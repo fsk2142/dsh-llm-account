@@ -19,7 +19,7 @@ import type { TransientFailureKind } from "./failures";
  */
 export const MAX_TRIED = 16;
 
-/** 没有明确重置时刻的账号级失败（rate-limit，以及无 `resetAt` 的 quota/unavailable）的冷缺时长。 */
+/** 没有明确重置时刻的账号级失败（rate-limit，以及无 `resetAt` 的 quota/unavailable）的冷却时长。 */
 export const RATE_LIMIT_COOLDOWN_MS = 300_000;
 
 /**
