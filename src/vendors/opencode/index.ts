@@ -1,0 +1,367 @@
+/**
+ * OpenCode Go 入口：一行装配（设计 §5.1）。
+ *
+ * **两个名字不同**：profile 行 id 固定为 `opencode-go`（用户现有 patch 的按 id 覆盖必须继续
+ * 生效），而 `core` 侧固定的设置命名空间是 `llm-opencode-go`。现代宿主（0.2.x）的
+ * `settings.describe()` 按**行 id** 建索引，所以设置端口按候选名单解析：先找行 id
+ * `opencode-go`，再回落到 `llm-opencode-go`（旧插件的 `accountSettingsRow` 是同一顺序）。
+ * 写路径一律用命中的行名 —— 写 `llm-opencode-go` 只会得到一个不存在的行。
+ *
+ * 一行 = 一个设置命名空间：`Config` 就是这一行的文档形状，`accounts` / `apiKeyEnv` /
+ * `credentialCleanupRefs` / `autoSwitch` 就是用户 profile patch 里已有的字段，账号端口原样
+ * 读写它（零迁移）。
+ *
+ * 装配产物：轮换引擎（顺序 = 顶层当前账号 + `accounts` 列表，固定 = 顶层 `apiKeyEnv`）、
+ * 意图日志（隐藏字段 `accountIntents`，每个命名空间唯一一个实例）、账号端口（Task 13）、
+ * 额度端口（Task 13），并注册路由 `ctx.llm.registerAdapter(["dsh-opencode-go"], adapter)`。
+ *
+ * 本期**不**做：客户端页面与统一账号中心（1b）、真机安装与旧插件切换（1c）、客户端 bundle、
+ * 第 2/3 期功能（用量胶囊、代理、协议覆盖、诊断导出等）。
+ * @module dsh-llm-account/src/vendors/opencode/index
+ */
+import type { Context } from "@deepseek-ai/cordis";
+import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
+import z from "@deepseek-ai/schemastery";
+
+import type { AccountPort, AccountState, CredentialPort, QuotaPort } from "../../core/adapter";
+import { normalizeKey } from "../../core/credentials";
+import type { IntentLog } from "../../core/recovery";
+import {
+  createCredentialsPort,
+  createRotationAccess,
+  createSettingsIntentStore,
+  createSettingsPort,
+  environmentValue,
+  intentLogFor,
+  isParsedConfig,
+  isRecord,
+  markVolatileFields,
+  unwrapVolatileConfig,
+} from "../assembly";
+import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
+import { createOpencodeAdapter } from "./adapter";
+import type { OpencodeAdapterDeps, OpencodeConfig, OpencodeModelLimits } from "./adapter";
+import { OPENCODE_DEFAULT_REF, OPENCODE_SETTINGS_NS, createOpencodeAccounts } from "./accounts";
+import { DEFAULT_BASE_URL } from "./protocol";
+import { createOpencodeQuota } from "./quota";
+
+/** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opencode-go`）。 */
+export const name = "llm-opencode-go";
+
+/** 本行需要的宿主服务：只声明 `llm`（设置与凭据按需现取，缺席时各自报错/降级）。 */
+export const inject = ["llm"];
+
+/** provider 路由 id（全局约束，不得更改）。 */
+export const PROVIDER_ID = "dsh-opencode-go";
+
+/** 合法凭据引用名（Global Constraints）。 */
+const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** 意图日志在设置文档里的隐藏字段（本项目自己的持久化字段，旧插件用的是 `accountOperations`）。 */
+const INTENTS_FIELD = "accountIntents";
+
+/**
+ * 设置行候选名（按优先级）：现代宿主按 profile 行 id 建索引，旧宿主用插件自报的命名空间。
+ * 行 id 必须排在前面 —— 命中它就说明用户现有 patch 的那一行正在给本插件供配置。
+ */
+const SETTINGS_ROWS: SettingsRowIds = ["opencode-go", OPENCODE_SETTINGS_NS];
+
+/**
+ * 这一行的 Config：全部字段 volatile（改完立即生效、可经设置表单逐路径写入），字段名逐条
+ * 对齐用户现有的 profile config（旧插件 `src/config.ts` 第 6816-6852 行的子集）。
+ *
+ * 旧插件里本期的非目标字段（`proxyURL`、`refreshMinutes`、`protocolOverrides`、
+ * `requestPreparationTimeoutMs`、图片预算、`accountOperations` 等）没有声明：schemastery 的
+ * object 解析会把未声明字段原样带过，所以它们仍然留在文档里，只是本期不读也不改。
+ *
+ * 类型上显式标成「宿主要求的最小 Config 面」（{@link PluginConfigSchema}）：schemastery 的
+ * 推断类型会展开出 cosmokit 的 `Dict`，dts 生成器无法为它写出可移植的引用（TS2883）；入口
+ * 本来就把配置读成 `Record<string, unknown>`，这个注解只影响声明文件，不影响运行时的
+ * schema 对象。
+ */
+export const Config: PluginConfigSchema = z.object(
+  markVolatileFields({
+    enabled: z.boolean().default(true),
+    usageDisplay: z.union(["auto", "always", "off"]).default("auto"),
+    modelVisibility: z.dict(z.boolean().required()).default({}),
+    apiKeyEnv: z.string().role("credential-ref").default(OPENCODE_DEFAULT_REF),
+    // 条目按用户现有形状声明（`id` / `name` / `apiKeyEnv`）。不写死的上限：账号数上限由
+    // 账号端口在写入路径上拒绝（`MAX_ACCOUNTS`），schema 拒绝存量文档会让整行起不来。
+    accounts: z
+      .union([
+        z.const(null),
+        z.array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            apiKeyEnv: z.string().role("credential-ref"),
+          }),
+        ),
+      ])
+      .default(null),
+    autoSwitch: z.boolean().default(false),
+    baseURL: z.string().default(DEFAULT_BASE_URL),
+    requestTimeoutMs: z.number(),
+    streamIdleTimeoutMs: z.number(),
+    modelLimits: z
+      .dict(
+        z.union([
+          z.const(null),
+          z.object({
+            contextWindow: z.union([z.const(null), z.number()]),
+            maxTokens: z.union([z.const(null), z.number()]),
+            /** 推理档位预算属第 2 期：本期只原样保留，不参与请求构造。 */
+            thinkingBudgets: z.union([z.const(null), z.array(z.number())]),
+          }),
+        ]),
+      )
+      .default({}),
+    credentialCleanupRefs: z.array(z.string().role("credential-ref")),
+    // 意图日志的持久化字段：内容是恢复状态，对 schema 不透明（`z.any()` 只做「是数组」这一层
+    // 校验，逐条收窄在 `createSettingsIntentStore` 里做）。形状写死会让一次手改把整行配置
+    // 判为非法、插件起不来。
+    accountIntents: z.array(z.any()).hidden(),
+  }),
+);
+
+/** 一行的装配产物。宿主忽略 `apply` 的返回值；它存在是为了装配测试与计划 1b 取用。 */
+export interface OpencodeBundle {
+  readonly providerId: string;
+  /** `core` 侧的固定命名空间（不是 profile 行 id）。 */
+  readonly settingsNs: string;
+  /** 注册到宿主路由的适配器实例。 */
+  readonly adapter: LlmAdapter;
+  /** 轮换引擎读取口（账号库状态变了就换引擎）。 */
+  readonly rotation: RotationAccess;
+  /** 该设置命名空间唯一的意图日志。 */
+  readonly intents: IntentLog;
+  readonly accounts: AccountPort;
+  readonly credentials: CredentialPort;
+  readonly quota: QuotaPort;
+}
+
+/**
+ * 装一行 OpenCode Go。
+ *
+ * 只做装配与注册，不做 I/O：请求路径上的读取（配置、凭据、环境）都是按需现取的函数。
+ * @param ctx - 宿主插件上下文。
+ * @param config - 宿主解析过的 Config，或程序化构造的原始配置（本函数自己过一遍 `Config`）。
+ * @returns 装配产物（宿主忽略；装配测试与 1b 使用）。
+ */
+export function apply(ctx: Context, config?: unknown): OpencodeBundle {
+  const parsed = parseConfig(config);
+  const document = (): Record<string, unknown> => unwrapVolatileConfig(parsed);
+  const warn = (message: string): void => {
+    ctx.logger.warn(message);
+  };
+
+  const settings = createSettingsPort(ctx, OPENCODE_SETTINGS_NS, SETTINGS_ROWS);
+  const credentials = createCredentialsPort(ctx);
+  const intents = intentLogFor(
+    OPENCODE_SETTINGS_NS,
+    createSettingsIntentStore(settings, OPENCODE_SETTINGS_NS, INTENTS_FIELD, warn),
+  );
+  const accounts = createOpencodeAccounts({ settings, credentials, intents });
+  const rotation = createRotationAccess(() => accountStateOf(document()));
+
+  /** 额度端口：每次读数都用当时的配置（`apiBase` 是构造参数，跟着现读的配置走）。 */
+  const quota: QuotaPort = {
+    async snapshot() {
+      const apiBase = normalizeKey(document().baseURL) ?? DEFAULT_BASE_URL;
+      return createOpencodeQuota({
+        ref: () => selectedRefOf(document()),
+        resolveKey: (ref) => resolveAccountKey(ctx, credentials, ref),
+        fetchImpl: fetch,
+        apiBase,
+      }).snapshot();
+    },
+  };
+
+  const deps: OpencodeAdapterDeps = {
+    config: () => adapterConfigOf(document()),
+    // 适配器按请求现取引擎：账号库一改（含 `move` / `select` 改写的顶层 `apiKeyEnv`），
+    // 下一次请求就用新的顺序与固定账号。
+    get rotation() {
+      return rotation.current();
+    },
+    quota,
+    accounts,
+    fetchImpl: fetch,
+    resolveStored: (ref) => credentials.resolve(ref),
+    resolveEnvironment: (ref) => environmentValue(ctx, ref),
+  };
+  const adapter = createOpencodeAdapter(deps);
+
+  const registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
+  ctx.effect(() => () => registration(), "dsh-llm-account: opencode provider route");
+
+  // Ruling 23：用户补上密钥后该账号必须能重新参与轮换。宿主 0.2.0-rc.2 的
+  // `credentials/reference-updated` 就是这个接缝（凭据引用名与账号 ref 同一套标识空间）。
+  ctx.on("credentials/reference-updated", (ref) => {
+    rotation.clearCredentialRejection(ref);
+  });
+
+  return { providerId: PROVIDER_ID, settingsNs: OPENCODE_SETTINGS_NS, adapter, rotation, intents, accounts, credentials, quota };
+}
+
+/**
+ * 解析入口收到的配置。
+ *
+ * 宿主交给 `apply` 的是**已解析**的 Config（volatile 引用就是解析产物），重复解析会把活引用
+ * 当成普通值；程序化构造（装配测试、将来的远程页）是普通值，必须自己过一遍 `Config`。
+ * @param config - `apply` 收到的原始配置。
+ * @returns 字段表（可能是 volatile 引用，也可能是普通值）。
+ */
+function parseConfig(config: unknown): Record<string, unknown> {
+  if (isParsedConfig(config)) return config;
+  const parsed: unknown = Config(config as Parameters<typeof Config>[0]);
+  return isRecord(parsed) ? parsed : {};
+}
+
+/**
+ * 入口配置 → 适配器配置。
+ *
+ * 只有一处改名：文档字段是 `baseURL`（旧插件的字段名，用户现有配置里就是它），适配器接口
+ * 叫 `apiBase`。`modelLimits` 只搬适配器认识的两项（`thinkingBudgets` 属第 2 期）。
+ */
+function adapterConfigOf(document: Record<string, unknown>): OpencodeConfig {
+  const baseURL = normalizeKey(document.baseURL);
+  const apiBase = normalizeKey(document.apiBase);
+  const apiKey = normalizeKey(document.apiKey);
+  const requestTimeoutMs = positiveNumber(document.requestTimeoutMs);
+  const streamIdleTimeoutMs = positiveNumber(document.streamIdleTimeoutMs);
+  const defaultMaxTokens = positiveNumber(document.defaultMaxTokens);
+  const catalogTtlMs = nonNegativeNumber(document.catalogTtlMs);
+  const modelVisibility = booleanMap(document.modelVisibility);
+  const modelLimits = modelLimitsOf(document.modelLimits);
+  return {
+    // `apiBase` 是本包自己的字段名（组合层可直接用）；用户文档里的 `baseURL` 优先于它。
+    ...(apiBase === undefined ? {} : { apiBase }),
+    ...(baseURL === undefined ? {} : { apiBase: baseURL }),
+    ...(apiKey === undefined ? {} : { apiKey }),
+    ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
+    ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),
+    ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
+    ...(catalogTtlMs === undefined ? {} : { catalogTtlMs }),
+    ...(modelVisibility === undefined ? {} : { modelVisibility }),
+    ...(modelLimits === undefined ? {} : { modelLimits }),
+  };
+}
+
+/** 读一个正有限数（缺省/0/负数/NaN 读作缺省，避免把坏配置变成「立即超时」）。 */
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** 读一个非负有限数（目录 TTL 允许 0 = 不缓存）。 */
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** 读一个 id → 布尔 的映射；非对象读作缺省，一个合法项都没有时也读作缺省。 */
+function booleanMap(value: unknown): Record<string, boolean> | undefined {
+  if (!isRecord(value)) return undefined;
+  const map: Record<string, boolean> = {};
+  for (const [key, flag] of Object.entries(value)) {
+    if (typeof flag === "boolean") map[key] = flag;
+  }
+  return Object.keys(map).length === 0 ? undefined : map;
+}
+
+/** 读 `null | number`（`null` 与适配器接口同义：显式「用目录自报值」）。 */
+function nullableNumber(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** 读逐模型的上下文窗口/输出上限覆盖；没有一项可用时读作缺省（适配器用目录自报值）。 */
+function modelLimitsOf(value: unknown): Record<string, OpencodeModelLimits> | undefined {
+  if (!isRecord(value)) return undefined;
+  const limits: Record<string, OpencodeModelLimits> = {};
+  for (const [model, entry] of Object.entries(value)) {
+    if (!isRecord(entry)) continue;
+    const contextWindow = nullableNumber(entry.contextWindow);
+    const maxTokens = nullableNumber(entry.maxTokens);
+    if (contextWindow === undefined && maxTokens === undefined) continue;
+    limits[model] = {
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
+    };
+  }
+  return Object.keys(limits).length === 0 ? undefined : limits;
+}
+
+/** 账号库状态：顺序、按模型规则（opencode 不支持，恒为空）与固定账号。 */
+function accountStateOf(document: Record<string, unknown>): AccountState {
+  return { order: orderOf(document), rules: [], pinned: pinnedRefOf(document) };
+}
+
+/** 顶层当前账号的 ref：`apiKeyEnv`；缺省或非法时回落到内置默认名。 */
+function defaultRefOf(document: Record<string, unknown>): string {
+  const ref = normalizeKey(document.apiKeyEnv);
+  return ref !== undefined && REF_PATTERN.test(ref) ? ref : OPENCODE_DEFAULT_REF;
+}
+
+/** `accounts[].apiKeyEnv` 里合法的凭据引用名（合法名才可能是凭据槽；其余条目本期不支持）。 */
+function accountRefsOf(document: Record<string, unknown>): string[] {
+  const accounts = document.accounts;
+  if (!Array.isArray(accounts)) return [];
+  const refs: string[] = [];
+  for (const item of accounts) {
+    if (!isRecord(item)) continue;
+    const ref = normalizeKey(item.apiKeyEnv);
+    if (ref !== undefined && REF_PATTERN.test(ref)) refs.push(ref);
+  }
+  return refs;
+}
+
+/**
+ * 轮换顺序 = 顶层当前账号 + `accounts` 条目（按文档顺序，去重保留第一次出现）。
+ *
+ * 旧插件的 `accountsOf` 在顶层引用不在账号表里时，会把它当成 `legacy:<ref>` 补在**列表
+ * 首位**；本函数是同一顺序的显式写法。少了它，只配了顶层密钥的存量用户会让
+ * `RotationEngine.pick` 返回 `undefined`，适配器直接报 MISSING_CREDENTIAL。
+ */
+function orderOf(document: Record<string, unknown>): string[] {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const ref of [defaultRefOf(document), ...accountRefsOf(document)]) {
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    order.push(ref);
+  }
+  return order;
+}
+
+/**
+ * 固定账号：opencode 用顶层 `apiKeyEnv` 表示「当前账号」（`AccountPort.select` 写它，
+ * `move` 也会把移动后的队首写进去），所以它就是引擎的固定账号；值非法时读作自动轮换。
+ *
+ * 注：`autoSwitch`（旧插件把切过去的账号写回 `apiKeyEnv` 的「落库」语义）本期**没有**接线
+ * ——本包的选择只由用户操作写入，自动切换的落库留在计划 1b/1c 决定（见任务报告）。
+ * @param document - 现读的设置文档。
+ * @returns 固定账号的 ref，或 `null`（自动轮换）。
+ */
+function pinnedRefOf(document: Record<string, unknown>): string | null {
+  const ref = normalizeKey(document.apiKeyEnv);
+  return ref !== undefined && REF_PATTERN.test(ref) ? ref : null;
+}
+
+/** 额度读数报告的账号：固定账号优先，否则顺序里的第一个（下一个请求会用的那个）。 */
+function selectedRefOf(document: Record<string, unknown>): string | undefined {
+  return pinnedRefOf(document) ?? orderOf(document)[0];
+}
+
+/**
+ * 解析某个账号这一读要用的密钥：按 `stored → environment` 挑第一把（opencode 没有
+ * auth.json 兜底，设计 §4.2 的差异表）。
+ * @param ctx - 插件上下文（读启动环境）。
+ * @param credentials - 凭据端口。
+ * @param ref - 目标账号 ref。
+ * @returns 可用的密钥，或 `undefined`。
+ */
+async function resolveAccountKey(ctx: Context, credentials: CredentialPort, ref: string): Promise<string | undefined> {
+  const stored = await credentials.resolve(ref);
+  if (stored !== undefined) return stored;
+  return environmentValue(ctx, ref);
+}

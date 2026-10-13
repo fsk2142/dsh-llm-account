@@ -1,0 +1,14 @@
+# dsh-llm-account 的 bundle 层：一个包装一次、插两行（设计 §5.1）。
+#
+# 行 id 与旧插件**完全一致**（`llm-commandcode` / `opencode-go`），所以用户 profile patch 里
+# 按 id 覆盖（`config:` 那些字段）继续生效，账号与白名单零迁移。同一行 id 只能由一个层插入，
+# 因此本包与两个旧插件互斥：切换必须是「卸旧装新」（设计 §5.3）。
+#
+# `name` 是包内子路径导出说明符（`exports` 里有 `./commandcode` 与 `./opencode`）；正因为
+# 不是裸包名，安装后必须用**子路径**指向各自的入口，宿主加载器按 Node 的 `exports` 解析。
+# 值统一加引号：YAML 里以 `@` 或特殊字符开头的标量会被当成指示符而解析失败。
+- insert:
+    - id: llm-commandcode
+      name: "dsh-llm-account/commandcode"
+    - id: opencode-go
+      name: "dsh-llm-account/opencode"
