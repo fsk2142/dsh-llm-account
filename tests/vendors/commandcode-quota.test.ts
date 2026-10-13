@@ -15,6 +15,7 @@ import type {
   SettingsPort,
   SettingsSnapshot,
 } from "../../src/core/adapter";
+import { accountRef } from "../../src/core/accounts";
 import { normalizeKey } from "../../src/core/credentials";
 import { IntentLog, type AccountIntent, type IntentStore } from "../../src/core/recovery";
 import {
@@ -281,16 +282,23 @@ it("percent 超出 0–100 视为端点未报告（契约是 0–100）", () => 
   expect(ok.windows[0].percent).toBe(50);
 });
 
-it("月度额度窗口用 monthlyCredits 键（单位是额度，不是 token），且只在两端都给数时出现", () => {
+it("月度窗口只报消耗（monthlyCredits 是余额）：没有 cap、没有 percent，不造比例（Review Focus 4）", () => {
   const both = toQuotaSnapshot({
     usage: { totalCredits: 12 },
     credits: { credits: { monthlyCredits: 100 } },
     failures: [],
   });
-  expect(both.windows).toEqual([{ key: "monthlyCredits", used: 12, cap: 100 }]);
-  // 只有额度上限、没有本期消耗：不造窗口（Review Focus 4）。
+  expect(both.windows).toEqual([{ key: "monthlyCredits", used: 12 }]);
+  // 月度配给总数在第 1 期未知（套餐表是第 2 期），而 monthlyCredits 是余额：拿它当 cap
+  // 会把「快用完」画成百分之几百，所以这里 cap 与 percent 都必须是「未报告」。
+  expect(both.windows[0]?.cap).toBeUndefined();
+  expect(both.windows[0]?.percent).toBeUndefined();
+  // 窗口只依赖 usage 的消耗：credits 没给余额（甚至整个端点失败）也照样产出。
+  expect(toQuotaSnapshot({ usage: { totalCredits: 12 }, failures: [] }).windows).toEqual([
+    { key: "monthlyCredits", used: 12 },
+  ]);
+  // 只有余额、没有本期消耗：不造窗口（缺失不倒成 0）。
   expect(toQuotaSnapshot({ credits: { credits: { monthlyCredits: 100 } }, failures: [] }).windows).toEqual([]);
-  expect(toQuotaSnapshot({ usage: { totalCredits: 12 }, failures: [] }).windows).toEqual([]);
 });
 
 it("plan 取 subscriptions 的 planId，缺失时退回 credits 的 planId，都没有就缺省", () => {
@@ -320,7 +328,7 @@ it("额度端口按旧插件的端点与请求头取数：whoami 先拿 orgId，
   expect(snap.windows).toEqual([
     { key: "fiveHour", used: 3, cap: 10, exceeded: false, resetAt: 1_791_921_600_000 },
     { key: "weekly", used: 30, cap: 100, exceeded: true, resetAt: 1_792_000_000_000 },
-    { key: "monthlyCredits", used: 12, cap: 100 },
+    { key: "monthlyCredits", used: 12 },
   ]);
 });
 
@@ -362,7 +370,7 @@ it("传输抛错也只记名，不让整次读取失败", async () => {
   const snap = await port.snapshot();
 
   expect(snap.failures).toEqual(["usage"]);
-  // usage 失败会连带没有月度额度窗口（它的 used 来自 usage），两个 token 窗口照常返回。
+  // 月度消耗窗口的 used 来自 usage，它失败就没有这个窗口；两个 token 窗口照常返回。
   expect(snap.windows).toEqual([
     { key: "fiveHour", used: 3, cap: 10, exceeded: false, resetAt: 1_791_921_600_000 },
     { key: "weekly", used: 30, cap: 100, exceeded: true, resetAt: 1_792_000_000_000 },
@@ -454,6 +462,86 @@ it("add 追加条目并返回新 ref，密钥只进凭据服务（设置文档�
   expect(JSON.stringify(settings.doc())).not.toContain("sk-live-secret");
   expect(credentials.sets).toEqual([{ ref: view.ref, value: "sk-live-secret" }]);
   expect(store.snapshot()).toEqual([]);
+});
+
+it("add 在写意图之前解析 ref：意图带着最终 ref，提交用的就是它（重放因此按 ref 对齐）", async () => {
+  const store = memoryStore();
+  const seenAtSubmit: AccountIntent[][] = [];
+  const settings = fakeSettings({ accounts: [], activeAccount: ACTIVE_ACCOUNT_AUTO, modelAccountRules: [] }, () => {
+    seenAtSubmit.push(store.snapshot());
+    return undefined;
+  });
+  const port = createCommandCodeAccounts({
+    settings,
+    credentials: fakeCredentials(),
+    intents: new IntentLog(store.store),
+  });
+
+  const view = await port.add({ label: "Team A" });
+
+  // 提交动作发起时，意图已经在日志里，而且已经带着这次提交真正使用的 ref。
+  expect(seenAtSubmit).toHaveLength(1);
+  expect(seenAtSubmit[0]).toEqual([expect.objectContaining({ kind: "add", ref: view.ref, label: "Team A" })]);
+  expect(settings.doc().accounts).toEqual([entry("Team A", view.ref)]);
+  expect(store.snapshot()).toEqual([]);
+});
+
+it("重放一条「设置已提交、凭据写入失败」的 add 意图：按 ref 对齐即无操作，不产生重复账号", async () => {
+  const store = memoryStore();
+  const settings = fakeSettings({ accounts: [], activeAccount: ACTIVE_ACCOUNT_AUTO, modelAccountRules: [] });
+  const credentials = fakeCredentials();
+  // 模拟崩溃点：设置条目已提交，凭据写入失败，意图因此没有被收尾（留给重放）。
+  credentials.set = async () => {
+    throw new Error("credential store down");
+  };
+  const intents = new IntentLog(store.store);
+  const port = createCommandCodeAccounts({ settings, credentials, intents });
+
+  await expect(port.add({ label: "Team A", key: "sk-live" })).rejects.toThrow("credential store down");
+
+  const committed = settings.doc().accounts as readonly { label: string; apiKeyEnv: string }[];
+  const pending = store.snapshot();
+  expect(committed).toHaveLength(1);
+  expect(pending).toHaveLength(1);
+  // 意图里带着已提交条目的 ref：重放不用按 label 猜（同名标签合法，猜就会造重复账号）。
+  expect(pending[0]).toMatchObject({ kind: "add", ref: committed[0]?.apiKeyEnv, label: "Team A" });
+
+  // 重放 apply（Task 14 的契约形状）：按意图里的 ref 对齐；条目已存在就是「已提交」。
+  const apply = async (intent: AccountIntent): Promise<"applied" | "unknown"> => {
+    if (intent.ref === undefined) return "unknown";
+    const accounts = settings.doc().accounts as readonly { label: string; apiKeyEnv: string }[];
+    return accounts.some((item) => item.apiKeyEnv === intent.ref) ? "applied" : "unknown";
+  };
+  const report = await intents.replay(apply);
+
+  expect(report).toEqual({ applied: 1, rejected: 0, unknown: 0, remaining: 0 });
+  // 无操作：没有重放出第二个账号条目。
+  expect(settings.doc().accounts).toEqual([entry("Team A", committed[0]?.apiKeyEnv ?? "")]);
+  expect(store.snapshot()).toEqual([]);
+});
+
+it("没有空闲 ref 时在写意图之前失败：日志里不留一条永远应用不了的意图", async () => {
+  const store = memoryStore();
+  // 占满 freeRef 的全部候选：基础 ref 与 _2…_128（accounts.ts 的 MAX_REF_ATTEMPTS = 128）。
+  const first = accountRef("commandcode", "Team A");
+  const occupied = [first, ...Array.from({ length: 127 }, (_, index) => `${first}_${index + 2}`)];
+  const settings = fakeSettings({
+    accounts: occupied.map((ref) => entry("Team A", ref)),
+    activeAccount: ACTIVE_ACCOUNT_AUTO,
+    modelAccountRules: [],
+  });
+  const port = createCommandCodeAccounts({
+    settings,
+    credentials: fakeCredentials(),
+    intents: new IntentLog(store.store),
+  });
+
+  await expect(port.add({ label: "Team A" })).rejects.toThrow(/no free credential reference/);
+
+  // 校验跑在 append 之前：一次都没落盘，没有提交，也没有未决意图。
+  expect(store.writeCount()).toBe(0);
+  expect(store.snapshot()).toEqual([]);
+  expect(settings.mutations).toEqual([]);
 });
 
 it("同名标签的第二个账号得到不同的 ref（不共用同一个凭据槽，Review Focus 1）", async () => {

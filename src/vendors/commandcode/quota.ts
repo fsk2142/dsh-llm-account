@@ -9,8 +9,10 @@
  *   `x-command-code-version` + `x-cli-environment` + attribution；
  * - 窗口形状（`parseWindowLimit` 第 6384-6393 行）：`{ used, cap, exceeded, resetAt }`
  *   位于 `billing/credits` 的 `windowLimits.fiveHour` / `windowLimits.weekly`；
- * - 额度上限（`parseCreditLimits` 第 6398-6418 行）：`credits.credits.monthlyCredits`
- *   与 usage 的 `totalCredits` 合成月度额度窗口；
+ * - 月度消耗（`parseUsageTotals` 第 6372 行）：usage 的 `totalCredits` 单独成为月度消耗
+ *   窗口。`billing/credits` 的 `monthlyCredits` 是月度**余额**（旧插件第 7738 行把它与
+ *   其它额度池相加成 `balanceTotal`），阶段 1 没有可信的月度**配给总数**（套餐表是第 2 期
+ *   的项目），所以不拿它当上限、不算比例 —— 见 `monthlyCreditsWindowOf`；
  * - 预算：与聊天请求同一档（第 7204-7207 行的说明），不用目录的 10 秒探测预算。
  *
  * **纪律**（设计 §12 Review Focus 4）：字段缺失就是「未知」，绝不倒成 0；缺失的窗口
@@ -34,7 +36,8 @@ import {
  * 本适配器产出的 `QuotaWindow.key` 词表（`QuotaWindow.key` 是字符串，这里只做文档与
  * 调用方收窄用）。**key 自带单位含义**，因为不同 key 下 `used`/`cap` 的单位不同：
  * - `"fiveHour"` / `"weekly"`：端点公布的用量窗口，`used`/`cap` 是 **token 数**；
- * - `"monthlyCredits"`：月度额度，`used` 是本期已消耗的**额度**、`cap` 是月度额度上限。
+ * - `"monthlyCredits"`：月度消耗，`used` 是本期已消耗的**额度**；**没有** `cap`（月度配给
+ *   总数在第 1 期未知，而 `monthlyCredits` 这个字段本身是余额，见 `monthlyCreditsWindowOf`）。
  *
  * 本适配器对 `QuotaWindow` 其余字段的用法约定（`QuotaWindow` 在共享内核里，本任务的
  * 改动范围只允许给它之外的 `CredentialPort.describe`，所以契约写在这里）：
@@ -72,8 +75,8 @@ export type QuotaEndpoint = (typeof QUOTA_ENDPOINTS)[number];
  * 一次归一化的输入：四个端点的原始负载（`undefined` 表示该端点失败）与已记名的失败项。
  * `whoami` 的 `org.id` 只用来给订阅端点拼 query（旧插件第 7251 行）；`QuotaSnapshot`
  * 没有账号字段，所以它不贡献任何输出字段 —— 保留这个参数是为了四个端点共用同一份形状，
- * 且调用方不必为「whoami 失败」另写一条路径。窗口来自 `credits`（与 `usage` 的消耗合成
- * 月度窗口）。
+ * 且调用方不必为「whoami 失败」另写一条路径。窗口来自 `credits`；月度消耗窗口来自
+ * `usage` 的 `totalCredits`。
  */
 export interface CommandCodeQuotaParts {
   /** `/alpha/whoami` 的负载；失败时缺省。 */
@@ -197,21 +200,24 @@ function windowLimitsOf(credits: unknown): QuotaWindow[] {
 }
 
 /**
- * 月度额度窗口：`used` 是 usage 的本期已消耗额度，`cap` 是 credits 的月度额度上限。
+ * 月度消耗窗口：`used` 是 usage 的本期已消耗额度，**没有** `cap`、没有 `percent`。
  *
- * 只有两端都给数才是一个可画的窗口 —— 只有上限或只有消耗都不造窗口（Review Focus 4：
- * 缺失不倒成 0）。单位是**额度**而不是 token，所以 key 用 `monthlyCredits` 与两个
- * token 窗口区分开。
- * @param credits - `billing/credits` 的负载。
+ * task brief 把 `credits.credits.monthlyCredits` 定义成月度**余额**（旧插件也把它当余额
+ * 与其它额度池相加：`balanceTotal = c.monthlyCredits + c.purchasedCredits` 第 7738 行），
+ * 而月度**配给总数**来自第 2 期才搬的静态套餐表（旧插件第 941-995 行）。阶段 1 没有可信
+ * 的上限来源，所以这里**只报消耗、不算 `used/cap` 比例**：把余额当上限会得到一个符号相反、
+ * 在快用完的账号上能到百分之几百的伪造读数（Review Focus 4）。
+ *
+ * 只要 usage 公布了 `totalCredits` 就产出这个窗口 —— 它与 `credits` 的负载无关；没有消耗
+ * 数据时不造窗口（缺失不倒成 0）。单位是**额度**而不是 token，所以 key 用 `monthlyCredits`
+ * 与两个 token 窗口区分开。
  * @param usage - `usage/summary` 的负载。
- * @returns 月度额度窗口；任一端缺数时为 `undefined`。
+ * @returns 月度消耗窗口；usage 没给 `totalCredits` 时为 `undefined`。
  */
-function monthlyCreditsWindowOf(credits: unknown, usage: unknown): QuotaWindow | undefined {
-  const record = creditsRecord(credits);
-  const cap = record === undefined ? undefined : numberValue(record.monthlyCredits);
+function monthlyCreditsWindowOf(usage: unknown): QuotaWindow | undefined {
   const used = isRecord(usage) ? numberValue(usage.totalCredits) : undefined;
-  if (cap === undefined || used === undefined) return undefined;
-  return { key: "monthlyCredits", used, cap };
+  if (used === undefined) return undefined;
+  return { key: "monthlyCredits", used };
 }
 
 /**
@@ -237,7 +243,7 @@ function planIdOf(subscriptions: unknown, credits: unknown): string | undefined 
  */
 export function toQuotaSnapshot(parts: CommandCodeQuotaParts): QuotaSnapshot {
   const windows = [...windowLimitsOf(parts.credits)];
-  const monthly = monthlyCreditsWindowOf(parts.credits, parts.usage);
+  const monthly = monthlyCreditsWindowOf(parts.usage);
   if (monthly !== undefined) windows.push(monthly);
   const plan = planIdOf(parts.subscriptions, parts.credits);
   return {

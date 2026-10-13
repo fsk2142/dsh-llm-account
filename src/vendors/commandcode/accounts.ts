@@ -25,6 +25,10 @@
  * 重放本次操作**，不覆盖对方的写入；`build` 每轮都拿刚读到的文档重算 ops，所以重放的
  * 是「用户的操作」而不是过期的 ops。
  *
+ * **意图与身份**：`add` 在 `append` **之前**解析出 ref 并写进意图（`{ kind: "add", ref, label }`），
+ * 提交用的就是同一个 ref —— 重放因此按 ref 对齐，不必按 label 猜（同名标签合法）。所有
+ * 不改状态就可能失败的校验都跑在 `append` 之前，日志里不会留下永远应用不了的意图。
+ *
  * 本任务**不**做：网页登录（Task 11）、客户端页面（计划 1b）、套餐过滤与费用估算（第 2 期）。
  * @module dsh-llm-account/src/vendors/commandcode/accounts
  */
@@ -240,28 +244,34 @@ class CommandCodeAccounts implements AccountPort {
   }
 
   /**
-   * 追加一个账号：ref 在这里生成一次并持久化，之后的任何改名都不再重推它。
-   * 带 `key` 时先提交账号条目、再写凭据服务（旧插件 `run()` → `store()` 的次序）；
-   * 凭据写失败时不收尾意图，留给崩溃恢复重放。
+   * 追加一个账号。
+   *
+   * **ref 在写意图之前解析**：它先进意图（`{ kind: "add", ref, label }`）、再进提交，
+   * 提交用的就是这一个 ref。于是崩溃重放**按 ref 对齐**就够了 —— 同名标签合法（`_2`
+   * 后缀），按 label 重新推导分不清「已提交但凭据没写成」「根本没提交」与「同名的存量
+   * 账号」，会造出重复账号或把密钥写到错的账号上。
+   *
+   * 所有**不改状态就可能失败**的校验（标签、密钥、没有空闲 ref）都跑在 `append` 之前，
+   * 因此日志里不会留下一条永远应用不了的意图；真正的写入失败（凭据写入、设置冲突耗尽）
+   * 才留下未决意图，那是给崩溃恢复重放的，正确。带 `key` 时先提交账号条目、再写凭据服务
+   * （旧插件 `run()` → `store()` 的次序）。
    * @param input - 展示名称与可选密钥。
    * @returns 新账号的视图。
    */
   async add(input: { label: string; key?: string }): Promise<AccountView> {
     const label = requireLabel(input.label);
     const key = input.key === undefined ? undefined : requireKey(input.key);
-    const committed = await this.#transaction("add", { label }, async () => {
-      const result = await this.#mutate((value) => {
-        const ref = freeRef(value, label);
-        const entry = { [LABEL_FIELD]: label, [REF_FIELD]: ref };
-        return {
-          ops: [{ op: "set", path: [ACCOUNTS_FIELD], value: [...rawAccounts(value), entry] }],
-          result: ref,
-        };
-      });
-      if (key !== undefined) await this.#deps.credentials.set(result.result, key);
+    // 解析 ref 需要当前文档；没有空闲 ref 时在这里就抛，不写意图（fail 在 append 之前）。
+    const snapshot = await this.#deps.settings.describe(COMMAND_CODE_SETTINGS_NS);
+    const ref = freeRef(snapshot.value, label);
+    const committed = await this.#transaction("add", { ref, label }, async () => {
+      const result = await this.#mutate<undefined>((value) => ({
+        ops: [{ op: "set", path: [ACCOUNTS_FIELD], value: [...rawAccounts(value), { [LABEL_FIELD]: label, [REF_FIELD]: ref }] }],
+        result: undefined,
+      }));
+      if (key !== undefined) await this.#deps.credentials.set(ref, key);
       return result;
     });
-    const ref = committed.result;
     const info = await this.#deps.credentials.describe([ref]);
     return { ref, label, configured: info[ref]?.configured === true, active: activeRefOf(committed.value) === ref };
   }
