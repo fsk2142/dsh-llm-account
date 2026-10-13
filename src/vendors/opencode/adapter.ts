@@ -51,7 +51,11 @@ import type { GatewayEvidence, GatewayRecorder } from "./protocol";
  */
 const ABORTED_CODE = "ABORTED";
 
-/** 重试延迟上限（旧插件 `RETRY_MAX_DELAY_MS` 第 2974 行）。 */
+/**
+ * 重试延迟上限。opencode 的旧插件**没有** `providerRetryPolicy`（旧包全文无此符号），
+ * 所以这套值与 Task 9 的 commandcode 路由保持一致 —— 它是控制器裁决 12 定下的路由策略，
+ * 不是从某个旧包抄来的。
+ */
 const RETRY_MAX_DELAY_MS = 900_000;
 
 /**
@@ -180,7 +184,8 @@ class OpencodeAdapter extends LlmAdapter {
   }
 
   /**
-   * 路由的重试白名单（控制器裁决 12）。两个超时码必须显式列出（宿主的默认白名单里没有）。
+   * 路由的重试白名单（控制器裁决 12）：与 Task 9 的 commandcode 路由同一套值。
+   * `LLM_REQUEST_TIMEOUT` / `LLM_STREAM_IDLE_TIMEOUT` 必须显式列出（宿主的默认白名单里没有）。
    * @returns 已解析的重试策略。
    */
   override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
