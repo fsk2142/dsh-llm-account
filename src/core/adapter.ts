@@ -95,6 +95,13 @@ export interface CredentialPort {
   set(ref: string, value: string): Promise<void>;
   /** 移除引用；移除不存在的引用是无操作。 */
   unset(ref: string): Promise<void>;
+  /**
+   * 一次查询一组引用的配置状态（`AccountView.configured` 的来源）。
+   * 空值、纯空白与不存在的引用一律 `configured: false`；调用方按 ref 直接索引结果。
+   * @param refs - 要查询的凭据引用名。
+   * @returns ref 到配置状态的映射。
+   */
+  describe(refs: string[]): Promise<Record<string, { configured: boolean; writable?: boolean }>>;
 }
 
 /**
