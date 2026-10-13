@@ -11,12 +11,18 @@
  *   `{ status: "ok" | "rate-limited", percent: 0–100, resetsAt: ISO 字符串 }`；
  * - 错误语义（第 7907-7934 行）：408/429/5xx **可重试并保留上一次读数**，其它状态不可
  *   重试；传输失败可重试且可保留；正文不可解析或超字节上限时**可重试但不保留**
- *   （旧插件的 `invalid` 分支）。
+ *   （旧插件的 `invalid` 分支）；凭据**解析失败**（非 `MISSING_CREDENTIAL`）可重试但不保留
+ *   （第 7864-7873 行），凭据缺失不可重试（第 7875-7881 行）；负载整体认不出来时可重试但
+ *   不保留（第 7925-7934 行的 `Invalid OpenCode Go usage response`）。
  *
  * **与旧插件的取舍**：旧插件的 `parseGoUsage` 是全有或全无（任何一条窗口不合法就整次
- * 读取失败），本模块把它拆开 —— 合法的窗口照常返回，不合法的窗口**不造出来**、只把窗口名
- * 记进 `failures`（设计 §12 Review Focus 4「缺失不倒成 0」）。这样一次形状漂移不会让
- * 整个额度面板变空，同时坏数据也不会伪装成 0%。
+ * 读取失败），本模块按「坏到什么程度」分两档：
+ * - **负载整体认不出来**（不是对象、没有 `usage`、`usage` 不是对象）仍然整次失败 ——
+ *   这种 200 响应一次形状漂移就可能把上一次读数换成「干净的空读数」，而 UI 分辨不出
+ *   「端点报告没有数据」与「端点换了形状」；
+ * - **`usage` 是对象、只有个别窗口不合法**：合法的窗口照常返回，不合法的窗口**不造出来**、
+ *   只把窗口名记进 `failures`（设计 §12 Review Focus 4「缺失不倒成 0」），坏数据不会让
+ *   整个额度面板变空，也不会伪装成 0%。
  *
  * **单位**：{@link OpencodeQuotaKey} 说明每个 key 的含义；`percent` 一律 0–100（超出范围
  * 视为端点未报告），`resetAt` 一律 epoch 毫秒（端点的 `resetsAt` 是 ISO 字符串，在此转换）。
@@ -26,7 +32,7 @@ import { LlmError, attributionHeaders } from "@deepseek-ai/dsh-llm";
 
 import type { QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
-import { DEFAULT_BASE_URL, trimBase } from "./protocol";
+import { DEFAULT_BASE_URL, isRecord, trimBase } from "./protocol";
 
 /** 额度端点路径（旧插件 `fetchUsage` 第 7899 行）。 */
 export const USAGE_PATH = "/usage";
@@ -106,11 +112,6 @@ export interface OpencodeQuotaDeps {
   timeoutMs?: number;
 }
 
-/** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** 读取非空字符串。 */
 function stringValue(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -166,22 +167,52 @@ function usageRecord(payload: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * 把 `/usage` 的负载归一化成一次额度读数。纯函数：不做 I/O、不缓存。
+ * 把「形状不认识」的负载统一成一个已分类的错误（旧插件 `parseGoUsage` 在
+ * `body.usage` 不合法时抛 `Invalid OpenCode Go usage response`，第 7925-7934 行）。
+ *
+ * 旧插件对**每一条窗口**都要求齐全（第 7777 行），所以它的「不合法」覆盖了「窗口字段缺失」
+ * 与「usage 缺失」两种情况。本模块刻意拆开这两者：
+ * - **`usage` 缺失或不是对象** → 「端点变了形状」，不可信 → 抛本错误（`retryable: true`、
+ *   `retainPrevious: false`）；
+ * - **`usage` 是对象但窗口字段缺失或非法** → 合法但空/部分读数，逐窗口记名（见 `toQuotaSnapshot`）。
+ *
+ * 这样一次形状漂移不会被当成「端点报告了空用量」，也不会静默覆盖上一次读数。
+ * @returns 已分类的错误（由调用方抛出，便于纯函数在 `unknown` 上收窄后直接 `throw`）。
+ */
+function unknownUsageShape(): OpencodeUsageError {
+  return new OpencodeUsageError("Invalid OpenCode Go usage response", {
+    retryable: true,
+    retainPrevious: false,
+  });
+}
+
+/**
+ * 把 `/usage` 的负载归一化成一次额度读数。
  *
  * 规则（控制器补充 1）：
  * - `key` 用窗口名（`rolling` / `weekly` / `monthly`），输出顺序固定；
  * - `percent` 原样保留（0–100），`resetsAt` 转 **epoch 毫秒**；
  * - `status === "rate-limited"` → `exceeded: true`，`status === "ok"` → `exceeded: false`；
- * - **缺失的窗口不造出来**；形状不认识或字段非法的窗口丢弃，并把窗口名记进 `failures`。
+ * - **缺失的窗口不造出来**；形状不认识的**窗口**丢弃并把窗口名记进 `failures`；
+ * - **负载整体认不出来**（不是对象、没有 `usage`、`usage` 不是对象）→ 抛
+ *   {@link OpencodeUsageError}（`retryable: true`、`retainPrevious: false`），
+ *   不返回一个「干净的空读数」。
+ *
+ * **合法但空**的形状只有一种：`usage` 是对象而三个窗口字段一个都没有（例如 `{ usage: {} }`）
+ * —— 那是端点明确报告「当前没有窗口数据」，返回 `{ windows: [], failures: [] }` 是诚实的。
+ *
+ * 纯函数：不做 I/O、不缓存（抛错的判定也只看入参）。
  * @param payload - `/usage` 的已解析负载（`unknown`：形状不可信，逐字段收窄）。
  * @returns 归一化读数。
+ * @throws {OpencodeUsageError} 负载整体认不出来时。
  */
 export function toQuotaSnapshot(payload: unknown): QuotaSnapshot {
   const usage = usageRecord(payload);
+  if (usage === undefined) throw unknownUsageShape();
   const windows: QuotaWindow[] = [];
   const failures: string[] = [];
   for (const key of WINDOW_KEYS) {
-    const raw = usage?.[key];
+    const raw = usage[key];
     // 窗口字段不存在 = 端点没公布这个窗口：既不是失败，也不造 0%。
     if (raw === undefined) continue;
     const window = windowOf(raw, key);
@@ -211,6 +242,11 @@ async function readBoundedText(response: Response): Promise<string> {
   return text;
 }
 
+/** 没有可用密钥（旧插件第 7875-7881 行语义：重试没有意义，也没有可信的旧读数）。 */
+function missingKeyError(): OpencodeUsageError {
+  return new OpencodeUsageError("OpenCode Go API key is not configured", { retryable: false, retainPrevious: false });
+}
+
 /**
  * opencode 的额度端口。`snapshot()` 的顺序：解析当前账号密钥 → `GET {base}/usage` →
  * 归一化。失败一律抛 {@link OpencodeUsageError}（带 `retryable` / `retainPrevious`）；
@@ -229,13 +265,28 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
   return {
     async snapshot(): Promise<QuotaSnapshot> {
       const ref = deps.ref();
-      const key = ref === undefined ? undefined : normalizeKey(await deps.resolveKey(ref));
-      if (key === undefined) {
-        throw new OpencodeUsageError("OpenCode Go API key is not configured", {
-          retryable: false,
-          retainPrevious: false,
-        });
+      // 凭据**解析失败**与「解析成功但为空」是两回事（旧插件第 7864-7881 行）：
+      // - 抛出，且 code 是 `MISSING_CREDENTIAL`：这个账号就是没配密钥，重试也不会变 → 不重试；
+      // - 抛其它错：凭据服务/环境读取本身失败（可能瞬时），旧插件给 `retryable: true`
+      //   且 `retainPrevious: false`（解析都没成功，谈不上「上一次读数仍可信」）；
+      // - 解析成空串/纯空白：按「没配密钥」处理。
+      // 三种都必须是**已分类**的 `OpencodeUsageError`：裸抛出去调用方既拿不到 code，
+      // 也不知道该不该重试、该不该保留上一次读数。
+      let resolved: string | undefined;
+      if (ref !== undefined) {
+        try {
+          resolved = await deps.resolveKey(ref);
+        } catch (error) {
+          if (isRecord(error) && error.code === "MISSING_CREDENTIAL") throw missingKeyError();
+          throw new OpencodeUsageError(`Could not resolve the OpenCode Go API key for account "${ref}"`, {
+            retryable: true,
+            retainPrevious: false,
+            cause: error,
+          });
+        }
       }
+      const key = normalizeKey(resolved);
+      if (key === undefined) throw missingKeyError();
 
       let response: Response;
       try {

@@ -20,7 +20,7 @@ import {
   createOpencodeAccounts,
   opencodeAccountRef,
 } from "../../src/vendors/opencode/accounts";
-import { DEFAULT_USAGE_TIMEOUT_MS, USAGE_MAX_BYTES, createOpencodeQuota, toQuotaSnapshot } from "../../src/vendors/opencode/quota";
+import { DEFAULT_USAGE_TIMEOUT_MS, USAGE_MAX_BYTES, OpencodeUsageError, createOpencodeQuota, toQuotaSnapshot } from "../../src/vendors/opencode/quota";
 
 /** 内存意图存储：读写都收发副本。 */
 function memoryStore(initial: readonly AccountIntent[] = []): {
@@ -291,12 +291,39 @@ it("三个窗口齐全时按 rolling/weekly/monthly 顺序输出，缺失的窗�
   expect(only.windows).toEqual([{ key: "weekly", percent: 3, exceeded: false, resetAt: 1_791_936_000_000 }]);
 });
 
-it("形状不认识或字段非法的窗口被丢弃并记名，而不是倒成 0 或整次读取失败", () => {
-  // 整个 payload 不是对象 / 没有 usage / usage 不是对象：没有窗口，也没有失败项。
-  expect(toQuotaSnapshot(undefined)).toEqual({ windows: [], failures: [] });
-  expect(toQuotaSnapshot(null)).toEqual({ windows: [], failures: [] });
-  expect(toQuotaSnapshot({})).toEqual({ windows: [], failures: [] });
-  expect(toQuotaSnapshot({ usage: 7 })).toEqual({ windows: [], failures: [] });
+it("负载整体认不出来是一个已分类的失败，而不是干净的空读数（形状漂移不覆盖旧读数）", async () => {
+  // 旧插件 `parseGoUsage` 对 `body.usage` 不合法一律抛 `Invalid OpenCode Go usage response`
+  // （第 7925-7934 行）：这里的判定与它一致。
+  for (const payload of [undefined, null, {}, { usage: 7 }, { usage: "rolling" }, []]) {
+    expect(() => toQuotaSnapshot(payload)).toThrow(OpencodeUsageError);
+  }
+  expect(() => toQuotaSnapshot({ usage: 7 })).toThrow(/Invalid OpenCode Go usage response/);
+  try {
+    toQuotaSnapshot(undefined);
+    expect.unreachable("认不出来的负载必须抛错");
+  } catch (error) {
+    expect(error).toMatchObject({
+      code: "opencode-go/usage-unavailable",
+      retryable: true,
+      retainPrevious: false,
+    });
+  }
+
+  // 端口的同一条路径：200 + 认不出来的正文 → 已分类的失败（不是空读数）。
+  const { port, calls } = quotaPort({ usage: 7 });
+  await expect(port.snapshot()).rejects.toMatchObject({ retryable: true, retainPrevious: false });
+  expect(calls).toHaveLength(1);
+  // 既不是空读数，也不是传输失败。
+  await expect(quotaPort({ usage: 7 }).port.snapshot()).rejects.not.toThrow(/transport failure/);
+
+  // **合法但空**的一种形状：`usage` 是对象而三个窗口一个都没有 —— 端点明确说「当前没有
+  // 窗口数据」，空读数是诚实的。
+  expect(toQuotaSnapshot({ usage: {} })).toEqual({ windows: [], failures: [] });
+  expect(await quotaPort({ usage: {} }).port.snapshot()).toEqual({ windows: [], failures: [] });
+});
+
+it("形状不认识或字段非法的窗口被丢弃并记名，而不是倒成 0（整份读数照常返回）", () => {
+  // 窗口字段存在但值是 `undefined`：端点没公布这个窗口，不造窗口也不记名。
   expect(toQuotaSnapshot({ usage: { rolling: undefined } })).toEqual({ windows: [], failures: [] });
 
   // percent 超出 0–100 / resetsAt 解析不了：这条窗口数据不可信，丢弃并记名。
@@ -380,20 +407,50 @@ it("错误语义照旧插件：408/429/5xx 可重试并保留上一次读数，�
   expect(calls).toHaveLength(1);
 });
 
-it("上限 20 个账号", async () => {
+it("凭据解析抛错也必须是已分类的失败：可重试、不保留，并保留原始 cause（旧插件第 7865-7873 行）", async () => {
+  const outage = new Error("credential store down");
+  const { fetchImpl, calls } = quotaFetch({ "/usage": () => jsonResponse(fullUsage()) });
+  const port = createOpencodeQuota({
+    apiBase: "https://opencode.ai/zen/go/v1",
+    ref: () => "acc-a",
+    resolveKey: async () => {
+      throw outage;
+    },
+    fetchImpl,
+  });
+
+  // 裸抛出去调用方既拿不到 code，也不知道该不该重试、该不该保留上一次读数。
+  await expect(port.snapshot()).rejects.toBeInstanceOf(OpencodeUsageError);
+  await expect(port.snapshot()).rejects.toMatchObject({
+    code: "opencode-go/usage-unavailable",
+    retryable: true,
+    retainPrevious: false,
+    cause: outage,
+  });
+  // 解析都没成功：一个请求都不发。
+  expect(calls).toEqual([]);
+
+  // 相反的一支：凭据服务明确说「这个账号没配密钥」（`MISSING_CREDENTIAL`）→ 重试没意义。
+  const missing = Object.assign(new Error("no credential"), { code: "MISSING_CREDENTIAL" });
+  const explicit = createOpencodeQuota({
+    apiBase: "https://opencode.ai/zen/go/v1",
+    ref: () => "acc-a",
+    resolveKey: async () => {
+      throw missing;
+    },
+    fetchImpl,
+  });
+  await expect(explicit.snapshot()).rejects.toMatchObject({
+    code: "opencode-go/usage-unavailable",
+    retryable: false,
+    retainPrevious: false,
+  });
+});
+
+it("上限 20 个账号", () => {
+  // 旧插件 `MAX_ACCOUNTS` 第 6780 行。拒绝的姿态在下面两条测试里（预检路径 + append 之后
+  // 的并发路径），这里只钉住这个契约常量。
   expect(MAX_ACCOUNTS).toBe(20);
-
-  // 正好占满：第 21 个必须被**拒绝**（抛错），而不是静默丢弃或挤掉一个。
-  const full = Array.from({ length: MAX_ACCOUNTS }, (_, index) => entry(`A${index}`, `A${index}`));
-  const { port, settings, store } = accountsPort(emptyDoc({ accounts: full }));
-
-  await expect(port.add({ label: "One more" })).rejects.toThrow(/at most 20 accounts/);
-
-  // 拒绝发生在写意图之前：没有落盘、没有提交、日志里没有永远应用不了的意图。
-  expect(store.writeCount()).toBe(0);
-  expect(store.snapshot()).toEqual([]);
-  expect(settings.mutations).toEqual([]);
-  expect((settings.doc().accounts as readonly unknown[]).length).toBe(MAX_ACCOUNTS);
 });
 
 it("账号操作先写意图再提交，提交成功后意图被清除", async () => {
@@ -564,6 +621,52 @@ it("list 用 CredentialPort.describe 填充 configured 与 active，空值不算
     { ref: "b", label: "B", configured: false, active: true },
     { ref: "c", label: "C", configured: false, active: false },
   ]);
+});
+
+it("账号表在 append 之前就已经满：add 直接拒绝，一个字节都不写", async () => {
+  // 这是**预检**路径（append 之前的校验）：拒绝时日志与设置都没有被碰过。
+  const existing = Array.from({ length: MAX_ACCOUNTS }, (_, index) => entry(`A${index}`, `A${index}`));
+  const { port, settings, store } = accountsPort(emptyDoc({ accounts: existing }));
+
+  await expect(port.add({ label: "One more" })).rejects.toThrow(/at most 20 accounts/);
+
+  expect(store.writeCount()).toBe(0);
+  expect(store.snapshot()).toEqual([]);
+  expect(settings.mutations).toEqual([]);
+  expect((settings.doc().accounts as readonly unknown[]).length).toBe(MAX_ACCOUNTS);
+});
+
+it("并发填满账号表时收尾先于抛出：那条 add 意图不会留在日志里拖停整轮回放", async () => {
+  // 起点 19 个：`add` 的预检通过（预检只看提交之前的文档），所以这次拒绝一定发生在
+  // **append 之后**的复核里 —— 也就是把意图留在日志里的那条路径。
+  const existing = Array.from({ length: MAX_ACCOUNTS - 1 }, (_, index) => entry(`A${index}`, `A${index}`));
+  const store = memoryStore();
+  const settings = fakeSettings(emptyDoc({ accounts: existing, credentialCleanupRefs: [] }));
+  const intents = new IntentLog(store.store);
+  const port = createOpencodeAccounts({ settings, credentials: fakeCredentials(), intents });
+
+  // 在本端口提交之前，让并发的另一个写者把第 20 个账号提交掉：本端口的复核因此撞上满表。
+  const innerMutate = settings.mutate.bind(settings);
+  let filled = false;
+  settings.mutate = async (ns, ops, expected) => {
+    if (!filled) {
+      filled = true;
+      await innerMutate(ns, [{ op: "set", path: ["accounts"], value: [...existing, entry("Other", "Other")] }], expected);
+    }
+    return innerMutate(ns, ops, expected);
+  };
+
+  // 收尾发生在抛出之前：调用方看到的是「满表拒绝」，而不是一条没法处理的收尾错误。
+  await expect(port.add({ label: "Team A" })).rejects.toThrow(/at most 20 accounts/);
+
+  // 提交被拒：账号表保持对方写的 20 个，本端口一个条目都没加。
+  expect((settings.doc().accounts as readonly unknown[]).length).toBe(MAX_ACCOUNTS);
+  expect(settings.doc().accounts).not.toContainEqual(entry("Team A", opencodeAccountRef("Team A")));
+  // 关键断言：那条已经 append 的意图必须在抛出之前被收尾，否则 `replay` 每次 apply 都会
+  // 再抛一次同样的错（`IntentLog.replay` 不吞 apply 的错误），一条意图拖停整轮回放。
+  expect(await intents.list()).toEqual([]);
+  // 收尾是一次真实落盘（append 1 次 + settle 1 次），不是「假装收尾」。
+  expect(store.writeCount()).toBe(2);
 });
 
 it("设置修订号冲突时重读并重放，而不是覆盖对方写入（Review Focus 5）", async () => {

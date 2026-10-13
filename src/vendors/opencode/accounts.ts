@@ -318,6 +318,11 @@ class OpencodeAccounts implements AccountPort {
    * 设置冲突重试用尽）才留下未决意图：重放能确认账号条目已经落地，但**补不回密钥** ——
    * 那条账号会保持 `configured: false`，直到用户重新提供密钥（`replaceKey`）。带 `key` 时
    * 先提交账号条目、再写凭据服务（旧插件 `begin()` → `credentials.set` 的次序，第 8393-8396 行）。
+   *
+   * **并发填满账号表**是唯一一条「`append` 之后才可能失败」的校验：另一次 `add` 在读取与
+   * 提交之间把表填满时，本方法的复核会拒绝本次提交。这条拒绝**必须先把意图收尾**（见
+   * `#settleQuietly`）——否则日志里会留下一条每次重放都抛错的 `add`，而
+   * `IntentLog.replay` 不吞 `apply` 的错误，一条这样的意图会拖停整轮回放。
    * @param input - 展示名称与可选密钥。
    * @returns 新账号的视图。
    */
@@ -328,14 +333,21 @@ class OpencodeAccounts implements AccountPort {
     const snapshot = await this.#deps.settings.describe(OPENCODE_SETTINGS_NS);
     if (rawAccounts(snapshot.value).length >= MAX_ACCOUNTS) throw tooManyAccounts();
     const ref = freeRef(snapshot.value, label);
-    const document = await this.#transaction("add", { ref, label }, async () => {
-      const { result: applied, value: current } = await this.#mutate<boolean>((value) => {
+    const document = await this.#transaction("add", { ref, label }, async (intent) => {
+      // `build` 是 async 的：并发上限复核必须**先 await 收尾**再抛，不能把一条悬浮的
+      // promise 丢出去（`await` 会把它按普通错误冒泡，两条路径的错误形状才是同一个）。
+      const { result: applied, value: current } = await this.#mutate<boolean>(async (value) => {
         // 最新文档里已经有这个 ref：这次 add 已经落地（自己的重试，或并发的同标签 add
         // 冻结到同一个确定性 ref）→ 空 ops 表示不落盘（见 `#mutate`），也不再写凭据槽。
         if (hasAccount(value, ref)) return { ops: [], result: false };
         const accounts = rawAccounts(value);
-        // 上限按**当前文档**再判一次：并发的另一个 add 可能刚刚把表填满。
-        if (accounts.length >= MAX_ACCOUNTS) throw tooManyAccounts();
+        // 上限按**当前文档**再判一次：并发的另一个 add 可能刚刚把表填满。这是 append
+        // 之后才可能发生的失败，所以要**先把这条意图收尾**再抛（见方法文档）——
+        // 否则日志里会留下一条每次重放都抛错的 `add`，拖停整轮回放。
+        if (accounts.length >= MAX_ACCOUNTS) {
+          await this.#settleQuietly(intent);
+          throw tooManyAccounts();
+        }
         return {
           ops: [
             {
@@ -492,7 +504,8 @@ class OpencodeAccounts implements AccountPort {
    * `settle`。顺序不能颠倒：崩溃时留下的未决意图正是重放的依据。
    * @param kind - 意图类型。
    * @param fields - 意图携带的 ref/label/toIndex/value。
-   * @param submit - 真正的提交动作。
+   * @param submit - 真正的提交动作；收到这条意图，便于在「已经 append、才发现不该提交」
+   *   的路径上先把它收尾再抛（见 `#settleQuietly`）。
    * @returns `submit` 的结果。
    */
   async #transaction<T>(
@@ -508,21 +521,47 @@ class OpencodeAccounts implements AccountPort {
   }
 
   /**
+   * 把一条**已经 append 但决定不提交**的意图收尾掉。
+   *
+   * 用途只有一处：`add` 的并发上限复核（另一次 `add` 抢先把账号表填满）。那条意图永远
+   * 重放不成功 —— 重放时账号表仍然是满的，`apply` 只会再抛一次同样的错；而
+   * `IntentLog.replay` 不吞 `apply` 的错误，一条这样的意图会拖停整轮回放（Task 8 的
+   * 文档化边界），直到某个账号被删掉为止。所以收尾必须发生在抛出之前。
+   *
+   * 收尾本身写失败不抛出：那条意图会留在日志里（与「凭据写失败」同一类未决状态），
+   * 但调用方拿到的仍是这次拒绝的真实原因（满表），而不是一个收尾失败。
+   * @param intent - 已 append 的意图。
+   */
+  async #settleQuietly(intent: AccountIntent): Promise<void> {
+    try {
+      await this.#deps.intents.settle(intent.id);
+    } catch {
+      // 收尾失败不掩盖拒绝原因：调用方要的是「为什么这次 add 没成功」。
+    }
+  }
+
+  /**
    * 提交一次设置变更，带修订号冲突重放：每轮都重新 `describe` 拿最新修订号，并用最新
    * 文档重算 ops 后再提交。冲突时**不**覆盖对方的写入。
    *
    * `build` 针对**刚读到的**文档返回空 ops，表示这次操作在这个文档上已经成立（`add`
    * 发现冻结的 ref 已经存在、`move` 发现位置没变都是这种情况）：直接返回，**不落盘**。
    * 这样「幂等的提交」不必伪造一次空写，也不会白白推进修订号去作废别人的写入。
+   *
+   * `build` 允许是 async 的：`add` 的并发上限复核要在「已经读到满表」时先 `settle` 掉
+   * 那条意图再抛（见 `#settleQuietly`）。`build` 抛出的错误原样冒泡，且**不计**冲突重试
+   * （它不是修订号冲突）。
    * @param build - 由最新文档算出 ops 与调用方要的结果。
    * @returns 调用方的结果与提交后的文档。
    */
   async #mutate<T>(
-    build: (value: Readonly<Record<string, unknown>>) => { ops: readonly SettingsOp[]; result: T },
+    build: (
+      value: Readonly<Record<string, unknown>>,
+    ) => { ops: readonly SettingsOp[]; result: T } | Promise<{ ops: readonly SettingsOp[]; result: T }>,
   ): Promise<{ result: T; value: Readonly<Record<string, unknown>> }> {
     for (let attempt = 0; ; attempt += 1) {
       const snapshot = await this.#deps.settings.describe(OPENCODE_SETTINGS_NS);
-      const { ops, result } = build(snapshot.value);
+      const { ops, result } = await build(snapshot.value);
       if (ops.length === 0) return { result, value: snapshot.value };
       try {
         const committed = await this.#deps.settings.mutate(OPENCODE_SETTINGS_NS, ops, snapshot.revision);
