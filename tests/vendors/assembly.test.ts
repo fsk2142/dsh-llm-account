@@ -9,7 +9,10 @@
  * 3. 一个设置命名空间只构造一个 `IntentLog`（Task 8 的文档化前置条件）；
  * 4. 凭据变更事件会清除该账号的 `invalid-credential` 标记；
  * 5. opencode 的固定命名空间（`llm-opencode-go`）在宿主上解析到 profile 行 id
- *    （`opencode-go`）——读写都落在行 id 上。
+ *    （`opencode-go`）——读写都落在行 id 上；
+ * 6. opencode 的 `enabled` 开关真的管住路由：`false` 不注册（用户现有 profile 行就是
+ *    `enabled: false`）、`true` 注册一次、之后的改写经 `loader/volatile-update` 重判并能撤下
+ *    （旧插件「false withdraws the route; the plugin stays mounted」的语义）。
  *
  * 本地的假 ctx / 假设置服务 / 假凭据服务 / volatile 解包一律写在本文件里，不跨任务共享
  * （计划 Review Focus 前的说明）。
@@ -52,12 +55,21 @@ function plain(value: unknown): unknown {
 interface RecordedRegistration {
   routes: string[];
   adapter: unknown;
+  /** 注册句柄被调用（撤下路由）后置为 `false`；记录本身保留，便于断言「注册了几次」。 */
+  active: boolean;
+}
+
+/** 一个手工 volatile 引用（`enabled` 这类「宿主改写、入口现读」的字段的最小形状）。 */
+function volatileRef(read: () => unknown): unknown {
+  return Object.freeze({ get: read });
 }
 
 /** 假宿主 ctx：只实现入口真正用到的接缝，其余一律缺席。 */
 interface FakeHost {
   ctx: Context;
   registrations: RecordedRegistration[];
+  /** 当前仍然生效的路由集合（撤下的注册不计入）。 */
+  liveRoutes(): string[][];
   /** 把一个事件投给假 ctx 上登记的监听器（宿主 `emit` 的最小替身）。 */
   emit(event: string, ...args: unknown[]): void;
   /** 某个事件当前登记了几个监听器。 */
@@ -79,8 +91,11 @@ function fakeHost(services: Readonly<Record<string, unknown>> = {}): FakeHost {
   const host = {
     llm: {
       registerAdapter(routes: string[], adapter: unknown): (() => void) & { replace: (next: string[]) => void } {
-        registrations.push({ routes: [...routes], adapter });
-        const handle = (() => undefined) as (() => void) & { replace: (next: string[]) => void };
+        const record: RecordedRegistration = { routes: [...routes], adapter, active: true };
+        registrations.push(record);
+        const handle = (() => {
+          record.active = false;
+        }) as (() => void) & { replace: (next: string[]) => void };
         handle.replace = () => undefined;
         return handle;
       },
@@ -102,6 +117,7 @@ function fakeHost(services: Readonly<Record<string, unknown>> = {}): FakeHost {
   return {
     ctx: host as unknown as Context,
     registrations,
+    liveRoutes: () => registrations.filter((record) => record.active).map((record) => record.routes),
     emit: (event, ...args) => {
       for (const listener of listeners.get(event) ?? []) listener(...args);
     },
@@ -207,11 +223,61 @@ it("两个入口各注册一次自己的 provider 路由", () => {
   expect(commandcode.name).toBe("llm-commandcode");
 
   const opencodeHost = fakeHost();
-  opencode.apply(opencodeHost.ctx, opencode.Config(OPENCODE_SHAPE));
+  // 用户现有的这一行是 `enabled: false`（见下一条测试），注册行为在这里用启用态单独断言。
+  opencode.apply(opencodeHost.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true }));
   expect(opencodeHost.registrations.map((registration) => registration.routes)).toEqual([[opencode.PROVIDER_ID]]);
   expect(opencode.PROVIDER_ID).toBe("dsh-opencode-go");
   expect(opencode.inject).toEqual(["llm"]);
   expect(opencode.name).toBe("llm-opencode-go");
+});
+
+it("opencode 的 enabled 为 false 时不注册路由，为 true 时注册一次", () => {
+  const disabledHost = fakeHost();
+  const disabled = opencode.apply(disabledHost.ctx, opencode.Config(OPENCODE_SHAPE));
+  // 用户 profile 里的这一行就是 `enabled: false`：路由与它的模型都不许上线。
+  expect(disabledHost.registrations).toHaveLength(0);
+  expect(disabledHost.liveRoutes()).toEqual([]);
+  // 「the plugin stays mounted」：其余产物照旧构造，凭据事件照旧订阅，改写仍需重判。
+  expect(disabled.adapter).toBeDefined();
+  expect(typeof disabled.accounts.list).toBe("function");
+  expect(typeof disabled.quota.snapshot).toBe("function");
+  expect(disabledHost.listenerCount("credentials/reference-updated")).toBe(1);
+  expect(disabledHost.listenerCount("loader/volatile-update")).toBe(1);
+
+  const enabledHost = fakeHost();
+  opencode.apply(enabledHost.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true }));
+  expect(enabledHost.liveRoutes()).toEqual([[opencode.PROVIDER_ID]]);
+});
+
+it("opencode 的 enabled 改成 false 会撤下已注册的路由", () => {
+  let enabled = true;
+  // 已解析的配置 + 一个可控的 volatile `enabled`：宿主改写后入口必须**现读**（volatile 变更
+  // 不会重跑 `apply`，所以只有经 `loader/volatile-update` 重判才能撤下路由）。
+  const config = opencode.Config(OPENCODE_SHAPE) as Record<string, unknown>;
+  config.enabled = volatileRef(() => enabled);
+  const host = fakeHost();
+  const bundle = opencode.apply(host.ctx, config);
+  expect(host.liveRoutes()).toEqual([[opencode.PROVIDER_ID]]);
+  expect(host.listenerCount("loader/volatile-update")).toBe(1);
+
+  // 重复广播不得重复注册（重判是幂等的）。
+  host.emit("loader/volatile-update", []);
+  expect(host.registrations).toHaveLength(1);
+  expect(host.liveRoutes()).toEqual([[opencode.PROVIDER_ID]]);
+
+  enabled = false;
+  host.emit("loader/volatile-update", []);
+  // 撤下：注册句柄被释放（路由与其模型目录随之消失），但这一行与其余产物留着。
+  expect(host.liveRoutes()).toEqual([]);
+  expect(host.registrations).toHaveLength(1);
+  expect(bundle.adapter).toBeDefined();
+  expect(host.listenerCount("credentials/reference-updated")).toBe(1);
+
+  // 再打开：重新注册一次（与旧插件 `applyRoute` 的释放/重注册同一行为）。
+  enabled = true;
+  host.emit("loader/volatile-update", []);
+  expect(host.liveRoutes()).toEqual([[opencode.PROVIDER_ID]]);
+  expect(host.registrations).toHaveLength(2);
 });
 
 it("Config 能解析用户现有的 commandcode 配置形状", () => {

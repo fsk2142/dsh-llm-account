@@ -13,15 +13,42 @@
  *
  * 装配产物：轮换引擎（顺序 = 顶层当前账号 + `accounts` 列表，固定 = 顶层 `apiKeyEnv`）、
  * 意图日志（隐藏字段 `accountIntents`，每个命名空间唯一一个实例）、账号端口（Task 13）、
- * 额度端口（Task 13），并注册路由 `ctx.llm.registerAdapter(["dsh-opencode-go"], adapter)`。
+ * 额度端口（Task 13），并按 `enabled` 决定是否注册路由
+ * `ctx.llm.registerAdapter(["dsh-opencode-go"], adapter)`。
+ *
+ * **`enabled` 门**（旧插件 `applyRoute` 第 8613-8626 行 + `lib/types/index.d.ts` 第 18 行的
+ * 文档「false withdraws the route; the plugin stays mounted」）：`false` 时不注册 provider 路由
+ * （路由与它的模型目录都不上线），但这一行仍然挂载 —— 适配器、账号/额度端口、意图日志与
+ * 凭据事件订阅照旧构造。用户现有的 profile 行就是 `enabled: false`，所以这个门必须在
+ * **挂载时**就读，而不是等第一次改写。
  *
  * 本期**不**做：客户端页面与统一账号中心（1b）、真机安装与旧插件切换（1c）、客户端 bundle、
  * 第 2/3 期功能（用量胶囊、代理、协议覆盖、诊断导出等）。
  * @module dsh-llm-account/src/vendors/opencode/index
  */
 import type { Context } from "@deepseek-ai/cordis";
-import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
+import type { AdapterRegistrationHandle, LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
+
+/**
+ * 宿主在 volatile 配置被改写后广播这次更新（两个旧插件用同一事件名重读配置：
+ * `dsh-opencode-go/lib/index.js` 第 8686 行、`@mars-sea/dsh-commandcode-provider/lib/index.js`
+ * 第 10410 行）。宿主**不会**为 volatile 变更重跑本插件的 `apply`（volatile 的意义就是
+ * 「改完立即生效、不重挂载」），所以 `enabled` 的后续改写要靠这个接缝重判。
+ *
+ * 事件名在宿主侧（`dsh-loader`）发出，本次 typecheck 用的 `@deepseek-ai/cordis` 与
+ * `@deepseek-ai/dsh-*` 都不声明它（本机没有 loader 包），所以这里按旧插件的做法自行补齐
+ * 声明；签名逐字取自 `dsh-opencode-go/lib/types/index.d.ts` 第 37 行。
+ */
+declare module "@deepseek-ai/cordis" {
+  interface Events {
+    /**
+     * volatile 配置被改写。
+     * @param paths - 被改写的路径列表（本入口不读它，只用来触发重判）。
+     */
+    "loader/volatile-update"(paths: readonly (readonly string[])[]): void;
+  }
+}
 
 import type { AccountPort, AccountState, CredentialPort, QuotaPort } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
@@ -81,6 +108,7 @@ const SETTINGS_ROWS: SettingsRowIds = ["opencode-go", OPENCODE_SETTINGS_NS];
  */
 export const Config: PluginConfigSchema = z.object(
   markVolatileFields({
+    /** `false` 撤下本行的 provider 路由（行仍然挂载、其余产物照旧构造），见模块头。 */
     enabled: z.boolean().default(true),
     usageDisplay: z.union(["auto", "always", "off"]).default("auto"),
     modelVisibility: z.dict(z.boolean().required()).default({}),
@@ -129,7 +157,7 @@ export interface OpencodeBundle {
   readonly providerId: string;
   /** `core` 侧的固定命名空间（不是 profile 行 id）。 */
   readonly settingsNs: string;
-  /** 注册到宿主路由的适配器实例。 */
+  /** 适配器实例（`enabled: false` 时构造但**不**注册到宿主路由）。 */
   readonly adapter: LlmAdapter;
   /** 轮换引擎读取口（账号库状态变了就换引擎）。 */
   readonly rotation: RotationAccess;
@@ -192,8 +220,37 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
   };
   const adapter = createOpencodeAdapter(deps);
 
-  const registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
-  ctx.effect(() => () => registration(), "dsh-llm-account: opencode provider route");
+  /**
+   * 当前这次路由注册的句柄；`enabled: false` 时是 `undefined`（行仍然挂载）。
+   *
+   * 用「释放 + 重新注册」而不是 `handle.replace([])`：与旧插件 `applyRoute` 同一形状，也让
+   * 撤下与 `ctx.effect` 的释放路径共用同一个句柄。
+   */
+  let registration: AdapterRegistrationHandle | undefined;
+  /** 按**现读**的 `enabled` 校准路由：缺省（含非布尔值）读作启用，只有显式的 `false` 撤下。 */
+  const applyRoute = (): void => {
+    const enabled = document().enabled !== false;
+    if (enabled && registration === undefined) {
+      registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
+    } else if (!enabled && registration !== undefined) {
+      registration();
+      registration = undefined;
+      ctx.logger.info("llm-opencode-go: disabled by configuration; the route and its models are withdrawn");
+    }
+  };
+
+  applyRoute();
+  // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判（与旧插件同一事件名）。
+  ctx.on("loader/volatile-update", () => {
+    applyRoute();
+  });
+  ctx.effect(
+    () => () => {
+      registration?.();
+      registration = undefined;
+    },
+    "dsh-llm-account: opencode provider route",
+  );
 
   // Ruling 23：用户补上密钥后该账号必须能重新参与轮换。宿主 0.2.0-rc.2 的
   // `credentials/reference-updated` 就是这个接缝（凭据引用名与账号 ref 同一套标识空间）。
