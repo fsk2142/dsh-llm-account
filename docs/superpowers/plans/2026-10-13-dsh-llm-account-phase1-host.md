@@ -879,3 +879,11 @@ git commit -m "feat: two-row bundle assembly and assembly smoke"
 ## 计划 1c（待写）
 
 切换与回退（卸载旧包、安装新包、真机启动验收、手工验收清单、回退演练）在第 1a 与 1b 都完成后写 —— 它需要与桌面端同版本（`0.2.0-rc.2`）的 `dsh` CLI 或用户在 GUI 里配合，因此必须在用户在场时执行。必测项见 Task 1 Step 2 与 Task 14 Step 4 的记录。写 1c 时必须**补上观测手段**：「页面被注册几次 / `apply` 被调用几次」用 DevTools 控制台还是宿主日志记录，并写明用户在 GUI 里怎么配合（这是 Task 1 复核留下的未决项）。
+
+## 1a 结束时明确「改期未做」的项（Task 14 复审判定 + 控制器裁决）
+
+这三项**不是遗漏，是显式改期**，1b/1c 必须继承：
+
+1. **意图日志的重放未接线**：`src/` 里没有任何地方调用 `IntentLog.replay`（`src/core/recovery.ts` 只定义了它）。恢复那半边要新增端口级接口（每个厂商一个 `applyIntent`，供重放回调使用），而本期没有任何真实路径能产生账号变更 —— 账号界面要到 1b 才有。**1b 设计时必须包含**「新增 `applyIntent` + 启动时 `replay`」；**1c 的真机验收必须包含**一次「崩溃后重放」演练。
+2. **登录 ref 撞名处置**：`storeKey`（Task 11 产物）目前没有「新 ref 与既有账号的凭据槽撞名时改分配或拒绝」的判定 —— 撞名静默覆盖会毁掉一个账号。1b 接线 `storeKey` 时补上。
+3. **`client` 入口的浏览器构建**：`exports` 里声明了 `./client`、`package.json` 里声明了 `dsh.client.inject`，但本期**不产出**该产物（tsdown 是 node 目标）。1b 必须先补浏览器目标构建，否则页面加载不到客户端 bundle。
