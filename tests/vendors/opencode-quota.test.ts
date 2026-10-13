@@ -616,10 +616,56 @@ it("list 用 CredentialPort.describe 填充 configured 与 active，空值不算
 
   const views = await port.list();
 
+  // 顶层 `apiKeyEnv` 是 "b"，而 "b" 已经在账号表里 → 不合成默认槽行（同一 ref 不重复）。
   expect(views).toEqual([
     { ref: "a", label: "A", configured: true, active: false },
     { ref: "b", label: "B", configured: false, active: true },
     { ref: "c", label: "C", configured: false, active: false },
+  ]);
+});
+
+it("用户真实形状（没有 accounts 键）：顶层当前账号仍然列出并标成 active，且可固定、不可移除（I1）", async () => {
+  // 用户 profile patch 里的真实 opencode 行：根本没有 `accounts` 键，只有顶层 `apiKeyEnv`。
+  const { port, settings, credentials, store } = accountsPort(
+    { apiKeyEnv: "OPENCODE_API_KEY", autoSwitch: true },
+    fakeCredentials({ OPENCODE_API_KEY: "sk-live" }),
+  );
+
+  // 旧插件 `accountsOf`（第 6783-6790 行）会把它补成 `legacy:<ref>` 放在首行；这里同一行必须
+  // 出现，而且它就是正在服务请求的那个账号（active）。
+  expect(await port.list()).toEqual([
+    { ref: "OPENCODE_API_KEY", label: "OPENCODE_API_KEY", configured: true, active: true },
+  ]);
+
+  // 可固定：页面拿这一行的 ref 回来必须成立（不再抛 unknown account ref）。
+  const before = settings.mutations.length;
+  await port.select("OPENCODE_API_KEY");
+  expect(settings.doc().apiKeyEnv).toBe("OPENCODE_API_KEY");
+  expect(settings.mutations).toHaveLength(before + 1);
+  expect(store.snapshot()).toEqual([]);
+
+  // 不可移除：合成的默认槽不是账号条目 —— 不写 accounts、不记待清理 ref、凭据不动。
+  await port.remove("OPENCODE_API_KEY");
+  expect(settings.mutations).toHaveLength(before + 1);
+  expect(settings.doc().accounts).toBeUndefined();
+  expect(settings.doc().credentialCleanupRefs).toBeUndefined();
+  expect(credentials.unsets).toEqual([]);
+  await expect(port.rename("OPENCODE_API_KEY", "x")).rejects.toThrow(/unknown account ref/);
+  // 认不出的 ref 照旧拒绝：合成行不把 select 变成「什么都收」。
+  await expect(port.select("missing")).rejects.toThrow(/unknown account ref/);
+});
+
+it("当前账号已在账号表里时不合成第二行（真条目仍是可改名的那一行）", async () => {
+  const { port, settings } = accountsPort(
+    emptyDoc({ accounts: [entry("Work", "OPENCODE_API_KEY_2")], apiKeyEnv: "OPENCODE_API_KEY_2" }),
+  );
+
+  expect(await port.list()).toEqual([
+    { ref: "OPENCODE_API_KEY_2", label: "Work", configured: false, active: true },
+  ]);
+  await port.rename("OPENCODE_API_KEY_2", "Renamed");
+  expect(settings.doc().accounts).toEqual([
+    { id: "OPENCODE_API_KEY_2", name: "Renamed", apiKeyEnv: "OPENCODE_API_KEY_2" },
   ]);
 });
 

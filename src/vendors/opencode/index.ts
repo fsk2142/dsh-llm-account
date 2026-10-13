@@ -51,6 +51,7 @@ declare module "@deepseek-ai/cordis" {
 }
 
 import type { AccountPort, AccountState, CredentialPort, QuotaPort } from "../../core/adapter";
+import { CREDENTIAL_REF_PATTERN } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -68,7 +69,12 @@ import {
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
 import { createOpencodeAdapter } from "./adapter";
 import type { OpencodeAdapterDeps, OpencodeConfig, OpencodeModelLimits } from "./adapter";
-import { OPENCODE_DEFAULT_REF, OPENCODE_SETTINGS_NS, createOpencodeAccounts } from "./accounts";
+import {
+  OPENCODE_DEFAULT_REF,
+  OPENCODE_SETTINGS_NS,
+  createOpencodeAccounts,
+  opencodeAccountSlot,
+} from "./accounts";
 import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
 
@@ -80,9 +86,6 @@ export const inject = ["llm"];
 
 /** provider 路由 id（全局约束，不得更改）。 */
 export const PROVIDER_ID = "dsh-opencode-go";
-
-/** 合法凭据引用名（Global Constraints）。 */
-const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** 意图日志在设置文档里的隐藏字段（本项目自己的持久化字段，旧插件用的是 `accountOperations`）。 */
 const INTENTS_FIELD = "accountIntents";
@@ -284,7 +287,6 @@ function parseConfig(config: unknown): Record<string, unknown> {
 function adapterConfigOf(document: Record<string, unknown>): OpencodeConfig {
   const baseURL = normalizeKey(document.baseURL);
   const apiBase = normalizeKey(document.apiBase);
-  const apiKey = normalizeKey(document.apiKey);
   const requestTimeoutMs = positiveNumber(document.requestTimeoutMs);
   const streamIdleTimeoutMs = positiveNumber(document.streamIdleTimeoutMs);
   const defaultMaxTokens = positiveNumber(document.defaultMaxTokens);
@@ -295,7 +297,6 @@ function adapterConfigOf(document: Record<string, unknown>): OpencodeConfig {
     // `apiBase` 是本包自己的字段名（组合层可直接用）；用户文档里的 `baseURL` 优先于它。
     ...(apiBase === undefined ? {} : { apiBase }),
     ...(baseURL === undefined ? {} : { apiBase: baseURL }),
-    ...(apiKey === undefined ? {} : { apiKey }),
     ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
     ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),
     ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
@@ -348,15 +349,27 @@ function modelLimitsOf(value: unknown): Record<string, OpencodeModelLimits> | un
   return Object.keys(limits).length === 0 ? undefined : limits;
 }
 
-/** 账号库状态：顺序、按模型规则（opencode 不支持，恒为空）与固定账号。 */
+/**
+ * 账号库状态：顺序、按模型规则（opencode 不支持，恒为空）与固定账号。
+ *
+ * **`autoSwitch` 门**（旧插件第 7515 行的同一分支）：`autoSwitch: false` 时候选集只有当前
+ * 账号 —— `autoSwitch ? [...new Set([preferred, ...accounts])] : [preferred]`。默认值就是
+ * `false`（旧插件与我们的 Config 都是），所以「关掉自动切换」必须真的只试一个账号，否则一次
+ * 额度拒绝就会把请求打到用户没允许的第二个账号上。只有**显式** `false` 才收窄：程序化构造的
+ * 文档没有这个字段时保持完整的顺序（与旧插件 `readConfig` 拿到的归一化值同义）。
+ */
 function accountStateOf(document: Record<string, unknown>): AccountState {
-  return { order: orderOf(document), rules: [], pinned: pinnedRefOf(document) };
+  const slot = opencodeAccountSlot(document);
+  return {
+    order: document.autoSwitch === false ? [slot.ref] : orderOf(document),
+    rules: [],
+    pinned: slot.pinned,
+  };
 }
 
-/** 顶层当前账号的 ref：`apiKeyEnv`；缺省或非法时回落到内置默认名。 */
+/** 顶层当前账号的 ref：`apiKeyEnv` 是合法引用名时就是它，否则是内置默认名。 */
 function defaultRefOf(document: Record<string, unknown>): string {
-  const ref = normalizeKey(document.apiKeyEnv);
-  return ref !== undefined && REF_PATTERN.test(ref) ? ref : OPENCODE_DEFAULT_REF;
+  return opencodeAccountSlot(document).ref;
 }
 
 /** `accounts[].apiKeyEnv` 里合法的凭据引用名（合法名才可能是凭据槽；其余条目本期不支持）。 */
@@ -367,7 +380,7 @@ function accountRefsOf(document: Record<string, unknown>): string[] {
   for (const item of accounts) {
     if (!isRecord(item)) continue;
     const ref = normalizeKey(item.apiKeyEnv);
-    if (ref !== undefined && REF_PATTERN.test(ref)) refs.push(ref);
+    if (ref !== undefined && CREDENTIAL_REF_PATTERN.test(ref)) refs.push(ref);
   }
   return refs;
 }
@@ -375,9 +388,10 @@ function accountRefsOf(document: Record<string, unknown>): string[] {
 /**
  * 轮换顺序 = 顶层当前账号 + `accounts` 条目（按文档顺序，去重保留第一次出现）。
  *
- * 旧插件的 `accountsOf` 在顶层引用不在账号表里时，会把它当成 `legacy:<ref>` 补在**列表
- * 首位**；本函数是同一顺序的显式写法。少了它，只配了顶层密钥的存量用户会让
- * `RotationEngine.pick` 返回 `undefined`，适配器直接报 MISSING_CREDENTIAL。
+ * 顶层 `apiKeyEnv` **必须**进顺序：旧插件的 `accountsOf` 在顶层引用不在账号表里时，会把它
+ * 当成 `legacy:<ref>` 补在**列表首位**；本函数是同一顺序的显式写法，账号端口的 `list()` 也会
+ * 合成同一行。少了它，只配了顶层密钥的存量用户会让 `RotationEngine.pick` 返回 `undefined`，
+ * 适配器直接报 MISSING_CREDENTIAL。
  */
 function orderOf(document: Record<string, unknown>): string[] {
   const order: string[] = [];
@@ -392,16 +406,16 @@ function orderOf(document: Record<string, unknown>): string[] {
 
 /**
  * 固定账号：opencode 用顶层 `apiKeyEnv` 表示「当前账号」（`AccountPort.select` 写它，
- * `move` 也会把移动后的队首写进去），所以它就是引擎的固定账号；值非法时读作自动轮换。
+ * `move` 也会把移动后的队首写进去），所以它就是引擎的固定账号；字段缺失/空串/非法引用名一律
+ * 读作自动轮换。
  *
- * 注：`autoSwitch`（旧插件把切过去的账号写回 `apiKeyEnv` 的「落库」语义）本期**没有**接线
- * ——本包的选择只由用户操作写入，自动切换的落库留在计划 1b/1c 决定（见任务报告）。
+ * 判定本身在账号端口里（`opencodeAccountSlot`）：端口的 `list()`/`select()`/`remove()` 与这里
+ * 必须对同一份文档给出同一个答案，否则又会出现「服务请求的账号没有行」那种裂缝。
  * @param document - 现读的设置文档。
  * @returns 固定账号的 ref，或 `null`（自动轮换）。
  */
 function pinnedRefOf(document: Record<string, unknown>): string | null {
-  const ref = normalizeKey(document.apiKeyEnv);
-  return ref !== undefined && REF_PATTERN.test(ref) ? ref : null;
+  return opencodeAccountSlot(document).pinned;
 }
 
 /** 额度读数报告的账号：固定账号优先，否则顺序里的第一个（下一个请求会用的那个）。 */

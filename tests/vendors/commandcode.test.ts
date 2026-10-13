@@ -452,6 +452,48 @@ it("Messages 已经发出 message_stop 的流在 EOF 时不会补第二条 finis
   expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "tool-calls" } });
 });
 
+it("畸形网关连发两个 message_stop：只有一条 finish，结束原因不被第二条覆盖", async () => {
+  const chunks = await decodeMessagesSse(
+    "event: message_start\n" +
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}\n\n' +
+      "event: content_block_start\n" +
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n' +
+      "event: content_block_delta\n" +
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n' +
+      "event: content_block_stop\n" +
+      'data: {"type":"content_block_stop","index":0}\n\n' +
+      "event: message_delta\n" +
+      'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\n' +
+      "event: message_stop\n" +
+      'data: {"type":"message_stop"}\n\n' +
+      "event: message_stop\n" +
+      'data: {"type":"message_stop"}\n\n',
+  );
+
+  // 第二个 message_stop 什么都不发：宿主保留最后一条 finish，冒充第二条会覆盖结束原因，
+  // 且 usage / 打开的块都会被重复交出。
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([
+    { type: "finish", reason: { kind: "max-tokens" } },
+  ]);
+  expect(chunks.filter((chunk) => chunk.type === "usage")).toHaveLength(1);
+  expect(openBlockIndices(chunks)).toEqual([]);
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "max-tokens" } });
+});
+
+it("畸形网关连发两个 finish_reason：只有一条 finish，先到的结束原因保留", async () => {
+  const chunks = await decodeSse(
+    "openai",
+    'data: {"choices":[{"delta":{"content":"hi"}}]}\n' +
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n' +
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+  );
+
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([
+    { type: "finish", reason: { kind: "tool-calls" } },
+  ]);
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "tool-calls" } });
+});
+
 it("openai 流在缺 finish_reason 的情况下 EOF 时补一条 finish，并关闭打开的文本块（Fix 2）", async () => {
   const chunks = await decodeSse("openai", 'data: {"choices":[{"delta":{"content":"hi"}}]}\n');
 

@@ -9,11 +9,17 @@
  * - `remove` 的顺序（`cleanup` 第 9221-9234 行）：移除条目 → 丢掉挂在该 ref 上的
  *   整条模型规则 → 若是当前固定账号则清成自动轮换 → 把 ref 记进 `credentialCleanupRefs`；
  * - `activeAccount` 的自动轮换取值用旧插件导出的 `ACTIVE_ACCOUNT_AUTO`（第 9523 行），
- *   空串也读作自动轮换（第 10153-10155 行 `preferredId`）。
+ *   空串也读作自动轮换（第 10153-10155 行 `preferredId`）；
+ * - **合成的默认槽**：顶层 `apiKeyEnv` 那个账号是旧插件 `slots()` 的第一项（第 10130-10152
+ *   行，`id: "default"`），它不在 `accounts[]` 里。`list()` 因此在第一行补出它，
+ *   `activeAccount: "default"` 也按它解析（`commandCodeAccountSlot`）—— 否则「正在服务请求的
+ *   那个账号」会既没有行、也固定不了（`select` 抛 unknown account ref）。
  *
  * **标识空间**：账号身份一律是**凭据引用名 ref**（`accountRef()` 的产物或用户手写的
  * 引用名），存在条目的 `apiKeyEnv` 字段里 —— 沿用旧插件的字段名才能让两个命名空间里的
  * 真实账号零迁移（设计 §5.1）。`label` 只用于展示，改名**绝不**重新推导 ref。
+ * 合成的默认槽**不是**一个真账号条目：`remove` 对它不写任何东西（幂等无操作），
+ * `rename` / `replaceKey` 对它抛 unknown account ref。
  *
  * **写回纪律**：改条目时按字段覆盖（改 `label`、保留其它字段），改数组时只摘除目标条目，
  * 所以**存量文档里的其它字段与其它条目都原样保留**。本模块从不写入明文密钥：新条目只有
@@ -44,7 +50,8 @@ import type {
   SettingsPort,
   VendorId,
 } from "../../core/adapter";
-import { accountRef, dedupeByRef } from "../../core/accounts";
+import { accountRef, CREDENTIAL_REF_PATTERN, dedupeByRef, readAccountSlot } from "../../core/accounts";
+import type { AccountSlotReading } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { AccountIntent, AccountIntentKind, IntentLog } from "../../core/recovery";
 
@@ -54,12 +61,25 @@ export const COMMAND_CODE_SETTINGS_NS = "llm-commandcode";
 /** 本端口所属的 provider 路由（ref 生成用的厂商段）。 */
 const VENDOR: VendorId = "commandcode";
 
+/** 顶层默认账号的凭据引用名（旧插件 `DEFAULT_API_KEY_ENV` 第 10030 行；也是 `apiKeyEnv` 的 schema 默认值）。 */
+export const DEFAULT_API_KEY_ENV = "COMMANDCODE_API_KEY";
+
 /**
  * `activeAccount` 的「自动轮换」取值（旧插件 `ACTIVE_ACCOUNT_AUTO` 第 9523 行；它自己的
  * 界面把这个值渲染成「自动」，并且也把空串读作自动）。写它而不是空串，是为了让值是
  * 自解释的字符串：消费方必须把 `"auto"` 与空串一视同仁。
  */
 export const ACTIVE_ACCOUNT_AUTO = "auto";
+
+/**
+ * 旧插件的「默认槽」id（第 10130-10133 行 `slots()` 的第一项：`id: "default"`、
+ * `ref: credentialRef(apiKeyEnv ?? DEFAULT_API_KEY_ENV)`）。`activeAccount: "default"`
+ * 指的就是顶层 `apiKeyEnv` 那个账号 —— 用户现有配置里就写着它（零迁移）。
+ */
+export const ACTIVE_ACCOUNT_DEFAULT = "default";
+
+/** 合成默认槽行的展示名（旧插件同一槽的 `label`，第 10133 行）。 */
+const DEFAULT_SLOT_LABEL = "Default";
 
 /** 账号条目的凭据引用字段（旧插件 Config schema 第 10059-10064 行）。 */
 const REF_FIELD = "apiKeyEnv";
@@ -81,9 +101,6 @@ const ACTIVE_FIELD = "activeAccount";
 
 /** 待清理凭据引用数组字段。 */
 const CLEANUP_FIELD = "credentialCleanupRefs";
-
-/** 合法凭据引用名（Global Constraints）。 */
-const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** ref 撞名时的后缀尝试上限（旧插件开通过程第 9108 行的同一条 128 次上限）。 */
 const MAX_REF_ATTEMPTS = 128;
@@ -134,7 +151,7 @@ function rawCleanupRefs(value: Readonly<Record<string, unknown>>): readonly unkn
 function refOf(item: unknown): string | undefined {
   if (!isRecord(item)) return undefined;
   const ref = normalizeKey(item[REF_FIELD]);
-  return ref !== undefined && REF_PATTERN.test(ref) ? ref : undefined;
+  return ref !== undefined && CREDENTIAL_REF_PATTERN.test(ref) ? ref : undefined;
 }
 
 /** 读一个账号条目的展示名称。 */
@@ -155,12 +172,35 @@ function hasAccount(value: Readonly<Record<string, unknown>>, ref: string): bool
 }
 
 /**
- * 读当前固定账号；`undefined` 表示自动轮换（字段缺失、空串与 {@link ACTIVE_ACCOUNT_AUTO}
- * 都算自动 —— 旧插件 `preferredId` 第 10153-10155 行就是这么读的）。
+ * 顶层默认账号的 ref：`apiKeyEnv`；缺省或非法时回落到内置默认名（旧插件 `slots()` 第
+ * 10130-10135 行的 `credentialRef(raw.apiKeyEnv ?? DEFAULT_API_KEY_ENV)` 同一读法）。
+ */
+export function commandCodeDefaultRef(value: Readonly<Record<string, unknown>>): string {
+  const ref = normalizeKey(value[REF_FIELD]);
+  return ref !== undefined && CREDENTIAL_REF_PATTERN.test(ref) ? ref : DEFAULT_API_KEY_ENV;
+}
+
+/**
+ * 固定账号槽：**哨兵词汇只在这一个函数里决定**。入口的 `pinnedRefOf`（轮换引擎的固定账号与
+ * 应用期诊断）与端口的 `activeRefOf`（`list()` 的 active、`remove()` 的回落、`add()` 的返回）
+ * 都读它，所以「`"default"` 指顶层账号」这件事不可能在两个地方读成两种结果。
+ * @param value - 现读的设置文档。
+ * @returns 归一化后的槽判定。
+ */
+export function commandCodeAccountSlot(value: Readonly<Record<string, unknown>>): AccountSlotReading {
+  return readAccountSlot(value[ACTIVE_FIELD], {
+    fallback: commandCodeDefaultRef(value),
+    auto: ACTIVE_ACCOUNT_AUTO,
+    legacyDefault: ACTIVE_ACCOUNT_DEFAULT,
+  });
+}
+
+/**
+ * 读当前固定账号；`undefined` 表示自动轮换（字段缺失、空串、`"auto"` 与认不出的坏值都算自动
+ * —— 坏值宁可轮换，也不能把请求指到一个不存在的凭据槽上）。
  */
 function activeRefOf(value: Readonly<Record<string, unknown>>): string | undefined {
-  const active = normalizeKey(value[ACTIVE_FIELD]);
-  return active === undefined || active === ACTIVE_ACCOUNT_AUTO ? undefined : active;
+  return commandCodeAccountSlot(value).pinned ?? undefined;
 }
 
 /** 标签必须是可展示的非空文本（空标签会渲染成一行没有名字的账号）。 */
@@ -231,14 +271,28 @@ class CommandCodeAccounts implements AccountPort {
     this.#deps = deps;
   }
 
-  /** @returns 账号行视图：身份取自 `apiKeyEnv`，`configured` 来自凭据服务。 */
+  /**
+   * @returns 账号行视图：身份取自 `apiKeyEnv`，`configured` 来自凭据服务。
+   *
+   * **合成的默认槽在第一行**（旧插件 `slots()` 第 10130-10152 行的同一顺序）：顶层
+   * `apiKeyEnv` 那个账号是轮换顺序的首项、也是 `activeAccount: "default"` 指的对象，但它不在
+   * `accounts[]` 里 —— 只列 `accounts[]` 会让「正在服务请求的那个账号」既看不见、也固定不了。
+   * 只有当真账号条目已经占用了这个 ref 时才不合成（same ref 的重复行不该出现）。
+   */
   async list(): Promise<AccountView[]> {
     const snapshot = await this.#deps.settings.describe(COMMAND_CODE_SETTINGS_NS);
-    const active = activeRefOf(snapshot.value);
-    const views = rawAccounts(snapshot.value)
-      .map((item) => ({ ref: refOf(item), label: labelOf(item) }))
-      .filter((item): item is { ref: string; label: string } => item.ref !== undefined)
-      .map((item) => ({ ref: item.ref, label: item.label ?? item.ref, configured: false, active: item.ref === active }));
+    const slot = commandCodeAccountSlot(snapshot.value);
+    const defaultRef = commandCodeDefaultRef(snapshot.value);
+    const views: AccountView[] = [];
+    if (!hasAccount(snapshot.value, defaultRef)) {
+      views.push({ ref: defaultRef, label: DEFAULT_SLOT_LABEL, configured: false, active: slot.pinned === defaultRef });
+    }
+    views.push(
+      ...rawAccounts(snapshot.value)
+        .map((item) => ({ ref: refOf(item), label: labelOf(item) }))
+        .filter((item): item is { ref: string; label: string } => item.ref !== undefined)
+        .map((item) => ({ ref: item.ref, label: item.label ?? item.ref, configured: false, active: item.ref === slot.pinned })),
+    );
     // 重复 ref 只保留第一个：同一个凭据槽不该在轮换里被算两轮（Review Focus 1）。
     const unique = dedupeByRef(views);
     const info = await this.#deps.credentials.describe(unique.map((view) => view.ref));
@@ -360,13 +414,29 @@ class CommandCodeAccounts implements AccountPort {
 
   /**
    * 固定账号或回到自动轮换。
+   *
+   * 可选的目标包含**合成的默认槽**（顶层 `apiKeyEnv` 那个 ref，即使它不在 `accounts[]` 里）：
+   * `list()` 会把它列成第一行，页面拿这一行的 ref 回来固定时必须成立。固定它写回旧插件的
+   * 槽 id {@link ACTIVE_ACCOUNT_DEFAULT}，而不是把顶层 ref 写死成字面量 —— 用户现有文档
+   * 因此一字不改，且以后改顶层 `apiKeyEnv` 时固定跟随默认槽，而不是钉在一个可能已经不在
+   * 轮换顺序里的旧 ref 上。真实账号条目照旧写它自己的 ref。
    * @param ref - 目标账号的 ref；`null` 表示自动轮换。
    */
   async select(ref: string | null): Promise<void> {
-    if (ref !== null) await this.#require(ref);
+    let target: string = ACTIVE_ACCOUNT_AUTO;
+    if (ref !== null) {
+      const snapshot = await this.#deps.settings.describe(COMMAND_CODE_SETTINGS_NS);
+      if (hasAccount(snapshot.value, ref)) {
+        target = ref;
+      } else if (ref === commandCodeDefaultRef(snapshot.value)) {
+        target = ACTIVE_ACCOUNT_DEFAULT;
+      } else {
+        throw unknownRef(ref);
+      }
+    }
     await this.#transaction("select", ref === null ? {} : { ref }, () =>
       this.#mutate(() => ({
-        ops: [{ op: "set", path: [ACTIVE_FIELD], value: ref ?? ACTIVE_ACCOUNT_AUTO }],
+        ops: [{ op: "set", path: [ACTIVE_FIELD], value: target }],
         result: undefined,
       })),
     );

@@ -28,6 +28,7 @@ import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
 import type { AccountPort, AccountState, CredentialPort, ModelRule, QuotaPort } from "../../core/adapter";
+import { CREDENTIAL_REF_PATTERN } from "../../core/accounts";
 import { normalizeKey, pickApiKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -43,7 +44,13 @@ import {
   unwrapVolatileConfig,
 } from "../assembly";
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
-import { ACTIVE_ACCOUNT_AUTO, COMMAND_CODE_SETTINGS_NS, createCommandCodeAccounts } from "./accounts";
+import {
+  COMMAND_CODE_SETTINGS_NS,
+  commandCodeAccountSlot,
+  commandCodeDefaultRef,
+  createCommandCodeAccounts,
+  DEFAULT_API_KEY_ENV,
+} from "./accounts";
 import { createCommandCodeAdapter } from "./adapter";
 import type { CommandCodeAdapterDeps, CommandCodeConfig } from "./adapter";
 import { createCommandCodeLogin } from "./login";
@@ -60,15 +67,6 @@ export const inject = ["llm"];
 
 /** provider 路由 id（全局约束，不得更改）。 */
 export const PROVIDER_ID = "commandcode";
-
-/** 顶层默认账号的凭据引用名（旧插件 `DEFAULT_API_KEY_ENV` 第 10030 行）。 */
-const DEFAULT_API_KEY_ENV = "COMMANDCODE_API_KEY";
-
-/** 旧插件的「默认槽」id：`activeAccount: default` 指顶层 `apiKeyEnv` 那个账号。 */
-const LEGACY_DEFAULT_SLOT = "default";
-
-/** 合法凭据引用名（Global Constraints）。 */
-const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** 意图日志在设置文档里的隐藏字段（本项目自己的持久化字段，旧插件没有）。 */
 const INTENTS_FIELD = "accountIntents";
@@ -291,10 +289,9 @@ function accountStateOf(document: Record<string, unknown>): AccountState {
   return { order: orderOf(document), rules: rulesOf(document), pinned: pinnedRefOf(document) };
 }
 
-/** 顶层默认账号的 ref：`apiKeyEnv`；缺省或非法时回落到内置默认名。 */
+/** 顶层默认账号的 ref：`apiKeyEnv`；缺省或非法时回落到内置默认名（与账号端口同一份读法）。 */
 function defaultRefOf(document: Record<string, unknown>): string {
-  const ref = normalizeKey(document.apiKeyEnv);
-  return ref !== undefined && REF_PATTERN.test(ref) ? ref : DEFAULT_API_KEY_ENV;
+  return commandCodeDefaultRef(document);
 }
 
 /** `accounts[].apiKeyEnv` 里合法的凭据引用名（合法名才可能是凭据槽；其余条目本期不支持）。 */
@@ -305,7 +302,7 @@ function accountRefsOf(document: Record<string, unknown>): string[] {
   for (const item of accounts) {
     if (!isRecord(item)) continue;
     const ref = normalizeKey(item.apiKeyEnv);
-    if (ref !== undefined && REF_PATTERN.test(ref)) refs.push(ref);
+    if (ref !== undefined && CREDENTIAL_REF_PATTERN.test(ref)) refs.push(ref);
   }
   return refs;
 }
@@ -314,8 +311,8 @@ function accountRefsOf(document: Record<string, unknown>): string[] {
  * 轮换顺序 = 顶层默认账号 + `accounts` 条目（按文档顺序，去重保留第一次出现）。
  *
  * 顶层 `apiKeyEnv` **必须**进顺序：旧插件把它渲染成第一个槽（Default / legacy），而
- * `AccountPort.list()` 只列 `accounts` 条目；顺序里少了它，只配了顶层密钥的存量用户会让
- * `RotationEngine.pick` 返回 `undefined`，适配器直接报 MISSING_CREDENTIAL。
+ * `AccountPort.list()` 在它缺席 `accounts[]` 时合成同一行；顺序里少了它，只配了顶层密钥的
+ * 存量用户会让 `RotationEngine.pick` 返回 `undefined`，适配器直接报 MISSING_CREDENTIAL。
  */
 function orderOf(document: Record<string, unknown>): string[] {
   const order: string[] = [];
@@ -347,14 +344,14 @@ function rulesOf(document: Record<string, unknown>): ModelRule[] {
  * 固定账号。`activeAccount` 是**旧的槽 id 空间**：`default`（顶层默认账号）、`auto`/空
  * （自动轮换），或者账号条目自己的 ref；认不出的值（旧插件的 `account-N` 内联密钥槽，
  * 本期不支持）读作自动轮换 —— 宁可轮换，也不能把请求指到一个不存在的凭据槽上。
+ *
+ * 判定本身在账号端口里（`commandCodeAccountSlot`）：端口的 `list()`/`select()`/`remove()` 与
+ * 这里必须对同一份文档给出同一个答案，否则又会出现「服务请求的账号没有行」那种裂缝。
  * @param document - 现读的设置文档。
  * @returns 固定账号的 ref，或 `null`（自动轮换）。
  */
 function pinnedRefOf(document: Record<string, unknown>): string | null {
-  const active = normalizeKey(document.activeAccount);
-  if (active === undefined || active === ACTIVE_ACCOUNT_AUTO) return null;
-  if (active === LEGACY_DEFAULT_SLOT) return defaultRefOf(document);
-  return REF_PATTERN.test(active) ? active : null;
+  return commandCodeAccountSlot(document).pinned;
 }
 
 /** 额度读数报告的账号：固定账号优先，否则顺序里的第一个（下一个请求会用的那个）。 */
@@ -364,10 +361,11 @@ function selectedRefOf(document: Record<string, unknown>): string | undefined {
 
 /** 应用期诊断：认不出的 `activeAccount` 只在这里说一次（现读路径按自动轮换处理）。 */
 function warnAboutActiveAccount(document: Record<string, unknown>, warn: (message: string) => void): void {
-  const active = normalizeKey(document.activeAccount);
-  if (active === undefined || active === ACTIVE_ACCOUNT_AUTO || active === LEGACY_DEFAULT_SLOT) return;
-  if (REF_PATTERN.test(active)) return;
-  warn(`llm-commandcode: activeAccount "${active}" is not a credential reference; automatic rotation is used instead`);
+  const slot = commandCodeAccountSlot(document);
+  if (!slot.invalid) return;
+  warn(
+    `llm-commandcode: activeAccount "${normalizeKey(document.activeAccount) ?? ""}" is not a credential reference; automatic rotation is used instead`,
+  );
 }
 
 /**

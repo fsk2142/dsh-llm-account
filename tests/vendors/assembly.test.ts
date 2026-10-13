@@ -18,7 +18,8 @@
  * （计划 Review Focus 前的说明）。
  */
 import type { Context } from "@deepseek-ai/cordis";
-import { expect, it } from "vitest";
+import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
+import { expect, it, vi } from "vitest";
 
 import type { SettingsOp } from "../../src/core/adapter";
 import * as commandcode from "../../src/vendors/commandcode/index";
@@ -337,7 +338,10 @@ it("opencode 的固定命名空间在宿主上解析到 profile 行 id", async (
   // 程序化构造（绕过 schemastery 归一化）也必须能装配。
   const bundle = opencode.apply(host.ctx, OPENCODE_SHAPE);
 
+  // 顶层 `apiKeyEnv`（"OPENCODE_API_KEY"）不在 `accounts[]` 里 → 第一行是合成的默认槽，而且
+  // 它就是当前账号（active）；真条目照旧列出（I1）。
   await expect(bundle.accounts.list()).resolves.toEqual([
+    { ref: "OPENCODE_API_KEY", label: "OPENCODE_API_KEY", configured: true, active: true },
     { ref: "OPENCODE_API_KEY_2", label: "work", configured: true, active: false },
   ]);
 
@@ -350,4 +354,150 @@ it("opencode 的固定命名空间在宿主上解析到 profile 行 id", async (
   ]);
   expect(settings.valueOf("opencode-go")).toMatchObject({ apiKeyEnv: "OPENCODE_API_KEY_2" });
   expect(settings.valueOf("opencode-go")?.accountIntents).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// 最终修复波：I1 哨兵（`default`/`auto`/空/缺失/非法）只在一个地方判定、I2 文档里的
+// `apiKey` 不是凭据来源、I3 `autoSwitch: false` 真的收窄候选集。
+// ---------------------------------------------------------------------------
+
+/** 一条最小的请求：装配产物上的适配器只用到 provider/model/messages。 */
+function streamRequest(): GenerateOptions {
+  return {
+    provider: "dsh-opencode-go",
+    model: "m1",
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  } as unknown as GenerateOptions;
+}
+
+/** 把流收成数组；抛错时把异常交回调用方（与宿主「边收边抛」的消费方式一致）。 */
+async function drain(source: AsyncIterable<StreamChunk>): Promise<{ chunks: StreamChunk[]; error: unknown }> {
+  const chunks: StreamChunk[] = [];
+  try {
+    for await (const chunk of source) chunks.push(chunk);
+    return { chunks, error: undefined };
+  } catch (error) {
+    return { chunks, error };
+  }
+}
+
+it("commandcode 的 activeAccount: default 与账号中心读同一份文档：固定到顶层默认账号（I1）", () => {
+  const host = fakeHost();
+  const bundle = commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+  const engine = bundle.rotation.current();
+
+  // `default` 是旧插件的槽 id，指顶层 `apiKeyEnv` 那个账号 —— 与 `accounts.list()` 合成的
+  // 第一行（同一个 ref）必须是同一个判定。
+  expect(engine.pick({ model: "m1", tried: new Set() })).toBe("COMMANDCODE_API_KEY");
+  // 顺序 = 顶层默认账号 + `accounts` 条目；固定账号被试过之后轮到真账号。
+  expect(engine.pick({ model: "m1", tried: new Set(["COMMANDCODE_API_KEY"]) })).toBe("COMMANDCODE_API_KEY_2");
+});
+
+it("设置文档里的 apiKey 不是凭据来源：opencode 只认 stored → environment（I2）", async () => {
+  const settings = fakeSettings([
+    {
+      ns: "opencode-go",
+      // 用户（或手工编辑）在文档里写了一个未声明的 `apiKey` 字面量。
+      value: { apiKeyEnv: "OPENCODE_TEST_REF", accounts: null, apiKey: "sk-from-settings" },
+      revision: 2,
+    },
+  ]);
+  const credentials = fakeCredentials({});
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", (async (input: unknown) => {
+    calls.push(String(input));
+    return new Response("{}", { status: 500 });
+  }) as typeof fetch);
+  try {
+    const host = fakeHost({ settings: settings.service, credentials: credentials.service });
+    const config = opencode.Config({
+      ...OPENCODE_SHAPE,
+      enabled: true,
+      apiKeyEnv: "OPENCODE_TEST_REF",
+      apiKey: "sk-from-settings",
+    });
+    // 前提：未声明的 `apiKey` 会被 schemastery 原样带过，所以它确实到得了适配器配置里
+    // （这正是这条缺陷能被触发的原因）。
+    expect(plain(config)).toMatchObject({ apiKey: "sk-from-settings" });
+
+    const bundle = opencode.apply(host.ctx, config);
+    const { error } = await drain(bundle.adapter.stream(streamRequest()));
+
+    // 密钥一个都没解析到（凭据服务为空、启动环境里没有这个名字）→ MISSING_CREDENTIAL，
+    // 而且**一次 HTTP 都不发**：字面量没有被当成凭据来源。
+    expect(error).toMatchObject({ code: "MISSING_CREDENTIAL" });
+    expect(calls).toEqual([]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+/**
+ * 造一个「当前账号 + 另一个账号」的假网关：目录端点返回空清单，生成端点一律 402 额度拒绝，
+ * 并按顺序记下每次生成请求带的密钥 —— 「第二个账号有没有被联系」就是看这个序列。
+ * @returns 假 fetch 与密钥序列。
+ */
+function quotaGateway(): { fetchImpl: typeof fetch; keys: string[] } {
+  const keys: string[] = [];
+  const fetchImpl = (async (input: unknown, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    if (url.includes("models.dev")) return new Response("{}", { status: 503 });
+    if (url.includes("/models")) {
+      return new Response(JSON.stringify({ object: "list", data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const headers = new Headers(init?.headers);
+    keys.push((headers.get("x-api-key") ?? headers.get("authorization") ?? "").replace(/^Bearer\s+/, ""));
+    return new Response(JSON.stringify({ error: { type: "insufficientquota" } }), {
+      status: 402,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  return { fetchImpl, keys };
+}
+
+/** 用户真实形状 + 第二个账号的 opencode 配置（`autoSwitch` 由调用方给）。 */
+function twoAccountConfig(autoSwitch: boolean): Record<string, unknown> {
+  return {
+    ...OPENCODE_SHAPE,
+    enabled: true,
+    apiKeyEnv: "PREFERRED_REF",
+    accounts: [{ id: "other", name: "other", apiKeyEnv: "OTHER_REF" }],
+    autoSwitch,
+  };
+}
+
+it("autoSwitch: false 时只试当前账号：额度拒绝不会打到第二个账号（I3）", async () => {
+  const credentials = fakeCredentials({ PREFERRED_REF: "key-preferred", OTHER_REF: "key-other" });
+  const gateway = quotaGateway();
+  vi.stubGlobal("fetch", gateway.fetchImpl);
+  try {
+    const host = fakeHost({ credentials: credentials.service });
+    const bundle = opencode.apply(host.ctx, opencode.Config(twoAccountConfig(false)));
+    const { error } = await drain(bundle.adapter.stream(streamRequest()));
+
+    // 唯一的候选被额度拒绝后没有下一个：抛出那次拒绝，第二个账号**从未被联系**。
+    expect(error).toMatchObject({ code: "QUOTA" });
+    expect(gateway.keys).toEqual(["key-preferred"]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("autoSwitch: true 时同一个网关会轮到第二个账号（同一份文档只差这个开关）", async () => {
+  const credentials = fakeCredentials({ PREFERRED_REF: "key-preferred", OTHER_REF: "key-other" });
+  const gateway = quotaGateway();
+  vi.stubGlobal("fetch", gateway.fetchImpl);
+  try {
+    const host = fakeHost({ credentials: credentials.service });
+    const bundle = opencode.apply(host.ctx, opencode.Config(twoAccountConfig(true)));
+    const { error } = await drain(bundle.adapter.stream(streamRequest()));
+
+    expect(error).toMatchObject({ code: "QUOTA" });
+    expect(gateway.keys).toEqual(["key-preferred", "key-other"]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

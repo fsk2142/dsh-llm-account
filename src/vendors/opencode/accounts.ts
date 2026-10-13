@@ -10,7 +10,11 @@
  *   （旧插件第 6824 行，`accountRefOf` 第 6784-6786 行把空串归一成默认引用名）；
  * - `autoSwitch`（第 6830 行）；
  * - `remove` 的候选回落顺序（旧插件第 8178-8180 行）：摘掉条目 → 若当前账号是它就
- *   回落到剩余列表里的第一个（删空了才回到默认引用名）。
+ *   回落到剩余列表里的第一个（删空了才回到默认引用名）；
+ * - **合成的默认槽**：当前账号（顶层 `apiKeyEnv`）不在 `accounts[]` 里时，旧插件
+ *   `accountsOf`（第 6783-6790 行）补一条 `{ id: "legacy:<ref>", name: "", apiKeyEnv: ref }`
+ *   放在首位。`list()` 因此也补出这一行（`opencodeAccountSlot`），否则用户现有那种
+ *   「没有 `accounts` 键、只有顶层 `apiKeyEnv`」的行会一行账号都列不出来。
  *
  * **注意**：旧插件的设置文档里**没有** commandcode 那套 `modelAccountRules`，也**没有**
  * `credentialCleanupRefs`（它的恢复状态叫 `accountOperations`，见下）。前者按模型绑定
@@ -50,7 +54,8 @@
 import { randomUUID } from "node:crypto";
 
 import type { AccountPort, AccountView, CredentialPort, SettingsOp, SettingsPort } from "../../core/adapter";
-import { dedupeByRef, reorder } from "../../core/accounts";
+import { CREDENTIAL_REF_PATTERN, dedupeByRef, readAccountSlot, reorder } from "../../core/accounts";
+import type { AccountSlotReading } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { AccountIntent, AccountIntentKind, IntentLog } from "../../core/recovery";
 
@@ -93,9 +98,6 @@ const ACTIVE_FIELD = "apiKeyEnv";
  * ref，真正 `credentials.unset` 留给确认该 ref 不再被引用的清理动作。
  */
 const CLEANUP_FIELD = "credentialCleanupRefs";
-
-/** 合法凭据引用名（Global Constraints）。 */
-const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** ref 撞名时的后缀尝试上限（与 commandcode 的同一上限）。 */
 const MAX_REF_ATTEMPTS = 128;
@@ -191,7 +193,7 @@ function rawCleanupRefs(value: Readonly<Record<string, unknown>>): readonly unkn
 function refOf(item: unknown): string | undefined {
   if (!isRecord(item)) return undefined;
   const ref = normalizeKey(item[REF_FIELD]);
-  return ref !== undefined && REF_PATTERN.test(ref) ? ref : undefined;
+  return ref !== undefined && CREDENTIAL_REF_PATTERN.test(ref) ? ref : undefined;
 }
 
 /** 读一个账号条目的展示名称。 */
@@ -206,11 +208,25 @@ function hasAccount(value: Readonly<Record<string, unknown>>, ref: string): bool
 }
 
 /**
- * 读当前固定账号；`undefined` 表示自动轮换 —— 字段缺失与空串都算自动（旧插件
- * `accountRefOf` 第 6784-6786 行把空串归一成默认引用名，也就是「没有固定账号」）。
+ * 当前账号槽：**哨兵词汇只在这一个函数里决定**（缺失、空串与非法值都读作自动轮换 ——
+ * 旧插件 `accountRefOf` 第 6784-6786 行把空串归一成默认引用名，也就是「没有固定账号」）。
+ *
+ * `fallback` 是内置默认引用名 {@link OPENCODE_DEFAULT_REF}：它是旧插件合成默认槽时用的那个
+ * ref（第 6791-6792 行 `legacy:<ref>` 的 `<ref>`），所以 `slot.ref` 恰好就是「默认槽的 ref」。
+ * 入口的 `pinnedRefOf`/`defaultRefOf`（轮换引擎的固定账号与顺序首项）与端口的
+ * `activeRefOf`（`list()` 的 active、`remove()` 的回落）都读它。
+ * @param value - 现读的设置文档。
+ * @returns 归一化后的槽判定。
+ */
+export function opencodeAccountSlot(value: Readonly<Record<string, unknown>>): AccountSlotReading {
+  return readAccountSlot(value[ACTIVE_FIELD], { fallback: OPENCODE_DEFAULT_REF });
+}
+
+/**
+ * 读当前固定账号；`undefined` 表示自动轮换（字段缺失、空串与非法引用名都算自动）。
  */
 function activeRefOf(value: Readonly<Record<string, unknown>>): string | undefined {
-  return normalizeKey(value[ACTIVE_FIELD]);
+  return opencodeAccountSlot(value).pinned ?? undefined;
 }
 
 /** 标签必须是可展示的非空文本（空标签会渲染成一行没有名字的账号）。 */
@@ -286,14 +302,28 @@ class OpencodeAccounts implements AccountPort {
     this.#deps = deps;
   }
 
-  /** @returns 账号行视图：身份取自 `apiKeyEnv`，`configured` 来自凭据服务。 */
+  /**
+   * @returns 账号行视图：身份取自 `apiKeyEnv`，`configured` 来自凭据服务。
+   *
+   * **合成的默认槽在第一行**（旧插件 `accountsOf` 第 6783-6790 行：当前账号不在 `accounts[]`
+   * 里时补一条 `{ id: "legacy:<ref>", name: "", apiKeyEnv: ref }`）。顶层 `apiKeyEnv` 就是
+   * 「当前账号」（`select` 写它、`move` 把队首跟到它），用户现有的 opencode 行根本没有
+   * `accounts` 键 —— 只列 `accounts[]` 会让正在服务请求的那个账号一行都不显示、也固定不了。
+   * 只有当真账号条目已经占用了这个 ref 时才不合成（同 ref 的重复行不该出现）。
+   */
   async list(): Promise<AccountView[]> {
     const snapshot = await this.#deps.settings.describe(OPENCODE_SETTINGS_NS);
-    const active = activeRefOf(snapshot.value);
-    const views = rawAccounts(snapshot.value)
-      .map((item) => ({ ref: refOf(item), label: labelOf(item) }))
-      .filter((item): item is { ref: string; label: string } => item.ref !== undefined)
-      .map((item) => ({ ref: item.ref, label: item.label ?? item.ref, configured: false, active: item.ref === active }));
+    const slot = opencodeAccountSlot(snapshot.value);
+    const views: AccountView[] = [];
+    if (!hasAccount(snapshot.value, slot.ref)) {
+      views.push({ ref: slot.ref, label: slot.ref, configured: false, active: slot.pinned === slot.ref });
+    }
+    views.push(
+      ...rawAccounts(snapshot.value)
+        .map((item) => ({ ref: refOf(item), label: labelOf(item) }))
+        .filter((item): item is { ref: string; label: string } => item.ref !== undefined)
+        .map((item) => ({ ref: item.ref, label: item.label ?? item.ref, configured: false, active: item.ref === slot.pinned })),
+    );
     // 重复 ref 只保留第一个：同一个凭据槽不该在轮换里被算两轮（Review Focus 1）。
     const unique = dedupeByRef(views);
     const info = await this.#deps.credentials.describe(unique.map((view) => view.ref));
@@ -436,10 +466,17 @@ class OpencodeAccounts implements AccountPort {
 
   /**
    * 固定账号或回到自动轮换。
+   *
+   * 可选的目标包含**合成的默认槽**（{@link OPENCODE_DEFAULT_REF} 或顶层 `apiKeyEnv`，即使它
+   * 不在 `accounts[]` 里）：`list()` 会把它列成第一行，页面拿这一行的 ref 回来固定时必须成立。
+   * 写回的就是这个 ref 本身（opencode 的当前账号字段就是那一个 ref，没有槽 id 空间）。
    * @param ref - 目标账号的 ref；`null` 表示自动轮换（写回默认引用名，旧插件第 6784-6786 行）。
    */
   async select(ref: string | null): Promise<void> {
-    if (ref !== null) await this.#require(ref);
+    if (ref !== null) {
+      const snapshot = await this.#deps.settings.describe(OPENCODE_SETTINGS_NS);
+      if (!hasAccount(snapshot.value, ref) && ref !== opencodeAccountSlot(snapshot.value).ref) throw unknownRef(ref);
+    }
     await this.#transaction("select", ref === null ? {} : { ref }, () =>
       this.#mutate(() => ({
         ops: [{ op: "set", path: [ACTIVE_FIELD], value: ref ?? OPENCODE_DEFAULT_REF }],

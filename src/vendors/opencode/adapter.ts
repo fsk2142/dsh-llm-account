@@ -3,7 +3,7 @@
  *
  * 一次 `stream()` 的固定顺序（设计 §9.1）：
  * 1. `rotation.pick({ model, tried })` 选账号 —— 决策顺序在轮换引擎里，这里不另写规则；
- * 2. 收集凭据来源（字面量 / 凭据库 / 环境变量）交给 `pickApiKey`；
+ * 2. 收集凭据来源（凭据库 / 环境变量）交给 `pickApiKey`；
  * 3. 经 **pi-ai SDK** 发出请求（见 `./protocol`），用 `runStream` 套上整请求 deadline
  *    与流空闲看门狗；
  * 4. 失败时用 `classifyGatewayFailure` 分类、`markRejected` 记入轮换引擎，
@@ -89,14 +89,15 @@ export interface OpencodeModelLimits {
 /**
  * opencode 的配置形状。
  *
- * 全部字段缺省即可用；`apiKey` 是组合配置里 `role("secret")` 那种**非持久化**字段，
- * 是唯一的字面量来源 —— 绝不允许从设置文档里读明文密钥（全局约束）。
+ * 全部字段缺省即可用。**没有 `apiKey` 字面量字段**：opencode 的密钥只有 `stored` 与
+ * `environment` 两个来源（设计 §4.2 的差异表：opencode 没有 auth.json 兜底，旧插件也没有任何
+ * 「配置里写死 key」的字段 —— `dsh-opencode-go/lib/index.js` 第 6816-6852 行的 Config 里全文
+ * 没有 `apiKey`）。文档里若手写一个 `apiKey` 字段，schema 会原样带过它，但本适配器**不读**：
+ * 它既不是 `role("secret")`（不会被脱敏，会明文流到设置客户端），也不该成为凭据来源。
  */
 export interface OpencodeConfig {
   /** 网关基地址；缺省 {@link DEFAULT_BASE_URL}。 */
   apiBase?: string;
-  /** 组合配置里写死的密钥（非持久化秘密字段）。 */
-  apiKey?: string;
   /** 整请求 deadline（毫秒）；缺省 {@link DEFAULT_REQUEST_TIMEOUT_MS}。 */
   requestTimeoutMs?: number;
   /** 流空闲看门狗（毫秒）；缺省 {@link DEFAULT_STREAM_IDLE_TIMEOUT_MS}。 */
@@ -116,7 +117,6 @@ export interface OpencodeConfig {
 /** 一次请求循环需要的、已填好默认值的配置。 */
 interface ResolvedConfig {
   apiBase: string;
-  apiKey?: string;
   requestTimeoutMs: number;
   streamIdleTimeoutMs: number;
   defaultMaxTokens: number;
@@ -151,7 +151,6 @@ function resolveConfig(raw: OpencodeConfig): ResolvedConfig {
   const ttl = raw.catalogTtlMs;
   return {
     apiBase: raw.apiBase !== undefined && raw.apiBase.trim() !== "" ? raw.apiBase : DEFAULT_BASE_URL,
-    ...(raw.apiKey === undefined ? {} : { apiKey: raw.apiKey }),
     requestTimeoutMs: positive(raw.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS),
     streamIdleTimeoutMs: positive(raw.streamIdleTimeoutMs, DEFAULT_STREAM_IDLE_TIMEOUT_MS),
     defaultMaxTokens: positive(raw.defaultMaxTokens, DEFAULT_GENERATE_MAX_TOKENS),
@@ -269,7 +268,6 @@ class OpencodeAdapter extends LlmAdapter {
       throw new LlmError("OpenCode Go adapter does not support stop sequences", "UNSUPPORTED_OPTION");
     }
     const raw = this.#deps.config();
-    const config = resolveConfig(raw);
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
 
@@ -290,7 +288,7 @@ class OpencodeAdapter extends LlmAdapter {
       }
       tried.add(ref);
 
-      const key = await this.#resolveKey(config, ref);
+      const key = await this.#resolveKey(ref);
       if (key === undefined) {
         // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
         // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
@@ -302,7 +300,7 @@ class OpencodeAdapter extends LlmAdapter {
         lastFailure = {
           rejection,
           thrown: new LlmError(
-            `llm-opencode-go: no API key for OpenCode Go account "${ref}"; store it through the credentials service, export it in the launching environment, or set config.apiKey`,
+            `llm-opencode-go: no API key for OpenCode Go account "${ref}"; store it through the credentials service or export it in the launching environment`,
             "MISSING_CREDENTIAL",
           ),
         };
@@ -441,12 +439,16 @@ class OpencodeAdapter extends LlmAdapter {
     }
   }
 
-  /** 收集三个凭据来源并按优先级挑选（`literal → stored → environment`）。 */
-  async #resolveKey(config: ResolvedConfig, ref: string): Promise<string | undefined> {
+  /**
+   * 收集两个凭据来源并按优先级挑选（`stored → environment`）。
+   *
+   * **没有字面量来源**：opencode 的密钥只能来自凭据服务或启动环境（旧插件的 Config 里根本没有
+   * 「配置写死 key」的字段，额度路径的 `resolveAccountKey` 也是同一套来源）。
+   */
+  async #resolveKey(ref: string): Promise<string | undefined> {
     const stored = await this.#deps.resolveStored?.(ref);
     const environment = this.#deps.resolveEnvironment?.(ref);
     return pickApiKey({
-      ...(config.apiKey === undefined ? {} : { literal: config.apiKey }),
       ...(stored === undefined ? {} : { stored }),
       ...(environment === undefined ? {} : { environment }),
     }).key;

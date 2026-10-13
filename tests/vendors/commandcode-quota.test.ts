@@ -697,12 +697,15 @@ it("list 用 CredentialPort.describe 填充 configured 与 active，空值不算
 
   const views = await port.list();
 
+  // 第一行是合成的默认槽（顶层 `apiKeyEnv`，此处文档里没写 → 内置默认名）：它不在
+  // `accounts[]` 里，但它是轮换顺序的首项，所以必须有一行（I1）。
   expect(views).toEqual([
+    { ref: "COMMANDCODE_API_KEY", label: "Default", configured: false, active: false },
     { ref: "a", label: "A", configured: true, active: false },
     { ref: "b", label: "B", configured: false, active: true },
     { ref: "c", label: "C", configured: false, active: false },
   ]);
-  expect(credentials.described).toEqual([["a", "b", "c"]]);
+  expect(credentials.described).toEqual([["COMMANDCODE_API_KEY", "a", "b", "c"]]);
 });
 
 it("list 在凭据服务漏报某个 ref 时按未配置处理，重复 ref 只保留第一个", async () => {
@@ -720,7 +723,70 @@ it("list 在凭据服务漏报某个 ref 时按未配置处理，重复 ref 只�
   };
   const port = createCommandCodeAccounts({ settings, credentials: omitting, intents: new IntentLog(store.store) });
 
-  expect(await port.list()).toEqual([{ ref: "a", label: "A", configured: false, active: false }]);
+  expect(await port.list()).toEqual([
+    { ref: "COMMANDCODE_API_KEY", label: "Default", configured: false, active: false },
+    { ref: "a", label: "A", configured: false, active: false },
+  ]);
+});
+
+it("用户真实形状：默认槽被 activeAccount: default 固定时可见、可固定、不可移除（I1）", async () => {
+  const store = memoryStore();
+  // 用户 profile patch 里的真实 commandcode 行（逐字来自 task-14-brief）：
+  // 顶层 apiKeyEnv 是那个「默认」账号，accounts[] 里另有一个账号，activeAccount 指向默认槽。
+  const settings = fakeSettings({
+    apiKeyEnv: "COMMANDCODE_API_KEY",
+    accounts: [entry("sample-user-2", "COMMANDCODE_API_KEY_2")],
+    activeAccount: "default",
+    modelAccountRules: [],
+  });
+  const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "sk-default", COMMANDCODE_API_KEY_2: "sk-2" });
+  const port = createCommandCodeAccounts({ settings, credentials, intents: new IntentLog(store.store) });
+
+  // 正在服务请求的默认槽必须有一行，而且是 active 的那一行；真账号条目原样列出。
+  expect(await port.list()).toEqual([
+    { ref: "COMMANDCODE_API_KEY", label: "Default", configured: true, active: true },
+    { ref: "COMMANDCODE_API_KEY_2", label: "sample-user-2", configured: true, active: false },
+  ]);
+
+  // 可固定：写回旧插件的槽 id，用户现有文档因此一字不改（`select(<默认槽 ref>)` 不再抛
+  // unknown account ref）。
+  const before = settings.mutations.length;
+  await port.select("COMMANDCODE_API_KEY");
+  expect(settings.doc().activeAccount).toBe("default");
+  expect(settings.mutations).toHaveLength(before + 1);
+  expect(store.snapshot()).toEqual([]);
+  expect((await port.list())[0]).toMatchObject({ ref: "COMMANDCODE_API_KEY", active: true });
+
+  // 不可移除：它不是真账号条目 —— 一个字节都不写，凭据不动，也不进待清理列表。
+  await port.remove("COMMANDCODE_API_KEY");
+  expect(settings.mutations).toHaveLength(before + 1);
+  expect(settings.doc().accounts).toEqual([entry("sample-user-2", "COMMANDCODE_API_KEY_2")]);
+  expect(settings.doc().credentialCleanupRefs).toBeUndefined();
+  expect(credentials.unsets).toEqual([]);
+  // 改名/换密钥同样拒绝：默认槽没有可改的条目（身份与真账号 ref 不同）。
+  await expect(port.rename("COMMANDCODE_API_KEY", "x")).rejects.toThrow(/unknown account ref/);
+  await expect(port.replaceKey("COMMANDCODE_API_KEY", "sk-x")).rejects.toThrow(/unknown account ref/);
+});
+
+it("真账号条目占用了顶层默认 ref 时不合成第二行（同 ref 不重复）", async () => {
+  const store = memoryStore();
+  const settings = fakeSettings({
+    apiKeyEnv: "COMMANDCODE_API_KEY",
+    accounts: [entry("A", "COMMANDCODE_API_KEY")],
+    activeAccount: "COMMANDCODE_API_KEY",
+    modelAccountRules: [],
+  });
+  const port = createCommandCodeAccounts({
+    settings,
+    credentials: fakeCredentials({ COMMANDCODE_API_KEY: "sk-a" }),
+    intents: new IntentLog(store.store),
+  });
+
+  // 只有真条目那一行：它是真账号（可改名/可移除），合成的默认槽只是「顶层 ref 不在账号表里」
+  // 时的补位。
+  expect(await port.list()).toEqual([{ ref: "COMMANDCODE_API_KEY", label: "A", configured: true, active: true }]);
+  await port.select("COMMANDCODE_API_KEY");
+  expect(settings.doc().activeAccount).toBe("COMMANDCODE_API_KEY");
 });
 
 it("move 不实现（能力声明已关闭）", () => {

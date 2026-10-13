@@ -1,5 +1,6 @@
 /**
- * 账号库不变量：ref 生成、按 ref 去重、顺序调整、按模型绑定与删除清理。
+ * 账号库不变量：ref 生成、按 ref 去重、顺序调整、按模型绑定、删除清理与固定账号字段
+ * （含哨兵）的读法。
  *
  * 全部为纯函数：不做 I/O、不持有状态、不修改入参。这些不变量是轮换引擎与
  * 两个厂商账号端口的共同地基，两处若各写一份迟早会走偏。
@@ -10,9 +11,17 @@
  * @module dsh-llm-account/src/core/accounts
  */
 import type { AccountState, AccountView, ModelRule, VendorId } from "./adapter";
+import { normalizeKey } from "./credentials";
 
 /** ref 前缀：账号 ref 同时充当凭据槽名，前缀把它与用户手写的引用名区分开。 */
 const REF_PREFIX = "DSH_LLM_ACCOUNT";
+
+/**
+ * 合法凭据引用名（Global Constraints）。槽判定与两个厂商的条目/字段校验共用这一份：
+ * 「这个值是不是一个 ref」是哨兵词汇的一部分（`invalid` 与「自动轮换」是两种不同的读法），
+ * 两处各写一份迟早会走偏。
+ */
+export const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** 哈希后缀的十六进制位数（48 位）：足够隔离标签转义碰撞，同时保持槽名可读。 */
 const HASH_SUFFIX_LENGTH = 12;
@@ -131,4 +140,59 @@ export function dropAccount(state: AccountState, ref: string): AccountState {
     rules: state.rules.filter((rule) => rule.account !== ref),
     pinned: state.pinned === ref ? null : state.pinned,
   };
+}
+
+/**
+ * 固定账号字段的**唯一**读法。
+ *
+ * 两个厂商的「当前账号」字段形状不同（Command Code 是 `activeAccount`，opencode 是顶层
+ * `apiKeyEnv`），但哨兵词汇完全一样：缺失、空串、自动轮换哨兵、旧插件的**默认槽**哨兵、
+ * 以及一个合法 ref；认不出的值按自动轮换处理。这些判定过去散在四个地方（两个入口的
+ * `pinnedRefOf` 与两个端口的 `activeRefOf`），一处漏掉一个哨兵就会出现「正在服务的账号
+ * 没有任何一行、也固定不了」的裂缝 —— 所以词汇只在这里决定。
+ */
+export interface AccountSlotReading {
+  /** 固定账号的 ref；`null` 表示按轮换顺序自动选择。 */
+  readonly pinned: string | null;
+  /** 这个字段当前生效的 ref（= `pinned ?? fallback`）：哨兵与坏值都落到 `fallback`。 */
+  readonly ref: string;
+  /** 字段缺失/空串/是自动轮换哨兵：没有固定账号。 */
+  readonly auto: boolean;
+  /** 字段是旧插件的默认槽哨兵：固定到 `fallback`（顶层那个账号）。 */
+  readonly isDefaultSlot: boolean;
+  /** 字段有值但既不是哨兵也不是合法引用名（只用于应用期诊断）。 */
+  readonly invalid: boolean;
+}
+
+/** 一个厂商的固定账号字段词汇。两个哨兵都是可选的：opencode 两个都不认。 */
+export interface AccountSlotVocabulary {
+  /** 字段缺失/空串/坏值时回落的默认账号 ref（顶层那个账号）。 */
+  readonly fallback: string;
+  /** 读作「自动轮换」的哨兵值（缺失与空串之外；Command Code 是 `"auto"`）。 */
+  readonly auto?: string;
+  /** 旧插件的「默认槽」哨兵：值等于它时固定到 `fallback`（Command Code 是 `"default"`）。 */
+  readonly legacyDefault?: string;
+}
+
+/**
+ * 读固定账号字段：把缺失、空串、两种哨兵与坏值归一成一个决定。
+ *
+ * 优先级固定为「缺失/空串/自动哨兵 → 自动」「默认槽哨兵 → 固定到 fallback」「合法 ref →
+ * 固定到它」「其余 → 自动（并标记 invalid 供诊断）」。
+ * @param raw - 文档字段的原始值（形状不可信）。
+ * @param vocabulary - 该厂商的哨兵词汇与默认账号 ref。
+ * @returns 归一化后的槽判定。
+ */
+export function readAccountSlot(raw: unknown, vocabulary: AccountSlotVocabulary): AccountSlotReading {
+  const value = normalizeKey(raw);
+  if (value === undefined || (vocabulary.auto !== undefined && value === vocabulary.auto)) {
+    return { pinned: null, ref: vocabulary.fallback, auto: true, isDefaultSlot: false, invalid: false };
+  }
+  if (vocabulary.legacyDefault !== undefined && value === vocabulary.legacyDefault) {
+    return { pinned: vocabulary.fallback, ref: vocabulary.fallback, auto: false, isDefaultSlot: true, invalid: false };
+  }
+  if (CREDENTIAL_REF_PATTERN.test(value)) {
+    return { pinned: value, ref: value, auto: false, isDefaultSlot: false, invalid: false };
+  }
+  return { pinned: null, ref: vocabulary.fallback, auto: true, isDefaultSlot: false, invalid: true };
 }

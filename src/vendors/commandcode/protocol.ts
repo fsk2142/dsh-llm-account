@@ -797,8 +797,16 @@ class StreamAssembler {
   /**
    * 关闭所有仍打开的块（Messages 的原生块、文本、推理、缓冲的 OpenAI 工具调用），
    * 并以 finish 收尾。
+   *
+   * **幂等**：已经交出过 finish 时返回 `[]`。每条流恰好一条 finish（宿主保留最后一条，多发的
+   * 会覆盖结束原因，且 `max-tokens` 截断时本该丢弃的半装工具块会被留下）；一个畸形网关连发
+   * 两个终止事件（两个 `finish` / `finish_reason`，或先 `message_stop` 再 `finish`）时，
+   * 第二个事件不能凭空再造一条 finish。
+   * @param reason - 结束原因。
+   * @returns 关闭块与唯一一条 finish；已有 finish 时为 `[]`。
    */
   finish(reason: FinishReason): StreamChunk[] {
+    if (this.#finished) return [];
     this.#finished = true;
     return [
       ...this.closeMessagesBlocks(),
@@ -856,10 +864,12 @@ class StreamAssembler {
    * 网关实测序列是 `message_delta`（带 `stop_reason` 与最终 usage）→ `message_stop`
    * （旧插件第 4680-4686 行注释）；finish 只在这里发出一次，否则宿主会拿到两条
    * finish chunk 并只保留最后一条 —— 结束原因被覆盖，且 `max-tokens` 截断时本该丢弃的
-   * 半装工具块会被留下（旧插件第 4814-4832 行）。
-   * @returns usage chunk（有且仅在尚未交出时）+ 一条 finish chunk。
+   * 半装工具块会被留下（旧插件第 4814-4832 行）。**幂等**：已经交出过 finish 时返回 `[]`
+   * （畸形网关连发两个 `message_stop` 时，第二条不能再造一条 finish）。
+   * @returns usage chunk（有且仅在尚未交出时）+ 一条 finish chunk；已有 finish 时为 `[]`。
    */
   messagesStop(): StreamChunk[] {
+    if (this.#finished) return [];
     this.#finished = true;
     return [...this.#emitMessagesUsage(), { type: "finish", reason: mapFinishReason(this.#messagesFinishReason) }];
   }
