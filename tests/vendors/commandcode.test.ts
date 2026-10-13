@@ -1,5 +1,6 @@
 import { LlmError } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/dsh-llm";
+import { readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 
 import type { AccountPort, QuotaPort } from "../../src/core/adapter";
@@ -7,6 +8,7 @@ import { RotationEngine } from "../../src/core/rotation";
 import { createCommandCodeAdapter } from "../../src/vendors/commandcode/adapter";
 import { parseCatalog } from "../../src/vendors/commandcode/catalog";
 import { classifyCommandCodeFailure } from "../../src/vendors/commandcode/failures";
+import { decodeStream } from "../../src/vendors/commandcode/protocol";
 
 /** 本文件里的假的账号端口：这些用例都不经账号写路径（Task 10 负责）。 */
 function stubAccounts(): AccountPort {
@@ -48,6 +50,16 @@ async function collect(source: AsyncIterable<StreamChunk>): Promise<StreamChunk[
 function sseResponse(events: readonly string[]): Response {
   const body = events.map((event) => `data: ${event}\n\n`).join("");
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+/** 读一个 SSE fixture（`tests/fixtures/commandcode/`）。 */
+function sseFixture(name: string): string {
+  return readFileSync(new URL(`../fixtures/commandcode/${name}`, import.meta.url), "utf8");
+}
+
+/** 把一段真实 SSE 文本喂进 Messages 传输解码器，收齐 chunk。 */
+async function decodeMessagesSse(text: string): Promise<StreamChunk[]> {
+  return collect(decodeStream("messages", new Response(text).body));
 }
 
 /**
@@ -236,4 +248,155 @@ it("providerRetryPolicy 把两个超时码列入 retryableCodes（裁决 12）",
   expect(policy.retryableCodes).toContain("LLM_STREAM_IDLE_TIMEOUT");
   expect(policy.retryableCodes).toContain("RATE_LIMIT");
   expect(adapter.providerInfo("commandcode")).toEqual({ id: "commandcode", name: "Command Code" });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 1：Messages 传输每个响应只能有一条终止 finish。
+// 网关实测序列是 message_delta（带 stop_reason）→ message_stop，finish 必须只发一次：
+// 宿主保留最后一条 finish，多发的会覆盖结束原因，且 max-tokens 截断时不再丢弃半装的工具块。
+// ---------------------------------------------------------------------------
+
+it("Messages 流只发出一个 finish，结束原因取自 message_delta 的 stop_reason（Finding 1）", async () => {
+  const chunks = await decodeMessagesSse(sseFixture("messages-tool-use.sse"));
+
+  const finishes = chunks.filter((chunk) => chunk.type === "finish");
+  expect(finishes).toEqual([{ type: "finish", reason: { kind: "tool-calls" } }]);
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "tool-calls" } });
+  // 内容块仍按线上顺序装配：两个 partial_json 片段拼成完整的工具参数。
+  expect(chunks.filter((chunk) => chunk.type === "text-delta")).toEqual([
+    { type: "text-delta", index: 0, text: "Let me read that file." },
+  ]);
+  expect(chunks.filter((chunk) => chunk.type === "block-end").at(-1)).toEqual({
+    type: "block-end",
+    index: 1,
+    block: { type: "tool-call", id: "toolu_01K7", name: "read_file", arguments: '{"path":"a.txt"}' },
+  });
+});
+
+it("Messages 的 max_tokens 截断只有一条 finish，且 reason 是 max-tokens（Finding 1）", async () => {
+  const chunks = await decodeMessagesSse(sseFixture("messages-max-tokens.sse"));
+
+  const finishes = chunks.filter((chunk) => chunk.type === "finish");
+  expect(finishes).toHaveLength(1);
+  expect(finishes[0]).toEqual({ type: "finish", reason: { kind: "max-tokens" } });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2：usage 只在 message_start 里有输入/缓存计数；合并后仅交出**一条** usage chunk
+//（宿主拒绝第二条 usage：dsh-llm 的流不变式 "LLM stream emitted usage more than once"）。
+// ---------------------------------------------------------------------------
+
+it("Messages usage 合并 message_start 与 message_delta，且只发一条 usage（Finding 2）", async () => {
+  const chunks = await decodeMessagesSse(sseFixture("messages-max-tokens.sse"));
+
+  const usages = chunks.filter((chunk) => chunk.type === "usage");
+  expect(usages).toHaveLength(1);
+  // input/cache 计数只出现在 message_start，output 计数只出现在 message_delta。
+  expect(usages[0]).toEqual({
+    type: "usage",
+    usage: { inputTokens: 4096, outputTokens: 8192, cacheReadTokens: 2048, cacheWriteTokens: 128 },
+  });
+  expect(chunks.indexOf(usages[0])).toBeLessThan(chunks.findIndex((chunk) => chunk.type === "finish"));
+});
+
+it("message_delta 完全不带 usage 时，message_start 的输入计数仍只发一条 usage（Finding 2）", async () => {
+  const chunks = await decodeMessagesSse(
+    "event: message_start\n" +
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":777,"cache_read_input_tokens":11,"output_tokens":1}}}\n\n' +
+      "event: message_delta\n" +
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n' +
+      "event: message_stop\n" +
+      'data: {"type":"message_stop"}\n',
+  );
+
+  expect(chunks.filter((chunk) => chunk.type === "usage")).toEqual([
+    { type: "usage", usage: { inputTokens: 777, outputTokens: 1, cacheReadTokens: 11 } },
+  ]);
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 3：4xx 散文扫描与窗口证据都要看整段原始正文，而不是只有 error.message。
+// ---------------------------------------------------------------------------
+
+it("纯文本 400 正文命中余额耗尽文案：标记 unavailable 并换账号（Finding 3）", async () => {
+  const rotation = new RotationEngine({ order: ["a", "b"], rules: [], pinned: null });
+  const markRejected = vi.spyOn(rotation, "markRejected");
+  const { fetchImpl, calls } = keyedFetch({
+    // 账号 a：400，正文是纯文本（解析不出 JSON），只在散文里点名余额耗尽。
+    "key-a": () =>
+      new Response("insufficient credits for this account", { status: 400, headers: { "content-type": "text/plain" } }),
+    "key-b": () =>
+      sseResponse([
+        '{"choices":[{"delta":{"content":"ok"}}]}',
+        '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        "[DONE]",
+      ]),
+  });
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test" }),
+    rotation,
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl,
+    resolveStored: async (ref) => (ref === "a" ? "key-a" : ref === "b" ? "key-b" : undefined),
+  });
+
+  const chunks = await collect(adapter.stream(request()));
+
+  expect(calls).toEqual(["key-a", "key-b"]);
+  expect(markRejected).toHaveBeenCalledWith("a", expect.objectContaining({ kind: "unavailable" }));
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
+});
+
+it("429 的重置证据落在 error.message 之外（根级 message / detail）时仍解析出 resetAt（Finding 3）", () => {
+  const now = Date.UTC(2026, 0, 1);
+  const stamp = new Date(now + 30 * 60 * 1000).toISOString();
+
+  const rootMessage = classifyCommandCodeFailure(
+    429,
+    { error: { type: "rate_limit_error" }, message: `usage limit for your plan, resets at ${stamp}` },
+    now,
+  );
+  expect(rootMessage?.kind).toBe("rate-limit");
+  expect(rootMessage?.resetAt).toBe(Date.parse(stamp));
+
+  const detail = classifyCommandCodeFailure(
+    429,
+    { error: { type: "rate_limit_error" }, detail: `usage limit for your plan, resets at ${stamp}` },
+    now,
+  );
+  expect(detail?.kind).toBe("rate-limit");
+  expect(detail?.resetAt).toBe(Date.parse(stamp));
+});
+
+// ---------------------------------------------------------------------------
+// 控制器裁决（小项）：缺凭据的账号必须入拒绝表，否则每次请求都会重新选中它。
+// ---------------------------------------------------------------------------
+
+it("缺凭据的账号被记入拒绝表，后续请求不再重选它（裁决：missing-credential 入表）", async () => {
+  const rotation = new RotationEngine({ order: ["a", "b"], rules: [], pinned: null });
+  const { fetchImpl, calls } = keyedFetch({
+    "key-b": () =>
+      sseResponse([
+        '{"choices":[{"delta":{"content":"ok"}}]}',
+        '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        "[DONE]",
+      ]),
+  });
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test" }),
+    rotation,
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl,
+    // 账号 a 没有任何来源的密钥（stored/environment/authFile 全空）。
+    resolveStored: async (ref) => (ref === "b" ? "key-b" : undefined),
+  });
+
+  const chunks = await collect(adapter.stream(request()));
+
+  expect(calls).toEqual(["key-b"]);
+  expect(rotation.rejections().get("a")).toMatchObject({ kind: "invalid-credential" });
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
 });

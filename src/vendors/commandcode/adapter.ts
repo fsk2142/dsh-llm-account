@@ -304,8 +304,15 @@ class CommandCodeAdapter extends LlmAdapter {
 
       const key = await this.#resolveKey(config, ref);
       if (key === undefined) {
+        // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
+        // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
+        const rejection: Rejection = {
+          kind: "invalid-credential",
+          message: `Command Code account "${ref}" has no usable API key`,
+        };
+        this.#deps.rotation.markRejected(ref, rejection);
         lastFailure = {
-          rejection: { kind: "invalid-credential", message: `Command Code account "${ref}" has no usable API key` },
+          rejection,
           thrown: new LlmError(
             `llm-commandcode: no API key for Command Code account "${ref}"; store it through the credentials service, export it in the launching environment, set config.apiKey, or run \`command-code login\` to write ~/.commandcode/auth.json`,
             "MISSING_CREDENTIAL",

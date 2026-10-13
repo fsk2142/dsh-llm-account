@@ -496,16 +496,28 @@ function openAiUsage(raw: unknown): TokenUsage | undefined {
   return usage;
 }
 
-/** Messages 的 usage 形状 → 宿主计数（Anthropic 的 input 已不含缓存读写）。 */
-function messagesUsage(raw: unknown): TokenUsage | undefined {
+/**
+ * Messages 的 usage 形状 → 宿主计数（Anthropic 的 input 已不含缓存读写）。
+ *
+ * 每个字段先看本次负载，缺失则沿用 `previous`（旧插件 `mapMessagesUsage` 第 4655-4669 行）：
+ * 网关实测的 `message_delta.usage` 可能**只有输出计数**，输入/缓存计数只出现在
+ * `message_start.message.usage`；不合并就会把已知的输入计数读成 0（项目约束：
+ * 缺失字段绝不能被当成 0）。
+ * @param raw - 本次事件的 usage 负载。
+ * @param previous - 同一响应里此前已见过的 usage（`message_start` 的）。
+ * @returns 宿主计数字段；本次负载不是对象时为 `undefined`。
+ */
+function messagesUsage(raw: unknown, previous?: TokenUsage): TokenUsage | undefined {
   if (!isRecord(raw)) return undefined;
-  const input = numberValue(raw.input_tokens) ?? 0;
-  const output = numberValue(raw.output_tokens) ?? 0;
-  const cacheRead = numberValue(raw.cache_read_input_tokens) ?? 0;
-  const cacheWrite = numberValue(raw.cache_creation_input_tokens) ?? 0;
+  const input = numberValue(raw.input_tokens) ?? previous?.inputTokens ?? 0;
+  const output = numberValue(raw.output_tokens) ?? previous?.outputTokens ?? 0;
+  const cacheRead = numberValue(raw.cache_read_input_tokens) ?? previous?.cacheReadTokens ?? 0;
+  const cacheWrite = numberValue(raw.cache_creation_input_tokens) ?? previous?.cacheWriteTokens ?? 0;
   const usage: TokenUsage = { inputTokens: Math.max(0, input), outputTokens: output, cacheReadTokens: cacheRead };
   if (cacheWrite > 0) usage.cacheWriteTokens = cacheWrite;
-  const reasoning = numberValue((isRecord(raw.output_tokens_details) ? raw.output_tokens_details : undefined)?.thinking_tokens);
+  const reasoning =
+    numberValue((isRecord(raw.output_tokens_details) ? raw.output_tokens_details : undefined)?.thinking_tokens) ??
+    previous?.reasoningTokens;
   if (reasoning !== undefined) usage.reasoningTokens = reasoning;
   return usage;
 }
@@ -572,6 +584,12 @@ class StreamAssembler {
   #reasoning = "";
   #openAiTools: OpenAiToolCall[] = [];
   readonly #messagesBlocks = new Map<number, MessagesBlockState>();
+  /** `message_start` 的 usage：`message_delta` 只带输出计数时靠它补齐输入/缓存计数。 */
+  #messagesUsage: TokenUsage | undefined;
+  /** usage 已交出的标志：宿主拒绝第二条 usage chunk（`dsh-llm` 的流不变式）。 */
+  #messagesUsageEmitted = false;
+  /** `message_delta` 记下的结束原因；真正的 finish 由 `message_stop` 发出。 */
+  #messagesFinishReason: string | undefined;
 
   #openText(): StreamChunk[] {
     if (this.#textIndex >= 0) return [];
@@ -734,6 +752,51 @@ class StreamAssembler {
   finish(reason: FinishReason): StreamChunk[] {
     return [...this.closeText(), ...this.closeReasoning(), ...this.flushOpenAiToolCalls(), { type: "finish", reason }];
   }
+
+  /** Messages 的 `message_start`：只记下 usage，不在此时交出（全流只发一条 usage）。 */
+  setMessagesUsage(usage: TokenUsage): void {
+    this.#messagesUsage = usage;
+  }
+
+  /**
+   * Messages 的 `message_delta`：把本次 usage 与此前 `message_start` 的合并后交出。
+   *
+   * 本次负载缺失时（`event.usage` 不是对象）**不**交出任何 chunk —— usage 会留到
+   * `message_stop` 由 {@link messagesStop} 发出，绝不把组件重复交给宿主。
+   * @param raw - `message_delta.usage` 的原始负载。
+   * @returns 至多一条 usage chunk。
+   */
+  mergeMessagesUsage(raw: unknown): StreamChunk[] {
+    const merged = messagesUsage(raw, this.#messagesUsage);
+    if (merged === undefined) return [];
+    this.#messagesUsage = merged;
+    return this.#emitMessagesUsage();
+  }
+
+  /** Messages 的 `message_delta`：记住 `stop_reason`，finish 留给 `message_stop`。 */
+  setMessagesFinishReason(raw: string | undefined): void {
+    if (raw !== undefined) this.#messagesFinishReason = raw;
+  }
+
+  /**
+   * Messages 的 `message_stop`：先补发（若尚未发出的）usage，再交出**唯一**的 finish。
+   *
+   * 网关实测序列是 `message_delta`（带 `stop_reason` 与最终 usage）→ `message_stop`
+   * （旧插件第 4680-4686 行注释）；finish 只在这里发出一次，否则宿主会拿到两条
+   * finish chunk 并只保留最后一条 —— 结束原因被覆盖，且 `max-tokens` 截断时本该丢弃的
+   * 半装工具块会被留下（旧插件第 4814-4832 行）。
+   * @returns usage chunk（有且仅在尚未交出时）+ 一条 finish chunk。
+   */
+  messagesStop(): StreamChunk[] {
+    return [...this.#emitMessagesUsage(), { type: "finish", reason: mapFinishReason(this.#messagesFinishReason) }];
+  }
+
+  /** 交出尚未发出的 Messages usage；已经交过或根本没有时为 `[]`。 */
+  #emitMessagesUsage(): StreamChunk[] {
+    if (this.#messagesUsage === undefined || this.#messagesUsageEmitted) return [];
+    this.#messagesUsageEmitted = true;
+    return [{ type: "usage", usage: this.#messagesUsage }];
+  }
 }
 
 /** Chat Completions 的一行事件（旧插件 `handleOpenAIEvent` 第 4557-4644 行）。 */
@@ -778,6 +841,13 @@ function openAiChunks(assembler: StreamAssembler, event: Record<string, unknown>
 /** Messages 的一行事件（旧插件第 4678 行起的处理器）。 */
 function messagesChunks(assembler: StreamAssembler, event: Record<string, unknown>): StreamChunk[] {
   switch (stringValue(event.type)) {
+    case "message_start": {
+      // 输入/缓存计数只在这里出现：先记进装配器，等 message_delta 合并后统一交出。
+      const message = isRecord(event.message) ? event.message : {};
+      const usage = messagesUsage(message.usage);
+      if (usage !== undefined) assembler.setMessagesUsage(usage);
+      return [];
+    }
     case "content_block_start": {
       const index = numberValue(event.index) ?? 0;
       const block = isRecord(event.content_block) ? event.content_block : {};
@@ -791,17 +861,14 @@ function messagesChunks(assembler: StreamAssembler, event: Record<string, unknow
     case "content_block_stop":
       return assembler.messagesBlockStop(numberValue(event.index) ?? 0);
     case "message_delta": {
-      const chunks: StreamChunk[] = [];
-      const usage = messagesUsage(event.usage);
-      if (usage !== undefined) chunks.push({ type: "usage", usage });
+      // 只交出合并后的 usage；finish 归 message_stop，避免一条响应两条终止 chunk。
+      const chunks = assembler.mergeMessagesUsage(event.usage);
       const delta = isRecord(event.delta) ? event.delta : {};
-      if (delta.stop_reason !== undefined) {
-        chunks.push(...assembler.finish(mapFinishReason(stringValue(delta.stop_reason))));
-      }
+      assembler.setMessagesFinishReason(stringValue(delta.stop_reason));
       return chunks;
     }
     case "message_stop":
-      return assembler.finish({ kind: "stop" });
+      return assembler.messagesStop();
     case "error":
       throw streamFailure(event.error ?? event);
     default:
