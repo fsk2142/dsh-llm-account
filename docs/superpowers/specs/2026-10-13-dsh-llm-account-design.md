@@ -192,7 +192,7 @@ export interface AccountPort {
 }
 
 export interface TransportPort {
-  stream(options: RequestOptions): AsyncIterable<StreamChunk>;
+  stream(options: GenerateOptions): AsyncIterable<StreamChunk>;   // 宿主 @deepseek-ai/dsh-llm 的真实请求类型
 }
 ```
 
