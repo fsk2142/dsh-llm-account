@@ -561,6 +561,84 @@ it("同名标签的第二个账号得到不同的 ref（不共用同一个凭据
   expect(settings.doc().accounts).toEqual([entry("Team A", first.ref), entry("Team A", second.ref)]);
 });
 
+it("并发同标签的两个 add 冻结到同一个 ref：文档里只有一个条目，凭据槽最多写一次（Review Focus 1）", async () => {
+  const ref = accountRef("commandcode", "Team A");
+  const settings = fakeSettings({ accounts: [], activeAccount: ACTIVE_ACCOUNT_AUTO, modelAccountRules: [] });
+  // 显式造出**真实**的交错：把第一次 mutate 停在「两个 add 都已经从**还没有提交**的文档里
+  // 冻结出 ref」之后 —— 意图日志里出现第二条意图（两个 add 都已经 append）即放行。
+  // 于是两次调用都冻结到同一个确定性 ref（正是重复条目的来源），而第一次提交一定发生在
+  // 第二次读取之后。它证明的是「提交按最新文档再判一次身份」这道闸门；它不依赖微任务
+  // 调度的运气（不靠 Promise.all 的偶然顺序）。
+  let parked = false;
+  let release: () => void = () => {};
+  const bothFrozen = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const innerMutate = settings.mutate.bind(settings);
+  settings.mutate = async (ns, ops, expected) => {
+    if (!parked) {
+      parked = true;
+      await bothFrozen;
+    }
+    return innerMutate(ns, ops, expected);
+  };
+  let state: AccountIntent[] = [];
+  const store: IntentStore = {
+    read: async () => state.map((intent) => ({ ...intent })),
+    write: async (intents) => {
+      state = intents.map((intent) => ({ ...intent }));
+      if (state.length >= 2) release();
+    },
+  };
+  const credentials = fakeCredentials();
+  const port = createCommandCodeAccounts({ settings, credentials, intents: new IntentLog(store) });
+
+  const [first, second] = await Promise.all([
+    port.add({ label: "Team A", key: "sk-first" }),
+    port.add({ label: "Team A", key: "sk-second" }),
+  ]);
+
+  // 两次都冻结到同一个确定性 ref —— 没有闸门时文档会变成 `[R, R]`。
+  expect([first.ref, second.ref]).toEqual([ref, ref]);
+  expect(settings.doc().accounts).toEqual([entry("Team A", ref)]);
+  // 文档只被提交一次：判定为「已成立」的那次不落盘（空 ops 不是一次空写）。
+  expect(settings.mutations).toHaveLength(1);
+  // 没有追加条目的那次不再写凭据槽：槽里最多一个值，两个密钥不会互相覆盖。
+  expect(credentials.sets).toHaveLength(1);
+  expect(credentials.sets[0]?.ref).toBe(ref);
+  expect(["sk-first", "sk-second"]).toContain(credentials.sets[0]?.value);
+  // 两条意图都被收尾。
+  expect(state).toEqual([]);
+});
+
+it("冲突重试时冻结的 ref 已经在文档里：不再追加条目、不再写凭据槽（幂等提交）", async () => {
+  const ref = accountRef("commandcode", "Team A");
+  const settings = fakeSettings(
+    { accounts: [], activeAccount: ACTIVE_ACCOUNT_AUTO, modelAccountRules: [] },
+    (context) => {
+      if (context.attempt !== 1) return undefined;
+      // 另一个写者抢先提交了**同一个 ref**（标签相同 → 确定性 ref 相同），修订号 3 → 7。
+      context.write("accounts", [entry("Team A", ref)]);
+      context.bumpRevision(4);
+      return "conflict";
+    },
+  );
+  const store = memoryStore();
+  const credentials = fakeCredentials();
+  const port = createCommandCodeAccounts({ settings, credentials, intents: new IntentLog(store.store) });
+
+  const view = await port.add({ label: "Team A", key: "sk-live" });
+
+  expect(view.ref).toBe(ref);
+  // 重试读到的文档里已经有这个 ref：不追加第二个条目（只 submit 了一次）。
+  expect(settings.mutations).toHaveLength(1);
+  expect(settings.doc().accounts).toEqual([entry("Team A", ref)]);
+  // 也没有写凭据槽（槽归抢先的写者），视图如实报告未配置。
+  expect(credentials.sets).toEqual([]);
+  expect(view).toMatchObject({ label: "Team A", configured: false, active: false });
+  expect(store.snapshot()).toEqual([]);
+});
+
 it("rename 只改 label，绝不重新推导 ref，也不丢条目上的其它字段", async () => {
   const store = memoryStore();
   const settings = fakeSettings({

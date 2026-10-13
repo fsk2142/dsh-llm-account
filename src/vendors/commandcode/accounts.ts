@@ -26,8 +26,10 @@
  * 是「用户的操作」而不是过期的 ops。
  *
  * **意图与身份**：`add` 在 `append` **之前**解析出 ref 并写进意图（`{ kind: "add", ref, label }`），
- * 提交用的就是同一个 ref —— 重放因此按 ref 对齐，不必按 label 猜（同名标签合法）。所有
- * 不改状态就可能失败的校验都跑在 `append` 之前，日志里不会留下永远应用不了的意图。
+ * 提交用的就是同一个 ref —— 重放因此按 ref 对齐，不必按 label 猜（同名标签合法）。提交还会按
+ * **最新文档**再判一次身份（ref 已在账号表里就不再追加条目、不再写凭据槽），所以并发的同标签
+ * `add` 不会造出两个同 ref 的条目。所有不改状态就可能失败的校验都跑在 `append` 之前，日志里
+ * 不会留下永远应用不了的意图。
  *
  * 本任务**不**做：网页登录（Task 11）、客户端页面（计划 1b）、套餐过滤与费用估算（第 2 期）。
  * @module dsh-llm-account/src/vendors/commandcode/accounts
@@ -251,10 +253,16 @@ class CommandCodeAccounts implements AccountPort {
    * 后缀），按 label 重新推导分不清「已提交但凭据没写成」「根本没提交」与「同名的存量
    * 账号」，会造出重复账号或把密钥写到错的账号上。
    *
+   * **提交是幂等的**：每一轮（含冲突重试）都拿**刚读到的**文档再判一次身份 —— 冻结的
+   * ref 已经在账号表里就不再追加第二个条目，也不再写凭据槽。同标签的并发 `add` 会因为
+   * `accountRef` 的确定性而冻结到同一个 ref：没有这道闸门，两次调用会把同一个凭据槽写
+   * 两遍（`list()` 的 `dedupeByRef` 只会把重复行藏起来，文档里仍然留着两条）。
+   *
    * 所有**不改状态就可能失败**的校验（标签、密钥、没有空闲 ref）都跑在 `append` 之前，
-   * 因此日志里不会留下一条永远应用不了的意图；真正的写入失败（凭据写入、设置冲突耗尽）
-   * 才留下未决意图，那是给崩溃恢复重放的，正确。带 `key` 时先提交账号条目、再写凭据服务
-   * （旧插件 `run()` → `store()` 的次序）。
+   * 因此日志里不会留下一条永远应用不了的意图。真正写失败（凭据服务写失败、设置冲突重试
+   * 用尽）才留下未决意图：重放能确认账号条目已经落地，但**补不回密钥** —— 那条账号会保持
+   * `configured: false`，直到用户重新提供密钥（`replaceKey`）。带 `key` 时先提交账号条目、
+   * 再写凭据服务（旧插件 `run()` → `store()` 的次序）。
    * @param input - 展示名称与可选密钥。
    * @returns 新账号的视图。
    */
@@ -264,16 +272,27 @@ class CommandCodeAccounts implements AccountPort {
     // 解析 ref 需要当前文档；没有空闲 ref 时在这里就抛，不写意图（fail 在 append 之前）。
     const snapshot = await this.#deps.settings.describe(COMMAND_CODE_SETTINGS_NS);
     const ref = freeRef(snapshot.value, label);
-    const committed = await this.#transaction("add", { ref, label }, async () => {
-      const result = await this.#mutate<undefined>((value) => ({
-        ops: [{ op: "set", path: [ACCOUNTS_FIELD], value: [...rawAccounts(value), { [LABEL_FIELD]: label, [REF_FIELD]: ref }] }],
-        result: undefined,
-      }));
-      if (key !== undefined) await this.#deps.credentials.set(ref, key);
-      return result;
+    const document = await this.#transaction("add", { ref, label }, async () => {
+      const { result: applied, value: current } = await this.#mutate<boolean>((value) => {
+        // 最新文档里已经有这个 ref：这次 add 已经落地（自己的重试，或并发的同标签 add
+        // 冻结到同一个确定性 ref）→ 空 ops 表示不落盘（见 `#mutate`），也不再写凭据槽。
+        if (hasAccount(value, ref)) return { ops: [], result: false };
+        return {
+          ops: [
+            {
+              op: "set",
+              path: [ACCOUNTS_FIELD],
+              value: [...rawAccounts(value), { [LABEL_FIELD]: label, [REF_FIELD]: ref }],
+            },
+          ],
+          result: true,
+        };
+      });
+      if (applied && key !== undefined) await this.#deps.credentials.set(ref, key);
+      return current;
     });
     const info = await this.#deps.credentials.describe([ref]);
-    return { ref, label, configured: info[ref]?.configured === true, active: activeRefOf(committed.value) === ref };
+    return { ref, label, configured: info[ref]?.configured === true, active: activeRefOf(document) === ref };
   }
 
   /**
@@ -381,6 +400,10 @@ class CommandCodeAccounts implements AccountPort {
   /**
    * 提交一次设置变更，带修订号冲突重放：每轮都重新 `describe` 拿最新修订号，并用最新
    * 文档重算 ops 后再提交。冲突时**不**覆盖对方的写入。
+   *
+   * `build` 针对**刚读到的**文档返回空 ops，表示这次操作在这个文档上已经成立（`add`
+   * 发现冻结的 ref 已经存在就是这种情况）：直接返回，**不落盘**。这样「幂等的提交」不必
+   * 伪造一次空写，也不会白白推进修订号去作废别人的写入。
    * @param build - 由最新文档算出 ops 与调用方要的结果。
    * @returns 调用方的结果与提交后的文档。
    */
@@ -390,6 +413,7 @@ class CommandCodeAccounts implements AccountPort {
     for (let attempt = 0; ; attempt += 1) {
       const snapshot = await this.#deps.settings.describe(COMMAND_CODE_SETTINGS_NS);
       const { ops, result } = build(snapshot.value);
+      if (ops.length === 0) return { result, value: snapshot.value };
       try {
         const committed = await this.#deps.settings.mutate(COMMAND_CODE_SETTINGS_NS, ops, snapshot.revision);
         return { result, value: committed.value };
