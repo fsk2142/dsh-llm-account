@@ -820,6 +820,8 @@ git commit -m "feat(opencode): quota normalization and account port"
 
 两个入口各导出 `{ name, inject: ["llm"], apply, Config }`。`apply` 里按 config 构造：轮换引擎（顺序 = 账号列表，固定 = `activeAccount`，规则 = `modelAccountRules`）、意图日志（存储接设置文档的隐藏字段）、额度与账号端口；commandcode 另外构造登录端口（`storeKey` 写凭据服务），**本期只构造并挂在插件实例上，远程暴露留给计划 1b**。`cordis.patch.yml` 按设计文档 §5.1 插入 `llm-commandcode`（`dsh-llm-account/commandcode`）与 `opencode-go`（`dsh-llm-account/opencode`）两行。
 
+构建侧的三条硬约束（Task 0 实测得到，别改回去）：① tsdown 的 `entry` 必须是**对象**映射 `{ index, commandcode, opencode, client }` —— 数组形式会产出 `lib/vendors/...`，与 `exports` 的扁平目标（`./lib/commandcode.js` 等）不匹配；② 保持 `fixedExtension: false`，否则 `platform: "node"` 下会强制 `.mjs`；③ `./client` 是给 GUI 加载的**浏览器**产物，不能用当前 `platform: "node"` 的配置构建 —— 本期（宿主侧）可以先不产出它（`exports` 里的声明保留），但计划 1b 必须先补一个浏览器目标的构建配置，否则页面加载不到客户端 bundle。
+
 - [ ] **Step 2: 构建并确认导出可解析**
 
 Run: `pnpm build && node -e "import('dsh-llm-account/commandcode').then(m => console.log(Object.keys(m)))"`
@@ -865,6 +867,8 @@ git commit -m "feat: two-row bundle assembly and assembly smoke"
 ## 计划 1b（待写）
 
 客户端统一页面（单页多厂商、能力降级、额度两种形状、i18n）在 1a 完成后按 **Task 1 记录的兜底路径**写（页面不依赖每实例注入的状态，直接按命名空间读两家数据）：`docs/superpowers/plans/2026-10-13-dsh-llm-account-phase1-client.md`。
+
+页面结构按设计文档 §8（用户要求，2026-10-13 追加）：**顶部厂商标签页**（Command Code / OpenCode），标签内沿用 Command Code 设置页的卡片顺序与交互 —— 账户卡片（每账号一行：名称、套餐、状态、5 小时/每周额度条，可展开，行尾 `⋯` 菜单，底部「添加账户」）→ 模型卡片 → 隐私与安全 → 集成与显示 → 高级设置（默认折叠）→ 底部浮动保存条；厂商不支持的卡片不渲染。界面摆放（侧边栏额度卡片、中栏用量面板、输入框下方费用读数）属第 2 期，同样对齐 Command Code。
 
 ## 计划 1c（待写）
 
