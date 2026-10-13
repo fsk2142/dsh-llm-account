@@ -497,7 +497,7 @@ git commit -m "feat(core): durable account intent log"
 ### Task 9: commandcode 适配器 · LlmAdapter、协议、目录与失败映射
 
 **Files:**
-- Create: `src/vendors/commandcode/protocol.ts`, `src/vendors/commandcode/failures.ts`, `src/vendors/commandcode/catalog.ts`
+- Create: `src/vendors/commandcode/protocol.ts`, `src/vendors/commandcode/failures.ts`, `src/vendors/commandcode/catalog.ts`, `src/vendors/commandcode/adapter.ts`
 - Test: `tests/vendors/commandcode.test.ts`
 
 **Interfaces:**
@@ -546,7 +546,9 @@ Expected: FAIL，模块不存在
 
 `classifyCommandCodeFailure` 覆盖 401 / 429（含窗口证据，单位为秒需 ×1000，超过 30 天的 reset 丢弃）/ `USAGE_EXCEEDED`、`INSUFFICIENT_CREDITS`、`PREMIUM_CREDITS_EXHAUSTED`、`MODEL_NOT_IN_PLAN` → `unavailable` / 5xx → `server` / 网络异常 → `network`。`parseCatalog` 忽略坏行并计数。协议层的传输选择与回退顺序**逐行对照** `@mars-sea/dsh-commandcode-provider/lib/index.js` 实现。
 
-另外实现 `createCommandCodeAdapter`：`listModels` = 拉目录 → `selectVisible` → 映射为宿主形状；`resolveModel` 带上下文、推理档位与图片能力；`stream` = `rotation.pick({ model, tried })` 选账号 → 收集凭据来源（字面量 / 凭据库 / 环境变量 / auth.json 兜底）交给 `pickApiKey` → 发请求 → 用 `runStream` 包上整请求 deadline 与流空闲看门狗 → 失败时用 `classifyCommandCodeFailure` 得到 `Rejection`，记入轮换引擎，并且**只在 `rotation.fallbackAllowed({ emitted, totalTokens, aborted })` 为真时**换下一个账号，否则把错误抛给宿主。
+另外实现 `createCommandCodeAdapter`：`listModels` = 拉目录 → `selectVisible` → 映射为宿主形状；`resolveModel` 带上下文、推理档位与图片能力；`stream` = `rotation.pick({ model, tried })` 选账号 → 收集凭据来源（字面量 / 凭据库 / 环境变量 / auth.json 兜底）交给 `pickApiKey` → 发请求 → 用 `runStream` 包上整请求 deadline 与流空闲看门狗 → 失败时用 `classifyCommandCodeFailure` 得到 `Rejection`，记入轮换引擎，并且**只在 `rotation.fallbackAllowed({ emitted, totalTokens, aborted })` 为真时**换下一个账号，否则把错误抛给宿主。轮换尝试次数达到 `MAX_TRIED` 就停止并把最后一次失败抛出。
+
+还必须实现 `providerRetryPolicy()`：`LLM_REQUEST_TIMEOUT` 与 `LLM_STREAM_IDLE_TIMEOUT` 不在宿主的默认可重试码里，必须把它们（连同 `EMPTY_RESPONSE`/`RATE_LIMIT`/`THROTTLED`/`SERVER`/`TIMEOUT`/`TRANSPORT` 等）列入 `retryableCodes`（控制器裁决 12；依据：设计 §10 要求超时可重试，且这两个码区分整请求超时与流空闲超时，不应退化成宿主的 `TIMEOUT`）。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -732,7 +734,7 @@ Expected: FAIL，模块不存在
 
 映射表按旧包 `lib/index.js` 里的 `classifyGatewayError` 逐条对照；目录走 `/models`，带请求缓存 TTL 与「仅接受 `opencode.ai` 域」的校验；传输用 pi-ai SDK（构建期内联，别名依赖 `opencode-go-pi-ai`）。
 
-`createOpencodeAdapter` 与 Task 9 同构：`listModels` = 目录 → `selectVisible` → 宿主形状；`resolveModel` 带上下文、推理档位与 `modelLimits` 覆盖；`stream` = `rotation.pick` → 收集凭据来源交给 `pickApiKey` → 经 pi-ai 发出 → `runStream` 包 deadline/idle → 失败时 `classifyGatewayFailure` 记入轮换引擎，只有 `rotation.fallbackAllowed(...)` 为真才换账号。
+`createOpencodeAdapter` 与 Task 9 同构：`listModels` = 目录 → `selectVisible` → 宿主形状；`resolveModel` 带上下文、推理档位与 `modelLimits` 覆盖；`stream` = `rotation.pick` → 收集凭据来源交给 `pickApiKey` → 经 pi-ai 发出 → `runStream` 包 deadline/idle → 失败时 `classifyGatewayFailure` 记入轮换引擎，只有 `rotation.fallbackAllowed(...)` 为真才换账号。轮换尝试次数达到 `MAX_TRIED` 就停止并把最后一次失败抛出。`providerRetryPolicy()` 同样必须把 `LLM_REQUEST_TIMEOUT` / `LLM_STREAM_IDLE_TIMEOUT` 列入 `retryableCodes`（控制器裁决 12）。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -821,6 +823,8 @@ git commit -m "feat(opencode): quota normalization and account port"
 两个入口各导出 `{ name, inject: ["llm"], apply, Config }`。`apply` 里按 config 构造：轮换引擎（顺序 = 账号列表，固定 = `activeAccount`，规则 = `modelAccountRules`）、意图日志（存储接设置文档的隐藏字段）、额度与账号端口；commandcode 另外构造登录端口（`storeKey` 写凭据服务），**本期只构造并挂在插件实例上，远程暴露留给计划 1b**。`cordis.patch.yml` 按设计文档 §5.1 插入 `llm-commandcode`（`dsh-llm-account/commandcode`）与 `opencode-go`（`dsh-llm-account/opencode`）两行。
 
 构建侧的三条硬约束（Task 0 实测得到，别改回去）：① tsdown 的 `entry` 必须是**对象**映射 `{ index, commandcode, opencode, client }` —— 数组形式会产出 `lib/vendors/...`，与 `exports` 的扁平目标（`./lib/commandcode.js` 等）不匹配；② 保持 `fixedExtension: false`，否则 `platform: "node"` 下会强制 `.mjs`；③ `./client` 是给 GUI 加载的**浏览器**产物，不能用当前 `platform: "node"` 的配置构建 —— 本期（宿主侧）可以先不产出它（`exports` 里的声明保留），但计划 1b 必须先补一个浏览器目标的构建配置，否则页面加载不到客户端 bundle。
+
+第四条（控制器裁决 11，来自 Task 7 的实测发现）：**宿主包必须从 devDependencies 提升为 peerDependencies**（析取范围 `0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2`，与旧插件一致），devDependencies 保留供本地 typecheck。原因：tsdown 默认只把 `dependencies` + `peerDependencies` 当外部依赖，宿主包留在 devDeps 会被**内联**进 `lib/`；对 `LlmError` 无碍（宿主按自有属性 `code`/`failure` 归类），但 Task 9/12 值导入的 `LlmAdapter` 一旦出现第二份副本，宿主可能用 `instanceof` 判定失败。验收步骤：构建后 **grep `lib/**/*.js` 确认对 `@deepseek-ai/*` 是裸导入而不是内联代码**。
 
 - [ ] **Step 2: 构建并确认导出可解析**
 
