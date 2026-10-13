@@ -40,6 +40,43 @@ function intent(id: string, kind: AccountIntent["kind"], createdAt: number): Acc
   return { id, kind, createdAt };
 }
 
+/** 手动闸门：把并发交错固定在确定的位置上，不依赖任何计时器。 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * 首写闸门存储：第一次 `write` 会挂起，直到调用 `release()`；`entered` 在该写被发起时
+ * resolve。用来在「append 的落盘」与「replay 的本轮落盘」之间插入一个确定的交错点。
+ */
+function gatedFirstWriteStore(initial: readonly AccountIntent[]) {
+  const inner = memoryStore(initial);
+  const entered = deferred<void>();
+  const released = deferred<void>();
+  let writes = 0;
+  const store: IntentStore = {
+    read: () => inner.read(),
+    write: async (intents) => {
+      writes += 1;
+      if (writes === 1) {
+        entered.resolve();
+        await released.promise;
+      }
+      await inner.write(intents);
+    },
+  };
+  return {
+    store,
+    entered: entered.promise,
+    release: () => released.resolve(),
+    snapshot: () => inner.snapshot(),
+  };
+}
+
 it("重放后已提交的意图被清除，未提交的保留", async () => {
   const store = memoryStore([
     { id: "1", kind: "add", label: "A", createdAt: 1 },
@@ -207,4 +244,44 @@ it("存储写失败必须向外抛出（append / settle / replay 都不静默吞
   await expect(
     new IntentLog(failingStore([intent("1", "add", 1)])).replay(async () => "applied"),
   ).rejects.toThrow("boom: store write failed");
+});
+
+it("并发 append：两条意图都要落盘（读改写不交叉，不丢写）", async () => {
+  const log = new IntentLog(memoryStore());
+
+  // read/write 都是异步的：不串行化时两个 append 会各自读到空日志，后写的覆盖先写的。
+  await Promise.all([log.append(intent("a", "add", 1)), log.append(intent("b", "remove", 2))]);
+
+  expect((await log.list()).map((i) => i.id)).toEqual(["a", "b"]);
+});
+
+it("并发 settle 与 append：被收尾的消失，被追加的留下", async () => {
+  const log = new IntentLog(memoryStore([intent("1", "add", 1)]));
+
+  await Promise.all([log.settle("1"), log.append(intent("2", "remove", 2))]);
+
+  // 无论谁先排队：settle 只能移除 "1"，append 的 "2" 不能被越过它的整份覆盖写掉。
+  expect((await log.list()).map((i) => i.id)).toEqual(["2"]);
+});
+
+it("并发 replay 与 append：本轮清理不会清掉并发追加的意图", async () => {
+  const gated = gatedFirstWriteStore([intent("1", "add", 1)]);
+  const log = new IntentLog(gated.store);
+  const appended: Promise<void>[] = [];
+  const replaying = log.replay(async (i) => {
+    if (i.id === "1") {
+      appended.push(log.append(intent("2", "auto-switch", 2)));
+      return "applied";
+    }
+    return "unknown";
+  });
+
+  // 闸门保证「追加的落盘」已经发起但尚未落地，此时放行。
+  await gated.entered;
+  gated.release();
+  await replaying;
+  await Promise.all(appended);
+
+  // 本轮只该清掉本轮判定为 applied 的 "1"；并发追加的 "2" 必须留下。
+  expect((await log.list()).map((i) => i.id)).toEqual(["2"]);
 });

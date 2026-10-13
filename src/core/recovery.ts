@@ -8,7 +8,13 @@
  *
  * 本模块是纯核心逻辑：不导入任何宿主包、不注册定时器、不写日志输出，只依赖注入的
  * `IntentStore` 端口。日志的**真源永远在存储里**：每个方法都重新 `read`，不缓存，
- * 因此外部对同一份存储的其它写者不会被陈旧的内存副本覆盖。
+ * 不会拿陈旧的内存副本去覆盖存储。
+ *
+ * **并发边界**：本实例的所有写路径（`append`、`settle`，以及 `replay` 每轮的落盘）都
+ * 串行化在一条内部 promise 链上，「读全量 → 改全量 → 写全量」不会互相交叉，因此同一
+ * 实例上的并发调用不会丢写。`IntentStore` 端口没有 CAS，这条链只覆盖**本实例**：调用
+ * 方必须保证**一份存储只配一个 `IntentLog` 实例**；多实例、以及其它进程/宿主的写者
+ * 仍可能整份覆盖（端口只有「一次写全量」，没有比对与合并的能力）。
  *
  * **顺序**：日志顺序就是 `append` 的插入顺序（即存储 `read` 返回的顺序），**不按
  * `createdAt` 排序** —— 回放必须按因果顺序（先 add 再 rename），墙钟顺序做不到这点。
@@ -96,12 +102,21 @@ function cloneIntent(intent: AccountIntent): AccountIntent {
 /**
  * 意图日志。用法：提交前 `append`，提交成功后 `settle`，启动时 `replay`。
  *
- * 每个方法都是一次「读全量 → 改全量 → 写全量」的原子步骤；存储写失败一律向外抛。
+ * 每个方法都是一次「读全量 → 改全量 → 写全量」的步骤；`append`、`settle` 与 `replay`
+ * 里的落盘都排在本实例的内部串行链上（`list` 只读，不排队），所以并发调用不会把彼此的
+ * 读改写撕开、丢写（见模块头的并发边界）。存储写失败一律向外抛。
  * `settle` 对不存在的 id 是无操作，连写都不发（避免无谓落盘，也避免让「清一条早已
  * 收尾的意图」因为存储抖动而失败）。
  */
 export class IntentLog {
   readonly #store: IntentStore;
+
+  /**
+   * 串行链尾：写路径依次挂在这条链上，保证「读全量 → 改全量 → 写全量」不交叉。
+   * 链尾永远是「已吞掉错误」的 promise，所以一次写失败不会卡住后续写入 —— 错误本身
+   * 仍然原样抛给各自的调用方（见 `#serialize`）。
+   */
+  #chain: Promise<void> = Promise.resolve();
 
   /**
    * @param store - 注入的持久化端口；本类不关心它背后是设置、文件还是数据库。
@@ -115,9 +130,13 @@ export class IntentLog {
    * @param intent - 待记录的意图；入参会被复制，调用方后续改动无效。
    */
   async append(intent: AccountIntent): Promise<void> {
-    const intents = await this.#read();
-    intents.push(cloneIntent(intent));
-    await this.#store.write(intents);
+    // 立即复制：调用方在排队等待期间改动入参也影响不到这次追加。
+    const entry = cloneIntent(intent);
+    await this.#serialize(async () => {
+      const intents = await this.#read();
+      intents.push(entry);
+      await this.#store.write(intents);
+    });
   }
 
   /**
@@ -134,10 +153,12 @@ export class IntentLog {
    * @param id - 意图标识。
    */
   async settle(id: string): Promise<void> {
-    const intents = await this.#read();
-    const kept = intents.filter((intent) => intent.id !== id);
-    if (kept.length === intents.length) return;
-    await this.#store.write(kept);
+    await this.#serialize(async () => {
+      const intents = await this.#read();
+      const kept = intents.filter((intent) => intent.id !== id);
+      if (kept.length === intents.length) return;
+      await this.#store.write(kept);
+    });
   }
 
   /**
@@ -178,13 +199,32 @@ export class IntentLog {
       }
 
       if (decided.size > 0) {
-        // 重新读一次：本轮 apply 可能追加了新意图，它们不在这轮快照里，必须保留。
-        const kept = (await this.#read()).filter((intent) => !decided.has(intent.id));
-        await this.#store.write(kept);
+        // 重新读一次并把这一步也排在串行链上：本轮 apply 可能追加了新意图，它们不在这轮
+        // 快照里，必须保留；并发的 append 同样不会因为这次整份落盘而被覆盖。
+        await this.#serialize(async () => {
+          const kept = (await this.#read()).filter((intent) => !decided.has(intent.id));
+          await this.#store.write(kept);
+        });
       }
     }
 
     return { applied, rejected, unknown, remaining: (await this.list()).length };
+  }
+
+  /**
+   * 把一次写路径排到内部串行链上，保证「读全量 → 改全量 → 写全量」不与他人的读改写交叉。
+   * 链尾始终记录一个「已吞掉错误」的 promise：一次写失败不会卡住后续写入，而错误本身
+   * 仍然原样抛给这次调用的调用方。
+   * @param work - 需要串行执行的写路径。
+   * @returns `work` 的结果（或它抛出的错误）。
+   */
+  async #serialize<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.#chain.then(work, work);
+    this.#chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   /**
