@@ -49,6 +49,27 @@ it("rate-limit 冷却 5 分钟后自动恢复", () => {
   expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
 });
 
+it("rate-limit 带 resetAt 时到 resetAt 即恢复（修复轮 1 裁决：与 quota 对称）", () => {
+  // resetAt 早于 5 分钟冷却：必须按 resetAt 放行，不能傻等冷却。
+  let now = 1_000;
+  const early = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
+  const resetAt = now + 20_000;
+  early.markRejected("a", { kind: "rate-limit", message: "429", resetAt });
+  now = resetAt - 1;
+  expect(early.pick({ model: "m", tried: new Set() })).toBeUndefined();
+  now = resetAt;
+  expect(early.pick({ model: "m", tried: new Set() })).toBe("a");
+
+  // resetAt 晚于冷却：仍以 resetAt 为准，冷却到点不得提前放行。
+  now = 1_000;
+  const late = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
+  late.markRejected("a", { kind: "rate-limit", message: "429", resetAt: now + 2 * RATE_LIMIT_COOLDOWN_MS });
+  now += RATE_LIMIT_COOLDOWN_MS;
+  expect(late.pick({ model: "m", tried: new Set() })).toBeUndefined();
+  now += RATE_LIMIT_COOLDOWN_MS;
+  expect(late.pick({ model: "m", tried: new Set() })).toBe("a");
+});
+
 // —— 控制器裁决补充：六种 FailureKind 的拒绝生命周期 ——
 
 it("quota 没有 resetAt 时按 RATE_LIMIT_COOLDOWN_MS 冷却", () => {

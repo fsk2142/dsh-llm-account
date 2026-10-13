@@ -66,11 +66,9 @@ function rejectionExpiry(kind: FailureKind, resetAt: number | undefined, now: nu
       // 凭据本身失效，时间不会修复它：只有 clearCredentialRejection 能清除。
       return undefined;
     case "rate-limit":
-      // 冷却固定 5 分钟（裁决：rate-limit 不看 resetAt）。
-      return now + RATE_LIMIT_COOLDOWN_MS;
     case "quota":
     case "unavailable":
-      // 有重置时刻就用到点为止；没有就退回冷却时长。
+      // 有重置时刻就用到点为止（429 常带一个有意义的窗口重置）；没有就退回冷却时长。
       return resetAt ?? now + RATE_LIMIT_COOLDOWN_MS;
     case "server":
     case "network":
