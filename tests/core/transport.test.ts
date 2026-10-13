@@ -251,6 +251,45 @@ it("每次产出后空闲计时重置：产出间隔始终短于空闲预算的�
   }
 });
 
+it("交出 chunk 后（消费方处理期间）只留整请求 deadline，空闲计时已清", async () => {
+  const timers = trackTimers();
+  try {
+    const stream = runStream(fromArray([{ type: "a" }, { type: "b" }]), { requestTimeoutMs: 60_000, streamIdleTimeoutMs: 60_000 });
+    const iterator = stream[Symbol.asyncIterator]();
+    expect(await iterator.next()).toEqual({ done: false, value: { type: "a" } });
+    // 挂起在 yield：空闲计时必须已清掉，否则消费方的处理时间会被算成「厂商空闲」。
+    expect(timers.count()).toBe(1);
+    expect(await iterator.next()).toEqual({ done: false, value: { type: "b" } });
+    expect(timers.count()).toBe(1);
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+    expect(timers.count()).toBe(0);
+  } finally {
+    timers.restore();
+  }
+});
+
+it("消费方在 yield 上停留超过整请求 deadline 时，下一次索取就报整请求超时", async () => {
+  const timers = trackTimers();
+  try {
+    const stream = runStream(fromArray([{ type: "text-delta" }, { type: "finish" }]), {
+      requestTimeoutMs: 25,
+      streamIdleTimeoutMs: 60_000,
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    // 25ms/60ms 的余量选择：首个 chunk 只需微秒级，30ms 级的事件循环停顿才会误伤它；
+    // 而停留必然超过 25ms，所以「deadline 在 yield 期间到点」是确定发生的。
+    expect((await iterator.next()).done).toBe(false);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 60);
+    });
+    const error = await iterator.next().catch((thrown: unknown) => thrown);
+    expect(error).toMatchObject({ code: LLM_REQUEST_TIMEOUT });
+    expect(timers.count()).toBe(0);
+  } finally {
+    timers.restore();
+  }
+});
+
 it("整请求 deadline 由注入的 now 判定：越预算的 chunk 不再下发", async () => {
   let clock = 0;
   // 每次读时钟前进 60s：deadline 只上膛 30s，所以真正判定它的是注入的时钟。
