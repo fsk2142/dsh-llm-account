@@ -68,6 +68,19 @@ async function decodeMessagesSse(text: string): Promise<StreamChunk[]> {
 }
 
 /**
+ * 模仿宿主不变式的开块账本（`dsh-llm/lib/invariant.js:20-55`）：流结束时仍打开的块索引。
+ * 非空即意味着宿主会用 `LLM stream finished with N open block(s)` 拒绝这条流。
+ */
+function openBlockIndices(chunks: readonly StreamChunk[]): number[] {
+  const open = new Map<number, string>();
+  for (const chunk of chunks) {
+    if (chunk.type === "block-start") open.set(chunk.index, chunk.blockType);
+    else if (chunk.type === "block-end") open.delete(chunk.index);
+  }
+  return [...open.keys()];
+}
+
+/**
  * 按账号返回响应的假 `fetch`：从 `Authorization` 头取出密钥，据此挑选响应，
  * 并记录每个密钥的调用顺序 —— 「换没换账号」就是看这个顺序。
  * @param handlers - 密钥到响应的映射。
@@ -252,6 +265,8 @@ it("providerRetryPolicy 把两个超时码列入 retryableCodes（裁决 12）",
   expect(policy.retryableCodes).toContain("LLM_REQUEST_TIMEOUT");
   expect(policy.retryableCodes).toContain("LLM_STREAM_IDLE_TIMEOUT");
   expect(policy.retryableCodes).toContain("RATE_LIMIT");
+  // Fix round 3：空响应（EMPTY_RESPONSE）必须在白名单里，否则空答案不会被重试。
+  expect(policy.retryableCodes).toContain("EMPTY_RESPONSE");
   expect(adapter.providerInfo("commandcode")).toEqual({ id: "commandcode", name: "Command Code" });
 });
 
@@ -453,4 +468,76 @@ it("cli 流在缺 finish 事件的情况下 EOF 时补一条 finish（Fix 2）",
 
   expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
   expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 3 —— Item A：流在终止事件之前结束且**毫无内容**时必须报可重试错误，不能伪装成
+// `{kind:"stop"}` 的正常收尾（旧插件第 4221 行的 EMPTY_RESPONSE）；有内容但被截断仍补一条 finish。
+// ---------------------------------------------------------------------------
+
+it("没有内容也没有终止事件的流抛可重试的 EMPTY_RESPONSE，而不是补一条 stop finish（Fix 3）", async () => {
+  // 0 字节正文。
+  const empty = await decodeMessagesSse("").catch((thrown: unknown) => thrown);
+  expect(empty).toBeInstanceOf(LlmError);
+  expect(empty).toMatchObject({ code: "EMPTY_RESPONSE" });
+
+  // 只有 message_start，且 usage 全是 0（非零 usage 才算内容）——随后断流。
+  const zeroUsage = await decodeMessagesSse(
+    "event: message_start\n" +
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":0,"output_tokens":0}}}\n\n',
+  ).catch((thrown: unknown) => thrown);
+  expect(zeroUsage).toBeInstanceOf(LlmError);
+  expect(zeroUsage).toMatchObject({ code: "EMPTY_RESPONSE" });
+
+  // 同一兜底对共用 decodeStream 的 openai 传输同样生效。
+  const openaiEmpty = await decodeSse("openai", "").catch((thrown: unknown) => thrown);
+  expect(openaiEmpty).toBeInstanceOf(LlmError);
+  expect(openaiEmpty).toMatchObject({ code: "EMPTY_RESPONSE" });
+});
+
+it("Messages 的 tool_use 块在 EOF 仍打开时被排空，且只有一条 finish（Fix 3，Item B）", async () => {
+  const chunks = await decodeMessagesSse(
+    "event: message_start\n" +
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}\n\n' +
+      "event: content_block_start\n" +
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_eof","name":"read_file","input":{}}}\n\n' +
+      "event: content_block_delta\n" +
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}\n\n',
+  );
+
+  // 宿主账本里没有打开的块（否则 invariant.js:53 会拒这条 finish）。
+  expect(openBlockIndices(chunks)).toEqual([]);
+  expect(chunks.filter((chunk) => chunk.type === "block-end")).toEqual([
+    { type: "block-end", index: 0, block: { type: "tool-call", id: "toolu_eof", name: "read_file", arguments: '{"path":' } },
+  ]);
+  // 有内容（tool-call-delta）→ 仍然恰好一条 finish；宿主 FinishReason 没有「截断」取值，故为 stop。
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
+});
+
+it("有内容但缺终止事件的 openai 流仍然恰好一条 finish 且块已关闭（Fix 3，回归守卫）", async () => {
+  const chunks = await decodeSse("openai", 'data: {"choices":[{"delta":{"content":"hi"}}]}\n');
+
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toHaveLength(1);
+  expect(openBlockIndices(chunks)).toEqual([]);
+});
+
+it("正常收尾的 Messages 流不变：恰好一条 finish、一条 usage、无打开块（Fix 3，回归守卫）", async () => {
+  const chunks = await decodeMessagesSse(sseFixture("messages-tool-use.sse"));
+
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toHaveLength(1);
+  expect(chunks.filter((chunk) => chunk.type === "usage")).toHaveLength(1);
+  expect(openBlockIndices(chunks)).toEqual([]);
+});
+
+it("openai 流只缓冲了工具调用、随后断流：工具调用被交出，不是空响应（Fix 3，回归守卫）", async () => {
+  const chunks = await decodeSse(
+    "openai",
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}}]}\n',
+  );
+
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
+  expect(openBlockIndices(chunks)).toEqual([]);
+  expect(chunks.filter((chunk) => chunk.type === "block-end")).toEqual([
+    { type: "block-end", index: 0, block: { type: "tool-call", id: "call_1", name: "read_file", arguments: '{"path":"a.txt"}' } },
+  ]);
 });

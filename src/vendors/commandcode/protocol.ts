@@ -11,7 +11,7 @@
  * 3. 其余失败交给适配器的失败分类（不在这里换账号）。
  * @module dsh-llm-account/src/vendors/commandcode/protocol
  */
-import { ToolCallId, attributionHeaders, LlmError } from "@deepseek-ai/dsh-llm";
+import { EMPTY_RESPONSE_CODE, ToolCallId, attributionHeaders, LlmError } from "@deepseek-ai/dsh-llm";
 import type {
   ContentBlock,
   FinishReason,
@@ -555,6 +555,39 @@ function mapFinishReason(raw: string | undefined): FinishReason {
   }
 }
 
+/** 一次 usage 计入的 token 总数（缺 `totalTokens` 时按分项相加，缺分项按 0）。 */
+function usageTotalOf(usage: TokenUsage): number {
+  return (
+    usage.totalTokens ??
+    usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+  );
+}
+
+/**
+ * 一条 chunk 是否代表「流真的产出了东西」。
+ *
+ * 口径 = 旧插件 `asm.sawContent`（文本/推理/工具调用，第 4405-4800 行）+ 非零 usage：
+ * 用来在**没有任何终止事件**的情况下区分「空响应」（必须报可重试错误）与
+ * 「有内容但被截断」（补一条 finish）。
+ * @param chunk - 已装配好、即将交给宿主的 chunk。
+ * @returns 是否算作内容。
+ */
+function chunkIsContent(chunk: StreamChunk): boolean {
+  switch (chunk.type) {
+    case "text-delta":
+    case "reasoning-delta":
+      return chunk.text !== "";
+    case "tool-call-delta":
+      return chunk.argumentsDelta !== "" || chunk.name !== "";
+    case "block-end":
+      return chunk.block.type === "tool-call";
+    case "usage":
+      return usageTotalOf(chunk.usage) > 0;
+    default:
+      return false;
+  }
+}
+
 /** Chat Completions 流里缓冲中的一个工具调用片段。 */
 interface OpenAiToolCall {
   index: number;
@@ -664,6 +697,17 @@ class StreamAssembler {
     if (fragment.arguments !== undefined) existing.arguments += fragment.arguments;
   }
 
+  /**
+   * 是否还缓冲着尚未交出的 OpenAI 工具调用片段。
+   *
+   * 它已经是「有内容」的证据（旧插件在收到 `delta.tool_calls` 的当刻就置 `sawContent`，第 4610 行），
+   * 但这些片段要到 {@link flushOpenAiToolCalls} 才变成 chunk —— 只看已产出的 chunk 会在流末把
+   * 它误判成空响应，并连带丢掉一个真实的工具调用。
+   */
+  get hasBufferedToolCall(): boolean {
+    return this.#openAiTools.length > 0;
+  }
+
   /** 交出所有缓冲的 Chat Completions 工具调用（在 finish 之前调用）。 */
   flushOpenAiToolCalls(): StreamChunk[] {
     const chunks: StreamChunk[] = [];
@@ -750,10 +794,35 @@ class StreamAssembler {
     ];
   }
 
-  /** 关闭所有打开的块、交出缓冲的工具调用，并以 finish 收尾。 */
+  /**
+   * 关闭所有仍打开的块（Messages 的原生块、文本、推理、缓冲的 OpenAI 工具调用），
+   * 并以 finish 收尾。
+   */
   finish(reason: FinishReason): StreamChunk[] {
     this.#finished = true;
-    return [...this.closeText(), ...this.closeReasoning(), ...this.flushOpenAiToolCalls(), { type: "finish", reason }];
+    return [
+      ...this.closeMessagesBlocks(),
+      ...this.closeText(),
+      ...this.closeReasoning(),
+      ...this.flushOpenAiToolCalls(),
+      { type: "finish", reason },
+    ];
+  }
+
+  /**
+   * 关闭所有仍打开的 Messages 原生块（等价于补发它们的 `content_block_stop`）。
+   *
+   * `messagesBlockStop` 会对文本/推理块交出 `block-end`、对工具块交出带累计参数的
+   * `block-end`；不排空就会留下宿主账本里的**打开块**，让随后的 finish 被
+   * `dsh-llm` 的不变式拒绝（`LLM stream finished with N open block(s)`）。
+   * @returns 每个仍打开的原生块的关闭 chunk；没有打开块时为 `[]`。
+   */
+  closeMessagesBlocks(): StreamChunk[] {
+    const chunks: StreamChunk[] = [];
+    for (const nativeIndex of [...this.#messagesBlocks.keys()]) {
+      chunks.push(...this.messagesBlockStop(nativeIndex));
+    }
+    return chunks;
   }
 
   /** Messages 的 `message_start`：只记下 usage，不在此时交出（全流只发一条 usage）。 */
@@ -799,18 +868,33 @@ class StreamAssembler {
    * 流在**没有任何终止事件**的情况下干净结束时的兜底（正文被截断、`message_stop` /
    * `finish_reason` / `finish` 事件缺席）。
    *
-   * 宿主不变式要求流必须以一条 finish 收尾（`dsh-llm` 的
-   * `LLM stream ended without a terminal finish chunk`），所以这里补一条：Messages 用
-   * `message_delta` 记下的 {@link #messagesFinishReason}（没有则 `stop`）；另外两条传输同样补
-   * `stop`。补发走 {@link finish}，因此仍打开的文本/推理块会被关闭、缓冲的 OpenAI 工具调用会被
-   * 交出（否则宿主的 `finished with N open block(s)` 会拒）。
+   * 三条判据（旧插件第 4209-4222 行的同一处分支）：
+   * - 已经交出过 finish（正常的 `message_stop` / `finish_reason` / `finish` 路径）→ 返回 `[]`：
+   *   每条流**恰好一条** finish，绝不补第二条。
+   * - 没交出过 finish 且**什么内容都没产出** → 抛可重试的 {@link EMPTY_RESPONSE_CODE}：
+   *   空响应/被截断的空响应不能伪装成 `{kind:"stop"}` 的正常收尾（旧插件第 4221 行；
+   *   该码在本适配器的 `providerRetryPolicy` 白名单里，宿主会重试）。
+   * - 有内容但缺终止事件（旧插件第 4222 行的 `STREAM_CLOSED` 场景）→ 补一条 finish：
+   *   Messages 用 `message_delta` 记下的 {@link #messagesFinishReason}（没有则 `stop`），
+   *   另外两条传输补 `stop`。补发走 {@link finish}，因此仍打开的 Messages 原生块、文本/推理块与
+   *   缓冲的 OpenAI 工具调用都会被关闭/交出（否则宿主的 `finished with N open block(s)` 会拒）。
    *
-   * 已经交出过 finish 的流（正常的 `message_stop` / `finish_reason` / `finish` 路径）返回 `[]`：
-   * 每条流**恰好一条** finish。
+   * 说明：宿主 `FinishReason` 的取值只有 `stop` / `tool-calls` / `max-tokens` /
+   * `aborted` / `error`（后两者要求 `failure` 负载，是宿主自己表达**失败回合**的通道，见
+   * `dsh-llm` 的 `adapterFailureChunk`），没有「截断/流被关闭」这一类，故截断情形保持 `stop`。
+   * @param sawContent - 本流是否产出过内容（文本/推理/工具调用 chunk、非零 usage，或
+   *   仍缓冲在装配器里、要到 finish 才交出的 OpenAI 工具调用）。
    * @returns 尚未交出的 usage（若有）+ 唯一一条兜底 finish；已有 finish 时为 `[]`。
+   * @throws {LlmError} `EMPTY_RESPONSE`：没有终止事件且毫无内容。
    */
-  endOfStream(): StreamChunk[] {
+  endOfStream(sawContent: boolean): StreamChunk[] {
     if (this.#finished) return [];
+    if (!sawContent) {
+      throw new LlmError(
+        "Command Code API returned an empty response: the stream produced no content and ended without a terminal event",
+        EMPTY_RESPONSE_CODE,
+      );
+    }
     return [...this.#emitMessagesUsage(), ...this.finish(mapFinishReason(this.#messagesFinishReason))];
   }
 
@@ -958,9 +1042,9 @@ function decodeLine(assembler: StreamAssembler, protocol: CommandCodeProtocol, l
  * 忽略 `[DONE]`，其余按 JSON 解析，解析失败的坏行跳过。调用方负责用
  * `runStream` 套上时间预算。
  *
- * 正文在终止事件之前结束时（缺 `message_stop` / `finish_reason` / `finish`，即断流）补一条
- * finish：宿主不变式要求流必须以终止 chunk 收尾（`dsh-llm` 的
- * `LLM stream ended without a terminal finish chunk`）。补发只发生在正常读完整个正文之后；
+ * 正文在终止事件之前结束时（缺 `message_stop` / `finish_reason` / `finish`，即断流）由
+ * {@link StreamAssembler.endOfStream} 收尾：有内容就补一条 finish，**毫无内容**则抛可重试的
+ * `EMPTY_RESPONSE`（空响应不能伪装成正常收尾）。补发/报错只发生在正常读完整个正文之后；
  * 调用方提前 `return()`/中止时生成器直接走 `finally`，不会补出假 finish。
  * @param protocol - 该响应对应的线协议。
  * @param body - 响应体；`null`（无响应体）时抛协议错误。
@@ -975,6 +1059,12 @@ export async function* decodeStream(
   const decoder = new TextDecoder();
   const assembler = new StreamAssembler();
   let buffer = "";
+  // 三条传输共用一个「产出过内容」账本，供流末兜底区分「空响应」与「截断」。
+  let sawContent = false;
+  const produced = (chunks: readonly StreamChunk[]): readonly StreamChunk[] => {
+    for (const chunk of chunks) if (chunkIsContent(chunk)) sawContent = true;
+    return chunks;
+  };
   try {
     for (;;) {
       const read = await reader.read();
@@ -984,13 +1074,14 @@ export async function* decodeStream(
       while (newline >= 0) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        for (const chunk of decodeLine(assembler, protocol, line)) yield chunk;
+        for (const chunk of produced(decodeLine(assembler, protocol, line))) yield chunk;
         newline = buffer.indexOf("\n");
       }
     }
     buffer += decoder.decode();
-    for (const chunk of decodeLine(assembler, protocol, buffer)) yield chunk;
-    for (const chunk of assembler.endOfStream()) yield chunk;
+    for (const chunk of produced(decodeLine(assembler, protocol, buffer))) yield chunk;
+    // 还没交出的缓冲工具调用同样算内容（它要到 finish 才会变成 chunk）。
+    for (const chunk of assembler.endOfStream(sawContent || assembler.hasBufferedToolCall)) yield chunk;
   } finally {
     // 尽力而为：不等取消完成（`runStream` 的超时/中止路径正是靠这一点不被拖住）。
     void reader.cancel().catch(() => {});
