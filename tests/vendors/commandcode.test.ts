@@ -78,9 +78,46 @@ it("401 映射为 invalid-credential", () => {
 });
 
 it("429 带窗口证据时带 resetAt，rate-limit → 冷却", () => {
-  const result = classifyCommandCodeFailure(429, { error: { rateLimit: { window: "fiveHour", reset: 1_800_000_000 } } });
+  const resetSeconds = Math.floor(Date.now() / 1000) + 60;
+  const result = classifyCommandCodeFailure(429, { error: { rateLimit: { window: "fiveHour", reset: resetSeconds } } });
   expect(result?.kind).toBe("rate-limit");
-  expect(result?.resetAt).toBe(1_800_000_000_000);
+  expect(result?.resetAt).toBe(resetSeconds * 1000);
+});
+
+it("429 显式 reset 超出 30 天视野时丢弃 resetAt（裁决：两条路径统一封顶）", () => {
+  const now = Date.UTC(2026, 0, 1);
+  const farSeconds = Math.floor((now + 90 * 24 * 60 * 60 * 1000) / 1000);
+  const result = classifyCommandCodeFailure(
+    429,
+    { error: { rateLimit: { window: "fiveHour", reset: farSeconds } } },
+    now,
+  );
+  expect(result?.kind).toBe("rate-limit");
+  expect(result?.resetAt).toBeUndefined();
+});
+
+it("429 文案 ISO 时间戳超出 30 天视野时丢弃 resetAt（同一条视野）", () => {
+  const now = Date.UTC(2026, 0, 1);
+  const farStamp = new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString();
+  const result = classifyCommandCodeFailure(
+    429,
+    { error: { message: `usage limit for your plan, resets at ${farStamp}` } },
+    now,
+  );
+  expect(result?.kind).toBe("rate-limit");
+  expect(result?.resetAt).toBeUndefined();
+});
+
+it("429 文案 ISO 时间戳在 30 天视野内时仍带 resetAt", () => {
+  const now = Date.UTC(2026, 0, 1);
+  const nearStamp = new Date(now + 60_000).toISOString();
+  const result = classifyCommandCodeFailure(
+    429,
+    { error: { message: `usage limit for your plan, resets at ${nearStamp}` } },
+    now,
+  );
+  expect(result?.kind).toBe("rate-limit");
+  expect(result?.resetAt).toBe(Date.parse(nearStamp));
 });
 
 it("用量耗尽语义（USAGE_EXCEEDED）映射为 unavailable", () => {

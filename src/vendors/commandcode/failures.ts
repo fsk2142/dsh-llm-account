@@ -43,13 +43,17 @@ const UNAVAILABLE_PROSE: readonly RegExp[] = [
 ];
 
 /**
- * 正文里公布的重置时刻最多允许领先当前时刻多久。
+ * 任何候选重置时刻最多允许领先当前时刻多久（30 天）。
  *
- * 只用于**从错误文案里推断**出来的 ISO 时间戳（`resets at <ISO>`）：这类推断最容易
- * 因为一段无关文本命中年份数字而得出荒谬的远期时间。供应商在
- * `error.rateLimit.reset` 里显式公布的秒数原样采信（旧插件第 3756-3761 行）。
+ * 对**所有**证据路径一视同仁：无论是供应商在 `error.rateLimit.reset` 里显式公布的
+ * 秒数（旧插件第 3756-3761 行），还是从错误文案里推断的 `resets at <ISO>` 时间戳
+ * （旧插件第 3761 行的过滤），只要落在 `now + 30 天` 之外就丢弃。取舍是
+ * 「宁可少停，不可多停」：一份单位混淆或伪造的远期 reset 会把一个健康账号**无限期**
+ * 钉出轮换（静默失效，正是本守卫要防的），而丢弃它只是退回
+ * `RATE_LIMIT_COOLDOWN_MS` 的短冷却，窗口真的重置后账号自愈。
+ * 代价：真实存在超过 30 天的窗口时会被忽略，该账号按短冷却重试而不是被停到窗口结束。
  */
-const MAX_STAMP_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_RESET_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** 从错误正文里读出的诊断字段（嵌套一层 `error` 与平铺两种形状都支持）。 */
 interface ProviderError {
@@ -106,10 +110,15 @@ function readProviderError(body: unknown): ProviderError {
  * 只有正文**点名窗口**（`error.rateLimit.window` 为 `fiveHour`/`weekly`/`daily`，
  * 或文案写着 "usage limit for your plan"）才算「用量窗口用尽」；裸 429 是突发限流器
  * 或消费上限，调用方不该据此宣称某个窗口用尽（旧插件第 3737-3766 行）。
+ *
+ * 重置时刻在所有证据路径上**统一**受 {@link MAX_RESET_AHEAD_MS} 约束：显式秒数字段与
+ * 文案 ISO 时间戳各自超出 30 天视野就被丢弃，`window` 仍然保留（分类不变，只是没有
+ * `resetAt`，调用方退回短冷却）。
  * @param parsed - 已归一化的错误字段。
+ * @param now - 判定 30 天视野的当前时刻（epoch 毫秒）；由调用方注入，便于测试确定。
  * @returns 窗口名（未被点名时为 `undefined`）与重置时刻（epoch 毫秒）。
  */
-function readWindowLimitEvidence(parsed: ProviderError): { window?: string; resetAt?: number } {
+function readWindowLimitEvidence(parsed: ProviderError, now: number): { window?: string; resetAt?: number } {
   const named = stringValue(parsed.rateLimit?.window);
   const message = parsed.message ?? "";
   const seconds = numberValue(parsed.rateLimit?.reset);
@@ -122,15 +131,19 @@ function readWindowLimitEvidence(parsed: ProviderError): { window?: string; rese
           : "fiveHour"
         : undefined;
 
-  // 供应商显式公布的秒数原样采信（单位是秒，×1000 转 epoch 毫秒）。
-  const published = seconds !== undefined && seconds > 0 ? Math.round(seconds * 1000) : undefined;
-  if (published !== undefined && Number.isFinite(published)) return { window, resetAt: published };
+  // 统一的 30 天视野：超出视野的候选重置时刻一律丢弃（见 MAX_RESET_AHEAD_MS）。
+  const horizon = now + MAX_RESET_AHEAD_MS;
+  const withinHorizon = (value: number): boolean => Number.isFinite(value) && value <= horizon;
 
-  // 退回到文案里的 `resets at <ISO>` 时间戳；推断出来的时间戳必须落在 30 天内。
+  // 优先采信供应商显式公布的秒数（单位是秒，×1000 转 epoch 毫秒）。
+  const published = seconds !== undefined && seconds > 0 ? Math.round(seconds * 1000) : undefined;
+  if (published !== undefined && withinHorizon(published)) return { window, resetAt: published };
+
+  // 退回到文案里的 `resets at <ISO>` 时间戳；它同样受 30 天视野约束。
   const stamp = /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(message)?.[1];
   if (stamp === undefined) return { window };
   const parsedStamp = Date.parse(stamp);
-  if (Number.isNaN(parsedStamp) || parsedStamp - Date.now() > MAX_STAMP_AHEAD_MS) return { window };
+  if (Number.isNaN(parsedStamp) || !withinHorizon(parsedStamp)) return { window };
   return { window, resetAt: parsedStamp };
 }
 
@@ -140,16 +153,17 @@ function readWindowLimitEvidence(parsed: ProviderError): { window?: string; rese
  * 口径（与旧插件逐条对照）：
  * - `status <= 0`：请求根本没拿到响应（连接失败、DNS、代理）→ `network`。
  * - 401 → `invalid-credential`（该账号退出轮换，只有换 key 能清除）。
- * - 429 或码 `RATE_LIMITED` → `rate-limit`；正文点名窗口且给出重置时刻时带上 `resetAt`。
+ * - 429 或码 `RATE_LIMITED` → `rate-limit`；正文点名窗口且给出 30 天视野内的重置时刻时带上 `resetAt`。
  * - 码落在 {@link UNAVAILABLE_CODES} → `unavailable`（不按状态过滤）。
  * - 4xx 正文命中散文表 → `unavailable`。
  * - 408 / 5xx → `server`（瞬时，不污染账号状态）。
  * - 其余 4xx → `undefined`：请求本身被拒，换账号没有意义。
  * @param status - HTTP 状态码；`0`（或负数）表示未拿到响应。
  * @param body - 已解析的响应正文，或原始文本。
+ * @param now - 判定 30 天重置视野的当前时刻（epoch 毫秒）；缺省读系统时钟（测试可注入）。
  * @returns 账号级失败分类；请求级（不可轮换）拒绝时为 `undefined`。
  */
-export function classifyCommandCodeFailure(status: number, body: unknown): Rejection | undefined {
+export function classifyCommandCodeFailure(status: number, body: unknown, now: number = Date.now()): Rejection | undefined {
   const parsed = readProviderError(body);
   const code = (parsed.code ?? parsed.type)?.toUpperCase();
 
@@ -157,9 +171,13 @@ export function classifyCommandCodeFailure(status: number, body: unknown): Rejec
     return rejection("network", `Command Code 请求未获得响应：${parsed.message ?? "连接失败（网络或代理问题）"}，已按瞬时故障处理`);
   }
   if (status === 429 || code === "RATE_LIMITED") {
-    const evidence = readWindowLimitEvidence(parsed);
+    const evidence = readWindowLimitEvidence(parsed, now);
     const detail = evidence.window === undefined ? "服务商未报告用量窗口用尽" : `用量窗口 ${evidence.window} 已用尽`;
-    const when = evidence.resetAt === undefined ? "，服务商未公布重置时间" : `，重置时间 ${new Date(evidence.resetAt).toISOString()}`;
+    // 没有 resetAt 有两种情况：服务商没给，或给的重置时刻超出 30 天视野被丢弃 —— 都退回短冷却。
+    const when =
+      evidence.resetAt === undefined
+        ? "，没有可用的重置时间（未公布，或公布的重置时间超出 30 天视野），按短冷却处理"
+        : `，重置时间 ${new Date(evidence.resetAt).toISOString()}`;
     return rejection("rate-limit", `Command Code 返回 429：当前账号被限流（${detail}）${when}`, evidence.resetAt);
   }
   if (status === 401) {
