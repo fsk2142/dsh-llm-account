@@ -809,8 +809,8 @@ git commit -m "feat(opencode): quota normalization and account port"
 ### Task 14: 两行装配与宿主冒烟
 
 **Files:**
-- Create: `src/vendors/commandcode/index.ts`, `src/vendors/opencode/index.ts`, `cordis.patch.yml`, `docs/superpowers/notes/2026-10-13-host-smoke.md`
-- Modify: `package.json`（`exports` 增加 `./commandcode`、`./opencode`；`dsh.bundle.patch`）
+- Create: `src/vendors/commandcode/index.ts`, `src/vendors/opencode/index.ts`, `cordis.patch.yml`, `tests/vendors/assembly.test.ts`, `docs/superpowers/notes/2026-10-13-host-smoke.md`
+- Modify: `package.json`（新增 `dsh.bundle.patch` 与 `dsh.client.inject`；`exports` 在 Task 0 已写好）
 
 **Interfaces:**
 - Consumes: Task 9–13 的全部适配器（两个 `createXAdapter`）、Task 11 的 `createCommandCodeLogin`、Task 5 的 `RotationEngine`、Task 8 的 `IntentLog`
@@ -825,28 +825,47 @@ git commit -m "feat(opencode): quota normalization and account port"
 Run: `pnpm build && node -e "import('dsh-llm-account/commandcode').then(m => console.log(Object.keys(m)))"`
 Expected: 打印出 `apply`、`Config`、`inject`、`PROVIDER_ID` 等键，无 `ERR_MODULE_NOT_FOUND`
 
-- [ ] **Step 3: 在一次性 profile 上冒烟**
+- [ ] **Step 3: 用假 ctx 冒烟（不启动宿主）**
 
-Run: `dsh plugin --profile spike2 add <workspace>`，然后 `dsh web --profile spike2 --port 19389`（后台）
-Expected: 启动无报错；两条 provider 路由注册成功；模型目录可读（日志中无 `ERR_MODULE_NOT_FOUND` 与 peer 拒绝）
+本机没有与桌面端同版本（`0.2.0-rc.2`）的 `dsh` CLI，所以真机启动留到计划 1c（用户在场时做）。本期用假 ctx 覆盖装配逻辑，新增 `tests/vendors/assembly.test.ts`：
+
+```ts
+it("两个入口各注册一次自己的 provider 路由", () => {
+  // 假 ctx：记录 ctx.llm.registerAdapter([providerId], adapter) 的调用
+  // 断言：commandcode 入口注册 ["commandcode"]，opencode 入口注册 ["dsh-opencode-go"]，各一次
+});
+it("Config 能解析用户现有的 commandcode 配置形状", () => {
+  // { apiKeyEnv: "COMMANDCODE_API_KEY", visibleModels: ["deepseek/deepseek-v4.1-flash"],
+  //   modelVisibility: {}, showSidebarQuota: true, accounts: [{ label: "sample-user-2", apiKeyEnv: "COMMANDCODE_API_KEY_2" }],
+  //   activeAccount: "default", modelAccountRules: [] }
+  // 断言：解析成功且字段值原样保留（零迁移的机器可验证部分）
+});
+it("Config 能解析用户现有的 opencode 配置形状", () => {
+  // { usageDisplay: "always", modelVisibility: { "space-bunny": true }, autoSwitch: true, enabled: false }
+  // 断言：解析成功且字段值原样保留
+});
+```
+
+Run: `pnpm build && node -e "import('dsh-llm-account/commandcode').then(m => console.log(Object.keys(m)))"` 与 `pnpm vitest run tests/vendors/assembly.test.ts`
+Expected: 导出键包含 `apply`/`Config`/`inject`/`PROVIDER_ID`，无 `ERR_MODULE_NOT_FOUND`；装配测试全绿
 
 - [ ] **Step 4: 写冒烟记录**
 
-`docs/superpowers/notes/2026-10-13-host-smoke.md` 记录：启动日志、两条路由是否存在、模型目录条目数、遇到的 peer/版本问题。
+`docs/superpowers/notes/2026-10-13-host-smoke.md` 记录：构建与解析结果、装配测试结果、**以及本期无法验证的部分与理由**（真机启动、真实路由注册、模型目录在选择器里出现、页面注册次数、`order` 是否生效），这些列为计划 1c 的必测项。
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/vendors/*/index.ts cordis.patch.yml package.json docs/superpowers/notes
-git commit -m "feat: two-row bundle assembly and host smoke"
+git add src/vendors/*/index.ts cordis.patch.yml package.json tests/vendors/assembly.test.ts docs/superpowers/notes
+git commit -m "feat: two-row bundle assembly and assembly smoke"
 ```
 
 ---
 
 ## 计划 1b（待写）
 
-客户端统一页面（单页多厂商、能力降级、额度两种形状、i18n）在 Task 1 的实验结论出来后再写：`docs/superpowers/plans/2026-10-13-dsh-llm-account-phase1-client.md`。
+客户端统一页面（单页多厂商、能力降级、额度两种形状、i18n）在 1a 完成后按 **Task 1 记录的兜底路径**写（页面不依赖每实例注入的状态，直接按命名空间读两家数据）：`docs/superpowers/plans/2026-10-13-dsh-llm-account-phase1-client.md`。
 
 ## 计划 1c（待写）
 
-切换与回退（卸载旧包、安装新包、手工验收清单、回退演练）在第 1a 与 1b 都完成后写，因为它要同时验证宿主与页面。
+切换与回退（卸载旧包、安装新包、真机启动验收、手工验收清单、回退演练）在第 1a 与 1b 都完成后写 —— 它需要与桌面端同版本（`0.2.0-rc.2`）的 `dsh` CLI 或用户在 GUI 里配合，因此必须在用户在场时执行。必测项见 Task 1 Step 2 与 Task 14 Step 4 的记录。
