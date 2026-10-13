@@ -30,6 +30,12 @@
  * 必须**先同步改状态、再 await 关服务器** —— 顺序反了，等待关闭的窗口里一次迟到的
  * `whoami` 成功会看到「还拥有尝试」，把用户已经取消的密钥写进凭据服务。
  *
+ * 同一个守卫也适用于**投递**：服务器对象在它被 `closeCallback()` 优雅停下之后仍会服务
+ * 已经建立的连接，所以一条旧请求可能在重新登录之后才把请求体送完。处理器因此把「接受
+ * 这条请求的 `server` 与 `attempt`」带在闭包里（`#bindServer`），决定性投递必须通过
+ * `#settleAttempt` 的代际裁决（三者对齐：当前服务器 + 当前代际 + 本次尝试的 settle 挂钩）——
+ * 被替换掉的投递既不能写凭据，也不能关掉当前尝试的监听或偷走它的挂钩。
+ *
  * **句柄卫生**：超时/成功/失败/取消四条路径都清定时器、中止在途验证、关掉服务器并
  * **等它真正关闭**（`close()` 的回调）——端口因此立刻可被复用，测试进程也不会被残留的
  * 监听或定时器拖住。收下决定性回调时只做优雅关闭（`closeCallback`，第 8894-8898 行）：
@@ -126,6 +132,8 @@ interface CallbackCredentials {
 
 /** 一次尝试的 settle 挂钩。 */
 interface AttemptSettle {
+  /** 这个挂钩属于哪一代尝试：迟到的投递即使蒙对 state，也不许用别人的挂钩结算。 */
+  readonly attempt: number;
   resolve(credentials: CallbackCredentials): void;
   reject(failure: LoginSettleError): void;
 }
@@ -380,9 +388,9 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
     const port = await this.#findPort();
     const expectedState = randomBytes(32).toString("base64url");
     const settled = new Promise<CallbackCredentials>((resolve, reject) => {
-      this.#settle = { resolve, reject };
+      this.#settle = { attempt, resolve, reject };
     });
-    await this.#bindServer(port, expectedState);
+    await this.#bindServer(port, attempt, expectedState);
     if (this.#cancelPending) {
       this.#cancelPending = false;
       this.#attemptAbort?.abort();
@@ -433,15 +441,20 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
   /**
    * 绑定本次尝试的回环服务器（旧插件 `bindServer` 第 8702-8726 行）。只绑 `127.0.0.1`：
    * 绑定前的失败从 `begin()` 抛出；绑定后的服务器错误结算为带标签的失败。
+   *
+   * 处理器**带着自己那一次尝试的代际与服务器句柄**进闭包：服务器对象会一直服务它已经接受的
+   * 连接，哪怕它早已不是当前尝试的监听器，所以「这条请求属于哪一代」只能由它自己带来，不能
+   * 在结算时去读实例上的当前值。服务器错误分支（下面）本来就是这个写法。
    * @param port - 已探测到的空闲端口。
+   * @param attempt - 本次尝试的代际。
    * @param expectedState - 本次尝试的 state（闭包进请求处理器）。
    * @returns 监听已建立。
    */
-  #bindServer(port: number, expectedState: string): Promise<void> {
+  #bindServer(port: number, attempt: number, expectedState: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let binding = true;
       const server = createServer((request, response) => {
-        this.#handleCallback(request, response, expectedState);
+        this.#handleCallback(request, response, attempt, expectedState, server);
       });
       this.#server = server;
       server.once("error", (error: NodeJS.ErrnoException) => {
@@ -473,11 +486,23 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
   /**
    * 一个回调请求（旧插件 `handleCallback` 第 8728-8806 行）。判定顺序是契约的一部分：
    * OPTIONS → 路径 → 方法 → 体积/JSON → 字段 → state。
+   *
+   * 只有「决定性投递」（拒绝回执与凭据）才需要代际裁决，那两步都交给
+   * {@link #settleAttempt}，并把这条请求自己的 `server` 与 `attempt` 一并交过去：本方法本身
+   * 不做任何跨代际的读写，所以旧服务器上任何迟到的非决定性应答都无害。
    * @param request - 回环请求。
    * @param response - 回环响应。
-   * @param expectedState - 本次尝试的 state。
+   * @param attempt - 接受这条请求的那次尝试的代际。
+   * @param expectedState - 那次尝试的 state。
+   * @param server - 接受这条请求的那个服务器句柄。
    */
-  #handleCallback(request: IncomingMessage, response: ServerResponse, expectedState: string): void {
+  #handleCallback(
+    request: IncomingMessage,
+    response: ServerResponse,
+    attempt: number,
+    expectedState: string,
+    server: Server,
+  ): void {
     response.setHeader("Connection", "close");
     response.setHeader("Access-Control-Allow-Origin", corsOrigin(request.headers.origin));
     response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -530,6 +555,8 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
         }
         const description = textOf(payload, "error_description") ?? textOf(payload, "error") ?? "";
         this.#settleAttempt(
+          server,
+          attempt,
           json,
           200,
           { success: true },
@@ -550,7 +577,7 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
         json(403, { success: false, error: "Invalid state token" });
         return;
       }
-      this.#settleAttempt(json, 200, { success: true }, undefined, credentials);
+      this.#settleAttempt(server, attempt, json, 200, { success: true }, undefined, credentials);
     });
     request.on("error", () => {
       // 客户端半路断开不是服务端错误：这一次投递作废，登录仍在等待。
@@ -559,6 +586,16 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
 
   /**
    * 应答一次决定性回调、停止监听、结算这次尝试（旧插件 `settleAttempt` 第 8808-8816 行）。
+   *
+   * **代际裁决**：投递带着接受它的那个 `server` 与 `attempt` 进来，只有「还是当前的服务器 +
+   * 还是当前的代际 + 还是当前这次尝试的 settle 挂钩」三者同时成立才准结算与关监听。旧服务器
+   * 上一条已经建立的连接（监听器早被 `closeCallback` 优雅关闭了，连接本身还活着）可能在被
+   * 替换之后才把请求体送完：若不裁决，它会拿**新尝试**的挂钩结算（于是把旧凭据写进新尝试），
+   * 并且关掉新尝试正在用的监听器、偷走它的挂钩（浏览器真实投递被拒，登录一直挂到总期限）。
+   * 对当前这次尝试来说，这种 state 本来就不属于它，所以按既有的拒绝形状回 403（不引入新的
+   * 文案键，也不改动旧插件的拒绝词汇表）。
+   * @param server - 接受这条请求的服务器句柄。
+   * @param attempt - 接受这条请求的那次尝试的代际。
    * @param json - 已装配好响应头的应答函数。
    * @param code - 状态码。
    * @param body - 响应体。
@@ -566,16 +603,26 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
    * @param credentials - 通过 state 校验的凭据。
    */
   #settleAttempt(
+    server: Server,
+    attempt: number,
     json: (code: number, body: unknown) => void,
     code: number,
     body: unknown,
     failure?: LoginSettleError,
     credentials?: CallbackCredentials,
   ): void {
-    json(code, body);
     const settle = this.#settle;
-    this.#closeCallback();
-    if (settle === undefined) return;
+    if (
+      this.#server !== server ||
+      !this.#ownsAttempt(attempt) ||
+      settle === undefined ||
+      settle.attempt !== attempt
+    ) {
+      json(403, { success: false, error: "Invalid state token" });
+      return;
+    }
+    json(code, body);
+    this.#closeCallback(server);
     if (failure !== undefined) settle.reject(failure);
     else if (credentials !== undefined) settle.resolve(credentials);
   }
@@ -661,9 +708,13 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
    * 收下决定性回调后停止监听（旧插件 `closeCallback` 第 8894-8898 行）。只做优雅关闭：
    * 监听端口同步释放，但正在写出的那个 JSON 响应会正常送完；总期限**故意保留**，用它约束
    * 后续的验证与存储。
+   *
+   * 只关**这一条请求自己的那个服务器**：它可能早就不是当前尝试的监听器了（被替换过），
+   * 那时这里什么都不做，绝不去动新尝试的监听器与挂钩。
+   * @param server - 接受这条请求的服务器句柄。
    */
-  #closeCallback(): void {
-    const server = this.#server;
+  #closeCallback(server: Server): void {
+    if (this.#server !== server) return;
     this.#server = undefined;
     this.#settle = undefined;
     closeQuietly(server);

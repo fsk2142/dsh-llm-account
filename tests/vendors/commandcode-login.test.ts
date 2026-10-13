@@ -14,7 +14,7 @@
  *
  * 测试进程能正常退出本身就是句柄卫生的验尸报告。
  */
-import { createServer, type Server } from "node:http";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import { expect, it, onTestFinished } from "vitest";
 
 import type { LoginStatus } from "../../src/core/adapter";
@@ -125,6 +125,62 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/**
+ * 在一个回环端口上开一条「请求头 + 半个请求体」的回调投递。
+ *
+ * 用来构造「旧服务器上**已经被接受**、但请求体在被替换之后才送完」的投递：`write()` 出去
+ * 的头 + 半个体足以让服务器解析出请求并挂上 `data`/`end` 监听，而 `end` 只会在调用方主动
+ * `finish()` 之后才到 —— 所以结算时机完全由测试决定，不靠睡眠对齐。
+ *
+ * 按字节切分（而不是按字符串下标），多字节字符也不会切坏 `Content-Length`。
+ * @param port - 目标回环端口。
+ * @param payload - 完整请求体（JSON 文本）。
+ * @returns `finish()` 补完剩下半个体并读出响应；`destroy()` 供兜底清理。
+ */
+function openSplitCallback(
+  port: number,
+  payload: string,
+): { finish: () => Promise<{ status: number; body: unknown }>; destroy: () => void } {
+  const bytes = Buffer.from(payload, "utf8");
+  const half = Math.floor(bytes.length / 2);
+  const request = httpRequest({
+    host: "127.0.0.1",
+    port,
+    path: "/callback",
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": bytes.length },
+  });
+  const response = new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+    request.on("response", (incoming) => {
+      const chunks: Buffer[] = [];
+      incoming.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      incoming.on("end", () => {
+        const text = Buffer.concat(chunks).toString();
+        let body: unknown = text;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // 非 JSON 正文就保留原文：断言会把它与预期形状的差异报出来。
+        }
+        resolve({ status: incoming.statusCode ?? 0, body });
+      });
+    });
+    request.on("error", reject);
+  });
+  request.write(bytes.subarray(0, half));
+  return {
+    finish: async () => {
+      request.end(bytes.subarray(half));
+      return response;
+    },
+    destroy: () => {
+      request.destroy();
+    },
+  };
 }
 
 /** 有界轮询：等一个前置条件成立，失败时报出等的是什么。 */
@@ -468,6 +524,81 @@ it("取消之后迟到的 whoami 结果不落库（代际守卫）", async () =>
   await sleep(5); // 让 #complete 的后续微任务跑完：迟到的成功不得落库
   expect(stored).toEqual([]);
   expect(await login.status()).toEqual({ state: "failed", reason: "cancelled" });
+});
+
+it("旧服务器上已被接受的投递在重新 begin 之后到达：不落库、不打断新尝试", async () => {
+  const stored: string[] = [];
+  const whoamiAuth: string[] = [];
+  let releaseFirstWhoami: (() => void) | undefined;
+  let firstWhoamiSettled = false;
+  const fetchImpl = (async (_input: unknown, init?: RequestInit): Promise<Response> => {
+    whoamiAuth.push(new Headers(init?.headers).get("authorization") ?? "");
+    if (whoamiAuth.length === 1) {
+      // 第一次尝试的验证永远停在这里：它的状态停在 waiting，而监听已经在收下回调时收了，
+      // 所以用户可以再 begin 一次 —— 这正是「旧服务器被替换掉」的前提。
+      await new Promise<void>((resolve) => {
+        releaseFirstWhoami = resolve;
+      });
+      firstWhoamiSettled = true;
+    }
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+
+  const login = createLogin({
+    fetchImpl,
+    apiBase: "https://api.example",
+    storeKey: async (_ref, key) => {
+      stored.push(key);
+    },
+  });
+
+  const firstStatus = await login.begin();
+  if (firstStatus.authUrl === undefined) throw new Error("第一次 begin() 没有返回授权 URL");
+  const first = authParts(firstStatus.authUrl);
+
+  // ① 在旧服务器上开一条「头 + 半个体」的投递：请求已被接受，`end` 还没到。
+  const stale = openSplitCallback(first.port, JSON.stringify(credentials(first.state, "k-stale")));
+  onTestFinished(() => {
+    stale.destroy(); // 断言失败也不留下剩下半条连接
+  });
+
+  // ② 让第一次尝试收下一次决定性投递（监听优雅关闭，但上面那条连接还活着），
+  //    它的 whoami 于是停在路上：状态仍是 waiting，而当前监听已经不是它了。
+  expect(await post(callbackUrl(first.port), credentials(first.state, "k-first"))).toEqual({
+    status: 200,
+    body: { success: true },
+  });
+  await waitFor(() => releaseFirstWhoami !== undefined, "第一次 whoami 请求发出");
+
+  // ③ 重新开始：第二次尝试有自己的 state，它的服务器才是「当前」的那个。
+  const secondStatus = await login.begin();
+  if (secondStatus.authUrl === undefined) throw new Error("第二次 begin() 没有返回授权 URL");
+  const second = authParts(secondStatus.authUrl);
+  expect(second.state).not.toBe(first.state);
+
+  // ④ 补完旧连接上的请求体：它以旧服务器的 expectedState 通过了字段与 state 校验，但它既不是
+  //    当前服务器接受的那条请求，也不属于当前代际 —— 代际裁决必须拒绝它。
+  const staleResponse = await stale.finish();
+  expect(staleResponse.status).toBe(403);
+  expect(staleResponse.body).toEqual({ success: false, error: "Invalid state token" });
+  expect(stored).toEqual([]); // 迟到的凭据一个字节都没落库
+  expect(await login.status()).toEqual({ state: "waiting", authUrl: secondStatus.authUrl });
+
+  // ⑤ 新尝试自己的浏览器投递照常成功：监听没被那条迟到请求关掉，也没有挂到总期限。
+  expect(await post(callbackUrl(second.port), credentials(second.state, "k-2"))).toEqual({
+    status: 200,
+    body: { success: true },
+  });
+  expect(await untilSettled(login)).toEqual({ state: "success" });
+  expect(stored).toEqual(["k-2"]);
+  expect(whoamiAuth).toEqual(["Bearer k-first", "Bearer k-2"]); // k-stale 从未走到验证
+
+  // ⑥ 第一次尝试那条一直停在路上的 whoami 后来成功返回：它早已不是所有者，不许落库。
+  releaseFirstWhoami?.();
+  await waitFor(() => firstWhoamiSettled, "第一次 whoami 完成");
+  await sleep(5);
+  expect(stored).toEqual(["k-2"]);
+  expect(await login.status()).toEqual({ state: "success" });
 });
 
 it("begin 单飞：并发 begin 复用同一次尝试（同一 state 与端口）", async () => {
