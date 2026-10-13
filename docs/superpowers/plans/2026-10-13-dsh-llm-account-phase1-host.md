@@ -870,7 +870,7 @@ git commit -m "feat: two-row bundle assembly and assembly smoke"
 
 页面结构按设计文档 §8（用户要求，2026-10-13 追加）：**顶部厂商标签页**（Command Code / OpenCode），标签内沿用 Command Code 设置页的卡片顺序与交互 —— 账户卡片（每账号一行：名称、套餐、状态、5 小时/每周额度条，可展开，行尾 `⋯` 菜单，底部「添加账户」）→ 模型卡片 → 隐私与安全 → 集成与显示 → 高级设置（默认折叠）→ 底部浮动保存条；厂商不支持的卡片不渲染。界面摆放（侧边栏额度卡片、中栏用量面板、输入框下方费用读数）属第 2 期，同样对齐 Command Code。
 
-1b 还必须兑现 `docs/superpowers/notes/2026-10-13-host-seam-assumptions.md` 的两条要求：在 `apply` 里留一个**调试计数或日志**（1c 用它才能区分「`apply` 被调用一次还是两次」）；统一页面上要留出**设置数据通道的验证点**（对应假设 ③ 的后半段）。
+1b 还必须兑现 `docs/superpowers/notes/2026-10-13-host-seam-assumptions.md` 的两条要求：在 `apply` 里留一个**调试计数或日志**（1c 用它才能区分「`apply` 被调用一次还是两次」）；统一页面上要留出**设置数据通道的验证点**（对应假设 ③ 的后半段）。另外：1b 写 `visibleModels` 前**必须丢弃空串与纯空白条目** —— `normalizeVisibility` 会保留空串，而 `[""]` 是非空白名单，会让所有模型从选择器里消失（Task 6 复核发现的真实风险）。
 
 ## 计划 1c（待写）
 
