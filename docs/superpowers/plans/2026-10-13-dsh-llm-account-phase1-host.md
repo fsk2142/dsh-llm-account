@@ -887,3 +887,5 @@ git commit -m "feat: two-row bundle assembly and assembly smoke"
 1. **意图日志的重放未接线**：`src/` 里没有任何地方调用 `IntentLog.replay`（`src/core/recovery.ts` 只定义了它）。恢复那半边要新增端口级接口（每个厂商一个 `applyIntent`，供重放回调使用），而本期没有任何真实路径能产生账号变更 —— 账号界面要到 1b 才有。**1b 设计时必须包含**「新增 `applyIntent` + 启动时 `replay`」；**1c 的真机验收必须包含**一次「崩溃后重放」演练。
 2. **登录 ref 撞名处置**：`storeKey`（Task 11 产物）目前没有「新 ref 与既有账号的凭据槽撞名时改分配或拒绝」的判定 —— 撞名静默覆盖会毁掉一个账号。1b 接线 `storeKey` 时补上。
 3. **`client` 入口的浏览器构建**：`exports` 里声明了 `./client`、`package.json` 里声明了 `dsh.client.inject`，但本期**不产出**该产物（tsdown 是 node 目标）。1b 必须先补浏览器目标构建，否则页面加载不到客户端 bundle。
+4. **两行都要 `ctx.settings.configure({ auto: false }, ctx.fiber)`**（最终复核建议）：旧插件正是这么关掉自动生成设置表单的（`@mars-sea/dsh-commandcode-provider` 的 `lib/index.js:10401`）；不做的话，宿主自动生成的设置表单会和统一页面并排出现。这一条原先不在交接清单里。
+5. **两处顺手要做的清理**（最终复核建议，均为少数行）：把 `FAILURE_CODES`/`LlmError` 构造与 `hashText` 各自单源化（现在两个厂商各一份）；把「`lib/*.js` 的裸导入必须是已声明 peer 的子集」这条 Ruling 11 验收**自动化**成一条测试或脚本（本期是手工 grep，且复核发现 bundle 注释里也有类似字样，容易误判）。
