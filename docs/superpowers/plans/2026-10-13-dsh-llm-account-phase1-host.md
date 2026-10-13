@@ -688,7 +688,7 @@ git commit -m "feat(commandcode): loopback browser login"
 ### Task 12: opencode 适配器 · LlmAdapter、协议、目录与失败映射
 
 **Files:**
-- Create: `src/vendors/opencode/protocol.ts`, `src/vendors/opencode/failures.ts`, `src/vendors/opencode/catalog.ts`
+- Create: `src/vendors/opencode/protocol.ts`, `src/vendors/opencode/failures.ts`, `src/vendors/opencode/catalog.ts`, `src/vendors/opencode/adapter.ts`
 - Test: `tests/vendors/opencode.test.ts`
 
 **Interfaces:**
