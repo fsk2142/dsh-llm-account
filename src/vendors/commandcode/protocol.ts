@@ -590,6 +590,8 @@ class StreamAssembler {
   #messagesUsageEmitted = false;
   /** `message_delta` 记下的结束原因；真正的 finish 由 `message_stop` 发出。 */
   #messagesFinishReason: string | undefined;
+  /** 是否已经交出过终止 finish：EOF 兜底不得再补第二条。 */
+  #finished = false;
 
   #openText(): StreamChunk[] {
     if (this.#textIndex >= 0) return [];
@@ -750,6 +752,7 @@ class StreamAssembler {
 
   /** 关闭所有打开的块、交出缓冲的工具调用，并以 finish 收尾。 */
   finish(reason: FinishReason): StreamChunk[] {
+    this.#finished = true;
     return [...this.closeText(), ...this.closeReasoning(), ...this.flushOpenAiToolCalls(), { type: "finish", reason }];
   }
 
@@ -788,7 +791,27 @@ class StreamAssembler {
    * @returns usage chunk（有且仅在尚未交出时）+ 一条 finish chunk。
    */
   messagesStop(): StreamChunk[] {
+    this.#finished = true;
     return [...this.#emitMessagesUsage(), { type: "finish", reason: mapFinishReason(this.#messagesFinishReason) }];
+  }
+
+  /**
+   * 流在**没有任何终止事件**的情况下干净结束时的兜底（正文被截断、`message_stop` /
+   * `finish_reason` / `finish` 事件缺席）。
+   *
+   * 宿主不变式要求流必须以一条 finish 收尾（`dsh-llm` 的
+   * `LLM stream ended without a terminal finish chunk`），所以这里补一条：Messages 用
+   * `message_delta` 记下的 {@link #messagesFinishReason}（没有则 `stop`）；另外两条传输同样补
+   * `stop`。补发走 {@link finish}，因此仍打开的文本/推理块会被关闭、缓冲的 OpenAI 工具调用会被
+   * 交出（否则宿主的 `finished with N open block(s)` 会拒）。
+   *
+   * 已经交出过 finish 的流（正常的 `message_stop` / `finish_reason` / `finish` 路径）返回 `[]`：
+   * 每条流**恰好一条** finish。
+   * @returns 尚未交出的 usage（若有）+ 唯一一条兜底 finish；已有 finish 时为 `[]`。
+   */
+  endOfStream(): StreamChunk[] {
+    if (this.#finished) return [];
+    return [...this.#emitMessagesUsage(), ...this.finish(mapFinishReason(this.#messagesFinishReason))];
   }
 
   /** 交出尚未发出的 Messages usage；已经交过或根本没有时为 `[]`。 */
@@ -934,6 +957,11 @@ function decodeLine(assembler: StreamAssembler, protocol: CommandCodeProtocol, l
  * 行级解析（与旧插件一致）：逐行 trim，跳过空行/注释/`event:` 行，去掉 `data:` 前缀，
  * 忽略 `[DONE]`，其余按 JSON 解析，解析失败的坏行跳过。调用方负责用
  * `runStream` 套上时间预算。
+ *
+ * 正文在终止事件之前结束时（缺 `message_stop` / `finish_reason` / `finish`，即断流）补一条
+ * finish：宿主不变式要求流必须以终止 chunk 收尾（`dsh-llm` 的
+ * `LLM stream ended without a terminal finish chunk`）。补发只发生在正常读完整个正文之后；
+ * 调用方提前 `return()`/中止时生成器直接走 `finally`，不会补出假 finish。
  * @param protocol - 该响应对应的线协议。
  * @param body - 响应体；`null`（无响应体）时抛协议错误。
  * @returns 与线上事件同序的 chunk 流。
@@ -962,6 +990,7 @@ export async function* decodeStream(
     }
     buffer += decoder.decode();
     for (const chunk of decodeLine(assembler, protocol, buffer)) yield chunk;
+    for (const chunk of assembler.endOfStream()) yield chunk;
   } finally {
     // 尽力而为：不等取消完成（`runStream` 的超时/中止路径正是靠这一点不被拖住）。
     void reader.cancel().catch(() => {});

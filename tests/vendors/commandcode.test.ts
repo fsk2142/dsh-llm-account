@@ -57,9 +57,14 @@ function sseFixture(name: string): string {
   return readFileSync(new URL(`../fixtures/commandcode/${name}`, import.meta.url), "utf8");
 }
 
+/** 把一段 SSE 文本喂进指定协议的解码器，收齐 chunk。 */
+async function decodeSse(protocol: "openai" | "messages" | "cli", text: string): Promise<StreamChunk[]> {
+  return collect(decodeStream(protocol, new Response(text).body));
+}
+
 /** 把一段真实 SSE 文本喂进 Messages 传输解码器，收齐 chunk。 */
 async function decodeMessagesSse(text: string): Promise<StreamChunk[]> {
-  return collect(decodeStream("messages", new Response(text).body));
+  return decodeSse("messages", text);
 }
 
 /**
@@ -398,5 +403,54 @@ it("缺凭据的账号被记入拒绝表，后续请求不再重选它（裁决�
 
   expect(calls).toEqual(["key-b"]);
   expect(rotation.rejections().get("a")).toMatchObject({ kind: "invalid-credential" });
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 2：流在终止事件之前干净结束（断流/正文被截断）时，`decodeStream` 必须补**一条**
+// finish —— 宿主不变式 "LLM stream ended without a terminal finish chunk"
+// （dsh-llm/lib/invariant.js:59）。已经出现过 finish 的流不得补第二条。
+// ---------------------------------------------------------------------------
+
+it("Messages 在 message_delta 之后断流（缺 message_stop）时补一条带 stop_reason 的 finish（Fix 2）", async () => {
+  const chunks = await decodeMessagesSse(
+    "event: message_start\n" +
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":321,"output_tokens":1}}}\n\n' +
+      "event: message_delta\n" +
+      'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":50}}\n\n',
+  );
+
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "max-tokens" } }]);
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "max-tokens" } });
+  // 断流前已交出的 usage 不重复，合并后的输入计数仍来自 message_start。
+  expect(chunks.filter((chunk) => chunk.type === "usage")).toEqual([
+    { type: "usage", usage: { inputTokens: 321, outputTokens: 50, cacheReadTokens: 0 } },
+  ]);
+});
+
+it("Messages 已经发出 message_stop 的流在 EOF 时不会补第二条 finish（Fix 2）", async () => {
+  const chunks = await decodeMessagesSse(sseFixture("messages-tool-use.sse"));
+
+  const finishes = chunks.filter((chunk) => chunk.type === "finish");
+  expect(finishes).toHaveLength(1);
+  expect(finishes[0]).toEqual({ type: "finish", reason: { kind: "tool-calls" } });
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "tool-calls" } });
+});
+
+it("openai 流在缺 finish_reason 的情况下 EOF 时补一条 finish，并关闭打开的文本块（Fix 2）", async () => {
+  const chunks = await decodeSse("openai", 'data: {"choices":[{"delta":{"content":"hi"}}]}\n');
+
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
+  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
+  // 打开的文本块必须被关闭，否则宿主的 "finished with N open block(s)" 仍会拒。
+  expect(chunks.filter((chunk) => chunk.type === "block-end")).toEqual([
+    { type: "block-end", index: 0, block: { type: "text", text: "hi" } },
+  ]);
+});
+
+it("cli 流在缺 finish 事件的情况下 EOF 时补一条 finish（Fix 2）", async () => {
+  const chunks = await decodeSse("cli", 'data: {"type":"text-delta","text":"hi"}\n');
+
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
   expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
 });
