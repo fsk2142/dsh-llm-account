@@ -68,6 +68,36 @@ const RATE_LIMIT_TYPES: ReadonlySet<string> = new Set(["ratelimiterror", "rateli
 /** 401/403 文案里点名密钥失效（旧插件第 7060 行）。 */
 const INVALID_KEY_PROSE = /(?:invalid|incorrect|expired)[ _-]?(?:api[ _-]?)?key|invalid credential/i;
 
+/**
+ * 没有 HTTP 状态时的文案判据（旧插件 `classifyPiAiError` 第 1698-1710 行）。
+ *
+ * 这张表存在的理由和结构化词表一样：**「认不出来」不等于「网络抖动」**。旧插件对无法归类的
+ * pi-ai 失败返回 `PI_AI_ERROR`（第 1710 行）—— 一个确定性的、不入重试白名单的终态；只有文案
+ * 真的像传输问题（`network` / `connection` / `socket` / `fetch` / `ECONN*` / `premature close` /
+ * 流提前结束…）才当瞬时故障。若把「认不出来」一律当 `network`，一个确定性的流内失败
+ * （例如供应商在 200 的 SSE 里报的拒绝）就会在每个账号上重放，并被宿主当成可重试的 TRANSPORT。
+ *
+ * `kind: undefined` 表示请求级（`INVALID_REQUEST` 语义）：换账号没有意义，也不该重试。
+ */
+const IN_BAND_RULES: readonly { readonly pattern: RegExp; readonly kind: FailureKind | undefined }[] = [
+  // 旧插件把裸的 401/403 文案归成 `AUTH`，在本内核里就是 `unavailable`。
+  { pattern: /\b(?:401|403)\b/, kind: "unavailable" },
+  { pattern: /\b429\b|rate.?limit/i, kind: "rate-limit" },
+  {
+    pattern: /\b413\b|failed to buffer the request body:\s*length limit exceeded|payload too large|request body too large/i,
+    kind: undefined,
+  },
+  { pattern: /\b400\b|invalid.?request/i, kind: undefined },
+  { pattern: /\b5\d\d\b/, kind: "server" },
+  // 旧插件区分 `TIMEOUT` 与 `TRANSPORT`；本内核只有一个瞬时传输档，两者都落 `network`
+  // （行为一致：都不入拒绝表、都允许同一请求内换账号）。
+  { pattern: /\btime(?:d)?\s*out\b|timeout/i, kind: "network" },
+  { pattern: /stream ended (?:before|without)\b/i, kind: "network" },
+  { pattern: /\b(?:network|connection|socket|fetch)\b|\bECONN[A-Z]+\b/i, kind: "network" },
+  { pattern: /\b(?:other side closed|HTTP2 request did not get a response|WebSocket closed unexpectedly)\b/i, kind: "network" },
+  { pattern: /\bterminated\b|premature close/i, kind: "network" },
+];
+
 /** 正文里的诊断字段（嵌套一层 `error` 与平铺两种形状都支持）。 */
 interface GatewayError {
   /** 结构化类型（`error.type`）。 */
@@ -145,7 +175,9 @@ function rawTextOf(body: unknown): string {
  * - 词表命中模型不存在 → `undefined`：请求级，换账号没有意义；
  * - 词表命中 {@link QUOTA_TYPES} → `quota`；{@link INVALID_CREDENTIAL_TYPES} → `invalid-credential`；
  *   {@link UNAVAILABLE_TYPES} → `unavailable`；{@link RATE_LIMIT_TYPES} → `rate-limit`；
- * - 未拿到响应（`status <= 0`）→ 先看文案是否点名配额/密钥失效/限流，否则 `network`；
+ * - 未拿到响应（`status <= 0`）→ 先看文案是否点名配额/密钥失效，再按旧插件 `classifyPiAiError`
+ *   第 1698-1710 行的文案表归入限流 / 5xx / 超时 / 传输；**认不出来就返回 `undefined`** ——
+ *   确定性的流内终态既不换账号重放，也不该被宿主当瞬时故障重试；
  * - 401/402/403/429 且文案像配额用尽 → `quota`；401/403 且文案点名密钥失效 → `invalid-credential`；
  * - 401/402/403 → `unavailable`；404 → `undefined`；429 → `rate-limit`；
  * - 408/504 与 5xx → `server`（瞬时，不污染账号状态）；
@@ -178,17 +210,25 @@ export function classifyGatewayFailure(status: number, body: unknown): Rejection
   }
 
   if (status <= 0) {
-    // 流中途的事件或传输失败：事件里没有状态，只能靠文案判一判，否则按网络抖动。
-    if (isQuotaExceededError(message) || /quota|credit/i.test(message)) {
+    // 流中途的事件或传输失败：事件里没有状态，只能靠文案定类。
+    if (isQuotaExceededError(message)) {
       return rejection("quota", `opencode 请求失败：${message}`);
     }
     if (INVALID_KEY_PROSE.test(message)) {
       return rejection("invalid-credential", `opencode 请求失败：${message}`);
     }
-    if (/rate.?limit|\b429\b/i.test(message)) {
-      return rejection("rate-limit", `opencode 请求失败：${message}，未公布重置时间，按短冷却处理`);
+    const rule = IN_BAND_RULES.find((entry) => entry.pattern.test(message));
+    if (rule === undefined) {
+      // 认不出来的流内失败 = 确定性的终态（旧插件第 1710 行的 `PI_AI_ERROR`）：
+      // 既不当账号级失败换号重放，也不该被宿主重试。`undefined` 让它原样上抛。
+      return undefined;
     }
-    return rejection("network", `opencode 请求未获得响应：${message === "" ? "连接失败（网络或代理问题）" : message}，已按瞬时故障处理`);
+    if (rule.kind === undefined) return undefined;
+    if (rule.kind === "network") {
+      const detail = message === "" ? "连接失败（网络或代理问题）" : message;
+      return rejection("network", `opencode 请求未获得响应：${detail}，已按瞬时故障处理`);
+    }
+    return rejection(rule.kind, `opencode 流内失败（${rule.kind}）：${message}`);
   }
 
   if ([401, 402, 403, 429].includes(status) && isQuotaExceededError(message)) {

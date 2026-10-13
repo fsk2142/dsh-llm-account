@@ -5,15 +5,17 @@
  * 每个 HTTP 请求都经过它，于是「换没换账号」= 假 fetch 看到的密钥序列。
  * @module dsh-llm-account/tests/vendors/opencode
  */
-import { EMPTY_RESPONSE_CODE, LlmError } from "@deepseek-ai/dsh-llm";
+import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, LlmError } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { expect, it, vi } from "vitest";
 
 import type { AccountPort, QuotaPort } from "../../src/core/adapter";
-import { RotationEngine } from "../../src/core/rotation";
+import { MAX_TRIED, RotationEngine } from "../../src/core/rotation";
+import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT } from "../../src/core/transport";
 import { createOpencodeAdapter } from "../../src/vendors/opencode/adapter";
 import { parseModels } from "../../src/vendors/opencode/catalog";
 import { classifyGatewayFailure } from "../../src/vendors/opencode/failures";
+import { BODY_READ_TIMEOUT_MS, recordGatewayFetch } from "../../src/vendors/opencode/protocol";
 
 const BASE_URL = "https://opencode.ai/zen/go/v1";
 const MODELS_URL = `${BASE_URL}/models`;
@@ -134,11 +136,16 @@ const TEXT_FRAMES: readonly (readonly [string, unknown])[] = [
   ["message_stop", { type: "message_stop" }],
 ];
 
-/** 先产出可见文本、再在流中途报错的回复。 */
+/**
+ * 先产出可见文本、再在流中途报错的回复。
+ *
+ * 报错文案刻意选**账号级可归类**的额度措辞：这两条用例要问的是「闸门在已输出时是否
+ * 拦住换号」，不是一个认不出来的失败碰巧没换号（后者由专门的用例覆盖）。
+ */
 const AFTER_OUTPUT_FRAMES: readonly (readonly [string, unknown])[] = [
   ...opener(),
   ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } }],
-  ["error", { type: "error", error: { type: "overloaded_error", message: "gateway exploded mid-stream" } }],
+  ["error", { type: "error", error: { type: "overloaded_error", message: "insufficient quota for this account" } }],
 ];
 
 /**
@@ -166,7 +173,25 @@ const TOKENS_THEN_ERROR_FRAMES: readonly (readonly [string, unknown])[] = [
     "message_delta",
     { type: "message_delta", delta: { stop_reason: null, stop_sequence: null }, usage: { output_tokens: 6 } },
   ],
-  ["error", { type: "error", error: { type: "api_error", message: "gateway failed after usage" } }],
+  ["error", { type: "error", error: { type: "api_error", message: "insufficient quota for this account" } }],
+];
+
+/**
+ * 上下文溢出**以 200 的流内事件**送达（旧插件在 `mapStopReason` 里第一个判它，第 1712-1723 行）：
+ * 这是宿主的压缩信号，不是「这个账号不行」。
+ */
+const OVERFLOW_FRAMES: readonly (readonly [string, unknown])[] = [
+  ...opener(8),
+  [
+    "error",
+    { type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 300000 tokens > 200000 maximum" } },
+  ],
+];
+
+/** 一个**认不出来**的流内失败：既不像传输问题，也不像账号问题。 */
+const UNCLASSIFIED_FRAMES: readonly (readonly [string, unknown])[] = [
+  ...opener(8),
+  ["error", { type: "error", error: { type: "api_error", message: "the model declined to answer this request" } }],
 ];
 
 /** 一次干净的结束，但一点内容都没有（宿主的 EMPTY_RESPONSE 场景）。 */
@@ -195,9 +220,14 @@ const EMPTY_FRAMES: readonly (readonly [string, unknown])[] = [
  * 造一个适配器：假 fetch 提供目录与生成两条路径，生成响应按密钥分流。
  * @param generate - 密钥到响应的映射：返回 `Response`，或抛错模拟网络失败。
  * @param modelVisibility - 逐模型可见性开关。
+ * @param order - 账号顺序；缺省两个账号（`a`/`b`）。
  * @returns 适配器、轮换引擎、`fallbackAllowed` 的探针与假 fetch 看到的密钥序列。
  */
-function harness(generate: (key: string) => Response, modelVisibility?: Record<string, boolean>) {
+function harness(
+  generate: (key: string) => Response,
+  modelVisibility?: Record<string, boolean>,
+  order: readonly string[] = ["a", "b"],
+) {
   const calls: string[] = [];
   const fetchImpl = (async (input: unknown, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : String((input as { url: string }).url);
@@ -209,7 +239,7 @@ function harness(generate: (key: string) => Response, modelVisibility?: Record<s
     return generate(key);
   }) as typeof fetch;
 
-  const rotation = new RotationEngine({ order: ["a", "b"], rules: [], pinned: null });
+  const rotation = new RotationEngine({ order: [...order], rules: [], pinned: null });
   // 探针：把「适配器拿什么去问轮换引擎」原样记下来 —— 「有没有真的走那道闸」不看结果猜。
   const gate = vi.spyOn(rotation, "fallbackAllowed");
   const adapter = createOpencodeAdapter({
@@ -218,7 +248,7 @@ function harness(generate: (key: string) => Response, modelVisibility?: Record<s
     quota: stubQuota(),
     accounts: stubAccounts(),
     fetchImpl,
-    resolveStored: async (ref) => KEYS[ref],
+    resolveStored: async (ref) => KEYS[ref] ?? `key-${ref}`,
   });
   return { adapter, rotation, gate, calls };
 }
@@ -308,4 +338,78 @@ it("空响应这类终态错误交给宿主，不被账号轮换吞掉", async (
   expect((settled.error as LlmError).code).toBe(EMPTY_RESPONSE_CODE);
   expect(empty.calls).toEqual(["key-a"]);
   expect(empty.gate).not.toHaveBeenCalled();
+});
+
+it("流内送达的上下文溢出映射为 CONTEXT_WINDOW_EXCEEDED，不换账号也不重试", async () => {
+  // 200 的 SSE 里报的溢出：确定性失败。当瞬时故障处理会按账号重放，并把宿主的压缩信号丢掉。
+  const overflow = harness((key) => (key === "key-a" ? sseResponse(OVERFLOW_FRAMES) : sseResponse(TEXT_FRAMES)));
+  const settled = await collectSettled(overflow.adapter.stream(request()));
+  expect(settled.error).toBeInstanceOf(LlmError);
+  expect((settled.error as LlmError).code).toBe(CONTEXT_WINDOW_EXCEEDED_CODE);
+  expect(overflow.calls).toEqual(["key-a"]);
+  expect(overflow.gate).not.toHaveBeenCalled();
+});
+
+it("认不出来的流内失败是终态（PI_AI_ERROR），不会伪装成 network 去轮换或重试", async () => {
+  // 「认不出来」不等于「网络抖动」：旧插件对这类失败返回 PI_AI_ERROR（不重试），
+  // 若倒成 network，它就会被每个账号重放一遍，并被宿主当成可重试的 TRANSPORT。
+  expect(classifyGatewayFailure(0, { message: "the model declined to answer this request" })).toBeUndefined();
+  // 反过来，真的像传输问题的文案仍然按瞬时故障处理。
+  expect(classifyGatewayFailure(0, { message: "fetch failed: other side closed" })?.kind).toBe("network");
+
+  const unclassified = harness((key) => (key === "key-a" ? sseResponse(UNCLASSIFIED_FRAMES) : sseResponse(TEXT_FRAMES)));
+  const settled = await collectSettled(unclassified.adapter.stream(request()));
+  expect(settled.error).toBeInstanceOf(LlmError);
+  expect((settled.error as LlmError).code).toBe("PI_AI_ERROR");
+  expect(unclassified.calls).toEqual(["key-a"]);
+  expect(unclassified.gate).not.toHaveBeenCalled();
+});
+
+it("providerRetryPolicy 保留两个超时码，且不退化成一个 TIMEOUT", () => {
+  const { adapter } = harness(() => sseResponse(TEXT_FRAMES));
+  const policy = adapter.providerRetryPolicy("dsh-opencode-go");
+  expect(policy?.mode).toBe("normal");
+  const codes = policy?.mode === "normal" ? policy.retryableCodes : [];
+  expect(codes).toContain(LLM_REQUEST_TIMEOUT);
+  expect(codes).toContain(LLM_STREAM_IDLE_TIMEOUT);
+  // 两个码各自独立存在（不是一个笼统的 TIMEOUT 顶替）：区分「整请求超时」与「流空闲超时」。
+  expect(LLM_REQUEST_TIMEOUT).not.toBe(LLM_STREAM_IDLE_TIMEOUT);
+  expect(codes).toContain("TIMEOUT");
+  expect(codes.filter((code) => code === LLM_REQUEST_TIMEOUT)).toHaveLength(1);
+  expect(codes.filter((code) => code === LLM_STREAM_IDLE_TIMEOUT)).toHaveLength(1);
+});
+
+it(`尝试次数到达 MAX_TRIED（${MAX_TRIED}）就停下并抛出最后一次失败`, async () => {
+  // 账号数比上限多一个：第 17 个账号从头到尾都不该被联系。
+  const order = Array.from({ length: MAX_TRIED + 1 }, (_value, index) => `acct-${index}`);
+  const capped = harness(
+    (key) => (key.startsWith("key-acct-") ? jsonResponse(402, { error: { type: "insufficientquota" } }) : sseResponse(TEXT_FRAMES)),
+    undefined,
+    order,
+  );
+  const settled = await collectSettled(capped.adapter.stream(request()));
+  expect(settled.error).toBeInstanceOf(LlmError);
+  expect((settled.error as LlmError).code).toBe("QUOTA"); // 抛出的是**最后一次**失败
+  expect(capped.calls).toHaveLength(MAX_TRIED);
+  expect(capped.calls[0]).toBe("key-acct-0");
+  expect(capped.calls.at(-1)).toBe(`key-acct-${MAX_TRIED - 1}`);
+  expect(capped.calls).not.toContain(`key-acct-${MAX_TRIED}`);
+  expect(capped.gate).toHaveBeenCalledTimes(MAX_TRIED);
+});
+
+it("失败响应的正文读不动时按已有证据降级，不会卡住请求", async () => {
+  // 一条永不结束的错误正文：读取必须自带期限（旧插件 BODY_READ_TIMEOUT_MS = 1000）。
+  // 真带上这条正文的话，pi-ai 自己的 SDK 也会卡在读它上面，所以这条用例直接打在
+  // 「证据记录器」这一层 —— 正是 `await gateway.evidence()` 依赖的那段。
+  const never = new ReadableStream<Uint8Array>({ start() {} });
+  const recorder = recordGatewayFetch((async () => new Response(never, { status: 402 })) as typeof fetch);
+  const response = await recorder.fetch(`${BASE_URL}/messages`, { method: "POST" });
+  expect(response.status).toBe(402);
+
+  const started = Date.now();
+  const evidence = await recorder.evidence();
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeLessThan(BODY_READ_TIMEOUT_MS + 1_500); // 有期限，不是无限等
+  expect(evidence?.status).toBe(402); // 状态永远在：正文读不动就按状态分类
+  expect(evidence?.body).toBeUndefined();
 });

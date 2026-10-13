@@ -80,6 +80,14 @@ export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /** 未指定 `maxTokens` 时的输出上限；再受模型自报上限收紧（旧插件第 7626 行）。 */
 export const DEFAULT_GENERATE_MAX_TOKENS = 131_072;
 
+/**
+ * 读一段诊断正文的期限（旧插件 `BODY_READ_TIMEOUT_MS` 第 7074 行，同为 1000 ms）。
+ *
+ * 这个上限是**必需**的：`await gateway.evidence()` 发生在 `runStream` 清掉自己的定时器之后，
+ * 一条不肯结束的错误正文会把整次请求无限期挂住（只有调用方中止能解开）。
+ */
+export const BODY_READ_TIMEOUT_MS = 1_000;
+
 /** 目录不可用时装模型用的上下文窗口兜底（只影响 pi-ai 的溢出判定，不影响目录展示）。 */
 export const DEFAULT_CONTEXT_WINDOW = 1_000_000;
 
@@ -188,51 +196,73 @@ export interface GatewayRecorder {
 }
 
 /**
- * 从响应体里读一段有界的正文预览（旧插件 `previewBody` 第 7094 行的同一目的：
- * 只读前 {@link ERROR_BODY_LIMIT} 字节，绝不因为读诊断正文而拖住或破坏原响应）。
+ * 从响应体里读一段有界的正文预览（旧插件 `previewBody` 第 7094-7135 行的同一目的与同一上限）。
+ *
+ * 三条纪律：
+ * - 只读前 {@link ERROR_BODY_LIMIT} 字节 —— 绝不因为读诊断正文而把整个响应体拉进内存；
+ * - **有期限**：`AbortSignal.any([调用方信号, AbortSignal.timeout(BODY_READ_TIMEOUT_MS)])`
+ *   与旧插件第 7100 行逐字一致；读超时就交出**已经读到的部分**（通常没有），绝不让调用方
+ *   等一个不落的正文；
+ * - 只读克隆体：原响应仍归 pi-ai 的 SDK 消费。
  * @param response - 已经拿到的响应。
+ * @param callerSignal - 调用方取消信号（旧插件的 `callerSignal` 参数）。
  * @returns 解析后的正文，或原始文本；读不到时为 `undefined`。
  */
-async function previewBody(response: Response): Promise<unknown> {
+async function previewBody(response: Response, callerSignal: AbortSignal | undefined): Promise<unknown> {
+  const signal =
+    callerSignal === undefined
+      ? AbortSignal.timeout(BODY_READ_TIMEOUT_MS)
+      : AbortSignal.any([callerSignal, AbortSignal.timeout(BODY_READ_TIMEOUT_MS)]);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let text = "";
+  let truncated = false;
   try {
-    const stream = response.clone().body;
-    if (stream === null) return undefined;
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let text = "";
-    try {
-      while (text.length < ERROR_BODY_LIMIT) {
-        const read = await reader.read();
-        if (read.done === true) break;
-        text += decoder.decode(read.value, { stream: true });
+    signal.throwIfAborted();
+    reader = response.clone().body?.getReader();
+    if (reader !== undefined) {
+      const decoder = new TextDecoder();
+      // 读与「信号中止」赛跑：`reader.read()` 卡住时靠它脱身（旧插件第 7111 行同法）。
+      const aborted = new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      for (;;) {
+        const part = await Promise.race([reader.read(), aborted]);
+        if (part.done === true) break;
+        text += decoder.decode(part.value, { stream: true });
+        if (text.length >= ERROR_BODY_LIMIT) {
+          truncated = true;
+          break;
+        }
       }
-      text += decoder.decode();
-    } finally {
-      void reader.cancel().catch(() => {});
-    }
-    const bounded = text.slice(0, ERROR_BODY_LIMIT);
-    if (bounded.trim() === "") return undefined;
-    try {
-      return JSON.parse(bounded);
-    } catch {
-      return bounded;
+      if (!truncated) text += decoder.decode();
     }
   } catch {
-    return undefined;
+    // 读超时、调用方中止、流错误：都退化成「有多少算多少」，状态照旧可用。
+  } finally {
+    if (reader !== undefined) void reader.cancel().catch(() => {});
+  }
+  const bounded = text.slice(0, ERROR_BODY_LIMIT);
+  if (bounded.trim() === "") return undefined;
+  try {
+    return JSON.parse(bounded);
+  } catch {
+    return bounded;
   }
 }
 
 /**
  * 包一层 `fetch`：每次非 2xx 响应记下（状态，正文），供失败分类使用。
  * @param fetchImpl - 宿主注入的 `fetch`（测试给假实现）。
+ * @param callerSignal - 调用方取消信号；中止时放弃读诊断正文（不拖住取消）。
  * @returns 记录器；`fetch` 字段交给 pi-ai。
  */
-export function recordGatewayFetch(fetchImpl: typeof fetch): GatewayRecorder {
+export function recordGatewayFetch(fetchImpl: typeof fetch, callerSignal?: AbortSignal): GatewayRecorder {
   let evidence: Promise<GatewayEvidence | undefined> = Promise.resolve(undefined);
   const wrapped = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
     const response = await fetchImpl(input, init);
     if (!response.ok) {
-      evidence = previewBody(response).then((body) => ({ status: response.status, body }));
+      // 先记状态：正文读不动时至少还能按状态分类（`previewBody` 自带期限）。
+      evidence = previewBody(response, callerSignal).then((body) => ({ status: response.status, body }));
     }
     return response;
   }) as typeof fetch;
@@ -600,6 +630,15 @@ export async function* toHostChunks(
       case "error": {
         const usage = toHostUsage(event.error.usage);
         if (usageTotal(usage) > 0) yield { type: "usage", usage };
+        if (signal?.aborted !== true && isContextOverflow(event.error, contextWindow)) {
+          // 溢出可能**以 200 的流内事件**送达（旧插件第 1712-1723 行在 `mapStopReason`
+          // 里第一个判它，`done` 与 `error` 两条路都要判）。它是宿主的压缩信号：
+          // 归类成瞬时故障会按账号重放，且丢掉 `CONTEXT_WINDOW_EXCEEDED`。
+          throw new LlmError(
+            event.error.errorMessage ?? `pi-ai detected context overflow for model "${event.error.model}"`,
+            CONTEXT_WINDOW_EXCEEDED_CODE,
+          );
+        }
         const reason = signal?.aborted === true ? "aborted" : "error";
         throw new OpencodeStreamFailure(0, undefined, event.error.errorMessage ?? `pi-ai stream ${reason}`);
       }

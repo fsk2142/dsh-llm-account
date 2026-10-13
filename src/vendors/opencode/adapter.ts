@@ -52,6 +52,12 @@ import type { GatewayEvidence, GatewayRecorder } from "./protocol";
 const ABORTED_CODE = "ABORTED";
 
 /**
+ * 认不出来的 pi-ai 流内失败交给宿主的错误码（旧插件 `classifyPiAiError` 的兜底，
+ * 第 1710 行）：确定性的终态，**不在** {@link RETRYABLE_CODES} 里。
+ */
+const PI_AI_ERROR_CODE = "PI_AI_ERROR";
+
+/**
  * 重试延迟上限。opencode 的旧插件**没有** `providerRetryPolicy`（旧包全文无此符号），
  * 所以这套值与 Task 9 的 commandcode 路由保持一致 —— 它是控制器裁决 12 定下的路由策略，
  * 不是从某个旧包抄来的。
@@ -309,7 +315,8 @@ class OpencodeAdapter extends LlmAdapter {
       let pendingUsage: StreamChunk | undefined;
       // 每次尝试一套「网关证据」记录：失败时用它还原（HTTP 状态，正文），
       // 否则 pi-ai 的错误事件只剩一句文案，`classifyGatewayFailure` 无从下手。
-      const gateway = recordGatewayFetch(this.#deps.fetchImpl);
+      // 调用方信号一并传入：取消时要能放弃读那条诊断正文（正文读取自带 1s 期限）。
+      const gateway = recordGatewayFetch(this.#deps.fetchImpl, options.signal);
       // 逐次索取上游：**只有** `iterator.next()` 的失败算本次尝试的失败；
       // 消费方在 `yield` 处的中断/抛错原样冒泡，不会被当成厂商失败而重放。
       const iterator = this.#attempt(raw, options, key, gateway)[Symbol.asyncIterator]();
@@ -363,7 +370,13 @@ class OpencodeAdapter extends LlmAdapter {
 
       if (options.signal?.aborted === true || this.#isAbort(failure)) throw failure;
       const classified = this.#classify(failure, await gateway.evidence());
-      if (classified === undefined) throw failure; // 请求级拒绝：换账号没有意义
+      // 请求级拒绝：换账号没有意义。pi-ai 的证据载体换成宿主认识的稳定终态码
+      // （`PI_AI_ERROR`，旧插件第 1710 行）：它不在重试白名单里，宿主不会把它当瞬时故障重试。
+      if (classified === undefined) {
+        throw failure instanceof OpencodeStreamFailure
+          ? new LlmError(failure.message, PI_AI_ERROR_CODE, { cause: failure })
+          : failure;
+      }
       this.#deps.rotation.markRejected(ref, classified.rejection);
       lastFailure = classified;
       // 唯一的换账号条件（Task 5 的判定）：已输出 / 已消耗 token / 已中止都不换。
