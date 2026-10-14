@@ -20,6 +20,7 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 import { dictionaryOf } from "./copy";
+import { Dashboard } from "./dashboard";
 import { SidebarCard } from "./sidebar-card";
 import { createPageState, applyModelEdit, closeAction, dirtyFields, modelEditTarget, normalizeModels, noteCredentialChange, openAction, selectTab, setActionField, setField, sidebarVendorOf, toggleExpanded, vendorCardKinds, type AccountAction, type ModelEdit, type PageState, type VendorSnapshot } from "./page-state";
 import type { LoginView } from "./account-card";
@@ -446,6 +447,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const sidebarVendorId = sidebarVendor?.providerId;
     useEffect(() => {
       if (sidebarVendorId === undefined) return;
+      const localeNs = options.localeNs ?? "settings.llm-account";
       const component = createSidebarCardView({
         ctx,
         vendor: sidebarVendorId,
@@ -454,12 +456,24 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           selectPanel(ctx, DASHBOARD_PANEL_ID);
         },
       });
-      return registerSidebarCard(ctx, {
-        id: SIDEBAR_CARD_ID,
-        order: 1,
-        locale: options.localeNs ?? "settings.llm-account",
-        component,
+      const disposeSidebar = registerSidebarCard(ctx, { id: SIDEBAR_CARD_ID, order: 1, locale: localeNs, component });
+      // 中栏仪表盘与侧边栏卡片同一个开关：它是从卡片上打开的，关着的时候注册它只是死代码。
+      const disposePanel = registerPanelCard(ctx, {
+        key: DASHBOARD_PANEL_ID,
+        locale: localeNs,
+        component: createDashboardView({
+          ctx,
+          vendor: sidebarVendorId,
+          t,
+          onClose: () => {
+            selectPanel(ctx, null);
+          },
+        }),
       });
+      return () => {
+        disposeSidebar();
+        disposePanel();
+      };
     }, [sidebarVendorId]);
 
     const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
@@ -819,6 +833,84 @@ function domDocument():
     }
   | undefined {
   return (globalThis as { document?: ReturnType<typeof domDocument> }).document;
+}
+
+/** 中栏面板的插槽名（旧插件 `lib/client.js:9130` 用的就是它）。 */
+export const MAIN_SLOT = "main";
+
+/**
+ * 把中栏面板注册进 `main` 插槽。
+ *
+ * 形状逐字对齐旧插件（`@mars-sea/dsh-commandcode-provider/lib/client.js:9130-9138`）：
+ * `ctx.slots.inject("main", () => ctx.slots.register({ name: "main", key: PANEL_ID, locale, inject }, Component))`。
+ *
+ * **注意这里用的是 `key`，不是 `id`**，而且没有 `order` —— `main` 插槽按 key 选择面板（壳层用
+ * `layout.selectPanel(key)` 打开它）。抄错成 `id` 会让面板永远打不开。
+ * @param ctx - 客户端上下文。
+ * @param registration - 面板 key、文案命名空间、组件与可选 `inject` 工厂。
+ * @returns 注销函数（本实现是空操作，见 `registerSidebarCard` 的说明）。
+ */
+export function registerPanelCard(
+  ctx: ClientSeamContext,
+  registration: { key: string; locale: string; component: unknown; face?: () => Record<string, unknown> },
+): () => void {
+  const slots = slotsOf(ctx);
+  if (slots === undefined) return () => undefined;
+  try {
+    slots.inject(MAIN_SLOT, () =>
+      slots.register(
+        {
+          name: MAIN_SLOT,
+          key: registration.key,
+          locale: registration.locale,
+          inject: registration.face ?? (() => ({ hooks: {} })),
+        },
+        registration.component,
+      ),
+    );
+  } catch (error) {
+    // 与侧边栏卡片同一处置：留一行错误，不让整个客户端因为一次注册失败而失效。
+    console.error("[dsh-llm-account] could not register the centre-column panel:", error);
+  }
+  return () => undefined;
+}
+
+/**
+ * 造**仪表盘容器组件**：挂载时读一次状态与切换记录，手动刷新时再读一次。
+ *
+ * **没有常驻轮询**：面板只在用户主动打开时存在，打开即读一次；之后由「刷新」按钮或重新打开
+ * 触发。规格 §8.1 第 6 条的「不做无谓后台查询」在这里同样适用。
+ * @param options - 上下文、厂商、取词函数与关闭动作。
+ * @returns 一个 React 函数组件。
+ */
+export function createDashboardView(options: {
+  ctx: ClientSeamContext;
+  vendor: string;
+  t: (key: string) => string;
+  onClose: () => void;
+}): () => ReactElement {
+  const { ctx, vendor, t } = options;
+  return function ConnectedDashboard(): ReactElement {
+    const [status, setStatus] = useState<VendorUsageStatus | undefined>(undefined);
+    const [switches, setSwitches] = useState<SwitchRecord[] | undefined>(undefined);
+
+    const load = (): void => {
+      const usage = usageNamespaceOf(ctx);
+      if (usage === undefined) return;
+      void readStatus(usage, vendor).then((next) => {
+        if (next !== undefined) setStatus(next);
+      });
+      void readSwitches(usage, vendor).then((next) => {
+        if (next !== undefined) setSwitches(next);
+      });
+    };
+
+    useEffect(() => {
+      load();
+    }, []);
+
+    return Dashboard({ t, status, switches, onClose: () => options.onClose(), onRefresh: load });
+  };
 }
 
 /**

@@ -89,6 +89,14 @@ export type CopyKey =
   | "switch.reason.rate-limit"
   | "switch.reason.invalid-credential"
   | "switch.reason.manual"
+  | "dashboard.title"
+  | "dashboard.close"
+  | "dashboard.refresh"
+  | "dashboard.accounts"
+  | "dashboard.switches"
+  | "dashboard.noSwitches"
+  | "dashboard.noData"
+  | "dashboard.unknown"
   | "account.reason.credential-slot-taken"
   | "account.reason.invalid-key"
   | "account.reason.unavailable"
@@ -184,6 +192,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.reason.rate-limit": "被限流",
     "switch.reason.invalid-credential": "凭据失效",
     "switch.reason.manual": "手动切换",
+    "dashboard.title": "账号与用量",
+    "dashboard.close": "关闭",
+    "dashboard.refresh": "刷新",
+    "dashboard.accounts": "账号",
+    "dashboard.switches": "切换记录",
+    "dashboard.noSwitches": "还没有发生过自动或手动切换。",
+    "dashboard.noData": "还没有可显示的用量数据。",
+    "dashboard.unknown": "未知",
     "account.reason.credential-slot-taken": "该凭据槽已被另一个账号占用，密钥未写入；请先重命名或移除那个账号。",
     "account.reason.invalid-key": "密钥被拒绝，请确认它属于这个账号。",
     "account.reason.unavailable": "登录服务暂时不可用。",
@@ -274,6 +290,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.reason.rate-limit": "rate limited",
     "switch.reason.invalid-credential": "credential rejected",
     "switch.reason.manual": "switched manually",
+    "dashboard.title": "Accounts & usage",
+    "dashboard.close": "Close",
+    "dashboard.refresh": "Refresh",
+    "dashboard.accounts": "Accounts",
+    "dashboard.switches": "Switch history",
+    "dashboard.noSwitches": "No automatic or manual switch has happened yet.",
+    "dashboard.noData": "No usage data to show yet.",
+    "dashboard.unknown": "Unknown",
     "account.reason.credential-slot-taken": "That credential slot already belongs to another account, so the key was not written. Rename or remove that account first.",
     "account.reason.invalid-key": "The key was rejected; check that it belongs to this account.",
     "account.reason.unavailable": "The sign-in service is temporarily unavailable.",

@@ -14,6 +14,7 @@ import {
   readStatus,
   readSwitches,
   registerSidebarCard,
+  registerPanelCard,
   saveSettings,
   selectPanel,
   subscribeCredentials,
@@ -278,6 +279,34 @@ it("侧边栏卡片注册：插槽名与形状逐字对齐旧插件", () => {
   expect(typeof registered[0]!.entry.inject).toBe("function");
   expect((registered[0]!.entry.inject as () => unknown)()).toMatchObject({ hooks: {} });
   expect(registered[0]!.component).toBe("Component");
+});
+
+it("中栏面板注册用 key 而不是 id（旧插件的 main 插槽形状）", () => {
+  const registered: { entry: Record<string, unknown>; component: unknown }[] = [];
+  const slots = {
+    inject: (name: string, callback: () => unknown) => {
+      expect(name).toBe("main");
+      return callback();
+    },
+    register: (entry: Record<string, unknown>, component: unknown) => {
+      registered.push({ entry, component });
+      return undefined;
+    },
+  };
+
+  registerPanelCard({ slots }, { key: "llm-account-dashboard", locale: "settings.llm-account", component: "Panel" });
+
+  expect(registered).toHaveLength(1);
+  expect(registered[0]!.entry).toMatchObject({
+    name: "main",
+    // 面板按 **key** 选择（壳层用 layout.selectPanel(key) 打开）；写成 `id` 会让面板永远打不开。
+    key: "llm-account-dashboard",
+    locale: "settings.llm-account",
+  });
+  expect(registered[0]!.entry["id"]).toBeUndefined();
+  expect(registered[0]!.entry["order"]).toBeUndefined();
+  expect(typeof registered[0]!.entry["inject"]).toBe("function");
+  expect(registered[0]!.component).toBe("Panel");
 });
 
 it("侧边栏卡片注册失败不把客户端带走（与旧插件同样只留一行错误）", () => {
