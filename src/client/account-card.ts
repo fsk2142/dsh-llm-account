@@ -43,6 +43,15 @@ export interface AccountCardProps {
   onRemove: (ref: string) => void;
   onToggleExpand: (ref: string) => void;
   onLoginBegin: () => void;
+  /**
+   * 追加到每一行末尾的厂商专属控件（T6 的排序控件由 `opencode-account-card.ts` 注入）。
+   *
+   * 扩展点：行本身的渲染只有一份实现（额度条、状态标记、菜单都在这里），厂商差异通过这个
+   * render prop 挂上去，而不是复制一整行。
+   * @param account - 该行账号。
+   * @param index - 它在轮换顺序里的下标（排序控件要用）。
+   */
+  rowExtras?: (account: AccountUsageStatus, index: number) => ReactNode;
 }
 
 /**
@@ -57,7 +66,7 @@ export function AccountCard(props: AccountCardProps): ReactElement {
     "section",
     { "data-card": "accounts" },
     createElement("h2", null, t("group.accounts")),
-    ...accounts.map((account) => accountRow(props, account)),
+    ...accounts.map((account, index) => accountRow(props, account, index)),
     status === undefined || accounts.length === 0 ? createElement("p", { "data-accounts-empty": "true" }, t("account.quotaMissing")) : null,
     ...failureNotes(props),
     ...loginSection(props),
@@ -66,7 +75,7 @@ export function AccountCard(props: AccountCardProps): ReactElement {
 }
 
 /** 一行账号：名称、套餐、状态标记、额度条、展开报告、`⋯` 菜单。 */
-function accountRow(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
+function accountRow(props: AccountCardProps, account: AccountUsageStatus, index: number): ReactNode {
   const { t, action } = props;
   const pinned = props.status?.pinned === account.ref;
   const effective = account.effective;
@@ -121,6 +130,8 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus): React
     ...menuButtons(props, account),
     editingRename ? renameEditor(props, account) : null,
     editingKey ? keyEditor(props, account) : null,
+    // 厂商专属控件（T6 的排序）挂在行尾：行渲染只有一份实现。
+    props.rowExtras === undefined ? null : props.rowExtras(account, index),
   );
 }
 

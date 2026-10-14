@@ -302,6 +302,8 @@ export interface VendorCardsContext {
   usage: UsageNamespace | undefined;
   /** 该厂商最新的状态（生效账号、账号行、额度摘要）；还没读到时为 `undefined`。 */
   status: VendorUsageStatus | undefined;
+  /** 该厂商设置文档的当前值（`autoSwitch` 等设置类控件的当前值来源）。 */
+  settings: Record<string, unknown>;
   t: (key: string) => string;
   /** 正在进行的账户操作草稿。 */
   action: AccountAction | undefined;
@@ -316,6 +318,10 @@ export interface VendorCardsContext {
   toggleExpand: (ref: string) => void;
   select: (ref: string | null) => void;
   remove: (ref: string) => void;
+  /** 调整账号顺序（`toIndex` 是移动后的**最终下标**）。 */
+  move: (ref: string, toIndex: number) => void;
+  /** 写自动切换开关（立即生效）。 */
+  setAutoSwitch: (value: boolean) => void;
   loginBegin: () => void;
 }
 
@@ -373,15 +379,21 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       };
     }, []);
 
-    // 读状态：远程面挂上时、凭据变更时、账户操作成功后各读一次。
+    // 读状态与设置快照：远程面挂上时、凭据变更时、账户操作成功后各读一次。
     // **不做常驻轮询**：规格 §8.1 第 6 条要的是「关闭即静默」，只有登录等待期才需要定时问（见下）。
     useEffect(() => {
-      if (usage === undefined) return;
       let alive = true;
-      for (const entry of entries) {
-        void readStatus(usage, entry.providerId).then((status) => {
-          if (alive && status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
-        });
+      // 账户操作（排序、autoSwitch、增删改）会改设置文档，所以每次都把快照重读一遍；
+      // 用户的未保存草稿由 `createPageState(…, previous)` 保留。
+      void describeVendorSnapshots(ctx, entries).then((snapshots) => {
+        if (alive && snapshots.length > 0) setState((current) => createPageState(entries, snapshots, current));
+      });
+      if (usage !== undefined) {
+        for (const entry of entries) {
+          void readStatus(usage, entry.providerId).then((status) => {
+            if (alive && status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
+          });
+        }
       }
       return () => {
         alive = false;
@@ -426,6 +438,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                 vendor: activeVendor,
                 usage,
                 status: statuses[activeVendor],
+                settings: state.snapshots[activeEntry.ns]?.value ?? {},
                 t,
                 action: state.action,
                 expandedRef: state.expandedRef,
@@ -448,6 +461,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                 },
                 remove: (ref) => {
                   void usage?.removeAccount(activeVendor, ref).then(() => setAccountRevision((current) => current + 1));
+                },
+                move: (ref, toIndex) => {
+                  void usage?.moveAccount(activeVendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
+                },
+                setAutoSwitch: (value) => {
+                  void usage?.setAutoSwitch(activeVendor, value).then(() => setAccountRevision((current) => current + 1));
                 },
                 loginBegin: () => {
                   void usage?.loginBegin(activeVendor).then((status) => {

@@ -33,7 +33,7 @@ declare module "react" {
   /** 创建元素。子节点按位置传入（第三个参数起）。 */
   export function createElement(
     type: unknown,
-    properties?: Record<string, unknown> | null,
+    properties?: object | null,
     ...children: readonly ReactNode[]
   ): ReactElement;
 

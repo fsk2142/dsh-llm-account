@@ -159,6 +159,8 @@ it("服务注册到固定键与命名空间，并登记三个远程方法", asyn
     "replaceKey",
     "removeAccount",
     "selectAccount",
+    "moveAccount",
+    "setAutoSwitch",
     "loginBegin",
     "loginStatus",
     "loginCancel",
@@ -352,4 +354,32 @@ it("网页登录：有登录端口的厂商可以 begin/status/cancel，没有�
   // opencode 没有网页登录能力：静默无操作会伪装成「登录没反应」，必须吵出来。
   const without = await mount([vendorDeps({ vendor: "dsh-opencode-go" })]);
   await expect(without.service.loginBegin("dsh-opencode-go")).rejects.toThrow(/browser login/);
+});
+
+it("排序与 autoSwitch：支持的厂商转发到账号端口，参数原样", async () => {
+  const accounts = fakeAccounts();
+  const withMove: AccountPort = {
+    ...accounts.port,
+    move: async (ref, toIndex) => {
+      accounts.calls.push({ method: "move", args: [ref, toIndex] });
+    },
+    setAutoSwitch: async (value) => {
+      accounts.calls.push({ method: "setAutoSwitch", args: [value] });
+    },
+  };
+  const { service } = await mount([vendorDeps({ vendor: "dsh-opencode-go", accounts: withMove })]);
+
+  await service.moveAccount("dsh-opencode-go", "b", 0);
+  await service.setAutoSwitch("dsh-opencode-go", true);
+  expect(accounts.calls).toEqual([
+    { method: "move", args: ["b", 0] },
+    { method: "setAutoSwitch", args: [true] },
+  ]);
+});
+
+it("排序与 autoSwitch：不支持的厂商报明确错误（不是静默无操作）", async () => {
+  // commandcode 的账号端口不实现这两个：它的自动切换由轮换引擎无条件执行，文档里也没有开关。
+  const { service } = await mount([vendorDeps({ vendor: "commandcode" })]);
+  await expect(service.moveAccount("commandcode", "a", 1)).rejects.toThrow(/reordering/);
+  await expect(service.setAutoSwitch("commandcode", true)).rejects.toThrow(/auto-switch/);
 });

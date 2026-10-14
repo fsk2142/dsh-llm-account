@@ -13,8 +13,9 @@
  */
 import { createElement, type ReactNode } from "react";
 
-import { AccountCard } from "./account-card";
+import { AccountCard, type AccountCardProps } from "./account-card";
 import { COPY } from "./copy";
+import { OpenCodeAccountCard } from "./opencode-account-card";
 import { createConnectedPage, type ClientSeamContext, type VendorCardsContext } from "./seams";
 import { applyShell, VENDORS } from "./shell";
 
@@ -90,14 +91,14 @@ export function apply(ctx: unknown): void {
 /**
  * 该厂商的专属卡片。
  *
- * 目前只有账户卡片；**Command Code 与 OpenCode 共用这一张**（数据形状相同：都是 `status().accounts`），
- * 差异全由宿主发布的能力声明驱动（`capabilities.pin`/`browserLogin`/`reorder`），所以不需要两份实现；
- * T6 的排序与 `autoSwitch` 会在 T6 里补上专属于 OpenCode 的那部分。
+ * OpenCode 多一层（排序 + `autoSwitch`），因为它有这两项独有语义；其余一切（账号行、额度条、
+ * `⋯` 菜单、添加账户）两个厂商共用同一份实现，差异全由宿主发布的能力声明驱动
+ * （`capabilities.pin`/`browserLogin`/`reorder`），不重复实现两遍。
  * @param cards - 容器递进来的数据与回调。
  * @returns 元素树。
  */
 function renderVendorCards(cards: VendorCardsContext): ReactNode {
-  return createElement(AccountCard, {
+  const shared: AccountCardProps = {
     status: cards.status,
     t: cards.t,
     action: cards.action,
@@ -111,5 +112,14 @@ function renderVendorCards(cards: VendorCardsContext): ReactNode {
     onRemove: cards.remove,
     onToggleExpand: cards.toggleExpand,
     onLoginBegin: cards.loginBegin,
-  });
+  };
+  if (cards.vendor === "dsh-opencode-go") {
+    return createElement(OpenCodeAccountCard, {
+      ...shared,
+      settings: cards.settings,
+      onMove: cards.move,
+      onSetAutoSwitch: cards.setAutoSwitch,
+    });
+  }
+  return createElement(AccountCard, shared);
 }

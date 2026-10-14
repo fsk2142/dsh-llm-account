@@ -289,6 +289,39 @@ export class LlmAccountUsageService extends TypertRemoteService {
   }
 
   /**
+   * 调整账号顺序。
+   *
+   * 只有声明了 `reorder` 能力的厂商才实现（本包只有 opencode）。没实现的厂商**报明确错误**，
+   * 不是静默无操作 —— 页面上没有这个控件，能走到这里就说明接线错了。
+   * @param vendor - 厂商 id。
+   * @param ref - 目标账号。
+   * @param toIndex - 移动后的最终下标。
+   */
+  async moveAccount(vendor: VendorId, ref: string, toIndex: number): Promise<void> {
+    const move = this.requireVendor(vendor).accounts.move;
+    if (move === undefined) {
+      throw new Error(`dsh-llm-account: vendor "${vendor}" does not support reordering accounts`);
+    }
+    await move.call(this.requireVendor(vendor).accounts, ref, toIndex);
+  }
+
+  /**
+   * 写自动切换开关。
+   *
+   * 只有真的有这个开关的厂商才实现（本包只有 opencode；Command Code 的自动切换由轮换引擎
+   * 无条件执行，没有开关可写）。没实现时报明确错误。
+   * @param vendor - 厂商 id。
+   * @param value - 开关值。
+   */
+  async setAutoSwitch(vendor: VendorId, value: boolean): Promise<void> {
+    const setAutoSwitch = this.requireVendor(vendor).accounts.setAutoSwitch;
+    if (setAutoSwitch === undefined) {
+      throw new Error(`dsh-llm-account: vendor "${vendor}" has no auto-switch setting`);
+    }
+    await setAutoSwitch.call(this.requireVendor(vendor).accounts, value);
+  }
+
+  /**
    * 开始（或接续）一次网页登录。
    * @param vendor - 厂商 id。
    * @returns 登录状态（`waiting` 时带授权网址）。

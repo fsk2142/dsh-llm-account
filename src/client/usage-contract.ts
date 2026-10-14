@@ -48,6 +48,9 @@ export const USAGE_METHODS = [
   "replaceKey",
   "removeAccount",
   "selectAccount",
+  // 排序与自动切换（Task 6：只有声明了相应能力的厂商才实现）
+  "moveAccount",
+  "setAutoSwitch",
   // 网页登录（Task 5：Command Code 的登录入口）
   "loginBegin",
   "loginStatus",
@@ -204,6 +207,20 @@ function parseString(value: unknown): string {
   return value;
 }
 
+/** 校验一个数字（账号下标）。 */
+function parseNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw boundaryError(USAGE_NAMESPACE, `expected a finite number, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/** 校验一个布尔值。 */
+function parseBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") throw boundaryError(USAGE_NAMESPACE, `expected a boolean, got ${JSON.stringify(value)}`);
+  return value;
+}
+
 /** 校验一个可空的字符串（`null` 表示「回到自动轮换」）。 */
 function parseNullableString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -291,6 +308,15 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
       VENDOR_PARAM,
       { name: "ref", typeSymbol: "NullableAccountRef", parse: parseNullableString, optional: true },
     ]),
+    makeDescriptor("moveAccount", "Void", parseVoid, [
+      VENDOR_PARAM,
+      REF_PARAM,
+      { name: "toIndex", typeSymbol: "AccountIndex", parse: parseNumber },
+    ]),
+    makeDescriptor("setAutoSwitch", "Void", parseVoid, [
+      VENDOR_PARAM,
+      { name: "value", typeSymbol: "AutoSwitch", parse: parseBoolean },
+    ]),
     // 登录的 ref 由宿主按登录返回的用户名推导（`accountRef`），客户端**不能**指定它 ——
     // 能指定就等于让页面决定把密钥写进哪个凭据槽，那正是 T5 Step 7 要防的事。
     makeDescriptor("loginBegin", "LoginStatus", parseLoginStatus, [VENDOR_PARAM]),
@@ -309,6 +335,8 @@ export interface UsageNamespace {
   replaceKey(vendor: string, ref: string, key: string): Promise<void>;
   removeAccount(vendor: string, ref: string): Promise<void>;
   selectAccount(vendor: string, ref: string | null): Promise<void>;
+  moveAccount(vendor: string, ref: string, toIndex: number): Promise<void>;
+  setAutoSwitch(vendor: string, value: boolean): Promise<void>;
   loginBegin(vendor: string): Promise<LoginStatus>;
   loginStatus(vendor: string): Promise<LoginStatus>;
   loginCancel(vendor: string): Promise<void>;

@@ -28,10 +28,10 @@ export interface StubElement {
  */
 export function createElement(
   type: unknown,
-  properties?: Record<string, unknown> | null,
+  properties?: object | null,
   ...children: readonly unknown[]
 ): StubElement {
-  const props: Record<string, unknown> = { ...(properties ?? {}) };
+  const props: Record<string, unknown> = { ...((properties ?? {}) as Record<string, unknown>) };
   if (children.length === 1) props.children = children[0];
   else if (children.length > 1) props.children = children;
   return { type, props, key: typeof props.key === "string" ? props.key : null };
