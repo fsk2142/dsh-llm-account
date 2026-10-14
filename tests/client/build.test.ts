@@ -137,8 +137,11 @@ describe("client bundle build", () => {
     // `src/core/adapter.ts` 只做**类型**导入（`verbatimModuleSyntax` 会擦掉整条 import），一旦
     // 有人把它改成值导入，core 的 `@deepseek-ai/dsh-llm` 之类就会进浏览器产物 —— 那时
     // `node:` 断言可能仍然通过（该依赖没用到 node 内置），所以必须直接断言裸导入集合。
+    //
+    // 正则的**前缀守卫** `(?:^|[^-\w])` 是必需的：没有它，`"data-switch-from": notice.fromRef`
+    // 这种属性名里的 `from"` 会被当成导入语句，测试就会对正常代码报假阳性（T8 实测踩到）。
     const source = readBundle(CLIENT_BUNDLE);
-    const bare = [...source.matchAll(/(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']([^"'.][^"']*)["']/g)].map(
+    const bare = [...source.matchAll(/(?:^|[^-\w])(?:from|require\s*\(|import\s*\()\s*["']([^"']+)["']/g)].map(
       (match) => match[1]!,
     );
     const outside = [...new Set(bare)].filter((specifier) => !CLIENT_HOST_MODULES.includes(specifier));
