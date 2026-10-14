@@ -231,6 +231,23 @@ export class RotationEngine {
   }
 
   /**
+   * 把另一台引擎的**观测状态**（生效账号与切换记录）搬到本引擎上。
+   *
+   * 引擎在账号库状态（顺序/固定/规则）变化时会被装配层**重建**；重建只搬拒绝记录是
+   * 不够的 —— 那样用户一改账号设置，卡片就会突然显示「没有生效账号」，切换提示也归零。
+   * 这是搬运而不是观察：不产生新的切换记录，也不改动拒绝表。
+   *
+   * 本引擎上已有的观测状态会被**覆盖**（调用方按「新引擎继承旧引擎」使用）。
+   * @param source - 被替换掉的那台引擎。
+   */
+  adoptObservations(source: RotationEngine): void {
+    const effective = source.effectiveAccount();
+    this.#effective = effective === undefined ? undefined : { ...effective };
+    // `switchNotices()` 已经是最新在前，取头部即保留最近的那些。
+    this.#notices = source.switchNotices().slice(0, MAX_SWITCH_NOTICES).map((notice) => ({ ...notice }));
+  }
+
+  /**
    * 记录一次账号级失败，让该账号退出轮换。同一 ref 的新记录覆盖旧记录。
    *
    * `server`/`network` 是瞬时失败：直接返回，**既不入表也不清除**已有条目 ——

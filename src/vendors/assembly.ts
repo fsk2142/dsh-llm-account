@@ -136,7 +136,8 @@ export function markVolatileFields<F extends Record<string, unknown>>(fields: F,
  * 轮换引擎的读取口。
  *
  * 适配器与额度端口都按请求现取引擎，所以账号库状态（顺序/固定/规则）一变就换一台新引擎，
- * 并把**仍然生效的拒绝记录**搬到新引擎上：换引擎不能把「这个账号刚被拒绝」这件事弄丢。
+ * 并把**仍然生效的拒绝记录**以及**观测状态（生效账号与切换记录）**搬到新引擎上：换引擎不能
+ * 把「这个账号刚被拒绝」或「刚才是谁在服务」弄丢。
  */
 export interface RotationAccess {
   /** 当前账号库状态对应的引擎（状态变了就顺带重建）。 */
@@ -171,6 +172,10 @@ export function createRotationAccess(state: () => AccountState): RotationAccess 
     if (nextKey === key) return engine;
     const replacement = new RotationEngine(next);
     for (const [ref, rejection] of engine.rejections()) replacement.markRejected(ref, rejection);
+    // Ruling 16（Task 2 复核）：**观测状态也要搬**。只搬拒绝记录的话，用户一改账号设置
+    // （顺序/固定/规则）就会丢掉「生效账号」与切换记录 —— 卡片随即显示「没有生效账号」，
+    // 正是规格 §8.1 要修掉的那类缺陷。
+    replacement.adoptObservations(engine);
     engine = replacement;
     key = nextKey;
     return engine;

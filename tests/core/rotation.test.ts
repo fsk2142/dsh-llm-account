@@ -370,3 +370,28 @@ it("生效账号/切换记录的读取不会把内部状态交出去（返回副
   expect(e.switchNotice()!.toRef).toBe("b");
   expect(e.switchNotices()).not.toBe(notices);
 });
+
+it("引擎重建时可以继承观测状态：生效账号与切换记录都不丢，且继承不算一次切换", () => {
+  let now = 1_000;
+  const previous = new RotationEngine({ order: ["a", "b"], pinned: null, rules: [], now: () => now });
+  previous.pick({ model: "m", tried: new Set() }); // a
+  now = 2_000;
+  previous.markRejected("a", { kind: "quota", message: "exhausted" });
+  previous.pick({ model: "m", tried: new Set(["a"]) }); // b + 通知 a→b
+
+  // 账号库状态变了（例如用户改了顺序）：装配层换一台新引擎，它当然是空的。
+  const replacement = new RotationEngine({ order: ["b", "a"], pinned: null, rules: [], now: () => now });
+  expect(replacement.effectiveAccount()).toBeUndefined();
+
+  replacement.adoptObservations(previous);
+  expect(replacement.effectiveAccount()).toEqual({ ref: "b", at: 2_000 });
+  expect(replacement.switchNotices()).toEqual(previous.switchNotices());
+  // 继承是搬运、不是切换：通知条数不变。
+  expect(replacement.switchNotices()).toHaveLength(1);
+
+  // 搬运之后仍按新引擎自己的时钟继续观察。
+  now = 5_000;
+  replacement.noteManualSwitch("a");
+  expect(replacement.switchNotice()).toEqual({ fromRef: "b", toRef: "a", reason: "manual", at: 5_000 });
+  expect(replacement.switchNotices()).toHaveLength(2);
+});
