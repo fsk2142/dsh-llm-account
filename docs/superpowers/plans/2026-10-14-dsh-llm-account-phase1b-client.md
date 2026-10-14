@@ -192,9 +192,9 @@ git commit -m "feat(core): effective account and switch notice"
 
 **Interfaces:**
 - Consumes: Task 1 的注册表、Task 3 的远程
-- Produces: `PageShell`（标题/简介/厂商标签页/底部保存条/高级折叠）；`seams.ts` 收拢所有未验证接缝（插槽注册、`hooks` 映射、`layout.selectPanel`、`remote.*` 读取）；i18n 命名空间 `settings.llm-account`（zh/en）
+- Produces: `PageShell`（标题/简介/厂商标签页/底部保存条/高级折叠）；**通用字段卡片**（数据驱动地渲染厂商声明的三组：隐私与安全 / 集成与显示 / 高级设置 —— 每组只列字段与文案，具体字段由各厂商注册表提供；侧边栏卡片的开关就住在「集成与显示」里，T8 依赖它）；`seams.ts` 收拢所有未验证接缝（插槽注册、`hooks` 映射、`layout.selectPanel`、`remote.*` 读取、`credentials/reference-updated` 订阅）；i18n 命名空间 `settings.llm-account`（zh/en）
 
-- [ ] **Step 1: 写失败测试**：标签页只渲染已注册厂商；切换标签不丢草稿；文案跟随语言；保存条只在有改动时出现。
+- [ ] **Step 1: 写失败测试**：标签页只渲染已注册厂商；切换标签不丢草稿；文案跟随语言；保存条只在有改动时出现；**三组通用字段卡片按厂商声明渲染，厂商未声明的组不出现**；**「集成与显示」里的侧边栏卡片开关默认关闭**；凭据变更推送到达时「已配置」徽标刷新（订阅 `credentials/reference-updated`，与两个旧插件一致）。
 - [ ] **Step 2: 运行测试确认失败**
 - [ ] **Step 3: 实现**：用旧插件已编译 bundle 里的 call-site 形状逐字对齐（`ctx.locale.register/bind`、`ctx.slots.inject(name, () => ctx.slots.register({...}, Component))`）；所有不确定的接缝集中在 `seams.ts`。
 - [ ] **Step 4: 运行测试确认通过**
