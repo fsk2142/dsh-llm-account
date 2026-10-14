@@ -484,9 +484,9 @@ it("两个入口装进同一个宿主：一份远程面同时回答两家，描�
   expect(settings.presentations.map((record) => record.presentation)).toEqual([{ auto: false }, { auto: false }]);
 });
 
-it("请求成功后生效账号更新为服务该请求的账号（noteSettled 接线，规格 §8.1 第 1 条）", async () => {
+it("请求成功后把服务完成请求的账号上报为生效账号；失败时不报（noteSettled 接线，规格 §8.1 第 1 条）", async () => {
   const credentials = fakeCredentials({ OPENCODE_API_KEY: "sk-default" });
-  // 一次干净的文本回复：适配器跑完整个流 → 走 noteSettled 那一支。
+  // 一次干净的文本回复：适配器跑完整个流 → 走「成功」那一支。
   vi.stubGlobal("fetch", (async (input: unknown) => {
     if (String(input).includes("models.dev")) return new Response("{}", { status: 503 });
     if (String(input).includes("/models")) {
@@ -500,14 +500,37 @@ it("请求成功后生效账号更新为服务该请求的账号（noteSettled �
   try {
     const host = fakeHost({ credentials: credentials.service });
     const bundle = opencode.apply(host.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true }));
+    const engine = bundle.rotation.current();
 
-    // 请求前：还没有任何生效账号。
-    expect(bundle.rotation.current().effectiveAccount()).toBeUndefined();
+    // 观察 `noteSettled` 本身，而不是只看生效账号：`pick` 早就把生效账号置好了，
+    // 「成功后再确认一次」是另一件事（变异检验发现原来的断言在没有 noteSettled 时也通过）。
+    const settled = vi.spyOn(engine, "noteSettled");
+    expect(engine.effectiveAccount()).toBeUndefined();
+
     const { chunks, error } = await drain(bundle.adapter.stream(streamRequest()));
     expect(error).toBeUndefined();
     expect(chunks.length).toBeGreaterThan(0);
-    // 请求后：生效账号就是那个真正服务完请求的账号（成功会把它固定下来）。
-    expect(bundle.rotation.current().effectiveAccount()?.ref).toBe("OPENCODE_API_KEY");
+    expect(settled).toHaveBeenCalledWith("OPENCODE_API_KEY");
+    expect(engine.effectiveAccount()?.ref).toBe("OPENCODE_API_KEY");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("请求失败时不把失败账号上报为生效账号（只有成功才 noteSettled）", async () => {
+  const credentials = fakeCredentials({ PREFERRED_REF: "key-preferred" });
+  const gateway = quotaGateway();
+  vi.stubGlobal("fetch", gateway.fetchImpl);
+  try {
+    const host = fakeHost({ credentials: credentials.service });
+    const bundle = opencode.apply(host.ctx, opencode.Config(twoAccountConfig(false)));
+    const engine = bundle.rotation.current();
+    const settled = vi.spyOn(engine, "noteSettled");
+
+    const { error } = await drain(bundle.adapter.stream(streamRequest()));
+    expect(error).toMatchObject({ code: "QUOTA" });
+    // 额度拒绝是「谁被拒绝」，不是「谁服务成功」：上报成功账号会把卡片指向一个没干活的账号。
+    expect(settled).not.toHaveBeenCalled();
   } finally {
     vi.unstubAllGlobals();
   }
