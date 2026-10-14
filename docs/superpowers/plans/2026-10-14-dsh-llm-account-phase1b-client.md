@@ -61,7 +61,7 @@ Expected: FAIL，`lib/client.js` 不存在
 
 - [ ] **Step 3: 加浏览器目标构建**
 
-`tsdown.config.ts` 增加第二个 build：entry 为对象 `{ client: "src/client/index.ts" }`，`platform: "browser"`，`format: "iife"`（与旧插件产物形态一致：自定义的 `__ModuleLoader__` 包装），外部依赖为宿主提供的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`。`src/client/index.ts` 先导出最小的 `{ apply, inject }` 骨架。
+`tsdown.config.ts` 增加第二个 build：entry 为对象 `{ client: "src/client/index.ts" }`，`platform: "browser"`，`format: "cjs"`（**T0 已实测：loader 注入 `require` 并读 `module.exports`，旧插件产物就是 CJS；计划原先写的 `iife` 是错的，已按实现校正**），外部依赖为宿主提供的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`（**凡按值导入的宿主客户端包都必须加进这个列表**，见 Ruling 4）。`src/client/index.ts` 先导出最小的 `{ apply, inject }` 骨架，其中 **`inject` 写 cordis 服务名**（`slots`/`locale`/`remote`，用到 `remote.credentials` 就加），**不是** `package.json` 里的 npm 包 id（Ruling 7）。
 
 - [ ] **Step 4: 构建并跑测试**
 
@@ -86,6 +86,8 @@ git commit -m "feat(client): browser-target build for the client bundle"
 **Interfaces:**
 - Consumes: Task 0 的构建；`docs/superpowers/notes/2026-10-13-host-seam-assumptions.md`（三条假设）
 - Produces: `registerVendor(entry)` / `vendors()`（模块级单例注册表）；`apply(clientCtx)`；`applyCount`（**调试计数**，1c 用它区分 `apply` 被调用一次还是两次）
+
+**厂商识别（控制器裁决 2，2026-10-14）**：本包只有**一个** `./client`，两行都会加载它，因此**不要**试图从实例身份判断「这次 `apply` 属于哪家」—— 那是未验证接缝。改为**由设置命名空间发现厂商**：页面读 `remote.settings.describe()`，谁存在（`llm-commandcode` / `llm-opencode-go`）就渲染谁的标签页。这样「`apply` 被调用一次还是两次」这个未决点对功能**完全无关紧要**，只影响调试计数。
 
 - [ ] **Step 1: 写失败测试**
 
