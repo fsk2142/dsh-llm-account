@@ -74,6 +74,13 @@ export type CopyKey =
   | "account.moveDown"
   | "account.autoSwitch"
   | "account.autoSwitch.hint"
+  | "models.title"
+  | "models.onSave"
+  | "models.immediate"
+  | "models.empty"
+  | "models.add"
+  | "models.remove"
+  | "models.placeholder"
   | "account.reason.credential-slot-taken"
   | "account.reason.invalid-key"
   | "account.reason.unavailable"
@@ -154,6 +161,13 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.moveDown": "下移",
     "account.autoSwitch": "额度耗尽时自动切换账号",
     "account.autoSwitch.hint": "立即生效。关闭后一次额度拒绝不会把请求打到下一个账号上。",
+    "models.title": "模型",
+    "models.onSave": "改动在底部保存后生效。",
+    "models.immediate": "改动立即生效。",
+    "models.empty": "还没有配置模型。",
+    "models.add": "添加模型",
+    "models.remove": "移除",
+    "models.placeholder": "模型 id，例如 deepseek/deepseek-v4.1-flash",
     "account.reason.credential-slot-taken": "该凭据槽已被另一个账号占用，密钥未写入；请先重命名或移除那个账号。",
     "account.reason.invalid-key": "密钥被拒绝，请确认它属于这个账号。",
     "account.reason.unavailable": "登录服务暂时不可用。",
@@ -229,6 +243,13 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.moveDown": "Move down",
     "account.autoSwitch": "Switch accounts automatically when quota runs out",
     "account.autoSwitch.hint": "Takes effect immediately. While off, one quota rejection will not send the request to the next account.",
+    "models.title": "Models",
+    "models.onSave": "Changes take effect when you press Save below.",
+    "models.immediate": "Changes take effect immediately.",
+    "models.empty": "No models configured yet.",
+    "models.add": "Add model",
+    "models.remove": "Remove",
+    "models.placeholder": "model id, for example deepseek/deepseek-v4.1-flash",
     "account.reason.credential-slot-taken": "That credential slot already belongs to another account, so the key was not written. Rename or remove that account first.",
     "account.reason.invalid-key": "The key was rejected; check that it belongs to this account.",
     "account.reason.unavailable": "The sign-in service is temporarily unavailable.",

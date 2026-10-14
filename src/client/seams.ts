@@ -20,8 +20,9 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 import { dictionaryOf } from "./copy";
-import { createPageState, closeAction, dirtyFields, noteCredentialChange, openAction, selectTab, setActionField, setField, toggleExpanded, type AccountAction, type PageState, type VendorSnapshot } from "./page-state";
+import { createPageState, applyModelEdit, closeAction, dirtyFields, modelEditTarget, normalizeModels, noteCredentialChange, openAction, selectTab, setActionField, setField, toggleExpanded, vendorCardKinds, type AccountAction, type ModelEdit, type PageState, type VendorSnapshot } from "./page-state";
 import type { LoginView } from "./account-card";
+import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import type { VendorEntry } from "./registry";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type SwitchRecord, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
@@ -322,6 +323,19 @@ export interface VendorCardsContext {
   move: (ref: string, toIndex: number) => void;
   /** 写自动切换开关（立即生效）。 */
   setAutoSwitch: (value: boolean) => void;
+  /** 这家要渲染哪些专属卡片（顺序即规格 §8 的卡片顺序）；规则在 `vendorCardKinds` 里。 */
+  cardKinds: readonly ("accounts" | "models")[];
+  /** 要展示的模型 id（白名单 ∪ 显隐表里有记录的，已清洗）。 */
+  models: string[];
+  /** 逐模型显隐（缺省视为可见）。 */
+  modelVisibility: Record<string, boolean>;
+  /** 「添加模型」输入框的当前草稿。 */
+  modelDraft: string;
+  /** 该厂商模型改动的生效时机。 */
+  modelMode: ModelsWriteMode;
+  setModelDraft: (value: string) => void;
+  /** 做一次模型编辑（按生效时机分派到草稿或立刻写）。 */
+  editModel: (edit: ModelEdit) => void;
   loginBegin: () => void;
 }
 
@@ -358,6 +372,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [usage, setUsage] = useState<UsageNamespace | undefined>(undefined);
     const [logins, setLogins] = useState<Record<string, LoginView | undefined>>({});
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
+    /** 「添加模型」的输入草稿（按厂商分开）。 */
+    const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({});
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
 
@@ -468,6 +484,19 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                 setAutoSwitch: (value) => {
                   void usage?.setAutoSwitch(activeVendor, value).then(() => setAccountRevision((current) => current + 1));
                 },
+                ...modelCardContext({
+                  entry: activeEntry,
+                  state,
+                  mode: statuses[activeVendor]?.capabilities.modelVisibilityWrite ?? "onSave",
+                  draft: modelDrafts[activeEntry.ns] ?? "",
+                  setDraft: (value) => setModelDrafts((current) => ({ ...current, [activeEntry.ns]: value })),
+                  draftInto: (ns, fields) => setState((current) => fields.reduce((acc, field) => setField(acc, ns, field.key, field.value), current)),
+                  writeNow: (ns, fields) => {
+                    void saveSettings(ctx, ns, fields, state.snapshots[ns]?.revision ?? 0).then((saved) => {
+                      if (saved) setAccountRevision((current) => current + 1);
+                    });
+                  },
+                }),
                 loginBegin: () => {
                   void usage?.loginBegin(activeVendor).then((status) => {
                     setLogins((current) => ({ ...current, [activeVendor]: status }));
@@ -476,6 +505,63 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
               }),
           }),
     });
+  };
+}
+
+/**
+ * 模型卡片要的数据与回调。
+ *
+ * 把「两次 `setField` → 草稿」与「`saveSettings` → 立刻写」这两条路线的选择放在这里，是因为
+ * 容器本身不参与单测（Ruling 22）；分流判定 `modelEditTarget` 与补丁计算 `applyModelEdit`
+ * 都是纯函数、各自有测试。这里只负责接线。
+ * @param input - 当前厂商、页面状态、生效时机与两个写入方式。
+ * @returns 模型卡片那部分上下文。
+ */
+function modelCardContext(input: {
+  entry: VendorEntry;
+  state: PageState;
+  mode: ModelsWriteMode;
+  draft: string;
+  setDraft: (value: string) => void;
+  draftInto: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
+  writeNow: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
+}): Pick<
+  VendorCardsContext,
+  "cardKinds" | "models" | "modelVisibility" | "modelDraft" | "modelMode" | "setModelDraft" | "editModel"
+> {
+  const { entry, state, mode } = input;
+  const spec = entry.models;
+  const settings = state.snapshots[entry.ns]?.value ?? {};
+  const visible = spec === undefined ? [] : normalizeModels(settings[spec.visible]);
+  const rawVisibility = spec === undefined ? undefined : settings[spec.visibility];
+  const modelVisibility =
+    typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
+      ? { ...(rawVisibility as Record<string, boolean>) }
+      : {};
+  // 列表 = 白名单 ∪ 显隐表里出现过的模型（后者让「显式隐藏了一个不在白名单里的模型」也看得见，
+  // 否则用户没有任何入口把它改回来）。
+  const models = [...new Set([...visible, ...Object.keys(modelVisibility)])];
+
+  return {
+    cardKinds: vendorCardKinds(entry),
+    models,
+    modelVisibility,
+    modelDraft: input.draft,
+    modelMode: mode,
+    setModelDraft: input.setDraft,
+    editModel: (edit: ModelEdit) => {
+      if (spec === undefined) return;
+      const patch = applyModelEdit({ visible: settings[spec.visible], visibility: settings[spec.visibility] }, edit);
+      const fields = [
+        { key: spec.visible, value: patch.visibleModels },
+        { key: spec.visibility, value: patch.modelVisibility },
+      ];
+      // 生效时机由能力声明决定：`onSave` 进草稿（底部保存条提交），`immediate` 立刻写。
+      if (modelEditTarget(mode) === "now") input.writeNow(entry.ns, fields);
+      else input.draftInto(entry.ns, fields);
+      // 添加完成后清空输入框（草稿已经落到设置里）。
+      if (edit.kind === "add") input.setDraft("");
+    },
   };
 }
 

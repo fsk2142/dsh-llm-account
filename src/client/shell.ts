@@ -66,6 +66,7 @@ export const VENDORS: readonly VendorEntry[] = [
     providerId: "commandcode",
     order: 12,
     labelKey: "vendor.commandcode",
+    models: { visible: "visibleModels", visibility: "modelVisibility" },
     cards: [
       {
         group: "integrations",
@@ -123,6 +124,7 @@ export const VENDORS: readonly VendorEntry[] = [
     providerId: "dsh-opencode-go",
     order: 20,
     labelKey: "vendor.opencodeGo",
+    models: { visible: "visibleModels", visibility: "modelVisibility" },
     cards: [
       {
         group: "integrations",

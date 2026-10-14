@@ -50,6 +50,19 @@ export interface CardGroupSpec {
   fields: readonly FieldSpec[];
 }
 
+/**
+ * 模型可见性的字段声明。
+ *
+ * 存在 = **这家支持模型卡片**；不声明 = 不渲染该卡片（规格 §8 的「厂商不支持的卡片不渲染」）。
+ * 两个字段名都是设置文档里的真实字段（与各厂商的 Config schema 一致）。
+ */
+export interface ModelsSpec {
+  /** 「只显示这些模型」白名单字段名（`visibleModels`）。 */
+  visible: string;
+  /** 逐模型显隐字段名（`modelVisibility`）。 */
+  visibility: string;
+}
+
 /** The two provider routes this package hosts (`src/core/adapter.ts` `VendorId`). */
 export interface VendorEntry {
   /** Settings namespace — the vendor's stable identity here (`llm-commandcode` / `llm-opencode-go`). */
@@ -75,6 +88,8 @@ export interface VendorEntry {
    * 与「忘了声明」必须是能区分开的两种状态。
    */
   cards: readonly CardGroupSpec[];
+  /** 模型可见性声明；不声明表示这家不渲染模型卡片。 */
+  models?: ModelsSpec;
 }
 
 /** Registrations keyed by settings namespace: a namespace names exactly one vendor. */

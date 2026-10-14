@@ -11,10 +11,11 @@
  * (`./registry`) and every host seam (`./shell`). No UI yet: the page component
  * arrives in Task 4.
  */
-import { createElement, type ReactNode } from "react";
+import { createElement, Fragment, type ReactNode } from "react";
 
 import { AccountCard, type AccountCardProps } from "./account-card";
 import { COPY } from "./copy";
+import { ModelsCard } from "./models-card";
 import { OpenCodeAccountCard } from "./opencode-account-card";
 import { createConnectedPage, type ClientSeamContext, type VendorCardsContext } from "./seams";
 import { applyShell, VENDORS } from "./shell";
@@ -113,13 +114,31 @@ function renderVendorCards(cards: VendorCardsContext): ReactNode {
     onToggleExpand: cards.toggleExpand,
     onLoginBegin: cards.loginBegin,
   };
-  if (cards.vendor === "dsh-opencode-go") {
-    return createElement(OpenCodeAccountCard, {
-      ...shared,
-      settings: cards.settings,
-      onMove: cards.move,
-      onSetAutoSwitch: cards.setAutoSwitch,
-    });
-  }
-  return createElement(AccountCard, shared);
+  const accountCard =
+    cards.vendor === "dsh-opencode-go"
+      ? createElement(OpenCodeAccountCard, {
+          ...shared,
+          settings: cards.settings,
+          onMove: cards.move,
+          onSetAutoSwitch: cards.setAutoSwitch,
+        })
+      : createElement(AccountCard, shared);
+  // 模型卡片：规则在 `vendorCardKinds` 里（可单测）——厂商没声明模型可见性时整张不渲染。
+  if (!cards.cardKinds.includes("models")) return accountCard;
+  return createElement(Fragment, null, accountCard, modelsCard(cards));
+}
+
+/** 模型卡片（T7）；该厂商没声明模型可见性时由调用方跳过。 */
+function modelsCard(cards: VendorCardsContext): ReactNode {
+  return createElement(ModelsCard, {
+    t: cards.t,
+    models: cards.models,
+    visibility: cards.modelVisibility,
+    draft: cards.modelDraft,
+    mode: cards.modelMode,
+    onToggleModel: (model: string, visible: boolean) => cards.editModel({ kind: "toggle", model, visible }),
+    onRemoveModel: (model: string) => cards.editModel({ kind: "remove", model }),
+    onDraftChange: cards.setModelDraft,
+    onAddModel: (model: string) => cards.editModel({ kind: "add", model }),
+  });
 }

@@ -295,6 +295,103 @@ export function fieldsOf(state: PageState, entry: VendorEntry): DraftField[] {
 export const SIDEBAR_TOGGLE_KEY = "showSidebarQuota";
 
 /**
+ * 清洗一个模型 id 列表。
+ *
+ * **丢弃空串与纯空白**（全局约束）：`[""]` 会被当作「非空白名单」，让所有模型从选择器里消失 ——
+ * 这是既有的真实缺陷形态。顺带去掉首尾空白、丢掉非字符串、去重（保持首次出现的顺序）。
+ * @param value - 原始值（可能来自设置文档，形状不可信）。
+ * @returns 清洗后的模型 id 列表。
+ */
+export function normalizeModels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const id = item.trim();
+    if (id === "" || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * 该厂商要渲染哪些专属卡片，顺序即规格 §8 的卡片顺序（账户卡片 → 模型卡片）。
+ *
+ * 单独成函数：`index.ts` 的接线不参与单测（Ruling 22），而「厂商不支持的卡片不渲染」是计划
+ * 明确要求的验收点（T7 Step 1）。这里把规则变成可测的纯函数。
+ * @param entry - 厂商声明。
+ * @returns 要渲染的卡片种类。
+ */
+export function vendorCardKinds(entry: VendorEntry): readonly ("accounts" | "models")[] {
+  return entry.models === undefined ? ["accounts"] : ["accounts", "models"];
+}
+
+/**
+ * 一次模型编辑算出的新设置值。
+ *
+ * 两个字段一起算：白名单（`visibleModels`）与逐模型显隐（`modelVisibility`）是同一件事的两种
+ * 表达，分开改会出现「在白名单里但被显式隐藏」这种自相矛盾的状态。
+ */
+export interface ModelEditPatch {
+  visibleModels: string[];
+  modelVisibility: Record<string, boolean>;
+}
+
+/** 一次模型编辑。 */
+export type ModelEdit =
+  | { kind: "toggle"; model: string; visible: boolean }
+  | { kind: "add"; model: string }
+  | { kind: "remove"; model: string };
+
+/**
+ * 把一次模型编辑应用到当前设置值上（纯函数）。
+ * @param current - 当前设置文档里的两个字段（形状不可信，一律先清洗）。
+ * @param edit - 要做的编辑。
+ * @returns 两个字段的新值（白名单已清洗：空串与纯空白绝不会被写回去）。
+ */
+export function applyModelEdit(current: { visible: unknown; visibility: unknown }, edit: ModelEdit): ModelEditPatch {
+  const visibleModels = normalizeModels(current.visible);
+  const rawVisibility = current.visibility;
+  const modelVisibility =
+    typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
+      ? { ...(rawVisibility as Record<string, boolean>) }
+      : {};
+
+  // id 先统一清洗：白名单里存的是 trim 过的，显隐的**键**也必须是同一个 —— 否则
+  // `" m2 "` 会造出一条永远匹配不上的显隐记录（测试抓出过这个 bug）。
+  const model = edit.model.trim();
+  if (model === "") return { visibleModels, modelVisibility };
+
+  if (edit.kind === "toggle") {
+    modelVisibility[model] = edit.visible;
+    return { visibleModels, modelVisibility };
+  }
+  if (edit.kind === "add") {
+    // 用户点「添加」的意图就是「让它可用」：进白名单，同时显式可见（清掉可能存在的 false）。
+    const next = normalizeModels([...visibleModels, model]);
+    modelVisibility[model] = true;
+    return { visibleModels: next, modelVisibility };
+  }
+  // remove：从白名单里去掉，并清掉它的显隐条目（否则它会因为还存在 visibility 键而回到列表里）。
+  delete modelVisibility[model];
+  return { visibleModels: visibleModels.filter((candidate) => candidate !== model), modelVisibility };
+}
+
+/**
+ * 一次模型可见性编辑该走哪条路。
+ *
+ * `onSave`（Command Code）→ 进设置草稿，由底部保存条提交；`immediate`（OpenCode）→ 立刻写。
+ * 单独成函数：这是计划 Step 1 要求「按能力区分」的那条判定本身，而容器的定时器/状态不参与单测。
+ * @param mode - 该厂商声明的写入时机。
+ * @returns `draft` 表示进草稿等保存，`now` 表示立刻写。
+ */
+export function modelEditTarget(mode: "onSave" | "immediate"): "draft" | "now" {
+  return mode === "immediate" ? "now" : "draft";
+}
+
+/**
  * 取该厂商「集成与显示」里的侧边栏卡片开关声明。
  * @param entry - 厂商声明。
  * @returns 开关声明；该厂商没声明时 `undefined`（此时不渲染卡片，也不轮询）。
