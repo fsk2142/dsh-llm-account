@@ -73,13 +73,19 @@ const clientConfig: UserConfig = {
     intro: "\t\tvar module = { exports: {} };\n\t\tvar exports = module.exports;",
     footer: "\t\treturn module.exports;\n\t}\n});",
   },
+  // `neverBundle` only: the three host-provided client packages that are not
+  // declared in package.json must stay external (they are resolved by the
+  // loader's `require`). Everything else follows tsdown's package.json-driven
+  // externalization, so a future client value-import of a **declared** peer
+  // dependency stays external instead of being silently inlined into the
+  // browser product. Do not add an `alwaysBundle` override here: it would
+  // disable that default and re-introduce exactly that failure mode.
+  //
+  // This does NOT prevent `node:*` builtins pulled in by a bundled
+  // (undeclared/transitive) dependency — `tests/client/build.test.ts` is the
+  // guard for that.
   deps: {
     neverBundle: [...CLIENT_EXTERNALS],
-    // Everything else is bundled, so `require` reaches the loader for the three
-    // externals only and no bare npm import survives. This does NOT prevent
-    // `node:*` builtins pulled in by a bundled dependency — the build test
-    // (`tests/client/build.test.ts`) is the guard for that.
-    alwaysBundle: (id: string) => !CLIENT_EXTERNALS.includes(id),
   },
 };
 

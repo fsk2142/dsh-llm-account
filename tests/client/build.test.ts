@@ -3,19 +3,51 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const CLIENT_BUNDLE = fileURLToPath(new URL("../../lib/client.js", import.meta.url));
-const HOST_BUNDLES = [
-  fileURLToPath(new URL("../../lib/index.js", import.meta.url)),
-  fileURLToPath(new URL("../../lib/commandcode.js", import.meta.url)),
-  fileURLToPath(new URL("../../lib/opencode.js", import.meta.url)),
+
+/**
+ * Host entries, each asserted on its own (aggregating them would let one
+ * clobbered entry hide behind the others' imports). `specifiers: null` means
+ * the entry legitimately carries no bare `@deepseek-ai/*` import and is only
+ * checked for existence.
+ */
+const HOST_BUNDLES: ReadonlyArray<{ path: string; specifiers: readonly string[] | null }> = [
+  {
+    path: fileURLToPath(new URL("../../lib/index.js", import.meta.url)),
+    specifiers: null,
+  },
+  {
+    path: fileURLToPath(new URL("../../lib/commandcode.js", import.meta.url)),
+    specifiers: ["@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
+  },
+  {
+    path: fileURLToPath(new URL("../../lib/opencode.js", import.meta.url)),
+    specifiers: ["@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
+  },
+];
+
+/** Node builtins that must never reach the browser product (bare, un-prefixed form). */
+const NODE_BUILTINS = [
+  "assert", "buffer", "child_process", "crypto", "events", "fs", "http", "https",
+  "module", "net", "os", "path", "process", "stream", "url", "util", "worker_threads", "zlib",
 ];
 
 const BUILD_HINT = "lib/ is missing or stale — run `pnpm build` before `pnpm test` (lib/ is a gitignored build artifact).";
 
 /** The bundle is a build artifact, so a missing file must fail with the fix, not a bare ENOENT. */
-function readClientBundle(): string {
-  if (!existsSync(CLIENT_BUNDLE)) throw new Error(`${BUILD_HINT}\n  expected: ${CLIENT_BUNDLE}`);
+function readBundle(path: string): string {
+  if (!existsSync(path)) throw new Error(`${BUILD_HINT}\n  expected: ${path}`);
   // Normalize EOL so the shape assertions below do not depend on the checkout's git config.
-  return readFileSync(CLIENT_BUNDLE, "utf8").replaceAll("\r\n", "\n");
+  return readFileSync(path, "utf8").replaceAll("\r\n", "\n");
+}
+
+/**
+ * Bare `@deepseek-ai/*` specifiers that survive as real import statements.
+ * Anchored at line start so `@deepseek-ai` mentions inside comments are not
+ * counted, but newlines inside the import list are still covered.
+ */
+function bareDeepseekImports(source: string): string[] {
+  const matches = source.matchAll(/^[ \t]*import\s[^;]*?from\s*["'](@deepseek-ai\/[^"']+)["']/gm);
+  return [...matches].map((match) => match[1]!).sort();
 }
 
 type LoaderRegistration = {
@@ -42,7 +74,7 @@ function loadClientBundle(source: string, requireImpl: (id: string) => unknown =
 
 describe("client bundle build", () => {
   it("构建产物是客户端 bundle：调用 __ModuleLoader__.load 且 id 正确", () => {
-    const source = readClientBundle();
+    const source = readBundle(CLIENT_BUNDLE);
 
     expect(source.split(/\r?\n/, 1)[0]).toContain("window.__ModuleLoader__.load({");
     // Id on its own line, exactly as the legacy plugins' client bundles declare it.
@@ -51,32 +83,30 @@ describe("client bundle build", () => {
 
     const exports = loadClientBundle(source) as { apply?: unknown; inject?: unknown };
     expect(typeof exports.apply).toBe("function");
-    expect(exports.inject).toEqual([
-      "@deepseek-ai/dsh-client-locale",
-      "@deepseek-ai/dsh-client-ui-settings",
-      "@deepseek-ai/dsh-api-remotes",
-    ]);
+    // Cordis *service* names, not npm module ids: the loader arms exactly these
+    // before calling apply, and the list intentionally differs from
+    // package.json `dsh.client.inject`.
+    expect(exports.inject).toEqual(["slots", "locale", "remote"]);
   });
 
-  it("客户端入口不导入任何 node 内置模块", () => {
-    const source = readClientBundle();
+  it("客户端入口不导入任何 node 内置模块（静态 / require / 动态 import 三种形态）", () => {
+    const source = readBundle(CLIENT_BUNDLE);
 
-    expect(source).not.toMatch(/(?:from\s*|require\(\s*)["']node:/);
-    expect(source).not.toMatch(/require\(\s*["'](?:fs|path|url|os|child_process)["']\s*\)/);
+    expect(source).not.toMatch(/(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']node:/);
+    const bare = NODE_BUILTINS.join("|");
+    expect(source).not.toMatch(new RegExp(`(?:require\\s*\\(\\s*|import\\s*\\(\\s*)["'](?:${bare})["']\\s*\\)`));
   });
 });
 
 describe("host-side bundles", () => {
-  it("宿主入口仍然是裸 @deepseek-ai 导入（客户端构建没有改写它们）", () => {
-    const missing = HOST_BUNDLES.filter((file) => !existsSync(file));
-    if (missing.length > 0) throw new Error(`${BUILD_HINT}\n  missing: ${missing.join(", ")}`);
+  it.each(HOST_BUNDLES)("$path 仍是裸 @deepseek-ai 导入（逐文件断言）", ({ path, specifiers }) => {
+    const source = readBundle(path);
 
-    const bareImports = HOST_BUNDLES.flatMap((file) =>
-      readFileSync(file, "utf8")
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => /^(?:import|export)\b.*\bfrom\s*["']@deepseek-ai\//.test(line)),
-    );
-    expect(bareImports.length).toBeGreaterThan(0);
+    if (specifiers === null) {
+      // lib/index.js is the host root entry; it carries no imports of its own today.
+      expect(source.length).toBeGreaterThan(0);
+      return;
+    }
+    expect(bareDeepseekImports(source)).toEqual([...specifiers].sort());
   });
 });
