@@ -12,6 +12,7 @@
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
+import { CSS_CLASS } from "./css";
 import { quotaShape, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, VendorUsageStatus } from "./usage-contract";
 
@@ -36,7 +37,7 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
 
   return createElement(
     "div",
-    { "data-card": "sidebar-quota" },
+    { "data-card": "sidebar-quota", className: CSS_CLASS.sidebar },
     ...(status === undefined || effective === undefined
       ? [
           // 还没有任何请求（或状态还没读到）：占位，**不显示 0%**。
@@ -92,6 +93,7 @@ function switchNotice(props: SidebarCardProps): ReactNode {
     {
       key: "switch",
       "data-switch-notice": "true",
+      className: CSS_CLASS.switchNotice,
       "data-switch-from": notice.fromRef,
       "data-switch-to": notice.toRef,
       "data-switch-reason": notice.reason,
@@ -112,12 +114,12 @@ function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undef
   const { t } = props;
   const quota = row?.quota;
   if (quota === undefined) {
-    return [createElement("p", { key: "noquota", "data-sidebar-quota-missing": "true" }, t("account.quotaMissing"))];
+    return [createElement("p", { key: "noquota", "data-sidebar-quota-missing": "true", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))];
   }
   return quota.windows.map((window) =>
     createElement(
       "div",
-      { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window) },
+      { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window), className: CSS_CLASS.quotaRow },
       createElement("span", null, window.key),
       createElement("span", { "data-sidebar-window-value": window.key }, quotaWindowText(t, window)),
     ),

@@ -13,6 +13,7 @@
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
+import { CSS_CLASS } from "./css";
 import type { AccountAction } from "./page-state";
 import { quotaShape, quotaWindowDetail, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
@@ -65,7 +66,7 @@ export function AccountCard(props: AccountCardProps): ReactElement {
   const accounts = status?.accounts ?? [];
   return createElement(
     "section",
-    { "data-card": "accounts" },
+    { "data-card": "accounts", className: CSS_CLASS.card },
     createElement("h2", null, t("group.accounts")),
     ...accounts.map((account, index) => accountRow(props, account, index)),
     status === undefined || accounts.length === 0 ? createElement("p", { "data-accounts-empty": "true" }, t("account.quotaMissing")) : null,
@@ -82,8 +83,8 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
   const effective = account.effective;
   // 两者相同只标一次（避免同一件事写两遍）。
   const marks: ReactNode[] = [];
-  if (pinned && !effective) marks.push(createElement("span", { key: "pinned", "data-mark": "pinned" }, t("account.pinnedBy")));
-  if (effective) marks.push(createElement("span", { key: "effective", "data-mark": "effective" }, t("account.effectiveBy")));
+  if (pinned && !effective) marks.push(createElement("span", { key: "pinned", "data-mark": "pinned", className: CSS_CLASS.mark }, t("account.pinnedBy")));
+  if (effective) marks.push(createElement("span", { key: "effective", "data-mark": "effective", className: CSS_CLASS.mark }, t("account.effectiveBy")));
 
   let rejection: ReactNode = null;
   if (account.rejection !== undefined) {
@@ -105,6 +106,7 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
     {
       key: account.ref,
       "data-account": account.ref,
+      className: CSS_CLASS.account,
       ...(account.rejection === undefined ? {} : { "data-rejection-kind": account.rejection.kind }),
       ...(account.rejection?.until === undefined ? {} : { "data-rejection-until": account.rejection.until }),
     },
@@ -170,12 +172,17 @@ function quotaBars(props: AccountCardProps, quota: QuotaSummary | undefined): Re
 
 /** 一个额度窗口。 */
 function quotaBar(props: AccountCardProps, window: QuotaWindow): ReactNode {
-  return createElement("div", { key: window.key, "data-quota-window": window.key }, createElement("span", null, window.key), quotaText(props, window));
+  return createElement("div", { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.quotaRow }, createElement("span", null, window.key), quotaText(props, window));
 }
 
 /** 一个窗口的读数文案：缺失与真的 0 必须区分开（规则在 `quota.ts`，三张卡片共用一份）。 */
 function quotaText(props: AccountCardProps, window: QuotaWindow): ReactNode {
-  return createElement("span", { "data-quota-value": quotaShape(window) }, quotaWindowText(props.t, window));
+  const shape = quotaShape(window);
+  return createElement(
+    "span",
+    { "data-quota-value": shape, ...(shape === "missing" ? { className: CSS_CLASS.quotaMissing } : {}) },
+    quotaWindowText(props.t, window),
+  );
 }
 
 /** 展开后的完整报告：窗口明细与失败项。 */
@@ -223,7 +230,7 @@ function renameEditor(props: AccountCardProps, account: AccountUsageStatus): Rea
   const label = props.action?.label ?? "";
   return createElement(
     "span",
-    { "data-editor": "rename", "data-editor-ref": account.ref },
+    { "data-editor": "rename", "data-editor-ref": account.ref, className: CSS_CLASS.inline },
     createElement("input", {
       "data-rename-input": account.ref,
       type: "text",
@@ -245,7 +252,7 @@ function renameEditor(props: AccountCardProps, account: AccountUsageStatus): Rea
 function keyEditor(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
   return createElement(
     "span",
-    { "data-editor": "key", "data-editor-ref": account.ref },
+    { "data-editor": "key", "data-editor-ref": account.ref, className: CSS_CLASS.inline },
     createElement("input", {
       "data-key-input": account.ref,
       type: "password",
@@ -261,7 +268,7 @@ function keyEditor(props: AccountCardProps, account: AccountUsageStatus): ReactN
 /** 服务端失败项提示。 */
 function failureNotes(props: AccountCardProps): ReactNode[] {
   return (props.status?.failures ?? []).map((failure, index) =>
-    createElement("p", { key: `failure-${index}`, "data-failure": index }, failure),
+    createElement("p", { key: `failure-${index}`, "data-failure": index, className: CSS_CLASS.failure }, failure),
   );
 }
 
@@ -318,5 +325,5 @@ function addSection(props: AccountCardProps): ReactNode {
   if (adding) {
     nodes.push(createElement("button", { key: "cancel", type: "button", "data-action": "cancel", onClick: () => props.onCancelAction() }, t("account.cancel")));
   }
-  return createElement("div", { "data-card": "add-account" }, ...nodes);
+  return createElement("div", { "data-card": "add-account", className: CSS_CLASS.actions }, ...nodes);
 }

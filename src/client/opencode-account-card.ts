@@ -18,6 +18,7 @@
 import { createElement, Fragment, type ReactElement, type ReactNode } from "react";
 
 import { AccountCard, type AccountCardProps } from "./account-card";
+import { CSS_CLASS } from "./css";
 import type { AccountUsageStatus } from "./usage-contract";
 
 /** 卡片属性：共享卡片的一切，加上设置快照与两个 OpenCode 专属回调。 */
@@ -55,7 +56,7 @@ function autoSwitchRow(props: OpenCodeAccountCardProps): ReactNode {
   const { t } = props;
   return createElement(
     "label",
-    { "data-card": "auto-switch" },
+    { "data-card": "auto-switch", className: CSS_CLASS.field },
     createElement("span", null, t("account.autoSwitch")),
     createElement("input", {
       "data-auto-switch": "true",
@@ -82,8 +83,8 @@ function moveControls(
   if (props.status?.capabilities.reorder !== true) return null;
   const { t } = props;
   return createElement(
-    Fragment,
-    null,
+    "span",
+    { className: CSS_CLASS.actions },
     createElement(
       "button",
       {

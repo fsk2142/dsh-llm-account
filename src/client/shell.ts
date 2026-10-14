@@ -17,6 +17,7 @@
  *
  * @module dsh-llm-account/src/client/shell
  */
+import { injectPluginCss, PAGE_CSS, PAGE_CSS_ID } from "./css";
 import { registerVendor, resetRegistry, type VendorEntry } from "./registry";
 
 /** One page locale namespace for the whole unified page (`settings.llm-account`). */
@@ -298,6 +299,10 @@ export function applyShell(rawContext: unknown, options: ApplyShellOptions = {})
   // The only structural cast in the client layer — the seam types above are our
   // model of the host, and plan 1c is what turns them into measurements.
   const context = rawContext as ClientShell;
+
+  // 样式表注入（幂等：同 id 已存在就什么都不做），与旧插件同一形状（`lib/client.js:8809-8818`）。
+  // 幂等由 `data-plugin-css` 属性保证，两行各调一次也只注入一份。
+  injectPluginCss(PAGE_CSS_ID, PAGE_CSS);
 
   // Vendor metadata first: every instance records the package's vendors, so the
   // registry is populated regardless of how many times `apply` runs.

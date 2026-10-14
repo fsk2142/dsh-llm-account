@@ -11,6 +11,8 @@
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
+import { CSS_CLASS } from "./css";
+
 /** 模型卡片的写模式（来自宿主的 `capabilities.modelVisibilityWrite`）。 */
 export type ModelsWriteMode = "onSave" | "immediate";
 
@@ -40,7 +42,7 @@ export function ModelsCard(props: ModelsCardProps): ReactElement {
   const { t } = props;
   return createElement(
     "section",
-    { "data-card": "models" },
+    { "data-card": "models", className: CSS_CLASS.card },
     createElement("h2", null, t("models.title")),
     // 提示必须与真实行为一致：立即生效时不该再出现「保存后生效」。
     createElement("small", { "data-models-mode": props.mode }, props.mode === "immediate" ? t("models.immediate") : t("models.onSave")),
@@ -57,7 +59,7 @@ function modelRow(props: ModelsCardProps, model: string): ReactNode {
   const visible = props.visibility[model] !== false;
   return createElement(
     "div",
-    { key: model, "data-model": model },
+    { key: model, "data-model": model, className: CSS_CLASS.field },
     createElement("span", { "data-model-label": model }, model),
     createElement("input", {
       "data-model-visible": model,
@@ -75,7 +77,7 @@ function addRow(props: ModelsCardProps): ReactNode {
   const submit = (): void => props.onAddModel(props.draft);
   return createElement(
     "div",
-    { "data-card": "models-add" },
+    { "data-card": "models-add", className: CSS_CLASS.actions },
     createElement("input", {
       "data-model-draft": "true",
       type: "text",

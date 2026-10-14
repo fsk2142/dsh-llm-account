@@ -10,6 +10,7 @@
  */
 import { createElement, Fragment, type ReactElement, type ReactNode } from "react";
 
+import { CSS_CLASS } from "./css";
 import { cardGroupsOf, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
 import type { CardGroupSpec, VendorEntry } from "./registry";
 
@@ -43,9 +44,9 @@ export function PageShell(props: PageShellProps): ReactElement {
 
   return createElement(
     "div",
-    { "data-page": "llm-account" },
+    { "data-page": "llm-account", className: CSS_CLASS.root },
     createElement("h1", null, t("title")),
-    createElement("p", { "data-intro": "true" }, t("intro")),
+    createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     tabRow(props),
     active === undefined
       ? createElement("p", { "data-empty": "vendor" }, t("empty.noVendor"))
@@ -59,7 +60,7 @@ function tabRow(props: PageShellProps): ReactNode {
   if (state.tabs.length === 0) return null;
   return createElement(
     "nav",
-    { "data-tabs": "true", role: "tablist" },
+    { "data-tabs": "true", role: "tablist", className: CSS_CLASS.tabs },
     state.tabs.map((tab) =>
       createElement(
         "button",
@@ -100,13 +101,13 @@ function cardGroupElement(props: PageShellProps, entry: VendorEntry, group: Card
   if (group.group === "advanced") {
     return createElement(
       "details",
-      { key: group.group, "data-card-group": group.group },
+      { key: group.group, "data-card-group": group.group, className: CSS_CLASS.card },
       createElement("summary", null, props.t("advanced")),
       hint,
       ...body,
     );
   }
-  return createElement("section", { key: group.group, "data-card-group": group.group }, heading, hint, ...body);
+  return createElement("section", { key: group.group, "data-card-group": group.group, className: CSS_CLASS.card }, heading, hint, ...body);
 }
 
 /** 一个字段：标签 + 控件 + 说明。控件种类由字段声明决定，不认识的一律不渲染。 */
@@ -116,7 +117,7 @@ function fieldElement(props: PageShellProps, entry: VendorEntry, field: DraftFie
   const control = fieldControl(props, entry, field);
   if (control === undefined) return null;
   const hint = spec.hintKey === undefined ? null : createElement("small", { "data-field-hint": spec.key }, t(spec.hintKey));
-  return createElement("label", { key: spec.key, "data-field": spec.key }, createElement("span", null, t(spec.labelKey)), control, hint);
+  return createElement("label", { key: spec.key, "data-field": spec.key, className: CSS_CLASS.field }, createElement("span", null, t(spec.labelKey)), control, hint);
 }
 
 /** 字段的控件。 */
@@ -160,7 +161,7 @@ function saveBar(props: PageShellProps, entry: VendorEntry): ReactElement {
   const { t } = props;
   return createElement(
     "div",
-    { "data-save-bar": "true" },
+    { "data-save-bar": "true", className: CSS_CLASS.save },
     createElement("button", { type: "button", "data-save": entry.ns, onClick: () => props.onSave(entry.ns) }, t("save")),
     createElement("small", null, t("saveHint")),
   );

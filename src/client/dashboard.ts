@@ -8,6 +8,7 @@
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
+import { CSS_CLASS } from "./css";
 import { quotaShape, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, SwitchRecord, VendorUsageStatus } from "./usage-contract";
 
@@ -36,7 +37,7 @@ export function Dashboard(props: DashboardProps): ReactElement {
   const { t, status } = props;
   return createElement(
     "div",
-    { "data-card": "dashboard" },
+    { "data-card": "dashboard", className: CSS_CLASS.dashboard },
     createElement(
       "header",
       null,
@@ -69,6 +70,7 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
     {
       key: account.ref,
       "data-dashboard-account": account.ref,
+      className: CSS_CLASS.account,
       // 生效账号高亮（规格 §8.1 第 5 条）。
       "data-dashboard-effective": effective,
       "data-dashboard-configured": account.configured,

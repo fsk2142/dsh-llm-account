@@ -169,6 +169,40 @@ it("宿主没有 layout 服务时 selectPanel 返回 false（调用方据此降�
   expect(selectPanel(bare, DASHBOARD_PANEL_ID)).toBe(false);
 });
 
+it("两个 profile 行各调一次 apply：样式表只注入一次（幂等由 data-plugin-css 保证）", () => {
+  resetShell();
+  const tags: { attrs: Record<string, string> }[] = [];
+  const previous = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = {
+    head: { appendChild: () => undefined },
+    querySelector: (selector: string) => {
+      const id = /data-plugin-css="([^"]+)"/.exec(selector)?.[1];
+      return tags.some((tag) => tag.attrs["data-plugin-css"] === id) ? {} : null;
+    },
+    createElement: () => {
+      const element = {
+        attrs: {} as Record<string, string>,
+        textContent: "",
+        setAttribute(name: string, value: string) {
+          element.attrs[name] = value;
+        },
+        remove: () => undefined,
+      };
+      tags.push(element);
+      return element;
+    },
+  };
+  try {
+    const host = fakeClientContext();
+    apply(host.ctx);
+    apply(host.ctx);
+    expect(tags).toHaveLength(1);
+    expect(tags[0]!.attrs["data-plugin-css"]).toBe("@dsh-llm-account/page.css");
+  } finally {
+    (globalThis as { document?: unknown }).document = previous;
+  }
+});
+
 it("插槽注册抛错时 apply 仍然完成（不让一次注册失败带走客户端）", () => {
   resetShell();
   const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
