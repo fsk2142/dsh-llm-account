@@ -59,6 +59,7 @@ import {
   createRotationAccess,
   createSettingsIntentStore,
   createSettingsPort,
+  disableSettingsAutoForm,
   environmentValue,
   intentLogFor,
   isParsedConfig,
@@ -77,6 +78,7 @@ import {
 } from "./accounts";
 import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
+import { applyUsageRemote } from "../usage-remote";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opencode-go`）。 */
 export const name = "llm-opencode-go";
@@ -260,6 +262,19 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
   ctx.on("credentials/reference-updated", (ref) => {
     rotation.clearCredentialRejection(ref);
   });
+
+  // Task 3：把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
+  applyUsageRemote(ctx, {
+    vendor: PROVIDER_ID,
+    rotation,
+    accounts,
+    quota,
+    pinnedRef: () => pinnedRefOf(document()),
+    quotaRef: () => selectedRefOf(document()),
+  });
+
+  // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
+  disableSettingsAutoForm(ctx, OPENCODE_SETTINGS_NS);
 
   return { providerId: PROVIDER_ID, settingsNs: OPENCODE_SETTINGS_NS, adapter, rotation, intents, accounts, credentials, quota };
 }

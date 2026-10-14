@@ -36,6 +36,15 @@ const hostConfig: UserConfig = {
   // tsdown's node-platform default forces `.mjs`; the package is `type: module`
   // and the host loads `lib/*.js`, so use the package-type based extension.
   fixedExtension: false,
+  // `@deepseek-ai/dsh-typert-protocol` must stay **external**: it is a host-provided
+  // package, and the Gateway validates the `typertRemote` binding stamped by its own
+  // `TypertRemoteService` base class. An inlined copy is a different class identity,
+  // so the registration would not be recognised. It is declared in
+  // `peerDependencies` (which tsdown externalizes by default) and pinned here
+  // explicitly so a future move back to devDependencies cannot silently re-bundle it.
+  deps: {
+    neverBundle: ["@deepseek-ai/dsh-typert-protocol"],
+  },
 };
 
 const clientConfig: UserConfig = {

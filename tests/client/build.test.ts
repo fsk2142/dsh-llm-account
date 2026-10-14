@@ -1,5 +1,6 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const CLIENT_BUNDLE = fileURLToPath(new URL("../../lib/client.js", import.meta.url));
@@ -42,6 +43,22 @@ function readBundle(path: string): string {
   if (!existsSync(path)) throw new Error(`${BUILD_HINT}\n  expected: ${path}`);
   // Normalize EOL so the shape assertions below do not depend on the checkout's git config.
   return readFileSync(path, "utf8").replaceAll("\r\n", "\n");
+}
+
+/**
+ * Every emitted JS bundle in `lib/`, including rolldown's code-split chunks.
+ *
+ * Chunk file names carry a content hash (`usage-remote-CY57W-EK.js`), so a scan that
+ * only looked at the three entry files would miss whatever the bundler decided to
+ * split out — exactly where an inlined host package would land.
+ * @returns absolute paths of all emitted `.js` files.
+ */
+function emittedBundles(): string[] {
+  const dir = fileURLToPath(new URL("../../lib", import.meta.url));
+  if (!existsSync(dir)) throw new Error(BUILD_HINT);
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".js"))
+    .map((name) => join(dir, name));
 }
 
 /**
@@ -108,5 +125,22 @@ describe("host-side bundles", () => {
 
     // Exact set, sorted: `[]` for lib/index.js, which must carry no bare import.
     expect(bareDeepseekImports(source)).toEqual([...specifiers].sort());
+  });
+
+  it("客户端产物自包含：除宿主提供的裸模块外不相对引用任何分块", () => {
+    // 浏览器侧只有 `lib/client.js` 一个文件：加载器不会替它解析相对路径（宿主分块也不在浏览器
+    // 图里），所以一旦它长出 `./xxx.js` 这类导入，客户端就是加载即坏。宿主侧不受此约束
+    // （`platform: "node"`，可以正当使用 node 内置与相对分块）。
+    const source = readBundle(CLIENT_BUNDLE);
+    expect(source).not.toMatch(/(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']\.{1,2}\//);
+  });
+
+  it("宿主提供的 dsh-typert-protocol 保持外部导入，没有被内联进任何产物", () => {
+    // 这条断言的形状是关键：**内联会消灭 specifier**。所以「顶层入口里没有它」不等于安全
+    // （它住在共享分块里），必须要求整目录里**至少有一个**产物仍然按裸导入引用它。
+    // 该包必须留在 peerDependencies（或 tsdown 的 neverBundle 里）：被内联的副本与宿主
+    // Gateway 校验的 `TypertRemoteService` 基类不是同一个类身份，远程面会注册不上。
+    const importedEverywhere = emittedBundles().flatMap((path) => bareDeepseekImports(readBundle(path)));
+    expect(importedEverywhere).toContain("@deepseek-ai/dsh-typert-protocol");
   });
 });

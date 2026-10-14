@@ -354,7 +354,11 @@ class CommandCodeAdapter extends LlmAdapter {
           if (closing !== undefined) void closing.catch(() => {});
         }
       }
-      if (exhausted) return;
+      if (exhausted) {
+        // 请求由这个账号**服务完了**：规格 §8.1 第 1 条的「最近成功者」（卡片跟随真实账号）。
+        this.#deps.rotation.noteSettled(ref);
+        return;
+      }
 
       if (options.signal?.aborted === true || this.#isAbort(failure)) throw failure;
       const classified = this.#classify(failure);

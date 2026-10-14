@@ -363,6 +363,8 @@ class OpencodeAdapter extends LlmAdapter {
       }
       if (exhausted) {
         if (pendingUsage !== undefined) yield pendingUsage;
+        // 请求由这个账号**服务完了**：规格 §8.1 第 1 条的「最近成功者」（卡片跟随真实账号）。
+        this.#deps.rotation.noteSettled(ref);
         return;
       }
 

@@ -191,6 +191,50 @@ export function createRotationAccess(state: () => AccountState): RotationAccess 
 /** 设置行的候选名字（按优先级）：现代宿主按 profile 行 id 建索引，旧宿主用插件自报的命名空间。 */
 export type SettingsRowIds = readonly string[];
 
+/**
+ * 关掉宿主为**这一行**自动生成的设置表单（`configure({ auto: false })`）。
+ *
+ * 为什么必须做：本包自带统一设置页（`settings.section`，id `llm-account`）。宿主默认会按
+ * schemastery 配置自动生成一份表单，不关掉就会和我们的页面**并排出现**。旧 Command Code 插件
+ * 用的正是这一条（`@mars-sea/dsh-commandcode-provider/lib/index.js:10982`：
+ * `settingsCtx.settings.configure({ auto: false }, ctx.fiber)`）。
+ *
+ * 两个未验证接缝都收在这里：`ctx.fiber` **没有**出现在 cordis 4.0.4 的 `Context` 类型里
+ * （运行时存在：`lib/index.js:1684`），所以只有一个窄化的结构读取；`configure` 的第二个参数
+ * 就是 owner fiber。
+ *
+ * 幂等：宿主对「这一行已经登记过策略」会抛错，而那种情况下的目标状态（自动表单已关）本来
+ * 就已经达成 —— 所以不把它变成整行的失败，只在日志里留一行。
+ * @param ctx - 该 profile 行的插件上下文。
+ * @param namespace - 该行的设置命名空间（只用于日志文案）。
+ */
+export function disableSettingsAutoForm(ctx: Context, namespace: string): void {
+  const service: unknown = ctx.get("settings");
+  if (!isRecord(service) || typeof service.configure !== "function") {
+    // 宿主没有这条策略接口：自动表单可能仍会出现，必须留痕而不是静默跳过。
+    ctx.logger.warn(
+      `dsh-llm-account: the settings service has no configure(); the generated settings form for "${namespace}" cannot be disabled and may appear beside the unified page`,
+    );
+    return;
+  }
+  const configure = service.configure as (presentation: { auto?: boolean }, owner?: unknown) => unknown;
+  const fiber = (ctx as unknown as { fiber?: unknown }).fiber;
+  ctx.effect(
+    () => {
+      try {
+        const dispose = configure.call(service, { auto: false }, fiber);
+        return typeof dispose === "function" ? (dispose as () => void) : () => undefined;
+      } catch (error) {
+        ctx.logger.warn(
+          `dsh-llm-account: could not disable the generated settings form for "${namespace}" (${error instanceof Error ? error.message : String(error)}); if a form still appears beside the unified page, this is why`,
+        );
+        return () => undefined;
+      }
+    },
+    "dsh-llm-account: settings auto-form policy",
+  );
+}
+
 /** 宿主设置服务的形状判定（只认本装配层用到的两个方法）。 */
 function isSettingsForms(value: unknown): value is SettingsForms {
   return isRecord(value) && typeof value.describe === "function" && typeof value.mutate === "function";

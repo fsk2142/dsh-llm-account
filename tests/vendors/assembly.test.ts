@@ -17,7 +17,7 @@
  * 本地的假 ctx / 假设置服务 / 假凭据服务 / volatile 解包一律写在本文件里，不跨任务共享
  * （计划 Review Focus 前的说明）。
  */
-import type { Context } from "@deepseek-ai/cordis";
+import { Context } from "@deepseek-ai/cordis";
 import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { expect, it, vi } from "vitest";
 
@@ -102,6 +102,8 @@ function fakeHost(services: Readonly<Record<string, unknown>> = {}): FakeHost {
       },
     },
     logger: { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined },
+    /** `ctx.fiber`：`settings.configure` 的 owner 参数（Task 3 会传它，这里要能断言到）。 */
+    fiber: { fake: "fiber" },
     get: (name: string): unknown => serviceMap.get(name),
     on: (event: string, listener: (...args: unknown[]) => void): (() => void) => {
       const list = listeners.get(event) ?? [];
@@ -134,10 +136,18 @@ interface RecordedMutation {
   revision: number;
 }
 
+/** 一次被记录的 `settings.configure` 调用（Task 3：关掉宿主自动生成的设置表单）。 */
+interface RecordedPresentation {
+  presentation: { auto?: boolean };
+  owner: unknown;
+}
+
 /** 假宿主设置服务：一份内存文档 + 修订号围栏，各行的文档内容与 `describe()` 一一对应。 */
 interface FakeSettings {
   service: unknown;
   mutations: RecordedMutation[];
+  /** 每次 `configure` 的参数（`auto: false` 与 owner fiber）。 */
+  presentations: RecordedPresentation[];
   valueOf(ns: string): Record<string, unknown> | undefined;
 }
 
@@ -149,9 +159,14 @@ interface FakeSettings {
 function fakeSettings(rows: readonly { ns: string; value: Record<string, unknown>; revision?: number }[]): FakeSettings {
   const state = rows.map((row) => ({ ns: row.ns, value: { ...row.value }, revision: row.revision ?? 0 }));
   const mutations: RecordedMutation[] = [];
+  const presentations: RecordedPresentation[] = [];
   const service = {
     describe: () =>
       state.map((row) => ({ ns: row.ns, value: { ...row.value }, revision: row.revision, applies: "live", autoGenerate: false })),
+    configure: (presentation: { auto?: boolean }, owner?: unknown) => {
+      presentations.push({ presentation: { ...presentation }, owner });
+      return () => undefined;
+    },
     mutate: async (ns: string, ops: readonly SettingsOp[], expected?: number): Promise<void> => {
       const row = state.find((candidate) => candidate.ns === ns);
       if (row === undefined) throw new Error(`No configurable plugin entry "${ns}"`);
@@ -171,6 +186,7 @@ function fakeSettings(rows: readonly { ns: string; value: Record<string, unknown
   return {
     service,
     mutations,
+    presentations,
     valueOf: (ns) => state.find((row) => row.ns === ns)?.value,
   };
 }
@@ -195,6 +211,83 @@ function fakeCredentials(initial: Readonly<Record<string, string>> = {}): { serv
     },
   };
 }
+
+/**
+ * 一个**真** cordis `Context` 的宿主。
+ *
+ * 远程面（Task 3）需要真的 `Service` 基类与真的服务解析（`ctx.get` 只会向上找、`Service` 实例
+ * 对外是代理），假 ctx 撑不住这些语义。只提供入口真正用到的服务；`ctx.fiber`/`ctx.logger`
+ * 由 cordis 自己给。
+ * @param services - 额外要提供的服务（设置、凭据等）。
+ * @returns 真 ctx 与观察窗口。
+ */
+function realHost(services: Readonly<Record<string, unknown>> = {}): {
+  ctx: Context;
+  typert: { contributions: unknown[] };
+  routes: string[][];
+} {
+  const ctx = new Context();
+  const typert = { contributions: [] as unknown[] };
+  const routes: string[][] = [];
+  const provided: Record<string, unknown> = {
+    llm: {
+      registerAdapter: (list: string[]) => {
+        routes.push([...list]);
+        return () => undefined;
+      },
+    },
+    typert: {
+      register: (contribution: unknown) => {
+        typert.contributions.push(contribution);
+        return () => Promise.resolve();
+      },
+    },
+    ...services,
+  };
+  for (const [key, value] of Object.entries(provided)) {
+    // cordis 4：`set` 之前必须先 `provide`（重复 provide 会抛，所以只在需要时补一次）。
+    try {
+      ctx.provide(key);
+    } catch {
+      // 已经提供过：直接用现有声明。
+    }
+    ctx.set(key, value);
+  }
+  return { ctx, typert, routes };
+}
+
+/** 把若干 Anthropic Messages 事件拼成一段 SSE 正文（与 `tests/vendors/opencode.test.ts` 同一形状）。 */
+function anthropicSse(frames: readonly (readonly [string, unknown])[]): string {
+  return frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+}
+
+/** 一次干净的文本回复（"hello"）：适配器会跑完整个流，走「成功」那一支。 */
+const TEXT_FRAMES: readonly (readonly [string, unknown])[] = [
+  [
+    "message_start",
+    {
+      type: "message_start",
+      message: {
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "m1",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 4, output_tokens: 1 },
+      },
+    },
+  ],
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } }],
+  ["content_block_stop", { type: "content_block_stop", index: 0 }],
+  [
+    "message_delta",
+    { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 3 } },
+  ],
+  ["message_stop", { type: "message_stop" }],
+];
 
 /** 用户现有的 commandcode 配置形状（逐字来自 task-14-brief 与 profile patch 第 29-41 行）。 */
 const COMMAND_CODE_SHAPE = {
@@ -353,6 +446,71 @@ it("账号库状态变化重建引擎时，生效账号与切换记录一起搬�
   // 新增行为：不搬观测状态的话，用户一改设置卡片就会显示「没有生效账号」。
   expect(after.effectiveAccount()).toEqual(before.effectiveAccount());
   expect(after.switchNotices()).toEqual(before.switchNotices());
+});
+
+it("两个入口都关掉宿主自动生成的设置表单，并把 owner fiber 交给宿主", () => {
+  for (const entry of [commandcode, opencode] as const) {
+    const settings = fakeSettings([]);
+    const host = fakeHost({ settings: settings.service });
+    const shape = entry === commandcode ? COMMAND_CODE_SHAPE : OPENCODE_SHAPE;
+    entry.apply(host.ctx, entry.Config(shape));
+    expect(settings.presentations).toEqual([{ presentation: { auto: false }, owner: (host.ctx as unknown as { fiber: unknown }).fiber }]);
+  }
+});
+
+it("两个入口装进同一个宿主：一份远程面同时回答两家，描述符只登记一次（Task 3 接线）", async () => {
+  const settings = fakeSettings([
+    { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE }, revision: 1 },
+    { ns: "opencode-go", value: { ...OPENCODE_SHAPE, enabled: true }, revision: 1 },
+  ]);
+  const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "k1", OPENCODE_API_KEY: "k2" });
+  const host = realHost({ settings: settings.service, credentials: credentials.service });
+
+  commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+  opencode.apply(host.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true }));
+  // 远程面的注册发生在 `ctx.inject(["typert"], …)` 的回调里（异步）。
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const service = host.ctx.get("llmAccountUsage") as {
+    status(vendor: string): Promise<{ vendor: string; pinned: string | null }>;
+  };
+  expect(service).toBeDefined();
+  await expect(service.status("commandcode")).resolves.toMatchObject({ vendor: "commandcode" });
+  await expect(service.status("dsh-opencode-go")).resolves.toMatchObject({ vendor: "dsh-opencode-go" });
+
+  // 描述符由创建服务的那一行登记一次，不是每行一次。
+  expect(host.typert.contributions).toHaveLength(1);
+  // 两个入口各自关掉了自己的自动表单。
+  expect(settings.presentations.map((record) => record.presentation)).toEqual([{ auto: false }, { auto: false }]);
+});
+
+it("请求成功后生效账号更新为服务该请求的账号（noteSettled 接线，规格 §8.1 第 1 条）", async () => {
+  const credentials = fakeCredentials({ OPENCODE_API_KEY: "sk-default" });
+  // 一次干净的文本回复：适配器跑完整个流 → 走 noteSettled 那一支。
+  vi.stubGlobal("fetch", (async (input: unknown) => {
+    if (String(input).includes("models.dev")) return new Response("{}", { status: 503 });
+    if (String(input).includes("/models")) {
+      return new Response(JSON.stringify({ object: "list", data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(anthropicSse(TEXT_FRAMES), { status: 200, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch);
+  try {
+    const host = fakeHost({ credentials: credentials.service });
+    const bundle = opencode.apply(host.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true }));
+
+    // 请求前：还没有任何生效账号。
+    expect(bundle.rotation.current().effectiveAccount()).toBeUndefined();
+    const { chunks, error } = await drain(bundle.adapter.stream(streamRequest()));
+    expect(error).toBeUndefined();
+    expect(chunks.length).toBeGreaterThan(0);
+    // 请求后：生效账号就是那个真正服务完请求的账号（成功会把它固定下来）。
+    expect(bundle.rotation.current().effectiveAccount()?.ref).toBe("OPENCODE_API_KEY");
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 it("opencode 的固定命名空间在宿主上解析到 profile 行 id", async () => {
