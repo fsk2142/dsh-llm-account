@@ -27,7 +27,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
-import type { AccountPort, AccountState, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
+import type { AccountPort, AccountState, AccountView, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
 import { CREDENTIAL_REF_PATTERN } from "../../core/accounts";
 import { normalizeKey, pickApiKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
@@ -218,14 +218,11 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     apiBase: normalizeKey(document().apiBase) ?? DEFAULT_API_BASE,
     // Task 5 Step 7（第 1a 期交接项）：登录的 ref 由 userName 推导，**可能与既有账号的凭据槽
     // 撞名**。撞名时必须拒绝并给出可读原因，**绝不静默覆盖**别人的凭据槽。
-    // 判定用账号端口的 `list()`（它包含合成的默认槽，与页面看到的是同一份视图）：
-    // 该 ref 已属于某个账号、而那个账号的名字与登录用户名不同 → 拒绝。
-    // 同名（或名字就是 ref 本身）视为**同一账号的重新登录**，允许刷新密钥。
+    // 判定用账号端口的 `list()`（它包含合成的默认槽，与页面看到的是同一份视图）；
+    // 同一账号的重新登录（名字相同）允许刷新密钥 —— 见 `loginSlotHolder` 的契约。
     storeKey: async (ref, key, userName) => {
-      const holder = (await accounts.list()).find((view) => view.ref === ref);
-      if (holder !== undefined && !sameAccountName(holder.label, userName)) {
-        throw new CredentialSlotTakenError(ref, holder.label);
-      }
+      const holder = loginSlotHolder(await accounts.list(), ref, userName);
+      if (holder !== undefined) throw new CredentialSlotTakenError(ref, holder.label);
       await credentials.set(ref, key);
     },
   });
@@ -402,6 +399,26 @@ function pinnedRefOf(document: Record<string, unknown>): string | null {
 /** 额度读数报告的账号：固定账号优先，否则顺序里的第一个（下一个请求会用的那个）。 */
 function selectedRefOf(document: Record<string, unknown>): string | undefined {
   return pinnedRefOf(document) ?? orderOf(document)[0];
+}
+
+/**
+ * 登录落库前判定：这个 ref 是否已经被**另一个**账号占用？
+ *
+ * 抽成导出函数是为了能被单测：它是「不得静默覆盖别人的凭据槽」（Task 5 Step 7）的判定本身，
+ * 而它平时藏在一个闭包里、只有跑完整的浏览器登录流程才会执行到。
+ * @param views - 当前账号表（`AccountPort.list()` 的视图，含合成的默认槽）。
+ * @param ref - 登录将要写入的凭据槽。
+ * @param userName - 登录返回的用户名。
+ * @returns 占用者；空闲、或占用者就是同一账号时为 `undefined`。
+ */
+export function loginSlotHolder(
+  views: readonly AccountView[],
+  ref: string,
+  userName: string,
+): AccountView | undefined {
+  const holder = views.find((view) => view.ref === ref);
+  if (holder === undefined) return undefined;
+  return sameAccountName(holder.label, userName) ? undefined : holder;
 }
 
 /**

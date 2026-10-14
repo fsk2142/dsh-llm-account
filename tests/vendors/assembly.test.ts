@@ -21,7 +21,7 @@ import { Context } from "@deepseek-ai/cordis";
 import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { expect, it, vi } from "vitest";
 
-import type { SettingsOp } from "../../src/core/adapter";
+import type { AccountView, SettingsOp } from "../../src/core/adapter";
 import * as commandcode from "../../src/vendors/commandcode/index";
 import * as opencode from "../../src/vendors/opencode/index";
 
@@ -534,6 +534,25 @@ it("请求失败时不把失败账号上报为生效账号（只有成功才 not
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("登录落库的撞名判定：别人的凭据槽拒绝写入，同一账号的重新登录放行（T5 Step 7）", () => {
+  const views: AccountView[] = [
+    { ref: "COMMANDCODE_API_KEY", label: "COMMANDCODE_API_KEY", configured: true, active: true },
+    { ref: "work", label: "sample-user-2", configured: true, active: false },
+  ];
+
+  // 空闲槽：可以写。
+  expect(commandcode.loginSlotHolder(views, "fresh", "someone")).toBeUndefined();
+  // 占用者名字与登录用户名不同 → 是**另一个**账号，拒绝并报出占用者。
+  expect(commandcode.loginSlotHolder(views, "work", "someone-else")).toMatchObject({ label: "sample-user-2" });
+  // 同一账号重新登录（忽略大小写与首尾空白）：放行，允许刷新密钥。
+  expect(commandcode.loginSlotHolder(views, "work", " sample-user-2 ")).toBeUndefined();
+  expect(commandcode.loginSlotHolder(views, "work", "SAMPLE-USER-2")).toBeUndefined();
+  // 合成的默认槽：名字就是 ref 本身，用户名与之不同 → 拒绝（宁可让用户手动处置）。
+  expect(commandcode.loginSlotHolder(views, "COMMANDCODE_API_KEY", "sample-user-2")).toMatchObject({
+    label: "COMMANDCODE_API_KEY",
+  });
 });
 
 it("opencode 的固定命名空间在宿主上解析到 profile 行 id", async () => {
