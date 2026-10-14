@@ -320,7 +320,13 @@ export function applyShell(rawContext: unknown, options: ApplyShellOptions = {})
 function registerPageOnce(context: ClientShell, options: ApplyShellOptions): void {
   if (pageRegistered) return;
   pageRegistered = true;
-  registerPage(context, options);
+  try {
+    registerPage(context, options);
+  } catch (error) {
+    // 与两个插槽注册同样的处置（旧插件在 `main`/`sidebar.footer.action` 上就是这么做的）：
+    // 留一行错误继续走完 `apply` —— 后面的凭据注入与 applyCount 不该因为一次注册失败而丢掉。
+    console.error("[dsh-llm-account] could not register the settings page:", error);
+  }
 }
 
 /**

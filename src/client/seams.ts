@@ -446,34 +446,13 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const sidebarVendor = sidebarVendorOf(entries, state.snapshots);
     const sidebarVendorId = sidebarVendor?.providerId;
     useEffect(() => {
-      if (sidebarVendorId === undefined) return;
-      const localeNs = options.localeNs ?? "settings.llm-account";
-      const component = createSidebarCardView({
+      return syncSidebarAndPanel({
         ctx,
-        vendor: sidebarVendorId,
+        enabled: sidebarVendorId !== undefined,
+        vendor: sidebarVendorId ?? "",
         t,
-        onOpen: () => {
-          selectPanel(ctx, DASHBOARD_PANEL_ID);
-        },
+        localeNs: options.localeNs ?? "settings.llm-account",
       });
-      const disposeSidebar = registerSidebarCard(ctx, { id: SIDEBAR_CARD_ID, order: 1, locale: localeNs, component });
-      // 中栏仪表盘与侧边栏卡片同一个开关：它是从卡片上打开的，关着的时候注册它只是死代码。
-      const disposePanel = registerPanelCard(ctx, {
-        key: DASHBOARD_PANEL_ID,
-        locale: localeNs,
-        component: createDashboardView({
-          ctx,
-          vendor: sidebarVendorId,
-          t,
-          onClose: () => {
-            selectPanel(ctx, null);
-          },
-        }),
-      });
-      return () => {
-        disposeSidebar();
-        disposePanel();
-      };
     }, [sidebarVendorId]);
 
     const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
@@ -910,6 +889,55 @@ export function createDashboardView(options: {
     }, []);
 
     return Dashboard({ t, status, switches, onClose: () => options.onClose(), onRefresh: load });
+  };
+}
+
+/**
+ * 按开关同步「侧边栏卡片 + 中栏面板」的注册，返回撤销函数。
+ *
+ * 单独成函数（而不是写在容器的 effect 里）的理由：这样**假客户端冒烟**可以不渲染 React 就把
+ * 「关闭时零注册 / 开启时注册一次」这条路走一遍 —— 容器里的 effect 只有真挂载才会跑，1c 才能
+ * 验证那条路（T10 的冒烟与 1c 的分工）。
+ * @param options - 上下文、开关、要显示的厂商、取词函数与文案命名空间。
+ * @returns 撤销函数（关闭时是空操作）。
+ */
+export function syncSidebarAndPanel(options: {
+  ctx: ClientSeamContext;
+  enabled: boolean;
+  vendor: string;
+  t: (key: string) => string;
+  localeNs: string;
+}): () => void {
+  if (!options.enabled) return () => undefined;
+  const { ctx, vendor, t, localeNs } = options;
+  const disposeSidebar = registerSidebarCard(ctx, {
+    id: SIDEBAR_CARD_ID,
+    order: 1,
+    locale: localeNs,
+    component: createSidebarCardView({
+      ctx,
+      vendor,
+      t,
+      onOpen: () => {
+        selectPanel(ctx, DASHBOARD_PANEL_ID);
+      },
+    }),
+  });
+  const disposePanel = registerPanelCard(ctx, {
+    key: DASHBOARD_PANEL_ID,
+    locale: localeNs,
+    component: createDashboardView({
+      ctx,
+      vendor,
+      t,
+      onClose: () => {
+        selectPanel(ctx, null);
+      },
+    }),
+  });
+  return () => {
+    disposeSidebar();
+    disposePanel();
   };
 }
 

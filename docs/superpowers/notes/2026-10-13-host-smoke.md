@@ -119,6 +119,12 @@ Get-ChildItem lib -Filter *.js | Select-String -Pattern 'from\s*"@deepseek-ai/[^
 
 补充：§4 的测试里那条「固定命名空间解析到 profile 行 id」用的是**假**设置服务，因此第 6 项里「真实宿主的 `describe()` 是否按行 id 建索引」同样属未验证假设（host-seam-assumptions §2 假设 ③ 与 §4 清单第 6 项）。
 
+### 5.1 第 1b 期补齐的客户端必测项（C1–C18）
+
+1b 结束时新增了 `docs/superpowers/notes/2026-10-14-client-smoke.md`，内含 18 项**客户端侧**必测项（bundle 是否被加载器接受、`apply` 次数、`remote.llm-account` 服务名是否成立、`$mount`/typert 贡献是否被接受、locale 载荷形状、`hooks` 投影、账户写路径、登录撞名、侧边栏卡片是否跟随生效账号、关闭开关是否真的零请求、可见性恢复、排序交互形态、窄栏呈现、两家同开、模型目录来源）。
+
+**1c 的入口就是这两份文档**：本文件 §5（宿主侧 8 项）+ client-smoke 的 C1–C18（客户端侧）。两边的未验证接缝也都收在薄层里（宿主侧 `src/vendors/assembly.ts` 与两个 entry；客户端侧 `src/client/shell.ts` 与 `src/client/seams.ts`），实测后只改那几处。
+
 ## 6. 与其它任务的衔接
 
 - 计划 1b：客户端页面与统一账号中心、浏览器目标构建（`./client`）、账号写入路径接线、`IntentLog.replay` 的恢复接线（改期为显式未做项，见计划文档「1a 结束时明确『改期未做』的项」）。
