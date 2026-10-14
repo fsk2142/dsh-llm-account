@@ -54,6 +54,40 @@ export interface FallbackContext {
 }
 
 /**
+ * 生效账号：最近一次**真正被选中去发请求**的 ref，以及那一刻（epoch 毫秒）。
+ *
+ * 规格 §8.1 第 1 条把它定成一等概念，存在的理由是修掉旧卡片的缺陷：旧卡片显示
+ * 「配置里固定的账号」，而多账号轮换是每次请求临时决定的，用量打满被自动切走后
+ * 卡片数字不变。`at` 让界面能说明「这个结论是什么时候取的」。
+ */
+export interface EffectiveAccount {
+  ref: string;
+  at: number;
+}
+
+/**
+ * 能被**指名**的切换原因（规格 §8.1 第 3 条列出的四种）。
+ *
+ * 刻意不包含 `unavailable`：它在失败分类里存在，但规格没有给它文案，硬塞进
+ * `quota` 之类的桶里就是编造原因 —— 指不出原因的变化只更新生效账号、不产出提示。
+ */
+export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual";
+
+/** 一次切换提示：谁 → 谁、原因、时刻。 */
+export interface SwitchNotice {
+  fromRef: string;
+  toRef: string;
+  reason: SwitchReason;
+  at: number;
+}
+
+/**
+ * 切换记录的保留上限。引擎长驻宿主进程、每次失败换号都可能记一条，历史必须封顶；
+ * 界面只需要最近若干条（Task 3 的 `switches()` 发布它）。
+ */
+export const MAX_SWITCH_NOTICES = 50;
+
+/**
  * 按分类算出拒绝条目的失效时刻。
  * @param kind - 失败分类。
  * @param resetAt - 厂商给出的重置时刻（epoch 毫秒），可能缺省。
@@ -90,6 +124,10 @@ export class RotationEngine {
   readonly #rules: readonly ModelRule[];
   readonly #now: () => number;
   readonly #entries = new Map<string, RejectionEntry>();
+  /** 生效账号；`undefined` 表示本引擎实例还没有发过任何请求（不编造）。 */
+  #effective: EffectiveAccount | undefined;
+  /** 切换记录，**最新在前**（`switchNotice()` 的头部即最近一次）。 */
+  #notices: SwitchNotice[] = [];
 
   /**
    * @param config - 账号库状态（顺序、固定账号、按模型规则）与可选时钟。
@@ -106,8 +144,11 @@ export class RotationEngine {
    *
    * 任一候选不可用都**继续往下走**，不会因为规则或固定账号不可用就直接放弃。
    * 顺带惰性清理已过期的拒绝条目。
+   *
+   * 命中时顺带把该 ref 记为**生效账号**（见 `noteSelected`）：选择次序、拒绝表与
+   * `fallbackAllowed` 的既有语义一律不动，这里只是把「这次真的是谁去发请求」记下来。
    * @param request - 目标模型与本请求内已试过的账号。
-   * @returns 选中的账号 ref；无可选账号时为 `undefined`。
+   * @returns 选中的账号 ref；无可选账号时为 `undefined`（此时不动生效账号）。
    */
   pick({ model, tried }: PickRequest): string | undefined {
     const rule = this.#rules.find((entry) => entry.models.includes(model));
@@ -116,9 +157,77 @@ export class RotationEngine {
       if (ref === null || ref === undefined) continue;
       if (tried.has(ref)) continue;
       if (this.#live(ref) !== undefined) continue;
+      this.noteSelected(ref);
       return ref;
     }
     return undefined;
+  }
+
+  /**
+   * 上报「这个 ref 被选中去发请求了」，把它记成生效账号，并在**上一次生效账号能被
+   * 指名**（额度耗尽 / 限流 / 凭据失效）时记一条切换提示。
+   *
+   * `pick` 命中时会自动调用；调用方用别的方式选号（宿主重放、显式指定）时自己调用。
+   * 对同一个 ref 重复上报是恒等变换，不会产生第二条提示。
+   * @param ref - 本次要去发请求的账号 ref。
+   */
+  noteSelected(ref: string): void {
+    const previous = this.#effective;
+    const at = this.#now();
+    this.#effective = { ref, at };
+    if (previous === undefined || previous.ref === ref) return;
+    const reason = this.#namedReason(previous.ref);
+    // 指不出原因的换号（例如 unavailable）只更新生效账号：宁可没有提示，也不编造原因。
+    if (reason === undefined) return;
+    this.#record({ fromRef: previous.ref, toRef: ref, reason, at });
+  }
+
+  /**
+   * 上报「这个 ref 成功完成了请求」，把生效账号修正为**最近成功者**
+   * （规格 §8.1 第 1 条的后半段）。成功不是一次「切换」，因此不产出切换提示。
+   * @param ref - 真正把请求服务完的账号 ref。
+   */
+  noteSettled(ref: string): void {
+    this.#effective = { ref, at: this.#now() };
+  }
+
+  /**
+   * 用户手动把生效账号切到 ref：原因固定为 `manual`，时间取当前时刻。
+   *
+   * 不触碰拒绝表 —— 手动换号是用户的选择，不改变被换下那个账号的额度/凭据状态。
+   * @param ref - 用户选定的账号 ref。
+   */
+  noteManualSwitch(ref: string): void {
+    const previous = this.#effective;
+    const at = this.#now();
+    this.#effective = { ref, at };
+    if (previous === undefined || previous.ref === ref) return;
+    this.#record({ fromRef: previous.ref, toRef: ref, reason: "manual", at });
+  }
+
+  /**
+   * 当前的生效账号（副本）。
+   * @returns 最近一次被选中/成功的 ref 与时刻；还没有请求时为 `undefined`。
+   */
+  effectiveAccount(): EffectiveAccount | undefined {
+    return this.#effective === undefined ? undefined : { ...this.#effective };
+  }
+
+  /**
+   * 最近一次切换提示（副本）。
+   * @returns 最近一条切换记录；从未切换过时为 `undefined`。
+   */
+  switchNotice(): SwitchNotice | undefined {
+    const latest = this.#notices[0];
+    return latest === undefined ? undefined : { ...latest };
+  }
+
+  /**
+   * 切换记录，最新在前（副本；Task 3 的 `switches()` 发布它）。
+   * @returns 切换记录数组，最多 `MAX_SWITCH_NOTICES` 条。
+   */
+  switchNotices(): readonly SwitchNotice[] {
+    return this.#notices.map((notice) => ({ ...notice }));
   }
 
   /**
@@ -183,5 +292,25 @@ export class RotationEngine {
       return undefined;
     }
     return entry.rejection;
+  }
+
+  /**
+   * 把一个 ref 被换下的原因翻译成**能指名**的切换原因。
+   * @param ref - 被换下的账号 ref。
+   * @returns 四种原因之一；拒绝表里没有它、或分类无法指名（`unavailable`/瞬时失败）时为 `undefined`。
+   */
+  #namedReason(ref: string): SwitchReason | undefined {
+    const kind = this.#live(ref)?.kind;
+    if (kind === "quota" || kind === "rate-limit" || kind === "invalid-credential") return kind;
+    return undefined;
+  }
+
+  /**
+   * 记一条切换提示（最新在前）并裁到上限。
+   * @param notice - 要记录的切换。
+   */
+  #record(notice: SwitchNotice): void {
+    this.#notices.unshift(notice);
+    if (this.#notices.length > MAX_SWITCH_NOTICES) this.#notices.length = MAX_SWITCH_NOTICES;
   }
 }
