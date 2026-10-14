@@ -133,6 +133,15 @@ export const Config: PluginConfigSchema = z.object(
       ])
       .default(null),
     autoSwitch: z.boolean().default(false),
+    /**
+     * 侧边栏额度卡片开关（规格 §8.1 第 6 条：**默认关闭，关闭时不后台刷新**）。
+     *
+     * Ruling 34：命令码 Command Code 的 Config 里一直有这个字段，opencode 此前没有 —— 而页面按
+     * 厂商声明渲染「集成与显示」里的这个开关，缺失会让这一家的开关写进宿主不认识的字段。
+     * 补上它与 commandcode 对称（两个旧插件都有侧边栏卡片，且规格把该卡片当作跨厂商能力）。
+     * 默认 `false`：存量文档不受影响，用户不开就不显示、也不轮询。
+     */
+    showSidebarQuota: z.boolean().default(false),
     baseURL: z.string().default(DEFAULT_BASE_URL),
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),

@@ -13,6 +13,7 @@ import {
   readAccounts,
   readStatus,
   readSwitches,
+  registerSidebarCard,
   saveSettings,
   selectPanel,
   subscribeCredentials,
@@ -242,6 +243,54 @@ it("中栏面板接缝：宿主没有 layout.selectPanel 时返回 false（供�
 
   const without = fakeContext({});
   expect(selectPanel(without.ctx, "llm-account")).toBe(false);
+});
+
+// —— Task 8：侧边栏卡片的注册接缝 ——
+
+it("侧边栏卡片注册：插槽名与形状逐字对齐旧插件", () => {
+  const registered: { entry: Record<string, unknown>; component: unknown }[] = [];
+  const slots = {
+    inject: (name: string, callback: () => unknown) => {
+      // 旧插件的两层：先 `slots.inject(slotName, () => slots.register(entry, C))`。
+      expect(name).toBe("sidebar.footer.action");
+      return callback();
+    },
+    register: (entry: Record<string, unknown>, component: unknown) => {
+      registered.push({ entry, component });
+      return undefined;
+    },
+  };
+  const ctx: ClientSeamContext = {
+    inject: (_names, callback) => callback({ slots }),
+    slots,
+  };
+
+  registerSidebarCard(ctx, { id: "llm-account-quota", order: 1, locale: "settings.llm-account", component: "Component" });
+
+  expect(registered).toHaveLength(1);
+  expect(registered[0]!.entry).toMatchObject({
+    name: "sidebar.footer.action",
+    id: "llm-account-quota",
+    order: 1,
+    locale: "settings.llm-account",
+  });
+  // `inject` 是**工厂**（旧插件的形状是返回 `{ hooks, ...回调 }`）。
+  expect(typeof registered[0]!.entry.inject).toBe("function");
+  expect((registered[0]!.entry.inject as () => unknown)()).toMatchObject({ hooks: {} });
+  expect(registered[0]!.component).toBe("Component");
+});
+
+it("侧边栏卡片注册失败不把客户端带走（与旧插件同样只留一行错误）", () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    const ctx: ClientSeamContext = {
+      inject: (_names, callback) => callback({ slots: { inject: () => { throw new Error("no such slot"); }, register: () => undefined } }),
+    };
+    expect(() => registerSidebarCard(ctx, { id: "x", order: 1, locale: "l", component: "C" })).not.toThrow();
+    expect(errors).toHaveBeenCalled();
+  } finally {
+    errors.mockRestore();
+  }
 });
 
 // —— Task 5：账户操作的派发（容器不参与单测，判定放在这里） ——

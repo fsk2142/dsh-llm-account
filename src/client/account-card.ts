@@ -14,6 +14,7 @@
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import type { AccountAction } from "./page-state";
+import { quotaShape, quotaWindowDetail, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
@@ -172,19 +173,9 @@ function quotaBar(props: AccountCardProps, window: QuotaWindow): ReactNode {
   return createElement("div", { key: window.key, "data-quota-window": window.key }, createElement("span", null, window.key), quotaText(props, window));
 }
 
-/** 一个窗口的读数文案：缺失与真的 0 必须区分开。 */
+/** 一个窗口的读数文案：缺失与真的 0 必须区分开（规则在 `quota.ts`，三张卡片共用一份）。 */
 function quotaText(props: AccountCardProps, window: QuotaWindow): ReactNode {
-  if (window.used !== undefined && window.cap !== undefined) {
-    return createElement("span", { "data-quota-value": "used-cap" }, `${window.used}/${window.cap}`);
-  }
-  if (window.percent !== undefined) {
-    return createElement("span", { "data-quota-value": "percent" }, `${window.percent}%`);
-  }
-  if (window.used !== undefined) {
-    return createElement("span", { "data-quota-value": "used" }, `${window.used}`);
-  }
-  // 什么数都没有：**不猜**。
-  return createElement("span", { "data-quota-value": "missing" }, props.t("account.quotaMissing"));
+  return createElement("span", { "data-quota-value": quotaShape(window) }, quotaWindowText(props.t, window));
 }
 
 /** 展开后的完整报告：窗口明细与失败项。 */
@@ -201,21 +192,12 @@ function reportBlock(props: AccountCardProps, account: AccountUsageStatus): Reac
             createElement(
               "p",
               { key: `w-${window.key}`, "data-report-window": window.key },
-              `${window.key}: ${renderWindowNumbers(window)}`,
+              `${window.key}: ${quotaWindowDetail(window)}`,
             ),
           ),
           ...quota.failures.map((failure, index) => createElement("p", { key: `f-${index}`, "data-report-failure": index }, failure)),
         ]),
   );
-}
-
-/** 报告里的窗口数字：存在的字段才写，缺失一律 `-`。 */
-function renderWindowNumbers(window: QuotaWindow): string {
-  const parts: string[] = [];
-  if (window.used !== undefined && window.cap !== undefined) parts.push(`${window.used}/${window.cap}`);
-  if (window.percent !== undefined) parts.push(`${window.percent}%`);
-  if (window.resetAt !== undefined) parts.push(`@${window.resetAt}`);
-  return parts.length === 0 ? "-" : parts.join(" ");
 }
 
 /** `⋯` 菜单：按能力渲染条目。 */

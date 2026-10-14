@@ -20,7 +20,8 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 import { dictionaryOf } from "./copy";
-import { createPageState, applyModelEdit, closeAction, dirtyFields, modelEditTarget, normalizeModels, noteCredentialChange, openAction, selectTab, setActionField, setField, toggleExpanded, vendorCardKinds, type AccountAction, type ModelEdit, type PageState, type VendorSnapshot } from "./page-state";
+import { SidebarCard } from "./sidebar-card";
+import { createPageState, applyModelEdit, closeAction, dirtyFields, modelEditTarget, normalizeModels, noteCredentialChange, openAction, selectTab, setActionField, setField, sidebarVendorOf, toggleExpanded, vendorCardKinds, type AccountAction, type ModelEdit, type PageState, type VendorSnapshot } from "./page-state";
 import type { LoginView } from "./account-card";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
@@ -47,8 +48,12 @@ export interface ClientSeamContext {
   remote?: unknown;
   inject?(names: readonly string[], callback: (scoped: ClientSeamContext) => unknown): unknown;
   effect?(callback: () => (() => void) | void, label?: string): unknown;
+  /** cordis 的服务读取（旧插件用 `ctx.get("layout")` 拿面板服务）。 */
+  get?(name: string): unknown;
+  /** 插槽服务（`sidebar.footer.action` 等插槽由它注册）。 */
+  slots?: unknown;
   /** 中栏面板（仪表盘）的宿主入口，T9 使用。 */
-  layout?: { selectPanel?(panel: string): unknown };
+  layout?: { selectPanel?(panel: string | null): unknown };
 }
 
 /** 取 `ctx.remote`；形状不认识时返回 `undefined`（调用方一律按「远程不可用」降级）。 */
@@ -112,14 +117,19 @@ export function subscribeCredentials(ctx: ClientSeamContext, listener: () => voi
 
 /**
  * 打开中栏面板（仪表盘，T9）。
+ *
+ * 两种形状都认：旧插件用的是 `ctx.get("layout")?.selectPanel(id)`
+ * （`@mars-sea/dsh-commandcode-provider/lib/client.js:9122`），而 1a 的假设文档里写的是
+ * `ctx.layout.selectPanel`。先试服务读取，再回落到属性访问。
  * @param ctx - 客户端上下文。
- * @param panel - 面板标识。
+ * @param panel - 面板标识；`null` 表示关闭面板。
  * @returns 是否真的打开了（宿主没有这个接缝时为 `false`，调用方可据此降级）。
  */
-export function selectPanel(ctx: ClientSeamContext, panel: string): boolean {
-  const select = ctx.layout?.selectPanel;
-  if (typeof select !== "function") return false;
-  select.call(ctx.layout, panel);
+export function selectPanel(ctx: ClientSeamContext, panel: string | null): boolean {
+  const fromService = typeof ctx.get === "function" ? ctx.get("layout") : undefined;
+  const layout = (fromService ?? ctx.layout) as { selectPanel?: (value: string | null) => unknown } | undefined;
+  if (layout === undefined || typeof layout.selectPanel !== "function") return false;
+  layout.selectPanel(panel);
   return true;
 }
 
@@ -284,6 +294,8 @@ export interface ConnectedPageOptions {
   ctx: ClientSeamContext;
   /** 取词函数；缺省按 `zh` 的本地字典（宿主 locale 绑定由 `shell.ts` 负责）。 */
   t?: (key: string) => string;
+  /** 页面文案命名空间（侧边栏卡片的 `locale` 用它）。 */
+  localeNs?: string;
   /**
    * 该厂商的专属卡片（账户卡片、模型卡片……）。T5–T7 从这里注入。
    *
@@ -428,6 +440,28 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       return () => clearInterval(timer);
     }, [usage, waitingVendors.join(",")]);
 
+    // 侧边栏额度卡片：只有**已存储**的开关为真才注册（默认关闭、关闭时零后台查询）。
+    // 判定是纯函数 `sidebarVendorOf`/`sidebarQuotaEnabled`（草稿把开关拨开不算，见那里的文档）。
+    const sidebarVendor = sidebarVendorOf(entries, state.snapshots);
+    const sidebarVendorId = sidebarVendor?.providerId;
+    useEffect(() => {
+      if (sidebarVendorId === undefined) return;
+      const component = createSidebarCardView({
+        ctx,
+        vendor: sidebarVendorId,
+        t,
+        onOpen: () => {
+          selectPanel(ctx, DASHBOARD_PANEL_ID);
+        },
+      });
+      return registerSidebarCard(ctx, {
+        id: SIDEBAR_CARD_ID,
+        order: 1,
+        locale: options.localeNs ?? "settings.llm-account",
+        component,
+      });
+    }, [sidebarVendorId]);
+
     const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
     const activeVendor = activeEntry?.providerId;
 
@@ -563,6 +597,242 @@ function modelCardContext(input: {
       if (edit.kind === "add") input.setDraft("");
     },
   };
+}
+
+/** 侧边栏底部卡片的插槽名（旧插件 `lib/client.js:9141` 用的就是它）。 */
+export const SIDEBAR_SLOT = "sidebar.footer.action";
+
+/** 侧边栏卡片的注册参数。 */
+export interface SidebarCardRegistration {
+  /** 该厂商 id（插槽里的稳定身份）。 */
+  id: string;
+  /** 同一插槽内的排序。 */
+  order: number;
+  /** 文案命名空间。 */
+  locale: string;
+  /** 要注册的组件。 */
+  component: unknown;
+  /** `inject` 工厂（旧插件的形状是返回 `{ hooks, ...回调 }`）。 */
+  face?: () => Record<string, unknown>;
+}
+
+/**
+ * 把侧边栏卡片注册进 `sidebar.footer.action`。
+ *
+ * 形状逐字对齐旧插件（`@mars-sea/dsh-commandcode-provider/lib/client.js:9139-9151`）：
+ * `ctx.inject(["layout"], layoutCtx => layoutCtx.slots.inject(SLOT, () => layoutCtx.slots.register({…}, C)))`，
+ * 并且**用 try/catch 包住** —— 旧插件在那里打印一行错误就继续（注册失败不该把整个客户端带走）。
+ * @param ctx - 客户端上下文。
+ * @param registration - 注册参数。
+ * @returns 注销函数；没注册成功时是空操作。
+ */
+export function registerSidebarCard(ctx: ClientSeamContext, registration: SidebarCardRegistration): () => void {
+  const inject = ctx.inject;
+  if (typeof inject !== "function") return () => undefined;
+  let dispose: (() => void) | undefined;
+  inject(["layout"], (layoutCtx: ClientSeamContext) => {
+    try {
+      const slots = slotsOf(layoutCtx);
+      if (slots === undefined) return;
+      slots.inject(SIDEBAR_SLOT, () =>
+        slots.register(
+          {
+            name: SIDEBAR_SLOT,
+            id: registration.id,
+            order: registration.order,
+            locale: registration.locale,
+            inject: registration.face ?? (() => ({ hooks: {} })),
+          },
+          registration.component,
+        ),
+      );
+      // 插槽服务不返回注销句柄，所以退订走 `ctx.effect` 的语义：由调用方在 effect 里登记本函数。
+      dispose = () => undefined;
+    } catch (error) {
+      // 与旧插件同一处置：留一行错误，不让整个客户端因为一次注册失败而失效。
+      console.error("[dsh-llm-account] could not register the sidebar footer card:", error);
+    }
+  });
+  return () => dispose?.();
+}
+
+/** 读一个上下文上的插槽服务。 */
+function slotsOf(ctx: ClientSeamContext): { inject(name: string, callback: () => unknown): unknown; register(entry: object, component: unknown): unknown } | undefined {
+  const slots = (ctx as unknown as { slots?: unknown }).slots;
+  if (typeof slots !== "object" || slots === null) return undefined;
+  const candidate = slots as { inject?: unknown; register?: unknown };
+  if (typeof candidate.inject !== "function" || typeof candidate.register !== "function") return undefined;
+  return candidate as { inject(name: string, callback: () => unknown): unknown; register(entry: object, component: unknown): unknown };
+}
+
+/**
+ * 侧边栏卡片的生命周期控制器（**不依赖 React**，因此可完整单测）。
+ *
+ * 它存在的理由正是本任务的两条硬要求：
+ * 1. **默认关闭、关闭时零后台查询**：没开启就不注册、不读额度、不起定时器；
+ * 2. **轮询与卡片挂载绑定**：开启时注册并起轮询、关闭或卸载即停（`dispose`）。
+ *
+ * 关掉开关必须把**已注册的卡片撤下来**（否则侧边栏还挂着一个不再更新的卡片）。
+ */
+export interface SidebarCardController {
+  /** 按当前开关同步注册与轮询；返回同步后是否处于注册状态。 */
+  sync(enabled: boolean): boolean;
+  /** 当前是否已注册。 */
+  registered(): boolean;
+  /** 当前是否有轮询在跑。 */
+  polling(): boolean;
+  /**
+   * 手动刷新一次（`visibilitychange` 恢复时调用）。
+   * **关闭状态下什么都不做** —— 这正是「关闭时不后台刷新」在可见性恢复这条路径上的落点。
+   */
+  refreshIfEnabled(): void;
+  /** 卸载：停轮询 + 撤注册。 */
+  dispose(): void;
+}
+
+/** 侧边栏卡片的轮询间隔（毫秒）。与旧插件一样按需起停，不做常驻。 */
+export const SIDEBAR_POLL_MS = 60_000;
+
+/**
+ * 造侧边栏卡片控制器。
+ * @param deps - 注册/注销、一次读取与轮询间隔。
+ * @returns 控制器。
+ */
+export function createSidebarCardController(deps: {
+  register: () => () => void;
+  load: () => void;
+  intervalMs?: number;
+}): SidebarCardController {
+  const intervalMs = deps.intervalMs ?? SIDEBAR_POLL_MS;
+  let unregister: (() => void) | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+
+  const stopPolling = (): void => {
+    if (timer === undefined) return;
+    clearInterval(timer);
+    timer = undefined;
+  };
+
+  return {
+    sync(enabled: boolean): boolean {
+      if (!enabled) {
+        stopPolling();
+        unregister?.();
+        unregister = undefined;
+        return false;
+      }
+      if (unregister === undefined) {
+        unregister = deps.register();
+        // 开启的那一刻先读一次：否则要等一个轮询周期才有数字。
+        deps.load();
+        timer = setInterval(() => deps.load(), intervalMs);
+      }
+      return true;
+    },
+    registered: () => unregister !== undefined,
+    polling: () => timer !== undefined,
+    refreshIfEnabled(): void {
+      if (unregister === undefined) return;
+      deps.load();
+    },
+    dispose(): void {
+      stopPolling();
+      unregister?.();
+      unregister = undefined;
+    },
+  };
+}
+
+/** 中栏仪表盘的面板 id（`layout.selectPanel` 用它打开/关闭）。 */
+export const DASHBOARD_PANEL_ID = "llm-account-dashboard";
+
+/** 侧边栏卡片在插槽里的注册参数。 */
+export const SIDEBAR_CARD_ID = "llm-account-quota";
+
+/**
+ * 造**侧边栏卡片的容器组件**：自己读状态、自己轮询，轮询随挂载起停。
+ *
+ * 为什么轮询放在组件里而不是页面容器里：插槽组件是**另一个 React 根**，读不到设置页容器的
+ * state。规格 §8.1 第 6 条要求「轮询随卡片生命周期起停」，所以卡片自己持有控制器最自然 ——
+ * 卸载即停，关闭开关时页面容器会把注册撤掉（连同组件一起卸载）。
+ *
+ * 这里用 Hook（与设置页容器同样的自觉取舍，Ruling 22）：全部判定都在
+ * `createSidebarCardController` 与 `sidebarVendorOf` 里，那些都有单测。
+ * @param options - 上下文、要显示哪一家、取词函数与「打开仪表盘」的动作。
+ * @returns 一个 React 函数组件。
+ */
+export function createSidebarCardView(options: {
+  ctx: ClientSeamContext;
+  vendor: string;
+  t: (key: string) => string;
+  onOpen: () => void;
+  intervalMs?: number;
+}): () => ReactElement {
+  const { ctx, vendor, t } = options;
+  return function ConnectedSidebarCard(): ReactElement {
+    const [status, setStatus] = useState<VendorUsageStatus | undefined>(undefined);
+
+    useEffect(() => {
+      // 注册由页面容器负责（它掌握「已存储的开关」）；这里只负责轮询的生命周期。
+      const controller = createSidebarCardController({
+        register: () => () => undefined,
+        load: () => {
+          const usage = usageNamespaceOf(ctx);
+          if (usage === undefined) return;
+          void readStatus(usage, vendor).then((next) => {
+            if (next !== undefined) setStatus(next);
+          });
+        },
+        ...(options.intervalMs === undefined ? {} : { intervalMs: options.intervalMs }),
+      });
+      controller.sync(true);
+      const onVisible = (): void => {
+        // 只有真的可见时才刷新（`document` 缺席时这个监听根本不会注册）。
+        const dom = domDocument();
+        if (dom?.visibilityState === "visible") controller.refreshIfEnabled();
+      };
+      const dom = domDocument();
+      if (typeof dom?.addEventListener === "function") dom.addEventListener("visibilitychange", onVisible);
+      return () => {
+        const current = domDocument();
+        if (typeof current?.removeEventListener === "function") current.removeEventListener("visibilitychange", onVisible);
+        controller.dispose();
+      };
+    }, []);
+
+    return SidebarCard({ t, status, onOpen: () => options.onOpen() });
+  };
+}
+
+/**
+ * 读浏览器的 `document`。
+ *
+ * tsconfig 的 `lib` 里**没有** DOM（刻意的：宿主侧代码不该用 DOM API），所以这里做一次窄化读取，
+ * 而不是给整个工程加 `DOM`。非浏览器环境（测试、SSR）拿到 `undefined`，调用方据此跳过。
+ * @returns 只含本模块用到的两个方法的形状。
+ */
+function domDocument():
+  | {
+      visibilityState?: string;
+      addEventListener?: (type: string, listener: () => void) => void;
+      removeEventListener?: (type: string, listener: () => void) => void;
+    }
+  | undefined {
+  return (globalThis as { document?: ReturnType<typeof domDocument> }).document;
+}
+
+/**
+ * 读当前已挂载的远程命名空间。
+ *
+ * 卡片容器是独立组件，拿不到设置页容器 state 里的那份 —— 所以从上下文里现取（挂载完成后由
+ * Gateway 提供，见 `mountUsageRemote`）。
+ * @param ctx - 客户端上下文。
+ * @returns 命名空间；还没挂上时为 `undefined`。
+ */
+function usageNamespaceOf(ctx: ClientSeamContext): UsageNamespace | undefined {
+  const remote = remoteOf(ctx);
+  const namespace = remote?.[USAGE_NAMESPACE];
+  return typeof namespace === "object" && namespace !== null ? (namespace as UsageNamespace) : undefined;
 }
 
 /** 把刚保存的字段并进快照（乐观更新本地基线，避免再读一次宿主）。 */

@@ -317,6 +317,36 @@ export function normalizeModels(value: unknown): string[] {
 }
 
 /**
+ * 侧边栏额度卡片是否开启。
+ *
+ * **只读已存储的设置文档**（`snapshots[ns].value`），不看草稿 —— 旧插件的同一判定写得很清楚
+ * （`@mars-sea/dsh-commandcode-provider/lib/client.js:7331-7334`）：「an unsaved draft cannot show
+ * the card」。用 `fieldValue` 会把草稿也算进来，于是用户刚拨动开关（还没保存）卡片就亮了，
+ * 而宿主其实还没落盘 —— 那正是「关闭时不后台刷新」要防的状态。
+ * @param storedValue - 该厂商设置文档的当前值（不是草稿）。
+ * @returns 是否开启（只有显式 `true` 才算）。
+ */
+export function sidebarQuotaEnabled(storedValue: Record<string, unknown> | undefined): boolean {
+  return storedValue?.[SIDEBAR_TOGGLE_KEY] === true;
+}
+
+/**
+ * 侧边栏卡片该显示哪一家。
+ *
+ * 插槽只有一个，而开关是按厂商存的：取**第一个**开启的厂商（按标签页顺序），确定性且可解释。
+ * 两家都开时另一家的额度仍在各自的设置页标签页里看得到。
+ * @param entries - 注册表里的厂商声明（已按页面顺序排列）。
+ * @param snapshots - 各厂商的设置文档。
+ * @returns 要显示的厂商；没有开启的厂商时为 `undefined`（此时**不注册卡片**）。
+ */
+export function sidebarVendorOf(
+  entries: readonly VendorEntry[],
+  snapshots: Readonly<Record<string, VendorSnapshot>>,
+): VendorEntry | undefined {
+  return entries.find((entry) => sidebarQuotaEnabled(snapshots[entry.ns]?.value));
+}
+
+/**
  * 该厂商要渲染哪些专属卡片，顺序即规格 §8 的卡片顺序（账户卡片 → 模型卡片）。
  *
  * 单独成函数：`index.ts` 的接线不参与单测（Ruling 22），而「厂商不支持的卡片不渲染」是计划
