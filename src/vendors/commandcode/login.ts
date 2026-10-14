@@ -88,7 +88,30 @@ export type CommandCodeLoginReason =
   | "invalid-key"
   | "network"
   | "error"
-  | "unavailable";
+  | "unavailable"
+  /** 目标凭据槽已被**另一个**账号占用：拒绝写入，绝不静默覆盖（Task 5 Step 7）。 */
+  | "credential-slot-taken";
+
+/**
+ * 目标凭据槽已被另一个账号占用。
+ *
+ * 由装配层注入的 `storeKey` 抛出：它比本模块更清楚账号表里都有谁。本模块只负责把它翻译成一个
+ * **可指名**的失败原因，而不是含糊的 `unavailable` —— 用户需要知道「为什么登录完了却没生效」，
+ * 以及该怎么办（改名/移除那个账号，或从「添加账户」手动新建）。
+ */
+export class CredentialSlotTakenError extends Error {
+  /**
+   * @param ref - 被占用的凭据槽。
+   * @param holderLabel - 占用者的展示名称。
+   */
+  constructor(
+    readonly ref: string,
+    readonly holderLabel: string,
+  ) {
+    super(`credential slot "${ref}" is already used by account "${holderLabel}"`);
+    this.name = "CredentialSlotTakenError";
+  }
+}
 
 /**
  * 网页登录端口的依赖。全部由装配层注入，本模块不认识宿主 `ctx`（控制器补充 4）。
@@ -107,8 +130,12 @@ export interface CommandCodeLoginDeps {
   /**
    * 凭据落库。ref 由本模块按 `userName` 推导（ref 标识空间，Global Constraints），
    * key 是 Studio 交付、已通过 `whoami` 验证的密钥；本模块从不写设置文档。
+   *
+   * 第三个参数是登录返回的**用户名**：装配层要用它判断「这个 ref 是不是已经属于另一个账号」
+   * （Task 5 Step 7）。占用时抛 {@link CredentialSlotTakenError}，那次登录结算为
+   * `credential-slot-taken` —— **不得静默覆盖**别人的凭据槽。
    */
-  storeKey: (ref: string, key: string) => Promise<void>;
+  storeKey: (ref: string, key: string, userName: string) => Promise<void>;
 }
 
 /** 登录端口 + 状态查询里需要的只读事实。 */
@@ -650,9 +677,12 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
       return;
     }
     try {
-      await this.#deps.storeKey(accountRef(VENDOR, credentials.userName), credentials.apiKey);
-    } catch {
-      await this.#settleTerminal(attempt, { state: "failed", reason: "unavailable" });
+      await this.#deps.storeKey(accountRef(VENDOR, credentials.userName), credentials.apiKey, credentials.userName);
+    } catch (error) {
+      // 撞名是**用户能懂、也需要用户处置**的失败：给出自己的原因键，不要混进 `unavailable`。
+      const reason: CommandCodeLoginReason =
+        error instanceof CredentialSlotTakenError ? "credential-slot-taken" : "unavailable";
+      await this.#settleTerminal(attempt, { state: "failed", reason });
       return;
     }
     await this.#settleTerminal(attempt, { state: "success" });

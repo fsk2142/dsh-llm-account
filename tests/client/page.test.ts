@@ -13,15 +13,19 @@ import { COPY, dictionaryOf, missingCopyKeys } from "../../src/client/copy";
 import { PageShell } from "../../src/client/page";
 import {
   cardGroupsOf,
+  closeAction,
   createPageState,
   dirtyFields,
   fieldValue,
   fieldsOf,
   isDirty,
   noteCredentialChange,
+  openAction,
   selectTab,
+  setActionField,
   setField,
   sidebarToggleField,
+  toggleExpanded,
   type PageState,
   type VendorSnapshot,
 } from "../../src/client/page-state";
@@ -184,6 +188,51 @@ it("凭据变更推送到达时刷新计数（「已配置」徽标的刷新依�
   // 新状态对象：靠引用变化触发重渲染，而不是就地改。
   expect(after).not.toBe(before);
   expect(after.tabs).toBe(before.tabs);
+});
+
+// —— Task 5：账户操作草稿（卡片受控，值住在这里） ——
+
+it("账户操作草稿：打开、改字段、取消各自独立；重复打开同一目标不重置输入", () => {
+  let state = createPageState(VENDORS, SNAPSHOTS);
+  expect(state.action).toBeUndefined();
+
+  state = openAction(state, { kind: "key", ref: "a" });
+  expect(state.action).toEqual({ kind: "key", ref: "a", label: "", key: "" });
+  state = setActionField(state, "key", "sk-1");
+  expect(state.action).toMatchObject({ kind: "key", key: "sk-1" });
+
+  // 重复打开同一目标：不把已经输入的密钥清掉（幂等）。
+  expect(openAction(state, { kind: "key", ref: "a" })).toBe(state);
+  // 打开另一个目标：换成新草稿。
+  const renamed = openAction(state, { kind: "rename", ref: "a" });
+  expect(renamed.action).toEqual({ kind: "rename", ref: "a", label: "", key: "" });
+
+  // 取消：草稿消失；再取消是恒等变换。
+  const closed = closeAction(renamed);
+  expect(closed.action).toBeUndefined();
+  expect(closeAction(closed)).toBe(closed);
+  // 没有草稿时改字段是恒等变换（不会凭空造出一个操作）。
+  expect(setActionField(closed, "label", "x")).toBe(closed);
+});
+
+it("账户操作草稿活过设置快照刷新（重读设置不丢用户输入）", () => {
+  let state = setActionField(openAction(createPageState(VENDORS, SNAPSHOTS), { kind: "add" }), "label", "work");
+  state = setActionField(state, "key", "sk-1");
+
+  const refreshed = createPageState(VENDORS, [{ ns: "llm-commandcode", value: { apiBase: "https://z" }, revision: 9 }], state);
+  expect(refreshed.action).toEqual({ kind: "add", label: "work", key: "sk-1" });
+  expect(refreshed.snapshots["llm-commandcode"]?.revision).toBe(9);
+});
+
+it("展开报告是单选的：展开另一个账号会收起前一个", () => {
+  let state = createPageState(VENDORS, SNAPSHOTS);
+  expect(state.expandedRef).toBeUndefined();
+  state = toggleExpanded(state, "a");
+  expect(state.expandedRef).toBe("a");
+  state = toggleExpanded(state, "b");
+  expect(state.expandedRef).toBe("b");
+  state = toggleExpanded(state, "b");
+  expect(state.expandedRef).toBeUndefined();
 });
 
 // —— 文案 ——

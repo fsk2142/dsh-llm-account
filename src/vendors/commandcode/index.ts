@@ -27,7 +27,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
-import type { AccountPort, AccountState, CredentialPort, ModelRule, QuotaPort } from "../../core/adapter";
+import type { AccountPort, AccountState, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
 import { CREDENTIAL_REF_PATTERN } from "../../core/accounts";
 import { normalizeKey, pickApiKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
@@ -54,7 +54,7 @@ import {
 } from "./accounts";
 import { createCommandCodeAdapter } from "./adapter";
 import type { CommandCodeAdapterDeps, CommandCodeConfig } from "./adapter";
-import { createCommandCodeLogin } from "./login";
+import { createCommandCodeLogin, CredentialSlotTakenError } from "./login";
 import type { CommandCodeLogin } from "./login";
 import { DEFAULT_API_BASE } from "./protocol";
 import type { CommandCodeProtocol } from "./protocol";
@@ -132,6 +132,8 @@ export interface CommandCodeBundle {
   readonly settingsNs: string;
   /** 注册到宿主路由的适配器实例。 */
   readonly adapter: LlmAdapter;
+  /** 能力声明（规格 §7.3）：宿主公开这套声明，页面据此降级。 */
+  readonly capabilities: VendorCapabilities;
   /** 轮换引擎读取口（账号库状态变了就换引擎）。 */
   readonly rotation: RotationAccess;
   /** 该设置命名空间唯一的意图日志。 */
@@ -168,6 +170,20 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   const rotation = createRotationAccess(() => accountStateOf(document()));
   warnAboutActiveAccount(document(), warn);
 
+  /**
+   * 能力声明（规格 §7.3 的矩阵）：UI 据此隐藏或置灰控件。**唯一来源在宿主侧**，
+   * 经远程 `status()` 发布给页面（客户端不各写一份，否则两边迟早不一致）。
+   */
+  const capabilities: VendorCapabilities = {
+    reorder: false,
+    pin: true,
+    browserLogin: true,
+    modelAccountRules: true,
+    quotaShape: "windows",
+    modelVisibilityWrite: "onSave",
+    automaticSwitch: true,
+  };
+
   /** 额度端口：每次读数都用当时的配置（`apiBase` 是构造参数，跟着现读的配置走）。 */
   const quota: QuotaPort = {
     async snapshot() {
@@ -200,7 +216,18 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     fetchImpl: fetch,
     // 登录端口的基地址是构造期参数：本期只构造，跟随 volatile 变更留给计划 1b 的远程页。
     apiBase: normalizeKey(document().apiBase) ?? DEFAULT_API_BASE,
-    storeKey: (ref, key) => credentials.set(ref, key),
+    // Task 5 Step 7（第 1a 期交接项）：登录的 ref 由 userName 推导，**可能与既有账号的凭据槽
+    // 撞名**。撞名时必须拒绝并给出可读原因，**绝不静默覆盖**别人的凭据槽。
+    // 判定用账号端口的 `list()`（它包含合成的默认槽，与页面看到的是同一份视图）：
+    // 该 ref 已属于某个账号、而那个账号的名字与登录用户名不同 → 拒绝。
+    // 同名（或名字就是 ref 本身）视为**同一账号的重新登录**，允许刷新密钥。
+    storeKey: async (ref, key, userName) => {
+      const holder = (await accounts.list()).find((view) => view.ref === ref);
+      if (holder !== undefined && !sameAccountName(holder.label, userName)) {
+        throw new CredentialSlotTakenError(ref, holder.label);
+      }
+      await credentials.set(ref, key);
+    },
   });
   ctx.effect(
     () => () => {
@@ -227,12 +254,15 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     quota,
     pinnedRef: () => pinnedRefOf(document()),
     quotaRef: () => selectedRefOf(document()),
+    capabilities,
+    // 网页登录端口（Task 5）：账户卡片的登录入口经远程调用它。
+    login,
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
   disableSettingsAutoForm(ctx, COMMAND_CODE_SETTINGS_NS);
 
-  return { providerId: PROVIDER_ID, settingsNs: COMMAND_CODE_SETTINGS_NS, adapter, rotation, intents, accounts, credentials, quota, login };
+  return { providerId: PROVIDER_ID, settingsNs: COMMAND_CODE_SETTINGS_NS, capabilities, adapter, rotation, intents, accounts, credentials, quota, login };
 }
 
 /**
@@ -372,6 +402,20 @@ function pinnedRefOf(document: Record<string, unknown>): string | null {
 /** 额度读数报告的账号：固定账号优先，否则顺序里的第一个（下一个请求会用的那个）。 */
 function selectedRefOf(document: Record<string, unknown>): string | undefined {
   return pinnedRefOf(document) ?? orderOf(document)[0];
+}
+
+/**
+ * 「这个名字属于同一个账号吗」：忽略大小写与首尾空白。
+ *
+ * 判定刻意**保守**：只有明显同名才允许覆盖凭据槽（同名 = 同一个 Command Code 账号的重新登录）；
+ * 名字不同的都拒绝。拒绝的代价是用户手动处置一次；静默覆盖的代价是把别人的密钥冲掉，
+ * 而密钥冲掉是找不回来的。
+ * @param label - 账号表里那一行的展示名称。
+ * @param userName - 登录流程返回的用户名。
+ * @returns 是否视为同一账号。
+ */
+function sameAccountName(label: string, userName: string): boolean {
+  return label.trim().toLowerCase() === userName.trim().toLowerCase();
 }
 
 /** 应用期诊断：认不出的 `activeAccount` 只在这里说一次（现读路径按自动轮换处理）。 */

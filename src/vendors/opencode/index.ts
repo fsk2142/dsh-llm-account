@@ -50,7 +50,7 @@ declare module "@deepseek-ai/cordis" {
   }
 }
 
-import type { AccountPort, AccountState, CredentialPort, QuotaPort } from "../../core/adapter";
+import type { AccountPort, AccountState, CredentialPort, QuotaPort, VendorCapabilities } from "../../core/adapter";
 import { CREDENTIAL_REF_PATTERN } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
@@ -162,6 +162,8 @@ export interface OpencodeBundle {
   readonly providerId: string;
   /** `core` 侧的固定命名空间（不是 profile 行 id）。 */
   readonly settingsNs: string;
+  /** 能力声明（规格 §7.3）：宿主公开这套声明，页面据此降级。 */
+  readonly capabilities: VendorCapabilities;
   /** 适配器实例（`enabled: false` 时构造但**不**注册到宿主路由）。 */
   readonly adapter: LlmAdapter;
   /** 轮换引擎读取口（账号库状态变了就换引擎）。 */
@@ -196,6 +198,21 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
   );
   const accounts = createOpencodeAccounts({ settings, credentials, intents });
   const rotation = createRotationAccess(() => accountStateOf(document()));
+
+  /**
+   * 能力声明（规格 §7.3 的矩阵）：UI 据此隐藏或置灰控件。**唯一来源在宿主侧**，
+   * 经远程 `status()` 发布给页面（客户端不各写一份，否则两边迟早不一致）。
+   */
+  const capabilities: VendorCapabilities = {
+    reorder: true,
+    // OpenCode 的「当前账号」由 `select` 改写顶层 `apiKeyEnv`，没有独立的「固定」概念。
+    pin: false,
+    browserLogin: false,
+    modelAccountRules: false,
+    quotaShape: "percent",
+    modelVisibilityWrite: "immediate",
+    automaticSwitch: true,
+  };
 
   /** 额度端口：每次读数都用当时的配置（`apiBase` 是构造参数，跟着现读的配置走）。 */
   const quota: QuotaPort = {
@@ -271,12 +288,13 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     quota,
     pinnedRef: () => pinnedRefOf(document()),
     quotaRef: () => selectedRefOf(document()),
+    capabilities,
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
   disableSettingsAutoForm(ctx, OPENCODE_SETTINGS_NS);
 
-  return { providerId: PROVIDER_ID, settingsNs: OPENCODE_SETTINGS_NS, adapter, rotation, intents, accounts, credentials, quota };
+  return { providerId: PROVIDER_ID, settingsNs: OPENCODE_SETTINGS_NS, capabilities, adapter, rotation, intents, accounts, credentials, quota };
 }
 
 /**

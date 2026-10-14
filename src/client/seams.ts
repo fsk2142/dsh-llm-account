@@ -20,18 +20,11 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 import { dictionaryOf } from "./copy";
-import { createPageState, dirtyFields, noteCredentialChange, selectTab, setField, type PageState, type VendorSnapshot } from "./page-state";
+import { createPageState, closeAction, dirtyFields, noteCredentialChange, openAction, selectTab, setActionField, setField, toggleExpanded, type AccountAction, type PageState, type VendorSnapshot } from "./page-state";
+import type { LoginView } from "./account-card";
 import { PageShell } from "./page";
 import type { VendorEntry } from "./registry";
-import {
-  USAGE_NAMESPACE,
-  USAGE_PACKAGE,
-  usageDescriptors,
-  type AccountView,
-  type SwitchRecord,
-  type UsageNamespace,
-  type VendorUsageStatus,
-} from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type SwitchRecord, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
 
 /** 一个「设置命名空间」在客户端看到的面（`remote.settings`）。 */
 export interface RemoteSettings {
@@ -252,6 +245,38 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
   };
 }
 
+/**
+ * 把一次账户操作草稿翻译成一次远程调用。
+ *
+ * 为什么单独成函数：**哪个操作调哪个方法**、以及「空名称/空密钥不提交」这类判定都属于
+ * 会出错的地方，而容器组件（唯一的 Hook 宿主）不参与单测（Ruling 22）。放在这里就能被测到。
+ * @param usage - 已挂载的远程命名空间；还没挂上时为 `undefined`。
+ * @param vendor - 厂商 id。
+ * @param action - `page-state.ts` 里的操作草稿。
+ * @returns 远程调用；不可用或输入不合法时为 `undefined`（调用方据此不关草稿）。
+ */
+export function dispatchAccountAction(
+  usage: UsageNamespace | undefined,
+  vendor: string,
+  action: AccountAction,
+): Promise<unknown> | undefined {
+  if (usage === undefined) return undefined;
+  switch (action.kind) {
+    case "add": {
+      // 空名称不提交（宿主会拒绝，但我们先不发这次调用）。
+      if (action.label.trim() === "") return undefined;
+      return usage.addAccount(vendor, action.key.trim() === "" ? { label: action.label } : { label: action.label, key: action.key });
+    }
+    case "rename":
+      if (action.ref === undefined || action.label.trim() === "") return undefined;
+      return usage.renameAccount(vendor, action.ref, action.label);
+    case "key":
+      // 空密钥不提交：那等于把账号的密钥清掉，用户不会想用这个方式做。
+      if (action.ref === undefined || action.key.trim() === "") return undefined;
+      return usage.replaceKey(vendor, action.ref, action.key);
+  }
+}
+
 /** 页面容器的参数。 */
 export interface ConnectedPageOptions {
   entries: readonly VendorEntry[];
@@ -261,20 +286,60 @@ export interface ConnectedPageOptions {
   /**
    * 该厂商的专属卡片（账户卡片、模型卡片……）。T5–T7 从这里注入。
    *
-   * 容器负责把**当前可用的远程命名空间**交给它：挂载是异步的，所以卡片必须能接受
-   * 「还没有命名空间」这个状态并自己降级，而不是在挂载完成前崩掉。
-   * @param ns - 厂商的设置命名空间。
-   * @param usage - 已挂载的远程命名空间；还没挂上时为 `undefined`。
+   * 容器把「当前可用的远程命名空间 + 页面状态里与卡片有关的那些字段 + 一组回调」交给它：
+   * 卡片自己是纯函数（Ruling 22），所以状态与回调必须由容器递进来。
    */
-  renderVendorCards?: (ns: string, usage: UsageNamespace | undefined) => ReactNode;
+  renderVendorCards?: (context: VendorCardsContext) => ReactNode;
 }
 
+/** 交给专属卡片的一切：数据 + 状态切片 + 回调。 */
+export interface VendorCardsContext {
+  /** 厂商的设置命名空间。 */
+  ns: string;
+  /** 该厂商的远程 id（`commandcode` / `dsh-opencode-go`）。 */
+  vendor: string;
+  /** 已挂载的远程命名空间；还没挂上时为 `undefined`（卡片必须自己降级）。 */
+  usage: UsageNamespace | undefined;
+  /** 该厂商最新的状态（生效账号、账号行、额度摘要）；还没读到时为 `undefined`。 */
+  status: VendorUsageStatus | undefined;
+  t: (key: string) => string;
+  /** 正在进行的账户操作草稿。 */
+  action: AccountAction | undefined;
+  /** 展开完整报告的账号。 */
+  expandedRef: string | undefined;
+  /** 该厂商的登录状态（没有登录入口的厂商为 `undefined`）。 */
+  login: LoginView | undefined;
+  openAction: (action: { kind: AccountAction["kind"]; ref?: string }) => void;
+  setActionField: (field: "label" | "key", value: string) => void;
+  confirmAction: () => void;
+  cancelAction: () => void;
+  toggleExpand: (ref: string) => void;
+  select: (ref: string | null) => void;
+  remove: (ref: string) => void;
+  loginBegin: () => void;
+}
+
+/** 登录轮询间隔（毫秒）。等待授权时的轮询是**唯一的**后台请求来源，且随状态起停。 */
+export const LOGIN_POLL_MS = 1_000;
+
 /**
- * 造**容器组件**：持有页面状态、挂载远程面、订阅宿主推送、把回调接上，然后渲染 `PageShell`。
+ * 是否继续轮询登录状态：只有 `waiting` 才需要（其余状态是终态或还没开始）。
  *
- * 这是本层唯一使用 Hook 的地方，刻意做得极薄：所有判定都在 `page-state.ts`（纯函数、完整单测），
- * 这里只负责「状态放哪、什么时候重新读」。因此它**不参与单测**（测试用的 React 替身会把 Hook
- * 调用判为失败）—— 这是自觉的取舍，1c 的真机渲染是它的验证。
+ * 单独成函数是为了能被单测：容器里的定时器本身不参与单测（Ruling 22），但「什么时候该继续
+ * 问」是会出错的地方，而且它关系到「不做无谓的后台请求」这条要求。
+ * @param login - 当前登录状态。
+ * @returns 是否继续轮询。
+ */
+export function shouldPollLogin(login: LoginView | undefined): boolean {
+  return login?.state === "waiting";
+}
+
+/** 造**容器组件**：持有页面状态、挂载远程面、订阅宿主推送、把回调接上，然后渲染 `PageShell`。
+ *
+ * 这是本层唯一使用 Hook 的地方，刻意做得极薄：所有判定都在 `page-state.ts` / `dispatchAccountAction`
+ * / `shouldPollLogin` 里（纯函数、完整单测），这里只负责「状态放哪、什么时候重新读」。
+ * 因此它**不参与单测**（测试用的 React 替身会把 Hook 调用判为失败）—— 自觉的取舍，1c 的真机
+ * 渲染是它的验证。
  * @param options - 见 {@link ConnectedPageOptions}。
  * @returns 一个 React 函数组件。
  */
@@ -285,6 +350,10 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
   return function ConnectedPage(): ReactElement {
     const [state, setState] = useState<PageState>(() => createPageState(entries, []));
     const [usage, setUsage] = useState<UsageNamespace | undefined>(undefined);
+    const [logins, setLogins] = useState<Record<string, LoginView | undefined>>({});
+    const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
+    /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
+    const [accountRevision, setAccountRevision] = useState(0);
 
     useEffect(() => {
       let alive = true;
@@ -304,6 +373,36 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       };
     }, []);
 
+    // 读状态：远程面挂上时、凭据变更时、账户操作成功后各读一次。
+    // **不做常驻轮询**：规格 §8.1 第 6 条要的是「关闭即静默」，只有登录等待期才需要定时问（见下）。
+    useEffect(() => {
+      if (usage === undefined) return;
+      let alive = true;
+      for (const entry of entries) {
+        void readStatus(usage, entry.providerId).then((status) => {
+          if (alive && status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
+        });
+      }
+      return () => {
+        alive = false;
+      };
+    }, [usage, state.credentialRevision, accountRevision]);
+
+    // 登录轮询：只在等待授权时跑（规格 §8.1 第 6 条的「关闭即静默」精神 —— 没有等待就不问）。
+    const waitingVendors = entries.map((entry) => entry.providerId).filter((vendor) => shouldPollLogin(logins[vendor]));
+    useEffect(() => {
+      if (usage === undefined || waitingVendors.length === 0) return;
+      const timer = setInterval(() => {
+        for (const vendor of waitingVendors) {
+          void usage.loginStatus(vendor).then((status) => setLogins((current) => ({ ...current, [vendor]: status })));
+        }
+      }, LOGIN_POLL_MS);
+      return () => clearInterval(timer);
+    }, [usage, waitingVendors.join(",")]);
+
+    const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
+    const activeVendor = activeEntry?.providerId;
+
     return PageShell({
       state,
       entries,
@@ -318,9 +417,45 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           setState((current) => createPageState(entries, mergeSnapshot(current, ns, fields), current));
         });
       },
-      ...(options.renderVendorCards === undefined
+      ...(options.renderVendorCards === undefined || activeEntry === undefined || activeVendor === undefined
         ? {}
-        : { renderVendorCards: (ns: string) => options.renderVendorCards?.(ns, usage) }),
+        : {
+            renderVendorCards: (ns: string) =>
+              options.renderVendorCards?.({
+                ns,
+                vendor: activeVendor,
+                usage,
+                status: statuses[activeVendor],
+                t,
+                action: state.action,
+                expandedRef: state.expandedRef,
+                login: logins[activeVendor],
+                openAction: (action) => setState((current) => openAction(current, action)),
+                setActionField: (field, value) => setState((current) => setActionField(current, field, value)),
+                confirmAction: () => {
+                  // 派发判定在 `dispatchAccountAction` 里（可单测）；这里只负责「成了就关草稿并重读」。
+                  const pending = state.action === undefined ? undefined : dispatchAccountAction(usage, activeVendor, state.action);
+                  if (pending === undefined) return;
+                  void pending.then(() => {
+                    setState((current) => closeAction(current));
+                    setAccountRevision((current) => current + 1);
+                  });
+                },
+                cancelAction: () => setState((current) => closeAction(current)),
+                toggleExpand: (ref) => setState((current) => toggleExpanded(current, ref)),
+                select: (ref) => {
+                  void usage?.selectAccount(activeVendor, ref).then(() => setAccountRevision((current) => current + 1));
+                },
+                remove: (ref) => {
+                  void usage?.removeAccount(activeVendor, ref).then(() => setAccountRevision((current) => current + 1));
+                },
+                loginBegin: () => {
+                  void usage?.loginBegin(activeVendor).then((status) => {
+                    setLogins((current) => ({ ...current, [activeVendor]: status }));
+                  });
+                },
+              }),
+          }),
     });
   };
 }

@@ -12,7 +12,7 @@
 import { Context } from "@deepseek-ai/cordis";
 import { expect, it, vi } from "vitest";
 
-import type { AccountState, AccountView, QuotaSnapshot, VendorId } from "../../src/core/adapter";
+import type { AccountPort, AccountState, AccountView, LoginPort, QuotaSnapshot, VendorCapabilities, VendorId } from "../../src/core/adapter";
 import { RotationEngine } from "../../src/core/rotation";
 import type { RotationAccess } from "../../src/vendors/assembly";
 import {
@@ -45,23 +45,65 @@ function rotationAccessOf(engine: RotationEngine): RotationAccess {
   };
 }
 
+/** Command Code 的能力矩阵（规格 §7.3；与入口里的声明一致）。 */
+const COMMANDCODE_CAPABILITIES: VendorCapabilities = {
+  reorder: false,
+  pin: true,
+  browserLogin: true,
+  modelAccountRules: true,
+  quotaShape: "windows",
+  modelVisibilityWrite: "onSave",
+  automaticSwitch: true,
+};
+
+/** 假账号端口：`list` 给出固定视图，写操作只记录调用（不碰设置/凭据）。 */
+function fakeAccounts(views: AccountView[] = VIEWS): {
+  port: AccountPort;
+  calls: { method: string; args: unknown[] }[];
+} {
+  const calls: { method: string; args: unknown[] }[] = [];
+  const record =
+    (method: string) =>
+    (...args: unknown[]): void => {
+      calls.push({ method, args });
+    };
+  const port: AccountPort = {
+    list: async () => views.map((view) => ({ ...view })),
+    add: async (input) => {
+      calls.push({ method: "add", args: [input] });
+      return { ref: "new-ref", label: input.label, configured: input.key !== undefined, active: false };
+    },
+    rename: async (ref, label) => record("rename")(ref, label),
+    replaceKey: async (ref, key) => record("replaceKey")(ref, key),
+    remove: async (ref) => record("remove")(ref),
+    select: async (ref) => record("select")(ref),
+  };
+  return { port, calls };
+}
+
 /** 一个厂商的读口；未给的字段用上面的缺省夹具。 */
 function vendorDeps(options: {
   vendor: VendorId;
   engine?: RotationEngine;
   views?: AccountView[];
+  accounts?: AccountPort;
+  capabilities?: VendorCapabilities;
   snapshot?: () => Promise<QuotaSnapshot>;
   pinnedRef?: () => string | null;
   quotaRef?: () => string | undefined;
+  login?: LoginPort;
 }): UsageVendorDeps {
   const engine = options.engine ?? new RotationEngine({ order: ["a", "b"], pinned: null, rules: [] });
   return {
     vendor: options.vendor,
     rotation: rotationAccessOf(engine),
-    accounts: { list: async () => (options.views ?? VIEWS).map((view) => ({ ...view })) },
+    accounts: options.accounts ?? fakeAccounts(options.views).port,
     quota: { snapshot: options.snapshot ?? (async () => ({ ...SNAPSHOT, windows: [...SNAPSHOT.windows] })) },
+    // 能力声明：默认取 commandcode 的矩阵（`reorder: false`、`browserLogin: true`）。
+    capabilities: options.capabilities ?? COMMANDCODE_CAPABILITIES,
     pinnedRef: options.pinnedRef ?? (() => "a"),
     quotaRef: options.quotaRef ?? (() => "a"),
+    ...(options.login === undefined ? {} : { login: options.login }),
   };
 }
 
@@ -108,7 +150,19 @@ it("服务注册到固定键与命名空间，并登记三个远程方法", asyn
   };
   expect(contribution.package).toBe(USAGE_PACKAGE);
   expect(contribution.face).toBe("host");
-  expect(contribution.invocations.map((entry) => entry.method)).toEqual(["status", "accounts", "switches"]);
+  expect(contribution.invocations.map((entry) => entry.method)).toEqual([
+    "status",
+    "accounts",
+    "switches",
+    "addAccount",
+    "renameAccount",
+    "replaceKey",
+    "removeAccount",
+    "selectAccount",
+    "loginBegin",
+    "loginStatus",
+    "loginCancel",
+  ]);
   // 每个描述符都声明自己属于哪个服务与命名空间（旧插件同一形状）。
   for (const entry of contribution.invocations) {
     expect(entry.service).toBe(USAGE_SERVICE_KEY);
@@ -245,4 +299,57 @@ it("没有在跑的账号库（引擎为空）时 status 仍可用，只是没�
   const status = await service.status("commandcode");
   expect(status.accounts).toEqual([]);
   expect(status.effective).toBeUndefined();
+});
+
+// —— Task 5：账号操作与网页登录（账户卡片要用的写路径）——
+
+it("账号操作转发到该厂商的账号端口（参数原样，不自行加工）", async () => {
+  const accounts = fakeAccounts();
+  const { service } = await mount([vendorDeps({ vendor: "commandcode", accounts: accounts.port })]);
+
+  await expect(service.addAccount("commandcode", { label: "work", key: "sk-new" })).resolves.toMatchObject({
+    ref: "new-ref",
+    label: "work",
+  });
+  await service.renameAccount("commandcode", "a", "renamed");
+  await service.replaceKey("commandcode", "a", "sk-rotated");
+  await service.removeAccount("commandcode", "b");
+  await service.selectAccount("commandcode", "b");
+  await service.selectAccount("commandcode", null);
+
+  expect(accounts.calls).toEqual([
+    { method: "add", args: [{ label: "work", key: "sk-new" }] },
+    { method: "rename", args: ["a", "renamed"] },
+    { method: "replaceKey", args: ["a", "sk-rotated"] },
+    { method: "remove", args: ["b"] },
+    { method: "select", args: ["b"] },
+    { method: "select", args: [null] },
+  ]);
+});
+
+it("换密钥只走账号端口：远程面既不回显密钥，也不把它放进任何返回值", async () => {
+  const accounts = fakeAccounts();
+  const { service } = await mount([vendorDeps({ vendor: "commandcode", accounts: accounts.port })]);
+
+  const result = await service.replaceKey("commandcode", "a", "sk-secret-value");
+  expect(result).toBeUndefined();
+  // 端口拿到的是明文密钥（它必须交给凭据服务），但远程面的返回里没有它。
+  expect(JSON.stringify(result ?? null)).not.toContain("sk-secret-value");
+  expect(accounts.calls).toEqual([{ method: "replaceKey", args: ["a", "sk-secret-value"] }]);
+});
+
+it("网页登录：有登录端口的厂商可以 begin/status/cancel，没有的厂商给出可读错误", async () => {
+  const login: LoginPort = {
+    begin: async () => ({ state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?x=1" }),
+    status: async () => ({ state: "idle" }),
+    cancel: async () => undefined,
+  };
+  const withLogin = await mount([vendorDeps({ vendor: "commandcode", login })]);
+  await expect(withLogin.service.loginBegin("commandcode")).resolves.toMatchObject({ state: "waiting" });
+  await expect(withLogin.service.loginStatus("commandcode")).resolves.toEqual({ state: "idle" });
+  await expect(withLogin.service.loginCancel("commandcode")).resolves.toBeUndefined();
+
+  // opencode 没有网页登录能力：静默无操作会伪装成「登录没反应」，必须吵出来。
+  const without = await mount([vendorDeps({ vendor: "dsh-opencode-go" })]);
+  await expect(without.service.loginBegin("dsh-opencode-go")).rejects.toThrow(/browser login/);
 });

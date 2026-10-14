@@ -19,6 +19,8 @@ export type CopyKey =
   | "advancedHint"
   | "group.privacy"
   | "group.privacy.hint"
+  | "group.accounts"
+  | "group.accounts.hint"
   | "group.integrations"
   | "group.integrations.hint"
   | "group.advanced"
@@ -50,6 +52,32 @@ export type CopyKey =
   | "credentials.updated"
   | "account.configured"
   | "account.missing"
+  | "account.add"
+  | "account.rename"
+  | "account.replaceKey"
+  | "account.pin"
+  | "account.remove"
+  | "account.menu"
+  | "account.expand"
+  | "account.collapse"
+  | "account.plan"
+  | "account.pinnedBy"
+  | "account.effectiveBy"
+  | "account.quotaMissing"
+  | "account.newLabel"
+  | "account.newKey"
+  | "account.confirm"
+  | "account.cancel"
+  | "account.login"
+  | "account.loginWaiting"
+  | "account.reason.credential-slot-taken"
+  | "account.reason.invalid-key"
+  | "account.reason.unavailable"
+  | "account.reason.cancelled"
+  | "account.reason.timeout"
+  | "account.reason.denied"
+  | "account.reason.network"
+  | "account.reason.error"
   | "empty.noVendor";
 
 /** 语言字典：键 → 文案。 */
@@ -67,6 +95,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     advancedHint: "默认折叠。这些值影响请求构造与超时。",
     "group.privacy": "隐私与安全",
     "group.privacy.hint": "数据保留与联网相关开关。",
+    "group.accounts": "账户",
+    "group.accounts.hint": "账号操作立即生效；密钥只写入凭据服务。",
     "group.integrations": "集成与显示",
     "group.integrations.hint": "与宿主界面交互的开关。",
     "group.advanced": "高级设置",
@@ -98,6 +128,32 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "credentials.updated": "凭据已更新",
     "account.configured": "已配置",
     "account.missing": "未配置",
+    "account.add": "添加账户",
+    "account.rename": "重命名",
+    "account.replaceKey": "更换密钥",
+    "account.pin": "固定使用此账户",
+    "account.remove": "移除",
+    "account.menu": "更多操作",
+    "account.expand": "展开完整报告",
+    "account.collapse": "收起报告",
+    "account.plan": "套餐",
+    "account.pinnedBy": "固定",
+    "account.effectiveBy": "当前",
+    "account.quotaMissing": "暂无额度数据",
+    "account.newLabel": "账户名称",
+    "account.newKey": "密钥",
+    "account.confirm": "确定",
+    "account.cancel": "取消",
+    "account.login": "网页登录",
+    "account.loginWaiting": "在浏览器里完成授权，然后回到这里。",
+    "account.reason.credential-slot-taken": "该凭据槽已被另一个账号占用，密钥未写入；请先重命名或移除那个账号。",
+    "account.reason.invalid-key": "密钥被拒绝，请确认它属于这个账号。",
+    "account.reason.unavailable": "登录服务暂时不可用。",
+    "account.reason.cancelled": "已取消。",
+    "account.reason.timeout": "等待授权超时。",
+    "account.reason.denied": "授权被拒绝。",
+    "account.reason.network": "网络错误。",
+    "account.reason.error": "登录失败。",
     "empty.noVendor": "没有可显示的厂商。",
   },
   en: {
@@ -110,6 +166,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     advancedHint: "Collapsed by default. These values affect request construction and timeouts.",
     "group.privacy": "Privacy & security",
     "group.privacy.hint": "Data retention and web-related switches.",
+    "group.accounts": "Accounts",
+    "group.accounts.hint": "Account changes take effect immediately; keys are written only to the credentials service.",
     "group.integrations": "Integrations & display",
     "group.integrations.hint": "Switches that interact with the host UI.",
     "group.advanced": "Advanced",
@@ -141,6 +199,32 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "credentials.updated": "Credentials updated",
     "account.configured": "Configured",
     "account.missing": "Not configured",
+    "account.add": "Add account",
+    "account.rename": "Rename",
+    "account.replaceKey": "Replace key",
+    "account.pin": "Pin this account",
+    "account.remove": "Remove",
+    "account.menu": "More actions",
+    "account.expand": "Show full report",
+    "account.collapse": "Hide report",
+    "account.plan": "Plan",
+    "account.pinnedBy": "Pinned",
+    "account.effectiveBy": "Current",
+    "account.quotaMissing": "No quota data",
+    "account.newLabel": "Account name",
+    "account.newKey": "API key",
+    "account.confirm": "Confirm",
+    "account.cancel": "Cancel",
+    "account.login": "Sign in with browser",
+    "account.loginWaiting": "Finish signing in in your browser, then come back here.",
+    "account.reason.credential-slot-taken": "That credential slot already belongs to another account, so the key was not written. Rename or remove that account first.",
+    "account.reason.invalid-key": "The key was rejected; check that it belongs to this account.",
+    "account.reason.unavailable": "The sign-in service is temporarily unavailable.",
+    "account.reason.cancelled": "Cancelled.",
+    "account.reason.timeout": "Timed out waiting for authorisation.",
+    "account.reason.denied": "Authorisation was denied.",
+    "account.reason.network": "Network error.",
+    "account.reason.error": "Sign-in failed.",
     "empty.noVendor": "No vendor to display.",
   },
 };

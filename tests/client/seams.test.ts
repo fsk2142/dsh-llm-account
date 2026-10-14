@@ -8,6 +8,7 @@ import { expect, it, vi } from "vitest";
 
 import {
   describeVendorSnapshots,
+  dispatchAccountAction,
   mountUsageRemote,
   readAccounts,
   readStatus,
@@ -19,7 +20,19 @@ import {
   type RemoteSettings,
 } from "../../src/client/seams";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type UsageNamespace } from "../../src/client/usage-contract";
+import type { VendorCapabilities } from "../../src/core/adapter";
 import { VENDORS } from "../../src/client/shell";
+
+/** Command Code 的能力矩阵（测试夹具：页面据此降级）。 */
+const CAPABILITIES: VendorCapabilities = {
+  reorder: false,
+  pin: true,
+  browserLogin: true,
+  modelAccountRules: true,
+  quotaShape: "windows",
+  modelVisibilityWrite: "onSave",
+  automaticSwitch: true,
+};
 
 /** 一个假 `remote.settings`：记录 mutate 调用。 */
 function fakeSettings(rows: readonly { ns?: string; id?: string; value?: unknown; revision?: number }[] = []): {
@@ -58,6 +71,25 @@ function fakeContext(remote: unknown): { ctx: ClientSeamContext; disposers: (() 
     },
   };
   return { ctx, disposers, injected };
+}
+
+/** 一个已挂载的远程命名空间：所有方法都可被覆盖，未覆盖的返回空结果。 */
+function fakeNamespace(overrides: Partial<UsageNamespace> = {}): UsageNamespace {
+  const empty = async (): Promise<never[]> => [];
+  return {
+    status: async () => ({ vendor: "commandcode", capabilities: CAPABILITIES, pinned: null, accounts: [], failures: [] }),
+    accounts: empty,
+    switches: empty,
+    addAccount: async () => ({ ref: "r", label: "l", configured: false, active: false }),
+    renameAccount: async () => undefined,
+    replaceKey: async () => undefined,
+    removeAccount: async () => undefined,
+    selectAccount: async () => undefined,
+    loginBegin: async () => ({ state: "waiting" }),
+    loginStatus: async () => ({ state: "idle" }),
+    loginCancel: async () => undefined,
+    ...overrides,
+  };
 }
 
 it("发现厂商：只认注册表里声明过的命名空间，行 id 与命名空间两种键都接受", async () => {
@@ -107,8 +139,8 @@ it("凭据订阅：宿主没有 $on 时返回空操作，而不是抛错", () =>
 });
 
 it("挂载远程面：把同一份描述符交给宿主的 $mount，再从 remote.<namespace> 取命名空间", async () => {
-  const status = { vendor: "commandcode", pinned: null, accounts: [], failures: [] };
-  const namespace: UsageNamespace = { status: async () => status, accounts: async () => [], switches: async () => [] };
+  const status = { vendor: "commandcode", capabilities: CAPABILITIES, pinned: null, accounts: [], failures: [] };
+  const namespace = fakeNamespace({ status: async () => status });
   const mounted: { package: string; descriptors: readonly unknown[] }[] = [];
   const hostDispose = vi.fn();
   const remote: Record<string, unknown> = {
@@ -208,4 +240,48 @@ it("中栏面板接缝：宿主没有 layout.selectPanel 时返回 false（供�
 
   const without = fakeContext({});
   expect(selectPanel(without.ctx, "llm-account")).toBe(false);
+});
+
+// —— Task 5：账户操作的派发（容器不参与单测，判定放在这里） ——
+
+it("账户操作派发：添加/重命名/换密钥各自调用对应的远程方法", async () => {
+  const calls: unknown[] = [];
+  const namespace = fakeNamespace({
+    addAccount: async (vendor, input) => {
+      calls.push(["add", vendor, input]);
+      return { ref: "new", label: input.label, configured: true, active: false };
+    },
+    renameAccount: async (vendor, ref, label) => void calls.push(["rename", vendor, ref, label]),
+    replaceKey: async (vendor, ref, key) => void calls.push(["replaceKey", vendor, ref, key]),
+  });
+
+  await dispatchAccountAction(namespace, "commandcode", { kind: "add", label: "work", key: "sk-1" });
+  await dispatchAccountAction(namespace, "commandcode", { kind: "add", label: "no-key", key: "" });
+  await dispatchAccountAction(namespace, "commandcode", { kind: "rename", ref: "a", label: "renamed", key: "" });
+  await dispatchAccountAction(namespace, "commandcode", { kind: "key", ref: "a", label: "", key: "sk-2" });
+
+  expect(calls).toEqual([
+    ["add", "commandcode", { label: "work", key: "sk-1" }],
+    // 没填密钥：只建条目（`key` 字段整个不传，而不是传空串 —— 空串会被宿主当成「要写空密钥」）。
+    ["add", "commandcode", { label: "no-key" }],
+    ["rename", "commandcode", "a", "renamed"],
+    ["replaceKey", "commandcode", "a", "sk-2"],
+  ]);
+});
+
+it("账户操作派发：输入不合法或远程面不可用时**不发调用**（返回 undefined）", () => {
+  const add = vi.fn();
+  const namespace = fakeNamespace({ addAccount: add as never });
+
+  // 空名称：宿主会拒绝，我们连调用都不发。
+  expect(dispatchAccountAction(namespace, "commandcode", { kind: "add", label: "   ", key: "sk" })).toBeUndefined();
+  // 空密钥不提交（那等于清掉账号的密钥）。
+  expect(dispatchAccountAction(namespace, "commandcode", { kind: "key", ref: "a", label: "", key: "  " })).toBeUndefined();
+  // 重命名必须有目标与名称。
+  expect(dispatchAccountAction(namespace, "commandcode", { kind: "rename", label: "x", key: "" })).toBeUndefined();
+  expect(dispatchAccountAction(namespace, "commandcode", { kind: "rename", ref: "a", label: " ", key: "" })).toBeUndefined();
+  // 远程面还没挂上：什么都不做，也不抛。
+  expect(dispatchAccountAction(undefined, "commandcode", { kind: "add", label: "x", key: "y" })).toBeUndefined();
+
+  expect(add).not.toHaveBeenCalled();
 });

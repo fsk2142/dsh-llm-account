@@ -11,8 +11,11 @@
  * (`./registry`) and every host seam (`./shell`). No UI yet: the page component
  * arrives in Task 4.
  */
+import { createElement, type ReactNode } from "react";
+
+import { AccountCard } from "./account-card";
 import { COPY } from "./copy";
-import { createConnectedPage, type ClientSeamContext } from "./seams";
+import { createConnectedPage, type ClientSeamContext, type VendorCardsContext } from "./seams";
 import { applyShell, VENDORS } from "./shell";
 
 /**
@@ -73,6 +76,40 @@ export function apply(ctx: unknown): void {
   console.debug("[dsh-llm-account] client bundle loaded");
   applyShell(ctx, {
     copy: { zh: COPY.zh, en: COPY.en },
-    pageComponent: (t) => createConnectedPage({ entries: VENDORS, ctx: ctx as ClientSeamContext, t }),
+    pageComponent: (t) =>
+      createConnectedPage({
+        entries: VENDORS,
+        ctx: ctx as ClientSeamContext,
+        t,
+        // 专属卡片：账户卡片（Task 5）。模型卡片在 T7 接到这里，顺序即规格 §8 的卡片顺序。
+        renderVendorCards: (cards) => renderVendorCards(cards),
+      }),
+  });
+}
+
+/**
+ * 该厂商的专属卡片。
+ *
+ * 目前只有账户卡片；**Command Code 与 OpenCode 共用这一张**（数据形状相同：都是 `status().accounts`），
+ * 差异全由宿主发布的能力声明驱动（`capabilities.pin`/`browserLogin`/`reorder`），所以不需要两份实现；
+ * T6 的排序与 `autoSwitch` 会在 T6 里补上专属于 OpenCode 的那部分。
+ * @param cards - 容器递进来的数据与回调。
+ * @returns 元素树。
+ */
+function renderVendorCards(cards: VendorCardsContext): ReactNode {
+  return createElement(AccountCard, {
+    status: cards.status,
+    t: cards.t,
+    action: cards.action,
+    expandedRef: cards.expandedRef,
+    login: cards.login,
+    onOpenAction: cards.openAction,
+    onActionField: cards.setActionField,
+    onConfirmAction: cards.confirmAction,
+    onCancelAction: cards.cancelAction,
+    onSelect: cards.select,
+    onRemove: cards.remove,
+    onToggleExpand: cards.toggleExpand,
+    onLoginBegin: cards.loginBegin,
   });
 }

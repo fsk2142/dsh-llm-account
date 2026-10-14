@@ -20,6 +20,7 @@ import { expect, it, onTestFinished } from "vitest";
 import type { LoginStatus } from "../../src/core/adapter";
 import { accountRef } from "../../src/core/accounts";
 import {
+  CredentialSlotTakenError,
   LOGIN_ALLOWED_ORIGINS,
   LOGIN_BODY_LIMIT_BYTES,
   LOGIN_PORT_ATTEMPTS,
@@ -489,6 +490,23 @@ it("storeKey 抛错 → failed / unavailable，且不残留监听", async () => 
   const { port, state } = await beginWaiting(login);
   await post(callbackUrl(port), credentials(state, "k"));
   expect(await untilSettled(login)).toEqual({ state: "failed", reason: "unavailable" });
+  const rebind = await listenOn(port);
+  await closeServer(rebind);
+});
+
+it("凭据槽被别的账号占用 → failed / credential-slot-taken（可指名，不混进 unavailable）", async () => {
+  // Task 5 Step 7：撞名必须让用户看懂发生了什么，而不是得到一句含糊的 unavailable。
+  const login = createLogin({
+    fetchImpl: okFetch,
+    apiBase: "https://api.example",
+    storeKey: async (ref, _key, userName) => {
+      expect(userName).toBe("n-1"); // 装配层要拿它判断「是不是同一个账号」
+      throw new CredentialSlotTakenError(ref, "另一个账号");
+    },
+  });
+  const { port, state } = await beginWaiting(login);
+  await post(callbackUrl(port), credentials(state, "k"));
+  expect(await untilSettled(login)).toEqual({ state: "failed", reason: "credential-slot-taken" });
   const rebind = await listenOn(port);
   await closeServer(rebind);
 });

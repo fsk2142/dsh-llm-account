@@ -35,6 +35,26 @@ export interface DraftField {
   changed: boolean;
 }
 
+/**
+ * 账户卡片正在进行的操作（**受控草稿**）。
+ *
+ * 为什么放在这里而不是卡片里：卡片是纯函数（Ruling 22 的 Humble Object 切分），不能持有状态；
+ * 而「用户输入到一半的账户名/密钥」必须活得比一次渲染久。放在 `page-state` 里它就能被完整单测，
+ * 卡片只负责把值渲染出来、把变化报出去。
+ *
+ * `key` 是**明文密钥的临时草稿**：它只经 `replaceKey`/`addAccount` 那次远程调用出去，
+ * 永远不进设置文档，也不进设置草稿（`drafts`）——两者是刻意分开的两套状态。
+ */
+export interface AccountAction {
+  kind: "add" | "rename" | "key";
+  /** `rename`/`key` 的目标账号；`add` 时为 `undefined`。 */
+  ref?: string;
+  /** 用户正在输入的名称（`add`/`rename`）。 */
+  label: string;
+  /** 用户正在输入的密钥（`add`/`key`）。 */
+  key: string;
+}
+
 /** 页面状态。 */
 export interface PageState {
   /** 全部已注册厂商（含宿主上不存在的，供诊断）。 */
@@ -49,6 +69,10 @@ export interface PageState {
   readonly snapshots: Readonly<Record<string, VendorSnapshot>>;
   /** 凭据变更计数：每次推送 +1，「已配置」徽标据此刷新。 */
   readonly credentialRevision: number;
+  /** 正在进行的账户操作（`⋯` 菜单/添加账户/换密钥）；没有就是 `undefined`。 */
+  readonly action: AccountAction | undefined;
+  /** 展开完整报告的账号 ref；没有就是 `undefined`。 */
+  readonly expandedRef: string | undefined;
 }
 
 /** 三组卡片的规范顺序（规格 §8 的卡片顺序：隐私与安全 → 集成与显示 → 高级设置）。 */
@@ -97,7 +121,54 @@ export function createPageState(
     drafts,
     snapshots: snapshotMap,
     credentialRevision: previous?.credentialRevision ?? 0,
+    // 账户操作的草稿跨快照刷新保留（重读设置不该把用户输入到一半的名字/密钥丢掉）。
+    action: previous?.action,
+    // 展开状态也保留；卡片只在对应账号行存在时才用得上它。
+    expandedRef: previous?.expandedRef,
   };
+}
+
+/**
+ * 打开一个账户操作（`⋯` 菜单项 / 添加账户）。重复打开同一目标时**不重置**已有输入。
+ * @param state - 当前状态。
+ * @param action - 要打开的操作（`label`/`key` 可省略，默认空串）。
+ * @returns 新状态。
+ */
+export function openAction(state: PageState, action: { kind: AccountAction["kind"]; ref?: string }): PageState {
+  if (state.action?.kind === action.kind && state.action.ref === action.ref) return state;
+  return { ...state, action: { kind: action.kind, ...(action.ref === undefined ? {} : { ref: action.ref }), label: "", key: "" } };
+}
+
+/**
+ * 改一个账户操作草稿字段。
+ * @param state - 当前状态。
+ * @param field - `label` 或 `key`。
+ * @param value - 新值。
+ * @returns 新状态；没有正在进行的操作时是恒等变换。
+ */
+export function setActionField(state: PageState, field: "label" | "key", value: string): PageState {
+  if (state.action === undefined) return state;
+  return { ...state, action: { ...state.action, [field]: value } };
+}
+
+/**
+ * 关掉正在进行的账户操作（取消，或提交完成）。
+ * @param state - 当前状态。
+ * @returns 新状态。
+ */
+export function closeAction(state: PageState): PageState {
+  if (state.action === undefined) return state;
+  return { ...state, action: undefined };
+}
+
+/**
+ * 展开/收起某个账号的完整报告。
+ * @param state - 当前状态。
+ * @param ref - 目标账号。
+ * @returns 新状态。
+ */
+export function toggleExpanded(state: PageState, ref: string): PageState {
+  return { ...state, expandedRef: state.expandedRef === ref ? undefined : ref };
 }
 
 /**

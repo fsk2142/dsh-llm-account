@@ -15,7 +15,16 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
-import type { AccountPort, AccountView, QuotaPort, QuotaSnapshot, VendorId } from "../core/adapter";
+import type {
+  AccountPort,
+  AccountView,
+  LoginPort,
+  LoginStatus,
+  QuotaPort,
+  QuotaSnapshot,
+  VendorCapabilities,
+  VendorId,
+} from "../core/adapter";
 import type { RotationAccess } from "./assembly";
 import {
   USAGE_NAMESPACE,
@@ -23,6 +32,7 @@ import {
   USAGE_SERVICE_KEY,
   usageDescriptors,
   type AccountUsageStatus,
+  type AddAccountInput,
   type QuotaSummary,
   type SwitchRecord,
   type UsageInvocationDescriptor,
@@ -47,13 +57,13 @@ export type {
 } from "../client/usage-contract";
 
 /**
- * 远程面要的账号读口：**只有** `list`。
+ * 远程面要的账号口：**整个** `AccountPort`。
  *
- * 按需收窄而不是照搬整个 `AccountPort`：这个远程是只读面（写入路径属于设置页面自己的端口，
- * 走的是各厂商的设置文档 + 凭据服务）。后续任务若要在远程上开放写操作，应当扩展**自己的**
- * 端口类型并说明写入路径，而不是让这个只读面顺带持有写能力。
+ * 收窄→放宽的经过：Task 3 只发布只读面，当时按需收窄成 `Pick<AccountPort, "list">`（Ruling 19）。
+ * Task 5 的账户卡片要做重命名/换密钥/固定/移除/添加，所以这里放宽为完整端口 —— 写入路径仍由
+ * 各厂商的账号端口实现（密钥只经凭据服务，见 `AccountPort.replaceKey` 的契约），远程面只是**转发**。
  */
-export type UsageAccountReader = Pick<AccountPort, "list">;
+export type UsageAccountPort = AccountPort;
 
 /**
  * 一个厂商的读口。两个 entry 各自构造一份，交给同一个服务实例。
@@ -66,12 +76,16 @@ export type UsageAccountReader = Pick<AccountPort, "list">;
 export interface UsageVendorDeps {
   readonly vendor: VendorId;
   readonly rotation: RotationAccess;
-  readonly accounts: UsageAccountReader;
+  readonly accounts: UsageAccountPort;
   readonly quota: QuotaPort;
+  /** 能力声明（规格 §7.3）：随 `status()` 发布给页面，客户端不各写一份。 */
+  readonly capabilities: VendorCapabilities;
   /** 配置里固定/首选的账号；`null` 表示自动轮换。 */
   readonly pinnedRef: () => string | null;
   /** 额度端口这一读报告的账号 ref（与 entry 里 `selectedRefOf` 同一个判定）。 */
   readonly quotaRef: () => string | undefined;
+  /** 网页登录端口：只有声明了 `browserLogin` 能力的厂商才有（本包只有 commandcode）。 */
+  readonly login?: LoginPort;
 }
 
 /** 宿主 `ctx.typert` 的最小形状（只认本项目用到的 `register`）。 */
@@ -195,6 +209,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
     const latestSwitch = engine.switchNotice();
     return {
       vendor,
+      capabilities: deps.capabilities,
       pinned,
       ...(effective === undefined ? {} : { effective }),
       ...(latestSwitch === undefined ? {} : { switch: latestSwitch }),
@@ -222,6 +237,83 @@ export class LlmAccountUsageService extends TypertRemoteService {
     return engine.switchNotices().map((notice) => ({ ...notice, vendor }));
   }
 
+  /**
+   * 追加一个账号。有密钥时同时写入凭据服务（ref 由账号端口按标签分配一个**空闲**槽）。
+   * @param vendor - 厂商 id。
+   * @param input - 展示名称与可选密钥。
+   * @returns 新账号的视图。
+   */
+  async addAccount(vendor: VendorId, input: AddAccountInput): Promise<AccountView> {
+    return this.requireVendor(vendor).accounts.add(input);
+  }
+
+  /**
+   * 只改展示名称（ref 是身份键，永不重推）。
+   * @param vendor - 厂商 id。
+   * @param ref - 目标账号。
+   * @param label - 新名称。
+   */
+  async renameAccount(vendor: VendorId, ref: string, label: string): Promise<void> {
+    await this.requireVendor(vendor).accounts.rename(ref, label);
+  }
+
+  /**
+   * 换密钥。
+   *
+   * 密钥只交给账号端口，端口只写凭据服务 —— **不经过设置文档**（全局约束）。这里不做日志输出，
+   * 也不把它放进任何返回值。
+   * @param vendor - 厂商 id。
+   * @param ref - 目标账号。
+   * @param key - 新密钥。
+   */
+  async replaceKey(vendor: VendorId, ref: string, key: string): Promise<void> {
+    await this.requireVendor(vendor).accounts.replaceKey(ref, key);
+  }
+
+  /**
+   * 移除账号（凭据的实际清理由账号端口按各厂商语义处理）。
+   * @param vendor - 厂商 id。
+   * @param ref - 目标账号。
+   */
+  async removeAccount(vendor: VendorId, ref: string): Promise<void> {
+    await this.requireVendor(vendor).accounts.remove(ref);
+  }
+
+  /**
+   * 固定账号或回到自动轮换。
+   * @param vendor - 厂商 id。
+   * @param ref - 目标账号；`null` 表示自动轮换。
+   */
+  async selectAccount(vendor: VendorId, ref: string | null): Promise<void> {
+    await this.requireVendor(vendor).accounts.select(ref);
+  }
+
+  /**
+   * 开始（或接续）一次网页登录。
+   * @param vendor - 厂商 id。
+   * @returns 登录状态（`waiting` 时带授权网址）。
+   */
+  async loginBegin(vendor: VendorId): Promise<LoginStatus> {
+    return this.requireLogin(vendor).begin();
+  }
+
+  /**
+   * 查询当前登录尝试。
+   * @param vendor - 厂商 id。
+   * @returns 登录状态。
+   */
+  async loginStatus(vendor: VendorId): Promise<LoginStatus> {
+    return this.requireLogin(vendor).status();
+  }
+
+  /**
+   * 取消等待中的登录尝试。
+   * @param vendor - 厂商 id。
+   */
+  async loginCancel(vendor: VendorId): Promise<void> {
+    await this.requireLogin(vendor).cancel();
+  }
+
   /** 取一家厂商的读口；没登记过就吵出来（静默返回空结果会伪装成「没有账号」）。 */
   private requireVendor(vendor: VendorId): UsageVendorDeps {
     const deps = this.vendorDeps.get(vendor);
@@ -231,6 +323,15 @@ export class LlmAccountUsageService extends TypertRemoteService {
       );
     }
     return deps;
+  }
+
+  /** 取一家厂商的登录端口；该厂商不支持网页登录时给出可读错误（而不是静默无操作）。 */
+  private requireLogin(vendor: VendorId): LoginPort {
+    const login = this.requireVendor(vendor).login;
+    if (login === undefined) {
+      throw new Error(`dsh-llm-account: vendor "${vendor}" does not support browser login`);
+    }
+    return login;
   }
 }
 
