@@ -159,7 +159,7 @@ describe("client plugin skeleton", () => {
   });
 
   it("注册表按设置命名空间收敛：重复注册同一厂商不产生第二条记录", () => {
-    const entry = { ns: "llm-commandcode", providerId: "commandcode", order: 1, labelKey: "nav" };
+    const entry = { ns: "llm-commandcode", rowIds: ["llm-commandcode"], providerId: "commandcode", order: 1, labelKey: "nav", cards: [] };
     registerVendor(entry);
     registerVendor({ ...entry, order: 9 });
 
@@ -168,8 +168,8 @@ describe("client plugin skeleton", () => {
   });
 
   it("注册表按 order 升序返回（页面标签页顺序）", () => {
-    registerVendor({ ns: "b", providerId: "b", order: 20, labelKey: "nav" });
-    registerVendor({ ns: "a", providerId: "a", order: 12, labelKey: "nav" });
+    registerVendor({ ns: "b", rowIds: ["b"], providerId: "b", order: 20, labelKey: "nav", cards: [] });
+    registerVendor({ ns: "a", rowIds: ["a"], providerId: "a", order: 12, labelKey: "nav", cards: [] });
 
     expect(vendors().map((vendor) => vendor.ns)).toEqual(["a", "b"]);
   });

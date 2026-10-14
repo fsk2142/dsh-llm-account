@@ -15,21 +15,36 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
-import type { AccountPort, AccountView, FailureKind, QuotaPort, QuotaSnapshot, QuotaWindow, VendorId } from "../core/adapter";
-import type { EffectiveAccount, SwitchNotice } from "../core/rotation";
+import type { AccountPort, AccountView, QuotaPort, QuotaSnapshot, VendorId } from "../core/adapter";
 import type { RotationAccess } from "./assembly";
+import {
+  USAGE_NAMESPACE,
+  USAGE_PACKAGE,
+  USAGE_SERVICE_KEY,
+  usageDescriptors,
+  type AccountUsageStatus,
+  type QuotaSummary,
+  type SwitchRecord,
+  type UsageInvocationDescriptor,
+  type VendorUsageStatus,
+} from "../client/usage-contract";
 
-/** 贡献所属的 npm 包（描述符 id 的前缀，与旧插件的 `@mars-sea/…` 同一约定）。 */
-export const USAGE_PACKAGE = "dsh-llm-account";
-
-/** cordis 服务键：两个 profile 行共享同一个实例。 */
-export const USAGE_SERVICE_KEY = "llmAccountUsage";
-
-/** 线上命名空间：`<namespace>/<method>` 就是端点。 */
-export const USAGE_NAMESPACE = "llm-account";
-
-/** 本包托管的两条厂商路由。 */
-const VENDOR_IDS: readonly VendorId[] = ["commandcode", "dsh-opencode-go"];
+// 线上契约（包名、命名空间、方法名、描述符、结果类型）住在 `src/client/usage-contract.ts`：
+// 客户端要用同一份描述符去 `$mount`，而客户端**不能**导入本文件（这一侧拉进宿主依赖）。
+// 这里重新导出，让宿主侧的消费者不必知道它住在哪。
+export {
+  USAGE_NAMESPACE,
+  USAGE_PACKAGE,
+  USAGE_SERVICE_KEY,
+  VENDOR_IDS,
+} from "../client/usage-contract";
+export type {
+  AccountUsageStatus,
+  QuotaSummary,
+  SwitchRecord,
+  UsageInvocationDescriptor,
+  VendorUsageStatus,
+} from "../client/usage-contract";
 
 /**
  * 远程面要的账号读口：**只有** `list`。
@@ -59,61 +74,9 @@ export interface UsageVendorDeps {
   readonly quotaRef: () => string | undefined;
 }
 
-/** 一条额度摘要。字段一律**原样**搬运：读数里没有的字段不许补 0（全局约束）。 */
-export interface QuotaSummary {
-  plan?: string;
-  windows: QuotaWindow[];
-  failures: string[];
-}
-
-/** 账号行的展示状态：账号视图 + 生效标注 + 拒绝与额度。 */
-export interface AccountUsageStatus extends AccountView {
-  /**
-   * 是否为当前生效账号。
-   *
-   * 「是否固定」**不在这里**：它由 `VendorUsageStatus.pinned` 一处给出（页面拿 `ref` 比对即可）。
-   * 同一件事在两个地方各写一遍，迟早会给出两个互相矛盾的答案。
-   */
-  effective: boolean;
-  /** 拒绝/冷却；没有就是没有（不编造）。 */
-  rejection?: { kind: FailureKind; until?: number };
-  /** 额度摘要；**只有**额度读数所属的那一行才有这个字段。 */
-  quota?: QuotaSummary;
-}
-
-/** 一个厂商的完整状态。 */
-export interface VendorUsageStatus {
-  vendor: VendorId;
-  /** 配置里固定的账号；`null` 表示自动轮换。 */
-  pinned: string | null;
-  /** 生效账号；从未发过请求时**没有**这个字段。 */
-  effective?: EffectiveAccount;
-  /** 最近一次切换；从未切换过时**没有**这个字段。 */
-  switch?: SwitchNotice;
-  accounts: AccountUsageStatus[];
-  /** 额度等读取失败的原因，供 UI 提示数据不完整。 */
-  failures: string[];
-}
-
-/** 切换记录：Task 2 的切换通知 + 厂商标签（`switches()` 一次只发布一家的）。 */
-export interface SwitchRecord extends SwitchNotice {
-  vendor: VendorId;
-}
-
 /** 宿主 `ctx.typert` 的最小形状（只认本项目用到的 `register`）。 */
 interface HostTypertRegistry {
   register(contribution: HostRemoteContribution): unknown;
-}
-
-/** 一个强类型调用描述符（字段名取自 `@deepseek-ai/dsh-typert-protocol` 的 `InvocationDescriptor`）。 */
-interface HostInvocationDescriptor {
-  id: string;
-  service: string;
-  namespace: string;
-  method: string;
-  invocation: { kind: "direct" };
-  parameters: readonly unknown[];
-  result: { mode: "strict"; typeSymbol: string; create: () => { parse: (value: unknown) => unknown } };
 }
 
 /** 注册给宿主的贡献形状：与旧插件同一组字段（`face: "host"` 是宿主面）。 */
@@ -122,17 +85,7 @@ interface HostRemoteContribution {
   face: "host";
   schemas: readonly unknown[];
   model: { services: readonly unknown[]; events: readonly unknown[]; objects: readonly unknown[] };
-  invocations: readonly HostInvocationDescriptor[];
-}
-
-/** 边界校验失败的错误：说出是哪个端点、哪个字段。 */
-function boundaryError(endpoint: string, detail: string): Error {
-  return new Error(`${USAGE_PACKAGE}: ${endpoint} boundary violation: ${detail}`);
-}
-
-/** 判定「普通对象」。 */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  invocations: readonly UsageInvocationDescriptor[];
 }
 
 /**
@@ -142,70 +95,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isServiceLike(value: unknown): value is Record<string, unknown> {
   return (typeof value === "object" || typeof value === "function") && value !== null;
 }
-
-/** 校验线上厂商 id。 */
-function parseVendorId(value: unknown): VendorId {
-  if (value === "commandcode" || value === "dsh-opencode-go") return value;
-  throw boundaryError(`${USAGE_NAMESPACE}/vendor`, `expected a known vendor id, got ${JSON.stringify(value)}`);
-}
-
-/** 校验状态结果：只查结构（数据由本进程产生，深校验没有额外价值）。 */
-function parseVendorUsageStatus(value: unknown): VendorUsageStatus {
-  if (!isRecord(value) || !Array.isArray(value.accounts)) {
-    throw boundaryError(`${USAGE_NAMESPACE}/status`, "expected an object with an accounts array");
-  }
-  return value as unknown as VendorUsageStatus;
-}
-
-/** 校验账号行数组。 */
-function parseAccountViews(value: unknown): AccountView[] {
-  if (!Array.isArray(value)) throw boundaryError(`${USAGE_NAMESPACE}/accounts`, "expected an array of account views");
-  return value as AccountView[];
-}
-
-/** 校验切换记录数组。 */
-function parseSwitchRecords(value: unknown): SwitchRecord[] {
-  if (!Array.isArray(value)) throw boundaryError(`${USAGE_NAMESPACE}/switches`, "expected an array of switch records");
-  return value as SwitchRecord[];
-}
-
-/** 造一个强类型结果编解码（与旧插件 `makeStrictCodec` 同形）。 */
-function strictCodec(
-  typeSymbol: string,
-  parse: (value: unknown) => unknown,
-): HostInvocationDescriptor["result"] {
-  return { mode: "strict", typeSymbol: `${USAGE_PACKAGE}#${typeSymbol}`, create: () => ({ parse }) };
-}
-
-/** 三个方法各占一个业务参数：厂商 id。 */
-function vendorParameter(): unknown {
-  return {
-    name: "vendor",
-    wire: "vendor",
-    source: "json",
-    codec: { mode: "strict", typeSymbol: `${USAGE_PACKAGE}#VendorId`, create: () => ({ parse: parseVendorId }) },
-  };
-}
-
-/** 造一个强类型调用描述符（端点 = `<namespace>/<method>`，与旧插件同一约定）。 */
-function makeDescriptor(method: string, typeSymbol: string, parse: (value: unknown) => unknown): HostInvocationDescriptor {
-  return {
-    id: `${USAGE_PACKAGE}#${USAGE_NAMESPACE}/${method}`,
-    service: USAGE_SERVICE_KEY,
-    namespace: USAGE_NAMESPACE,
-    method,
-    invocation: { kind: "direct" },
-    parameters: [vendorParameter()],
-    result: strictCodec(typeSymbol, parse),
-  };
-}
-
-/** 三个远程方法。 */
-const INVOCATIONS: readonly HostInvocationDescriptor[] = [
-  makeDescriptor("status", "VendorUsageStatus", parseVendorUsageStatus),
-  makeDescriptor("accounts", "AccountViewList", parseAccountViews),
-  makeDescriptor("switches", "SwitchRecordList", parseSwitchRecords),
-];
 
 /** 错误对象到一行文案（不泄漏对象结构，也不把 `undefined` 打成空白）。 */
 function messageOf(error: unknown): string {
@@ -424,9 +313,6 @@ function publishInvocations(remoteCtx: Context): void {
     face: "host",
     schemas: [],
     model: { services: [], events: [], objects: [] },
-    invocations: INVOCATIONS,
+    invocations: usageDescriptors(),
   });
 }
-
-/** 本模块对外声明的厂商 id 列表（entry 侧接线时的自检用）。 */
-export { VENDOR_IDS };

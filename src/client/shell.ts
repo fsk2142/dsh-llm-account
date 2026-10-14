@@ -32,13 +32,27 @@ export const PAGE_ID = "llm-account";
 export const PAGE_ORDER = 12;
 
 /**
- * The vendors this package hosts.
+ * The vendors this package hosts, with the generic field cards each one declares.
  *
  * Static data, deliberately: the controller's vendor-discovery ruling
  * (2026-10-14) forbids deriving a vendor from instance identity, because one
  * bundle serves both profile rows. The page still discovers vendors from the
  * settings namespaces that exist (`remote.settings.describe()`); these entries
- * only carry what discovery cannot supply (tab order, locale key).
+ * only carry what discovery cannot supply (tab order, locale key, card fields).
+ *
+ * Field keys are the **real** settings-document fields from each vendor's own
+ * Config schema (`src/vendors/commandcode/index.ts` / `opencode/index.ts`) — the
+ * page must not invent settings the host cannot persist:
+ * - commandcode declares `showSidebarQuota` (integrations; `default(false)`) and
+ *   `apiBase` / `protocol` / `requestTimeoutMs` / `streamIdleTimeoutMs` /
+ *   `defaultMaxTokens` (advanced);
+ * - opencode declares `showSidebarQuota` (integrations) and `baseURL` /
+ *   `requestTimeoutMs` / `streamIdleTimeoutMs` (advanced).
+ *
+ * **No privacy group for either vendor** (Ruling 23): plan 1a deliberately left
+ * `zdr` and `webSearch` out of the commandcode Config schema (see that entry's
+ * module header), so there is no field to render and the group stays hidden. When
+ * those fields arrive, declaring them here lights the card up with no page change.
  *
  * `ns` values mirror `COMMAND_CODE_SETTINGS_NS` / `OPENCODE_SETTINGS_NS`, and
  * `providerId` mirrors `VendorId` (`src/core/adapter.ts`) — kept as literals
@@ -46,8 +60,113 @@ export const PAGE_ORDER = 12;
  * SDK dependencies that must never reach the browser bundle.
  */
 export const VENDORS: readonly VendorEntry[] = [
-  { ns: "llm-commandcode", providerId: "commandcode", order: 12, labelKey: "vendor.commandcode.nav" },
-  { ns: "llm-opencode-go", providerId: "dsh-opencode-go", order: 20, labelKey: "vendor.opencodeGo.nav" },
+  {
+    ns: "llm-commandcode",
+    rowIds: ["llm-commandcode"],
+    providerId: "commandcode",
+    order: 12,
+    labelKey: "vendor.commandcode",
+    cards: [
+      {
+        group: "integrations",
+        fields: [
+          {
+            key: "showSidebarQuota",
+            kind: "boolean",
+            labelKey: "field.showSidebarQuota",
+            hintKey: "field.showSidebarQuota.hint",
+            fallback: false,
+          },
+        ],
+      },
+      {
+        group: "advanced",
+        fields: [
+          { key: "apiBase", kind: "text", labelKey: "field.apiBase", hintKey: "field.apiBase.hint" },
+          {
+            key: "protocol",
+            kind: "select",
+            labelKey: "field.protocol",
+            hintKey: "field.protocol.hint",
+            options: [
+              { value: "openai", labelKey: "options.openai" },
+              { value: "messages", labelKey: "options.messages" },
+              { value: "cli", labelKey: "options.cli" },
+            ],
+          },
+          {
+            key: "requestTimeoutMs",
+            kind: "number",
+            labelKey: "field.requestTimeoutMs",
+            hintKey: "field.requestTimeoutMs.hint",
+          },
+          {
+            key: "streamIdleTimeoutMs",
+            kind: "number",
+            labelKey: "field.streamIdleTimeoutMs",
+            hintKey: "field.streamIdleTimeoutMs.hint",
+          },
+          {
+            key: "defaultMaxTokens",
+            kind: "number",
+            labelKey: "field.defaultMaxTokens",
+            hintKey: "field.defaultMaxTokens.hint",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    ns: "llm-opencode-go",
+    // 行 id 与核心命名空间**不同**（宿主侧 `SETTINGS_ROWS = ["opencode-go", "llm-opencode-go"]`）。
+    rowIds: ["opencode-go", "llm-opencode-go"],
+    providerId: "dsh-opencode-go",
+    order: 20,
+    labelKey: "vendor.opencodeGo",
+    cards: [
+      {
+        group: "integrations",
+        fields: [
+          {
+            key: "showSidebarQuota",
+            kind: "boolean",
+            labelKey: "field.showSidebarQuota",
+            hintKey: "field.showSidebarQuota.hint",
+            fallback: false,
+          },
+          {
+            key: "usageDisplay",
+            kind: "select",
+            labelKey: "field.usageDisplay",
+            hintKey: "field.usageDisplay.hint",
+            options: [
+              { value: "auto", labelKey: "options.auto" },
+              { value: "always", labelKey: "options.always" },
+              { value: "off", labelKey: "options.off" },
+            ],
+          },
+        ],
+      },
+      {
+        group: "advanced",
+        fields: [
+          { key: "baseURL", kind: "text", labelKey: "field.baseURL", hintKey: "field.baseURL.hint" },
+          {
+            key: "requestTimeoutMs",
+            kind: "number",
+            labelKey: "field.requestTimeoutMs",
+            hintKey: "field.requestTimeoutMs.hint",
+          },
+          {
+            key: "streamIdleTimeoutMs",
+            kind: "number",
+            labelKey: "field.streamIdleTimeoutMs",
+            hintKey: "field.streamIdleTimeoutMs.hint",
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 /** A slot registration as the host receives it (legacy: `{ name, id, order, label, locale, inject }`). */
@@ -151,11 +270,29 @@ export function resetShell(): void {
 }
 
 /**
+ * 注册页面时可注入的两件东西（由 `index.ts` 组合，避免本层依赖 `seams.ts`/`page.ts`）。
+ *
+ * 为什么用「工厂」而不是直接给组件：页面需要**宿主绑定的取词函数**（`ctx.locale.bind(ns)`），
+ * 而它只有本层拿得到；`index.ts` 拿到 `t` 之后再去构造容器组件（`createConnectedPage`）。
+ * 这样分层是单向的：`index` → `shell` → 宿主，`index` → `seams` → `page` → `page-state`。
+ */
+export interface ApplyShellOptions {
+  /**
+   * 页面组件工厂：收到宿主的取词函数，返回要注册进 `settings.section` 的组件。
+   * 缺省用占位组件（返回 `null`）——那只是为了在没有页面实现时也能验证注册路径。
+   */
+  pageComponent?: (t: (key: string) => string) => unknown;
+  /** 页面文案字典（`{ zh, en }`）；缺省只有内置的 `nav`。 */
+  copy?: Record<string, Record<string, string>>;
+}
+
+/**
  * The one client-plugin body. Runs once per mounted profile row.
  * @param rawContext - the client cordis context (typed narrowly on purpose: a
  *   seam reached for through an unmodeled property fails loudly).
+ * @param options - page component factory and copy (see {@link ApplyShellOptions}).
  */
-export function applyShell(rawContext: unknown): void {
+export function applyShell(rawContext: unknown, options: ApplyShellOptions = {}): void {
   // The only structural cast in the client layer — the seam types above are our
   // model of the host, and plan 1c is what turns them into measurements.
   const context = rawContext as ClientShell;
@@ -168,21 +305,20 @@ export function applyShell(rawContext: unknown): void {
 
   // Only the first instance registers the page, and the guard sits BEFORE
   // `slots.inject`: the second instance never touches the page's slot at all.
-  registerPageOnce(context);
+  registerPageOnce(context, options);
 
   // The credentials service is armed through a NESTED injection, exactly as the
   // legacy commandcode client does it (`lib/client.js:7764-7765`), not through
-  // the exported top-level `inject` list. Task 1 has nothing to read yet, so the
-  // callback is empty; Task 4 — the first task that calls `remote.credentials` —
-  // does its credential work inside here.
+  // the exported top-level `inject` list. The credential-reading work of Task 4+
+  // lives inside this callback; here it only proves the service is reachable.
   context.inject(["remote.credentials"], () => undefined);
 }
 
 /** Check-and-set the page guard, then register the page on the first pass only. */
-function registerPageOnce(context: ClientShell): void {
+function registerPageOnce(context: ClientShell, options: ApplyShellOptions): void {
   if (pageRegistered) return;
   pageRegistered = true;
-  registerPage(context);
+  registerPage(context, options);
 }
 
 /**
@@ -192,12 +328,15 @@ function registerPageOnce(context: ClientShell): void {
  * `slots.inject(name, () => slots.register(...))` form: the host resolves the
  * "settings.section" slot, and the callback registers our entry into it.
  * @param context - the client context.
+ * @param options - page component factory and copy (see {@link ApplyShellOptions}).
  */
-function registerPage(context: ClientShell): void {
+function registerPage(context: ClientShell, options: ApplyShellOptions): void {
+  const t = context.locale.bind(PAGE_LOCALE_NS);
   context.effect(
-    () => context.locale.register(PAGE_LOCALE_NS, PAGE_COPY),
+    () => context.locale.register(PAGE_LOCALE_NS, options.copy ?? PAGE_COPY),
     "dsh-llm-account: page copy",
   );
+  const component = options.pageComponent?.(t) ?? PLACEHOLDER_PAGE;
   context.slots.inject("settings.section", () =>
     context.slots.register(
       {
@@ -205,12 +344,12 @@ function registerPage(context: ClientShell): void {
         id: PAGE_ID,
         order: PAGE_ORDER,
         /** Legacy shape: `() => ctx.locale.bind(ns)("nav")`. */
-        label: () => context.locale.bind(PAGE_LOCALE_NS)("nav"),
+        label: () => t("nav"),
         locale: PAGE_LOCALE_NS,
-        /** Legacy shape: a factory returning `{ hooks: { ... } }`; Task 4 supplies the hooks. */
+        /** Legacy shape: a factory returning `{ hooks: { ... } }`. */
         inject: () => ({ hooks: {} }),
       },
-      PLACEHOLDER_PAGE,
+      component as PlaceholderComponent,
     ),
   );
 }
@@ -219,8 +358,9 @@ function registerPage(context: ClientShell): void {
  * Page copy namespace, as **per-locale dictionaries** (the shape the legacy
  * commandcode page registers, `lib/client.js:7756-7763`).
  *
- * Task 1 has no UI, so this carries only the nav label; the page's full zh/en
- * copy arrives with the page in Task 4 (`src/client/copy.ts`).
+ * Fallback only: `index.ts` passes the full dictionaries from `copy.ts`. This
+ * carries just the nav label so a bare `applyShell` (tests, or a host without the
+ * page) still registers a labelled entry.
  */
 const PAGE_COPY: Record<string, Record<string, string>> = {
   zh: { nav: "LLM 账号" },

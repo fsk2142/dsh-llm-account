@@ -11,7 +11,9 @@
  * (`./registry`) and every host seam (`./shell`). No UI yet: the page component
  * arrives in Task 4.
  */
-import { applyShell } from "./shell";
+import { COPY } from "./copy";
+import { createConnectedPage, type ClientSeamContext } from "./seams";
+import { applyShell, VENDORS } from "./shell";
 
 /**
  * Debug counter: how many times the host called `apply` (plan 1c reads it to
@@ -60,9 +62,17 @@ export const inject = ["slots", "locale", "remote"];
  * The one client-plugin body. Runs once per mounted profile row, and both rows
  * share this module instance, so the page is registered only by the first call
  * (see `registerPageOnce` in `./shell`).
+ *
+ * Composition (single direction, no cycles):
+ * `index` → `shell` (slot/locale registration primitives) and
+ * `index` → `seams` → `page` → `page-state`. `shell` never imports the page layer;
+ * it asks for a component factory and supplies the host-bound `t` itself.
  * @param ctx - the client cordis context.
  */
 export function apply(ctx: unknown): void {
   console.debug("[dsh-llm-account] client bundle loaded");
-  applyShell(ctx);
+  applyShell(ctx, {
+    copy: { zh: COPY.zh, en: COPY.en },
+    pageComponent: (t) => createConnectedPage({ entries: VENDORS, ctx: ctx as ClientSeamContext, t }),
+  });
 }

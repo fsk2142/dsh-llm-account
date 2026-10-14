@@ -1,0 +1,234 @@
+/**
+ * 统一设置页的**状态机**（纯函数，完全不碰 React）。
+ *
+ * 为什么单独一层：页面要在标签页之间保持草稿、判断「有没有改动」、按厂商声明决定渲染哪几组
+ * 卡片、并在凭据变更推送到达时刷新徽标 —— 这些都会出错，而它们不该靠渲染组件来验证。
+ * React 那层只做「状态 → 元素树」的翻译（`page.ts`），本文件负责所有判定。
+ *
+ * 不可变约定：每个函数都返回**新**状态对象（`noteCredentialChange` 保留未动字段的引用，
+ * 让宿主能靠引用比较决定是否重渲染）。
+ * @module dsh-llm-account/src/client/page-state
+ */
+import type { CardGroupSpec, FieldSpec, VendorEntry } from "./registry";
+
+/** 宿主设置命名空间的一份快照：值 + 修订号（保存时要用它做并发围栏）。 */
+export interface VendorSnapshot {
+  ns: string;
+  value: Record<string, unknown>;
+  revision: number;
+}
+
+/** 一个标签页。 */
+export interface VendorTab {
+  ns: string;
+  providerId: string;
+  labelKey: string;
+  order: number;
+}
+
+/** 一个字段的渲染状态。 */
+export interface DraftField {
+  spec: FieldSpec;
+  /** 草稿 → 基线 → 声明默认值。都没有就是 `undefined`（没有默认值的可选字段）。 */
+  value: unknown;
+  /** 是否与基线不同。 */
+  changed: boolean;
+}
+
+/** 页面状态。 */
+export interface PageState {
+  /** 全部已注册厂商（含宿主上不存在的，供诊断）。 */
+  readonly entries: readonly VendorEntry[];
+  /** 真正要渲染的标签页：已注册 **且** 宿主上存在该设置命名空间，按 `order` 升序。 */
+  readonly tabs: readonly VendorTab[];
+  /** 当前标签页；没有标签页时为 `undefined`。 */
+  readonly activeNs: string | undefined;
+  /** 草稿：ns → 字段 → 值（**只放与基线不同**的字段）。 */
+  readonly drafts: Readonly<Record<string, Record<string, unknown>>>;
+  /** 基线快照：ns → 值 + 修订号。 */
+  readonly snapshots: Readonly<Record<string, VendorSnapshot>>;
+  /** 凭据变更计数：每次推送 +1，「已配置」徽标据此刷新。 */
+  readonly credentialRevision: number;
+}
+
+/** 三组卡片的规范顺序（规格 §8 的卡片顺序：隐私与安全 → 集成与显示 → 高级设置）。 */
+const GROUP_ORDER: readonly CardGroupSpec["group"][] = ["privacy", "integrations", "advanced"];
+
+/**
+ * 建一个页面状态。
+ * @param entries - 注册表里的厂商声明。
+ * @param snapshots - 宿主上实际存在的设置命名空间快照（发现的依据，见 Ruling 2）。
+ * @param previous - 上一个状态：提供了就**保留草稿与凭据计数**（重新读设置不该把用户没保存的
+ *   输入丢掉）。与快照已经一致的草稿会被清掉（那种「改动」已经没有意义）。
+ * @returns 新状态：没有草稿时选中的是第一个标签页。
+ */
+export function createPageState(
+  entries: readonly VendorEntry[],
+  snapshots: readonly VendorSnapshot[],
+  previous?: PageState,
+): PageState {
+  const available = new Set(snapshots.map((snapshot) => snapshot.ns));
+  const tabs = entries
+    .filter((entry) => available.has(entry.ns))
+    .sort((left, right) => left.order - right.order)
+    .map((entry): VendorTab => ({ ns: entry.ns, providerId: entry.providerId, labelKey: entry.labelKey, order: entry.order }));
+  const snapshotMap: Record<string, VendorSnapshot> = {};
+  for (const snapshot of snapshots) {
+    snapshotMap[snapshot.ns] = { ns: snapshot.ns, value: { ...snapshot.value }, revision: snapshot.revision };
+  }
+
+  const drafts: Record<string, Record<string, unknown>> = {};
+  for (const [ns, draft] of Object.entries(previous?.drafts ?? {})) {
+    const baseline = snapshotMap[ns]?.value ?? {};
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(draft)) {
+      if (!Object.is(baseline[key], value)) kept[key] = value;
+    }
+    if (Object.keys(kept).length > 0) drafts[ns] = kept;
+  }
+
+  const activeNs = previous !== undefined && tabs.some((tab) => tab.ns === previous.activeNs)
+    ? previous.activeNs
+    : tabs[0]?.ns;
+  return {
+    entries,
+    tabs,
+    activeNs,
+    drafts,
+    snapshots: snapshotMap,
+    credentialRevision: previous?.credentialRevision ?? 0,
+  };
+}
+
+/**
+ * 切到某个标签页。未知的 ns 是恒等变换（不制造一个没有对应标签页的选中态）。
+ * @param state - 当前状态。
+ * @param ns - 目标设置命名空间。
+ * @returns 新状态（草稿原样保留）。
+ */
+export function selectTab(state: PageState, ns: string): PageState {
+  if (!state.tabs.some((tab) => tab.ns === ns)) return state;
+  if (state.activeNs === ns) return state;
+  return { ...state, activeNs: ns };
+}
+
+/**
+ * 改一个字段的值。
+ *
+ * 写回与基线相同的值**不算改动**（草稿条目被丢掉）：否则「碰过这个输入框」会被误判成
+ * 「有改动」，保存条就会在没有任何实际变化时出现。
+ * @param state - 当前状态。
+ * @param ns - 该厂商的设置命名空间。
+ * @param key - 字段名。
+ * @param value - 新值。
+ * @returns 新状态。
+ */
+export function setField(state: PageState, ns: string, key: string, value: unknown): PageState {
+  const draft: Record<string, unknown> = { ...(state.drafts[ns] ?? {}) };
+  if (Object.is(state.snapshots[ns]?.value[key], value)) delete draft[key];
+  else draft[key] = value;
+  const drafts = { ...state.drafts };
+  if (Object.keys(draft).length === 0) delete drafts[ns];
+  else drafts[ns] = draft;
+  return { ...state, drafts };
+}
+
+/**
+ * 该厂商是否有未保存的改动（保存条的显示依据）。
+ * @param state - 当前状态。
+ * @param ns - 设置命名空间。
+ * @returns 有改动为 `true`。
+ */
+export function isDirty(state: PageState, ns: string): boolean {
+  return Object.keys(state.drafts[ns] ?? {}).length > 0;
+}
+
+/**
+ * 该厂商待保存的字段（保存动作的输入）。
+ * @param state - 当前状态。
+ * @param ns - 设置命名空间。
+ * @returns 字段与目标值，按用户改动的先后顺序。
+ */
+export function dirtyFields(state: PageState, ns: string): { key: string; value: unknown }[] {
+  return Object.entries(state.drafts[ns] ?? {}).map(([key, value]) => ({ key, value }));
+}
+
+/**
+ * 记一次凭据变更（宿主推送 `credentials/reference-updated`）。计数变化会让页面重新读
+ * 「已配置」状态。
+ * @param state - 当前状态。
+ * @returns 新状态；未动的字段保持同一引用。
+ */
+export function noteCredentialChange(state: PageState): PageState {
+  return { ...state, credentialRevision: state.credentialRevision + 1 };
+}
+
+/**
+ * 该厂商声明的卡片组：**字段为空的组不渲染**（预检 Ruling 1），并按规范顺序排列。
+ * @param entry - 厂商声明。
+ * @returns 要渲染的组。
+ */
+export function cardGroupsOf(entry: VendorEntry): readonly CardGroupSpec[] {
+  return [...entry.cards]
+    .filter((group) => group.fields.length > 0)
+    .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
+}
+
+/** 声明里的全部字段（按卡片组的规范顺序展平）。 */
+function declaredFields(entry: VendorEntry): readonly FieldSpec[] {
+  return cardGroupsOf(entry).flatMap((group) => group.fields);
+}
+
+/**
+ * 找一个字段的声明。
+ * @param state - 当前状态（用它的注册表）。
+ * @param ns - 设置命名空间。
+ * @param key - 字段名。
+ * @returns 声明；该厂商没声明这个字段时为 `undefined`。
+ */
+export function specOf(state: PageState, ns: string, key: string): FieldSpec | undefined {
+  const entry = state.entries.find((candidate) => candidate.ns === ns);
+  return entry === undefined ? undefined : declaredFields(entry).find((spec) => spec.key === key);
+}
+
+/**
+ * 一个字段当前应显示的值：草稿 → 基线 → 声明默认值。都没有就是 `undefined`（**不编造**）。
+ * @param state - 当前状态。
+ * @param ns - 设置命名空间。
+ * @param key - 字段名。
+ * @returns 当前值。
+ */
+export function fieldValue(state: PageState, ns: string, key: string): unknown {
+  const draft = state.drafts[ns];
+  if (draft !== undefined && key in draft) return draft[key];
+  const snapshot = state.snapshots[ns];
+  if (snapshot !== undefined && key in snapshot.value) return snapshot.value[key];
+  return specOf(state, ns, key)?.fallback;
+}
+
+/**
+ * 一个厂商要渲染的全部字段（按卡片顺序展平，带当前值与「是否改动」）。
+ * @param state - 当前状态。
+ * @param entry - 厂商声明。
+ * @returns 字段渲染状态。
+ */
+export function fieldsOf(state: PageState, entry: VendorEntry): DraftField[] {
+  const baseline = state.snapshots[entry.ns]?.value ?? {};
+  return declaredFields(entry).map((spec) => {
+    const value = fieldValue(state, entry.ns, spec.key);
+    return { spec, value, changed: !Object.is(baseline[spec.key], value) };
+  });
+}
+
+/** 侧边栏额度卡片开关的字段名（规格 §8.1 第 6 条：它住在「集成与显示」里）。 */
+export const SIDEBAR_TOGGLE_KEY = "showSidebarQuota";
+
+/**
+ * 取该厂商「集成与显示」里的侧边栏卡片开关声明。
+ * @param entry - 厂商声明。
+ * @returns 开关声明；该厂商没声明时 `undefined`（此时不渲染卡片，也不轮询）。
+ */
+export function sidebarToggleField(entry: VendorEntry): FieldSpec | undefined {
+  const integrations = cardGroupsOf(entry).find((group) => group.group === "integrations");
+  return integrations?.fields.find((spec) => spec.key === SIDEBAR_TOGGLE_KEY);
+}

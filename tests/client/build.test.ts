@@ -6,6 +6,12 @@ import { describe, expect, it } from "vitest";
 const CLIENT_BUNDLE = fileURLToPath(new URL("../../lib/client.js", import.meta.url));
 
 /**
+ * Modules the **browser** bundle may reference by bare specifier: the host loader answers exactly
+ * these from its own module table (mirrors `CLIENT_EXTERNALS` in `tsdown.config.ts`).
+ */
+const CLIENT_HOST_MODULES = ["react", "react/jsx-runtime", "@deepseek-ai/dsh-client-ui-primitives"];
+
+/**
  * Host entries, each asserted on its own (aggregating them would let one
  * clobbered entry hide behind the others' imports).
  *
@@ -117,6 +123,27 @@ describe("client bundle build", () => {
     const bare = NODE_BUILTINS.join("|");
     expect(source).not.toMatch(new RegExp(`(?:require\\s*\\(\\s*|import\\s*\\(\\s*)["'](?:${bare})["']\\s*\\)`));
   });
+
+  it("客户端产物自包含：不相对引用任何分块", () => {
+    // 浏览器侧只有 `lib/client.js` 一个文件：加载器不会替它解析相对路径（宿主分块也不在浏览器
+    // 图里），所以一旦它长出 `./xxx.js` 这类导入，客户端就是加载即坏。宿主侧不受此约束
+    // （`platform: "node"`，可以正当使用 node 内置与相对分块）。
+    const source = readBundle(CLIENT_BUNDLE);
+    expect(source).not.toMatch(/(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']\.{1,2}\//);
+  });
+
+  it("客户端产物只引用宿主提供的模块（白名单之外的裸导入一律不许出现）", () => {
+    // 这一条守的是「按值导入宿主/内核代码」这类回归：`src/client/usage-contract.ts` 从
+    // `src/core/adapter.ts` 只做**类型**导入（`verbatimModuleSyntax` 会擦掉整条 import），一旦
+    // 有人把它改成值导入，core 的 `@deepseek-ai/dsh-llm` 之类就会进浏览器产物 —— 那时
+    // `node:` 断言可能仍然通过（该依赖没用到 node 内置），所以必须直接断言裸导入集合。
+    const source = readBundle(CLIENT_BUNDLE);
+    const bare = [...source.matchAll(/(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']([^"'.][^"']*)["']/g)].map(
+      (match) => match[1]!,
+    );
+    const outside = [...new Set(bare)].filter((specifier) => !CLIENT_HOST_MODULES.includes(specifier));
+    expect(outside).toEqual([]);
+  });
 });
 
 describe("host-side bundles", () => {
@@ -125,14 +152,6 @@ describe("host-side bundles", () => {
 
     // Exact set, sorted: `[]` for lib/index.js, which must carry no bare import.
     expect(bareDeepseekImports(source)).toEqual([...specifiers].sort());
-  });
-
-  it("客户端产物自包含：除宿主提供的裸模块外不相对引用任何分块", () => {
-    // 浏览器侧只有 `lib/client.js` 一个文件：加载器不会替它解析相对路径（宿主分块也不在浏览器
-    // 图里），所以一旦它长出 `./xxx.js` 这类导入，客户端就是加载即坏。宿主侧不受此约束
-    // （`platform: "node"`，可以正当使用 node 内置与相对分块）。
-    const source = readBundle(CLIENT_BUNDLE);
-    expect(source).not.toMatch(/(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']\.{1,2}\//);
   });
 
   it("宿主提供的 dsh-typert-protocol 保持外部导入，没有被内联进任何产物", () => {
