@@ -52,8 +52,8 @@ const clientConfig: UserConfig = {
   // No declarations for the browser entry: tsdown's isolated-declarations pass
   // emits nothing for it (verified — `dts: true` yields zero files here), and the
   // legacy client bundles ship no `client.d.ts` either. package.json's
-  // `exports["./client"].types` therefore points at a file that does not exist;
-  // that is pre-existing from plan 1a and reported, not silently changed here.
+  // `exports["./client"]` therefore carries **no** `types` condition (removed in
+  // Task 1), so the export declaration matches the artifact that actually exists.
   dts: false,
   // Must not wipe the host entries emitted by `hostConfig`.
   clean: false,

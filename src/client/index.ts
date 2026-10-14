@@ -7,9 +7,18 @@
  * `@deepseek-ai/dsh-client-ui-primitives`) arrive through the loader's
  * injected `require`.
  *
- * Task 0 scope: the minimal `{ apply, inject }` skeleton only. No slots, no
- * pages, no styles — the account UI is registered by later tasks.
+ * Task 1 scope: the real `apply` body — the module-level vendor registry
+ * (`./registry`) and every host seam (`./shell`). No UI yet: the page component
+ * arrives in Task 4.
  */
+import { applyShell } from "./shell";
+
+/**
+ * Debug counter: how many times the host called `apply` (plan 1c reads it to
+ * settle assumption ②, "two rows call `apply` twice"). Re-exported from
+ * `./shell`, where the counting actually happens.
+ */
+export { applyCount } from "./shell";
 
 /**
  * Host **client services** this plugin needs, in cordis service-name form.
@@ -28,13 +37,32 @@
  * `dsh-fpga-workbench/lib/client.js` exports `["slots"]`;
  * `dsh-plugin-save-token/lib/client.js` documents `{ inject: ['slots', 'locale'], apply(ctx) }`.
  *
- * `remote` is the host Remote service (`ctx.remote`); Task 1+ reaches
- * credentials through it. No legacy bundle injects a separate
- * `"remote.credentials"` entry.
+ * `remote.credentials` is **not** listed here, and that is a deliberate choice,
+ * not an impossibility — an earlier revision of this comment claimed "no legacy
+ * bundle injects a separate `remote.credentials` entry", which is false:
+ *  - `@mars-sea/dsh-commandcode-provider/lib/client.js:7764` is
+ *    `ctx.inject(["remote.credentials"], (remoteCtx) => ...)`, a **nested**
+ *    injection (so it never shows up in that bundle's top-level list), and the
+ *    next line reads `remoteCtx.remote.credentials`;
+ *  - `dsh-better-sidebar/lib/client.js:29451-29459` lists the dotted sub-service
+ *    `"remote.session"` directly in its top-level `inject`, and its comment
+ *    records the failure mode: a missing entry throws
+ *    `cannot get property "remote.session" without inject` — which, thrown from
+ *    a render path, blanks the whole panel.
+ *
+ * Both spellings are therefore valid host contracts. This package uses the
+ * **nested** one: `src/client/shell.ts` arms `["remote.credentials"]` inside
+ * `applyShell`. Do not declare a service here that `apply` does not need.
  */
 export const inject = ["slots", "locale", "remote"];
 
-export function apply(_ctx: unknown): void {
-  // Intentionally empty: this build only proves the browser bundle loads.
+/**
+ * The one client-plugin body. Runs once per mounted profile row, and both rows
+ * share this module instance, so the page is registered only by the first call
+ * (see `registerPageOnce` in `./shell`).
+ * @param ctx - the client cordis context.
+ */
+export function apply(ctx: unknown): void {
   console.debug("[dsh-llm-account] client bundle loaded");
+  applyShell(ctx);
 }

@@ -20,7 +20,6 @@
       "default": "./lib/opencode.js"
     },
     "./client": {
-      "types": "./lib/client.d.ts",
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json"

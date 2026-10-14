@@ -6,14 +6,18 @@ const CLIENT_BUNDLE = fileURLToPath(new URL("../../lib/client.js", import.meta.u
 
 /**
  * Host entries, each asserted on its own (aggregating them would let one
- * clobbered entry hide behind the others' imports). `specifiers: null` means
- * the entry legitimately carries no bare `@deepseek-ai/*` import and is only
- * checked for existence.
+ * clobbered entry hide behind the others' imports).
+ *
+ * `specifiers` is always the **exact** expected set of bare `@deepseek-ai/*`
+ * imports: an entry that lost them (inlined) or gained new ones both fail. The
+ * empty array for `lib/index.js` is the assertion that the host root entry
+ * carries no bare import of its own — asserting mere existence was the gap that
+ * let a rewritten root entry pass.
  */
-const HOST_BUNDLES: ReadonlyArray<{ path: string; specifiers: readonly string[] | null }> = [
+const HOST_BUNDLES: ReadonlyArray<{ path: string; specifiers: readonly string[] }> = [
   {
     path: fileURLToPath(new URL("../../lib/index.js", import.meta.url)),
-    specifiers: null,
+    specifiers: [],
   },
   {
     path: fileURLToPath(new URL("../../lib/commandcode.js", import.meta.url)),
@@ -99,14 +103,10 @@ describe("client bundle build", () => {
 });
 
 describe("host-side bundles", () => {
-  it.each(HOST_BUNDLES)("$path 仍是裸 @deepseek-ai 导入（逐文件断言）", ({ path, specifiers }) => {
+  it.each(HOST_BUNDLES)("$path 的裸 @deepseek-ai 导入与期望集合精确一致（逐文件断言）", ({ path, specifiers }) => {
     const source = readBundle(path);
 
-    if (specifiers === null) {
-      // lib/index.js is the host root entry; it carries no imports of its own today.
-      expect(source.length).toBeGreaterThan(0);
-      return;
-    }
+    // Exact set, sorted: `[]` for lib/index.js, which must carry no bare import.
     expect(bareDeepseekImports(source)).toEqual([...specifiers].sort());
   });
 });
