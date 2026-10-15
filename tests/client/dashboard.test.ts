@@ -148,6 +148,23 @@ it("未知字段显示为「未知」，不把原始值糊到界面上", () => {
   expect(textsOf(row1).join(" ")).not.toContain("something-new");
 });
 
+it("拒绝原因对全部分类都有可读文案：不把原始枚举或文案键名印到界面上", () => {
+  // 旧实现只认识四种「切换原因」，`unavailable`/`server`/`network` 会回退成键名原文
+  // （`switch.reason.server`）显示给用户 —— 这里逐分类钉住。
+  for (const kind of ["quota", "rate-limit", "invalid-credential", "unavailable", "server", "network"]) {
+    const { tree } = render({ status: statusOf([row("a", { rejection: { kind: kind as never } })]) });
+    const texts = textsOf(elementsOf(tree).find((element) => element.props["data-dashboard-account"] === "a")!).join(" ");
+    expect(texts, kind).not.toContain(kind);
+    expect(texts, kind).not.toContain("switch.reason.");
+    expect(texts, kind).not.toContain("rejection.");
+  }
+  // 认识的原因用对应文案（额度耗尽那条与切换提示共用）。
+  const { tree } = render({ status: statusOf([row("a", { rejection: { kind: "rate-limit" } })]) });
+  expect(textsOf(elementsOf(tree).find((element) => element.props["data-dashboard-account"] === "a")!)).toContain(
+    dictionaryOf("zh")("switch.reason.rate-limit"),
+  );
+});
+
 it("状态还没到时给出占位说明；关闭与刷新按钮把意图报出去", () => {
   const empty = render({ status: undefined });
   expect(textsOf(empty.tree)).toContain(dictionaryOf("zh")("dashboard.noData"));

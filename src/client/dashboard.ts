@@ -9,6 +9,7 @@
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
+import { rejectionText } from "./copy";
 import { quotaShape, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, SwitchRecord, VendorUsageStatus } from "./usage-contract";
 
@@ -24,9 +25,6 @@ export interface DashboardProps {
   /** 手动刷新（可选）。 */
   onRefresh?: () => void;
 }
-
-/** 认识的拒绝分类（其余显示为「未知」，不把原始值印到界面上）。 */
-const KNOWN_REJECTIONS: readonly string[] = ["quota", "rate-limit", "invalid-credential", "unavailable", "server", "network"];
 
 /**
  * 中栏仪表盘。
@@ -60,8 +58,7 @@ export function Dashboard(props: DashboardProps): ReactElement {
   );
 }
 
-/** 一个账号的区块：名称、状态、固定/生效标注、拒绝、逐窗口额度。 */
-function accountBlock(props: DashboardProps, account: AccountUsageStatus): ReactNode {
+/** 一个账号的区块：名称、状态、固定/生效标注、拒绝、逐窗口额度。 */function accountBlock(props: DashboardProps, account: AccountUsageStatus): ReactNode {
   const { t } = props;
   const effective = account.effective;
   const pinned = props.status?.pinned === account.ref;
@@ -107,12 +104,6 @@ function windowBlock(t: (key: string) => string, window: { key: string; used?: n
     createElement("span", null, window.key === "" ? t("dashboard.unknown") : window.key),
     createElement("span", { "data-dashboard-window-value": window.key }, quotaWindowText(t, window)),
   );
-}
-
-/** 拒绝分类文案：认识的映射到原因文案，不认识的显示「未知」。 */
-function rejectionText(t: (key: string) => string, kind: string): string {
-  if (!KNOWN_REJECTIONS.includes(kind)) return t("dashboard.unknown");
-  return t(`switch.reason.${kind}`);
 }
 
 /** 切换记录（最新在前）。 */

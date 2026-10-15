@@ -14,6 +14,7 @@
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
+import { rejectionText } from "./copy";
 import type { AccountAction } from "./page-state";
 import { quotaShape, quotaWindowDetail, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
@@ -69,7 +70,13 @@ export function AccountCard(props: AccountCardProps): ReactElement {
     { "data-card": "accounts", className: CSS_CLASS.card },
     createElement("h2", null, t("group.accounts")),
     ...accounts.map((account, index) => accountRow(props, account, index)),
-    status === undefined || accounts.length === 0 ? createElement("p", { "data-accounts-empty": "true" }, t("account.quotaMissing")) : null,
+    // 空态分三种原因，文案不许混用：「远程面还没挂上」是数据不可用；「挂上了但一家账号都
+    // 没有」是提示用户去添加 —— 都写成「暂无额度数据」会把没账号显示成额度故障。
+    ...(status === undefined
+      ? [createElement("p", { key: "unavailable", "data-accounts-empty": "true" }, t("account.unavailable"))]
+      : accounts.length === 0
+        ? [createElement("p", { key: "empty", "data-accounts-empty": "true" }, t("account.empty"))]
+        : []),
     ...failureNotes(props),
     ...loginSection(props),
     addSection(props),
@@ -94,7 +101,8 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
         "data-rejection-kind": account.rejection.kind,
         ...(account.rejection.until === undefined ? {} : { "data-rejection-until": account.rejection.until }),
       },
-      account.rejection.kind,
+      // 可读文案，不是原始枚举（`quota`/`server`/…）；机器可读的值在 data 属性上。
+      rejectionText(t, account.rejection.kind),
     );
   }
 

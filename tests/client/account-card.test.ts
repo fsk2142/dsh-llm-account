@@ -320,6 +320,24 @@ it("未配置凭据的账号标出「未配置」，被拒绝的账号标出原�
   const rejected = elements.find((element) => element.props["data-account"] === "b")!;
   expect(rejected.props["data-rejection-kind"]).toBe("quota");
   expect(rejected.props["data-rejection-until"]).toBe(1_700_000_060_000);
+  // 界面上是**可读原因**（「额度耗尽」），不是原始枚举（`quota`）；机器可读的值在 data 属性上。
+  expect(textsOf(rejected).join(" ")).toContain(t("switch.reason.quota"));
+  expect(textsOf(rejected).join(" ")).not.toContain("quota ");
+});
+
+it("拒绝原因对全部分类都有可读文案：不把原始枚举或文案键名印到界面上", () => {
+  const t = dictionaryOf("zh");
+  for (const kind of ["quota", "rate-limit", "invalid-credential", "unavailable", "server", "network"]) {
+    const { tree } = renderCard({ status: statusOf({ accounts: [row({ ref: "a", rejection: { kind: kind as never } })] }) });
+    const texts = textsOf(elementsOf(tree).find((element) => element.props["data-account"] === "a")!).join(" ");
+    expect(texts, kind).not.toContain(kind);
+    expect(texts, kind).not.toContain("switch.reason.");
+    expect(texts, kind).not.toContain("rejection.");
+    expect(texts.length, kind).toBeGreaterThan(0);
+  }
+  // 未知分类回退到「未知」。
+  const { tree } = renderCard({ status: statusOf({ accounts: [row({ ref: "a", rejection: { kind: "something-new" as never } })] }) });
+  expect(textsOf(elementsOf(tree).find((element) => element.props["data-account"] === "a")!).join(" ")).toContain(t("dashboard.unknown"));
 });
 
 // —— 登录（Step 7 的用户可见面） ——
@@ -356,7 +374,17 @@ it("服务端的失败项（failures）以文字提示，不静默吞掉", () =>
 
 it("状态还没到（远程面未挂载）时给出说明而不是空白", () => {
   const { tree } = renderCard({ status: undefined });
-  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.quotaMissing"));
+  // 「数据暂不可用」——不是「暂无额度数据」（那不是额度问题），更不是 0。
+  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.unavailable"));
+  expect(textsOf(tree)).not.toContain(dictionaryOf("zh")("account.quotaMissing"));
   // 没有状态就没有账号行可渲染。
   expect(elementsOf(tree).filter((element) => element.props["data-account"] !== undefined)).toEqual([]);
+});
+
+it("一家账号都没有时提示添加账户，而不是显示成额度故障", () => {
+  const { tree } = renderCard({ status: statusOf({ accounts: [] }) });
+  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.empty"));
+  expect(textsOf(tree)).not.toContain(dictionaryOf("zh")("account.quotaMissing"));
+  // 「添加账户」的入口照旧在（空态正是为了引导用户去用它）。
+  expect(elementsOf(tree).filter((element) => element.props["data-action"] === "add")).toHaveLength(1);
 });

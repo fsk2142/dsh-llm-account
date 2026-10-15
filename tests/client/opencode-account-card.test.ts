@@ -189,5 +189,7 @@ it("opencode 没有 pin 与网页登录能力，卡片也不渲染它们", () =>
 
 it("状态还没到时给出说明而不是空白", () => {
   const { tree } = renderCard({ status: undefined });
-  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.quotaMissing"));
+  // 「数据暂不可用」—— 远程面未挂载不是额度问题，文案不许混用。
+  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.unavailable"));
+  expect(textsOf(tree)).not.toContain(dictionaryOf("zh")("account.quotaMissing"));
 });
