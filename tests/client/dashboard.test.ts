@@ -165,6 +165,15 @@ it("拒绝原因对全部分类都有可读文案：不把原始枚举或文案�
   );
 });
 
+it("拒绝文案缺失时回退到「未知」，不把键名印到界面上", () => {
+  // 取词函数坏掉（或某条文案被删）的形状：键原样返回。此时显示键名比显示「未知」更糟。
+  const keyed = (key: string): string => key;
+  const { tree } = render({ t: keyed, status: statusOf([row("a", { rejection: { kind: "quota" } })]) });
+  const texts = textsOf(elementsOf(tree).find((element) => element.props["data-dashboard-account"] === "a")!).join(" ");
+  expect(texts).toContain("dashboard.unknown");
+  expect(texts).not.toContain("switch.reason.");
+});
+
 it("状态还没到时给出占位说明；关闭与刷新按钮把意图报出去", () => {
   const empty = render({ status: undefined });
   expect(textsOf(empty.tree)).toContain(dictionaryOf("zh")("dashboard.noData"));
