@@ -2,17 +2,32 @@
  * Task 10 测试：**假客户端上下文的冒烟**（不启动宿主、不渲染 React）。
  *
  * 真机启动与真渲染是计划 1c 的事（本机没有与桌面端同版本的引擎）。这里覆盖：
- * 1. `apply` 被两个 profile 行各调一次时，设置页只注册一次；
- * 2. 侧边栏开关**关闭**时既不注册侧边栏卡片、也不注册中栏面板；
- * 3. 开关**开启**时两者各注册一次，且面板用的是 `main` 插槽要的 `key`；
- * 4. `layout.selectPanel` 能被用来打开/关闭这块面板；
- * 5. 注册失败不会把客户端带走。
+ * 1. `apply` 被两个 profile 行各调一次时，设置页 / 侧边栏卡片 / 中栏面板都只注册一次；
+ * 2. 插槽是**常驻注册**的（旧插件同形：门控是渲染决策，不是注册决策）；
+ * 3. 侧边栏开关存储：已存储的开关为真时认得出厂商，`settings/document-updated`
+ *    事件让存储在设置页之外也保持新鲜；
+ * 4. usage 远程面两个行只 `$mount` 一次（插件级共享）；
+ * 5. `layout.selectPanel` 能被用来打开/关闭这块面板；
+ * 6. 注册失败不会把客户端带走。
+ *
+ * **渲染门控本身**（关闭 → `null` + 停轮询）发生在 React 容器里，只有真挂载才会跑；
+ * 它的判定依据（存储）与轮询语义（`createSidebarCardController`）分别在本文件与
+ * `sidebar-card.test.ts` 里覆盖，1c 的真机渲染是最后一环。
  */
 import { expect, it, vi } from "vitest";
 
 import { apply, inject } from "../../src/client/index";
-import { DASHBOARD_PANEL_ID, selectPanel, syncSidebarAndPanel, type ClientSeamContext } from "../../src/client/seams";
-import { resetShell } from "../../src/client/shell";
+import {
+  DASHBOARD_PANEL_ID,
+  registerSharedSurfaces,
+  resetSeams,
+  selectPanel,
+  sidebarVendor,
+  sidebarVendorSeeded,
+  startSharedState,
+  type ClientSeamContext,
+} from "../../src/client/seams";
+import { resetShell, VENDORS } from "../../src/client/shell";
 import { dictionaryOf } from "../../src/client/copy";
 
 /** 一次被记录的插槽注册。 */
@@ -23,17 +38,19 @@ interface Registered {
 }
 
 /** 一个假客户端上下文：只实现本包真正调用的那些接缝。 */
-function fakeClientContext(options: { describe?: () => Promise<unknown> } = {}): {
+function fakeClientContext(options: { describe?: () => Promise<unknown>; remote?: Record<string, unknown> } = {}): {
   ctx: ClientSeamContext;
   registered: Registered[];
   locale: { namespace: string; dictionaries: Record<string, unknown> }[];
   panels: (string | null)[];
   listeners: Map<string, (() => void)[]>;
+  mounts: { package: string; descriptors: readonly unknown[] }[];
 } {
   const registered: Registered[] = [];
   const locale: { namespace: string; dictionaries: Record<string, unknown> }[] = [];
   const panels: (string | null)[] = [];
   const listeners = new Map<string, (() => void)[]>();
+  const mounts: { package: string; descriptors: readonly unknown[] }[] = [];
 
   const slots = {
     inject: (_slot: string, callback: () => unknown) => {
@@ -82,40 +99,43 @@ function fakeClientContext(options: { describe?: () => Promise<unknown> } = {}):
         listeners.set(event, list);
         return () => undefined;
       },
-      $mount: async () => () => undefined,
+      $mount: async (contribution: { package: string; descriptors: readonly unknown[] }) => {
+        mounts.push(contribution);
+        return () => undefined;
+      },
+      ...(options.remote ?? {}),
     },
   } as unknown as ClientSeamContext;
 
-  return { ctx, registered, locale, panels, listeners };
+  return { ctx, registered, locale, panels, listeners, mounts };
 }
 
-/** 宿主设置行：把某个厂商的开关设成给定值。 */
-function rowsWith(toggle: boolean): { ns: string; value: Record<string, unknown>; revision: number }[] {
+/** 宿主设置行：把某个厂商的开关设成给定值（opencode 用**行 id** 回来，与命名空间不同）。 */
+function rowsWith(toggle: boolean): { ns?: string; id?: string; value: Record<string, unknown>; revision: number }[] {
   return [
     { ns: "llm-commandcode", value: { showSidebarQuota: toggle }, revision: 1 },
-    { ns: "llm-opencode-go", value: { showSidebarQuota: toggle }, revision: 1 },
+    { id: "opencode-go", value: { showSidebarQuota: toggle }, revision: 1 },
   ];
 }
 
-it("设置行里开关为真时，发现厂商能认出来（页面据此注册侧边栏卡片）", async () => {
-  const host = fakeClientContext({ describe: async () => rowsWith(true) });
-  // 纯粹的发现逻辑（与容器里的调用同一个函数）。
-  const { describeVendorSnapshots } = await import("../../src/client/seams");
-  const { sidebarVendorOf, createPageState } = await import("../../src/client/page-state");
-  const { VENDORS } = await import("../../src/client/shell");
+/** 触发一次宿主推送（凭据/设置失效信号）。 */
+function fire(host: ReturnType<typeof fakeClientContext>, event: string): void {
+  for (const listener of host.listeners.get(event) ?? []) listener();
+}
 
-  const snapshots = await describeVendorSnapshots(host.ctx, VENDORS);
-  const state = createPageState(VENDORS, snapshots);
-  expect(sidebarVendorOf(VENDORS, state.snapshots)?.ns).toBe("llm-commandcode");
-});
+/** 每个用到 `apply`/共享状态的测试都从干净状态开始（模块级单例 + 守卫）。 */
+function resetAll(): void {
+  resetShell();
+  resetSeams();
+}
 
 it("客户端入口导出 { apply, inject }，inject 是 cordis 服务名", () => {
   expect(typeof apply).toBe("function");
   expect(inject).toEqual(["slots", "locale", "remote"]);
 });
 
-it("两个 profile 行各调一次 apply：设置页只注册一次，且不碰侧边栏/中栏插槽", () => {
-  resetShell();
+it("两个 profile 行各调一次 apply：页面与两块插槽都只注册一次", () => {
+  resetAll();
   const host = fakeClientContext();
 
   apply(host.ctx);
@@ -124,17 +144,69 @@ it("两个 profile 行各调一次 apply：设置页只注册一次，且不碰�
   const sections = host.registered.filter((item) => item.slot === "settings.section");
   expect(sections).toHaveLength(1);
   expect(sections[0]!.entry).toMatchObject({ id: "llm-account", order: 12, locale: "settings.llm-account" });
-  // 开关默认关闭：这两条插槽一个都不注册（也就不可能有后台用量请求）。
-  expect(host.registered.filter((item) => item.slot === "sidebar.footer.action")).toEqual([]);
-  expect(host.registered.filter((item) => item.slot === "main")).toEqual([]);
+  // 侧边栏卡片与中栏面板是**常驻注册**的（旧插件同形：门控是渲染决策，不是注册决策），
+  // 两个行共享一份模块实例，所以各插槽恰好一次。
+  const sidebar = host.registered.filter((item) => item.slot === "sidebar.footer.action");
+  const panels = host.registered.filter((item) => item.slot === "main");
+  expect(sidebar).toHaveLength(1);
+  expect(panels).toHaveLength(1);
+  expect(sidebar[0]!.entry).toMatchObject({ id: "llm-account-quota", order: 1, locale: "settings.llm-account" });
+  // `main` 用 key（不是 id）：抄错会让面板永远打不开。
+  expect(panels[0]!.entry).toMatchObject({ key: DASHBOARD_PANEL_ID, locale: "settings.llm-account" });
+  expect(panels[0]!.entry["id"]).toBeUndefined();
 });
 
-it("开关开启时才注册侧边栏卡片与中栏面板（各一次，面板用 key）", () => {
+it("usage 远程面两个行只 $mount 一次（插件级共享，不随页面开闭起落）", () => {
+  resetAll();
   const host = fakeClientContext();
-  const dispose = syncSidebarAndPanel({
+
+  apply(host.ctx);
+  apply(host.ctx);
+
+  expect(host.mounts).toHaveLength(1);
+  expect(host.mounts[0]!.package).toBe("dsh-llm-account");
+});
+
+it("侧边栏开关存储：已存储的开关为真时认得出厂商（按标签页顺序取第一家）", async () => {
+  resetAll();
+  const on = fakeClientContext({ describe: async () => rowsWith(true) });
+  startSharedState(on.ctx, VENDORS);
+  await vi.waitFor(() => expect(sidebarVendor()).toBe("commandcode"));
+
+  resetAll();
+  const off = fakeClientContext({ describe: async () => rowsWith(false) });
+  startSharedState(off.ctx, VENDORS);
+  // 两家都关：读取完成、存储已 seed，但没有厂商（卡片渲染 null、不轮询）。
+  await vi.waitFor(() => expect(sidebarVendorSeeded()).toBe(true));
+  expect(sidebarVendor()).toBeUndefined();
+});
+
+it("settings/document-updated 事件让开关存储在设置页之外也保持新鲜", async () => {
+  resetAll();
+  let toggle = false;
+  const host = fakeClientContext({ describe: async () => rowsWith(toggle) });
+  startSharedState(host.ctx, VENDORS);
+  await vi.waitFor(() => expect(host.listeners.get("settings/document-updated")?.length).toBeGreaterThan(0));
+  await vi.waitFor(() => expect(sidebarVendorSeeded()).toBe(true));
+  expect(sidebarVendor()).toBeUndefined();
+
+  // 外部改动（patch 文件 / 其它工具）把开关拨开：事件到达后存储随之更新。
+  toggle = true;
+  fire(host, "settings/document-updated");
+  await vi.waitFor(() => expect(sidebarVendor()).toBe("commandcode"));
+
+  // 再拨上：存储清空（卡片关闭的那条路）。
+  toggle = false;
+  fire(host, "settings/document-updated");
+  await vi.waitFor(() => expect(sidebarVendor()).toBeUndefined());
+});
+
+it("侧边栏卡片与中栏面板的注册形状逐字对齐旧插件", () => {
+  resetAll();
+  const host = fakeClientContext();
+  registerSharedSurfaces({
     ctx: host.ctx,
-    enabled: true,
-    vendor: "commandcode",
+    entries: [],
     t: dictionaryOf("zh"),
     localeNs: "settings.llm-account",
   });
@@ -144,17 +216,13 @@ it("开关开启时才注册侧边栏卡片与中栏面板（各一次，面板�
   expect(sidebar).toHaveLength(1);
   expect(sidebar[0]!.entry).toMatchObject({ id: "llm-account-quota", order: 1, locale: "settings.llm-account" });
   expect(panels).toHaveLength(1);
-  // `main` 用 key（不是 id）：抄错会让面板永远打不开。
   expect(panels[0]!.entry).toMatchObject({ key: DASHBOARD_PANEL_ID, locale: "settings.llm-account" });
   expect(panels[0]!.entry["id"]).toBeUndefined();
-
-  expect(() => dispose()).not.toThrow();
-});
-
-it("关闭时不注册任何东西（关闭即零后台查询的注册面）", () => {
-  const host = fakeClientContext();
-  syncSidebarAndPanel({ ctx: host.ctx, enabled: false, vendor: "commandcode", t: dictionaryOf("zh"), localeNs: "settings.llm-account" });
-  expect(host.registered).toEqual([]);
+  expect(panels[0]!.entry["order"]).toBeUndefined();
+  // `inject` 是**工厂**（旧插件的形状是返回 `{ hooks, ...回调 }`）。
+  expect(typeof sidebar[0]!.entry.inject).toBe("function");
+  expect((sidebar[0]!.entry.inject as () => unknown)()).toMatchObject({ hooks: {} });
+  expect(() => registerSharedSurfaces({ ctx: host.ctx, entries: [], t: dictionaryOf("zh"), localeNs: "settings.llm-account" })).not.toThrow();
 });
 
 it("layout.selectPanel 能打开与关闭这块面板", () => {
@@ -170,7 +238,7 @@ it("宿主没有 layout 服务时 selectPanel 返回 false（调用方据此降�
 });
 
 it("两个 profile 行各调一次 apply：样式表只注入一次（幂等由 data-plugin-css 保证）", () => {
-  resetShell();
+  resetAll();
   const tags: { attrs: Record<string, string> }[] = [];
   const previous = (globalThis as { document?: unknown }).document;
   (globalThis as { document?: unknown }).document = {
@@ -204,7 +272,7 @@ it("两个 profile 行各调一次 apply：样式表只注入一次（幂等由 
 });
 
 it("插槽注册抛错时 apply 仍然完成（不让一次注册失败带走客户端）", () => {
-  resetShell();
+  resetAll();
   const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
   try {
     const host = fakeClientContext();

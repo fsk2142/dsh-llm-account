@@ -20,6 +20,7 @@ import {
   fieldsOf,
   isDirty,
   noteCredentialChange,
+  noteSaveResult,
   openAction,
   selectTab,
   setActionField,
@@ -47,8 +48,8 @@ function entryOf(overrides: Partial<VendorEntry> & Pick<VendorEntry, "ns">): Ven
 
 /** 两份设置快照：两家都在宿主上存在。 */
 const SNAPSHOTS: VendorSnapshot[] = [
-  { ns: "llm-commandcode", value: { showSidebarQuota: false, apiBase: "https://a.example" }, revision: 3 },
-  { ns: "llm-opencode-go", value: { usageDisplay: "auto" }, revision: 1 },
+  { ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: false, apiBase: "https://a.example" }, revision: 3 },
+  { ns: "llm-opencode-go", row: "opencode-go", value: { usageDisplay: "auto" }, revision: 1 },
 ];
 
 /** 展平元素树（数组与 `props.children` 都要下钻），得到所有元素。 */
@@ -158,10 +159,10 @@ it("「集成与显示」里的侧边栏卡片开关默认关闭，且声明来�
   }
 
   // 宿主文档里没有这个字段时，读到的就是声明的默认值 —— 不是 `undefined`，也不是真的 0/true。
-  const state = createPageState(VENDORS, [{ ns: "llm-commandcode", value: {}, revision: 1 }]);
+  const state = createPageState(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: {}, revision: 1 }]);
   expect(fieldValue(state, "llm-commandcode", "showSidebarQuota")).toBe(false);
   // 宿主文档里有值时以宿主为准。
-  const on = createPageState(VENDORS, [{ ns: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 }]);
+  const on = createPageState(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 }]);
   expect(fieldValue(on, "llm-commandcode", "showSidebarQuota")).toBe(true);
 });
 
@@ -219,7 +220,7 @@ it("账户操作草稿活过设置快照刷新（重读设置不丢用户输入�
   let state = setActionField(openAction(createPageState(VENDORS, SNAPSHOTS), { kind: "add" }), "label", "work");
   state = setActionField(state, "key", "sk-1");
 
-  const refreshed = createPageState(VENDORS, [{ ns: "llm-commandcode", value: { apiBase: "https://z" }, revision: 9 }], state);
+  const refreshed = createPageState(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { apiBase: "https://z" }, revision: 9 }], state);
   expect(refreshed.action).toEqual({ kind: "add", label: "work", key: "sk-1" });
   expect(refreshed.snapshots["llm-commandcode"]?.revision).toBe(9);
 });
@@ -299,6 +300,34 @@ it("保存条只在当前厂商有改动时出现", () => {
   const bars = elementsOf(render(dirty)).filter((element) => element.props["data-save-bar"] !== undefined);
   expect(bars).toHaveLength(1);
   expect(textOf(bars[0])).toContain(COPY.en.save);
+});
+
+it("保存失败时保存条显示可读原因（此前完全静默：用户以为保存成功了）", () => {
+  const dirty = setField(createPageState(VENDORS, SNAPSHOTS), "llm-commandcode", "apiBase", "https://b.example");
+
+  // 没有失败原因时没有错误行。
+  expect(elementsOf(render(dirty)).filter((element) => element.props["data-save-error"] !== undefined)).toEqual([]);
+
+  const failed = noteSaveResult(dirty, "llm-commandcode", "SETTINGS_CONFLICT: revision 3 is stale");
+  const bar = elementsOf(render(failed)).find((element) => element.props["data-save-bar"] !== undefined)!;
+  const error = elementsOf(bar).find((element) => element.props["data-save-error"] !== undefined)!;
+  expect(error.props["data-save-error"]).toBe("llm-commandcode");
+  // 界面上是通用文案；宿主的错误原文只在 data 属性上（对用户没有意义，但排查要用）。
+  expect(textOf(error)).toContain(COPY.en["save.failed"]);
+  expect(error.props["data-save-error-reason"]).toBe("SETTINGS_CONFLICT: revision 3 is stale");
+
+  // 保存成功即清除；换一个厂商的失败互不影响。
+  const other = noteSaveResult(failed, "llm-opencode-go", "boom");
+  expect(noteSaveResult(other, "llm-commandcode", undefined).saveErrors).toEqual({ "llm-opencode-go": "boom" });
+  // 恒等变换：结果没变时返回同一对象（宿主靠引用比较决定重渲染）。
+  expect(noteSaveResult(other, "llm-opencode-go", "boom")).toBe(other);
+  expect(noteSaveResult(other, "llm-ghost", undefined)).toBe(other);
+});
+
+it("保存失败原因跨快照刷新保留（它描述的还是当前这份草稿的问题）", () => {
+  const failed = noteSaveResult(createPageState(VENDORS, SNAPSHOTS), "llm-commandcode", "boom");
+  const refreshed = createPageState(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { apiBase: "https://z" }, revision: 9 }], failed);
+  expect(refreshed.saveErrors["llm-commandcode"]).toBe("boom");
 });
 
 it("没有厂商可渲染时给出说明文字，而不是空白页", () => {

@@ -52,6 +52,8 @@ export type CopyKey =
   | "credentials.updated"
   | "account.configured"
   | "account.missing"
+  | "account.empty"
+  | "account.unavailable"
   | "account.add"
   | "account.rename"
   | "account.replaceKey"
@@ -85,6 +87,10 @@ export type CopyKey =
   | "sidebar.effective"
   | "sidebar.open"
   | "sidebar.noRequest"
+  | "rejection.unavailable"
+  | "rejection.server"
+  | "rejection.network"
+  | "save.failed"
   | "switch.reason.quota"
   | "switch.reason.rate-limit"
   | "switch.reason.invalid-credential"
@@ -155,6 +161,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "credentials.updated": "凭据已更新",
     "account.configured": "已配置",
     "account.missing": "未配置",
+    "account.empty": "还没有添加任何账户。",
+    "account.unavailable": "账号数据暂不可用。",
     "account.add": "添加账户",
     "account.rename": "重命名",
     "account.replaceKey": "更换密钥",
@@ -188,6 +196,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.effective": "当前",
     "sidebar.open": "打开用量面板",
     "sidebar.noRequest": "还没有请求经过这个账号。",
+    "rejection.unavailable": "服务暂不可用",
+    "rejection.server": "服务端错误",
+    "rejection.network": "网络错误",
+    "save.failed": "保存失败，请重试。",
     "switch.reason.quota": "额度耗尽",
     "switch.reason.rate-limit": "被限流",
     "switch.reason.invalid-credential": "凭据失效",
@@ -253,6 +265,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "credentials.updated": "Credentials updated",
     "account.configured": "Configured",
     "account.missing": "Not configured",
+    "account.empty": "No accounts yet.",
+    "account.unavailable": "Account data is not available yet.",
     "account.add": "Add account",
     "account.rename": "Rename",
     "account.replaceKey": "Replace key",
@@ -286,6 +300,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.effective": "Current",
     "sidebar.open": "Open the usage panel",
     "sidebar.noRequest": "No request has used this account yet.",
+    "rejection.unavailable": "Service unavailable",
+    "rejection.server": "Server error",
+    "rejection.network": "Network error",
+    "save.failed": "Save failed, please try again.",
     "switch.reason.quota": "quota exhausted",
     "switch.reason.rate-limit": "rate limited",
     "switch.reason.invalid-credential": "credential rejected",
@@ -339,4 +357,36 @@ export function missingCopyKeys(): string[] {
 export function dictionaryOf(language: Language): (key: string) => string {
   const dictionary = COPY[language] as CopyDictionary;
   return (key: string) => dictionary[key] ?? key;
+}
+
+/**
+ * 拒绝分类（`FailureKind`）→ 文案键。
+ *
+ * 四种「能指名」的切换原因沿用切换提示的文案（额度耗尽/被限流/凭据失效 —— 同一件事的两种
+ * 读法，文案通用）；其余三种失败分类有各自的拒绝文案。**未知分类不在这张表里**：调用方
+ * 回退到「未知」，绝不把原始枚举或键名印到界面上。
+ */
+const REJECTION_COPY_KEYS: Readonly<Record<string, CopyKey>> = {
+  quota: "switch.reason.quota",
+  "rate-limit": "switch.reason.rate-limit",
+  "invalid-credential": "switch.reason.invalid-credential",
+  unavailable: "rejection.unavailable",
+  server: "rejection.server",
+  network: "rejection.network",
+};
+
+/**
+ * 一个拒绝分类的人类可读文案（账户卡片与仪表盘共用的唯一实现）。
+ *
+ * 与 {@link dictionaryOf} 的回退语义配合：取到的文案等于键名本身（文案缺失）时同样回退到
+ * 「未知」—— 显示一个键名比显示「未知」更糟。
+ * @param t - 取词函数（页面文案命名空间的）。
+ * @param kind - 失败分类（形状不可信，按字符串查表）。
+ * @returns 可读文案；未知分类或文案缺失时为「未知」。
+ */
+export function rejectionText(t: (key: string) => string, kind: string): string {
+  const key = REJECTION_COPY_KEYS[kind];
+  if (key === undefined) return t("dashboard.unknown");
+  const text = t(key);
+  return text === key ? t("dashboard.unknown") : text;
 }

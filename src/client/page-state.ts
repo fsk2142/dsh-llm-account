@@ -14,6 +14,15 @@ import type { CardGroupSpec, FieldSpec, VendorEntry } from "./registry";
 /** 宿主设置命名空间的一份快照：值 + 修订号（保存时要用它做并发围栏）。 */
 export interface VendorSnapshot {
   ns: string;
+  /**
+   *  describe 时**命中的行名**：写路径必须用它，不能用 `ns`。
+   *
+   * 宿主设置服务按 profile 条目 id 寻址（`SettingsForms.write` 找 `row.options.id === ns`），
+   * 而 opencode 的条目 id（`opencode-go`）与本包的核心命名空间（`llm-opencode-go`）**不同** ——
+   * 用 `ns` 写会落到一个不存在的条目上（commandcode 两者相同，所以只有 opencode 会中招）。
+   * 旧宿主上两者相同时，这个值就等于 `ns`。
+   */
+  row: string;
   value: Record<string, unknown>;
   revision: number;
 }
@@ -73,6 +82,14 @@ export interface PageState {
   readonly action: AccountAction | undefined;
   /** 展开完整报告的账号 ref；没有就是 `undefined`。 */
   readonly expandedRef: string | undefined;
+  /**
+   * 保存失败的可读原因：ns → 宿主给出的文案。
+   *
+   * 存在理由：保存失败此前**完全静默**（`saveSettings` 返回 false 后被丢掉），用户点了保存
+   * 以为落盘了，其实没有 —— 草稿还在，刷新页面即丢失。失败原因显示在保存条上，保存成功
+   * 即清除。
+   */
+  readonly saveErrors: Readonly<Record<string, string>>;
 }
 
 /** 三组卡片的规范顺序（规格 §8 的卡片顺序：隐私与安全 → 集成与显示 → 高级设置）。 */
@@ -98,7 +115,7 @@ export function createPageState(
     .map((entry): VendorTab => ({ ns: entry.ns, providerId: entry.providerId, labelKey: entry.labelKey, order: entry.order }));
   const snapshotMap: Record<string, VendorSnapshot> = {};
   for (const snapshot of snapshots) {
-    snapshotMap[snapshot.ns] = { ns: snapshot.ns, value: { ...snapshot.value }, revision: snapshot.revision };
+    snapshotMap[snapshot.ns] = { ns: snapshot.ns, row: snapshot.row, value: { ...snapshot.value }, revision: snapshot.revision };
   }
 
   const drafts: Record<string, Record<string, unknown>> = {};
@@ -125,7 +142,25 @@ export function createPageState(
     action: previous?.action,
     // 展开状态也保留；卡片只在对应账号行存在时才用得上它。
     expandedRef: previous?.expandedRef,
+    // 保存失败的原因同样跨刷新保留：它描述的还是当前这份草稿的问题，下一次保存才可能改变它。
+    saveErrors: previous?.saveErrors ?? {},
   };
+}
+
+/**
+ * 记一次保存的结果：成功清除该厂商的失败原因，失败把可读原因放进去。
+ * @param state - 当前状态。
+ * @param ns - 设置命名空间。
+ * @param error - 失败原因；`undefined` 表示保存成功。
+ * @returns 新状态；结果没有变化时是恒等变换。
+ */
+export function noteSaveResult(state: PageState, ns: string, error: string | undefined): PageState {
+  const current = state.saveErrors[ns];
+  if (error === undefined ? current === undefined : current === error) return state;
+  const saveErrors = { ...state.saveErrors };
+  if (error === undefined) delete saveErrors[ns];
+  else saveErrors[ns] = error;
+  return { ...state, saveErrors };
 }
 
 /**

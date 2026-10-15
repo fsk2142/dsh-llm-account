@@ -18,8 +18,9 @@ import { resetShell } from "../../src/client/shell";
 /** A `settings.section` registration as the fake host captures it. */
 interface RecordedSection {
   name: string;
-  id: string;
-  order: number;
+  id?: string;
+  key?: string;
+  order?: number;
   label: unknown;
   locale: unknown;
   inject: unknown;
@@ -88,13 +89,19 @@ describe("client plugin skeleton", () => {
     expect(vendors().map((vendor) => vendor.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
 
     // Page: exactly ONE `settings.section`, even though both instances ran.
-    expect(harness.register).toHaveBeenCalledTimes(1);
-    expect(harness.registrations).toHaveLength(1);
+    // The centre-column panel is registered the same way (once): both slots are
+    // resident for the bundle's lifetime, and the second instance reaches
+    // neither — the guards sit BEFORE `slots.inject`.
+    expect(harness.register).toHaveBeenCalledTimes(2);
+    expect(harness.registrations).toHaveLength(2);
     const registration = harness.registrations[0]!;
     expect(registration.name).toBe("settings.section");
     expect(registration.id).toBe("llm-account");
     expect(registration.order).toBe(12);
     expect(registration.locale).toBe("settings.llm-account");
+    const panel = harness.registrations[1]!;
+    expect(panel.name).toBe("main");
+    expect(panel.key).toBe("llm-account-dashboard");
     // Legacy call-site shape: `label` binds the locale namespace, `inject` is the
     // `hooks`-mapping factory the page reads its data through.
     expect(registration.label).toBeTypeOf("function");
@@ -102,14 +109,23 @@ describe("client plugin skeleton", () => {
     expect((registration.inject as () => unknown)()).toEqual({ hooks: {} });
     expect((registration.label as () => string)()).toBe("settings.llm-account.nav");
 
-    // Only the first instance reached the slot: the guard sits BEFORE
-    // `slots.inject`, so the second instance never touches the page slot at all.
-    expect(harness.inject).toHaveBeenCalledTimes(1);
+    // Only the first instance reached the slots: the guards sit BEFORE
+    // `slots.inject`, so the second instance never touches them at all.
+    expect(harness.inject).toHaveBeenCalledTimes(2);
     expect(harness.inject).toHaveBeenCalledWith("settings.section", expect.any(Function));
+    expect(harness.inject).toHaveBeenCalledWith("main", expect.any(Function));
 
     // The credentials service, by contrast, is armed by every instance: it rides
     // a NESTED injection (legacy commandcode client:7764), outside the page guard.
-    expect(harness.injectedServices).toEqual([["remote.credentials"], ["remote.credentials"]]);
+    // The plugin-scoped shared state adds two one-shot injections of its own: the
+    // settings mirror (`remote.settings`, for the sidebar toggle store) and the
+    // sidebar card's `layout` scope (legacy commandcode client:9331).
+    expect(harness.injectedServices).toEqual([
+      ["remote.settings"],
+      ["layout"],
+      ["remote.credentials"],
+      ["remote.credentials"],
+    ]);
 
     // Page copy namespace registered once (only the first instance registers the page).
     expect([...harness.localeNamespaces.keys()]).toEqual(["settings.llm-account"]);

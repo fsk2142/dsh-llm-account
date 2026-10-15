@@ -250,6 +250,13 @@ let applyCountValue = 0;
 let pageRegistered = false;
 
 /**
+ * Whether the sidebar card and the centre-column panel have been registered.
+ * Same module-level guard story as {@link pageRegistered}: one bundle, one
+ * registration, shared by both rows.
+ */
+let sharedSurfacesRegistered = false;
+
+/**
  * How many times the host called `apply` (assumption ② in
  * `docs/superpowers/notes/2026-10-13-host-seam-assumptions.md`). Read it from
  * the browser console (`dsh-llm-account`), or assert it here.
@@ -269,6 +276,7 @@ export function applyCount(): number {
 export function resetShell(): void {
   applyCountValue = 0;
   pageRegistered = false;
+  sharedSurfacesRegistered = false;
   resetRegistry();
 }
 
@@ -287,6 +295,14 @@ export interface ApplyShellOptions {
   pageComponent?: (t: (key: string) => string) => unknown;
   /** 页面文案字典（`{ zh, en }`）；缺省只有内置的 `nav`。 */
   copy?: Record<string, Record<string, string>>;
+  /**
+   * 侧边栏卡片与中栏面板的注册工厂（T8/T9 的常驻插槽）。
+   *
+   * **无条件、每个 bundle 一次**（与页面同样只有第一个实例注册）：插槽服务不返回注销句柄，
+   * 条件注册一旦开启就撤不下来，所以门控放在组件里按**已存储**的开关做（旧插件
+   * `CommandCodeFooterEntry` 的同一条判定）。两行各调一次 `apply` 也只注册一份。
+   */
+  sharedSurfaces?: (context: ClientShell, t: (key: string) => string) => void;
 }
 
 /**
@@ -314,6 +330,10 @@ export function applyShell(rawContext: unknown, options: ApplyShellOptions = {})
   // `slots.inject`: the second instance never touches the page's slot at all.
   registerPageOnce(context, options);
 
+  // 侧边栏卡片与中栏面板：同样只注册一次（守卫同形）。注册是**无条件**的 —— 门控在组件里
+  // 按已存储的开关做，见 {@link ApplyShellOptions.sharedSurfaces}。
+  registerSharedSurfacesOnce(context, options);
+
   // The credentials service is armed through a NESTED injection, exactly as the
   // legacy commandcode client does it (`lib/client.js:7764-7765`), not through
   // the exported top-level `inject` list. The credential-reading work of Task 4+
@@ -331,6 +351,18 @@ function registerPageOnce(context: ClientShell, options: ApplyShellOptions): voi
     // 与两个插槽注册同样的处置（旧插件在 `main`/`sidebar.footer.action` 上就是这么做的）：
     // 留一行错误继续走完 `apply` —— 后面的凭据注入与 applyCount 不该因为一次注册失败而丢掉。
     console.error("[dsh-llm-account] could not register the settings page:", error);
+  }
+}
+
+/** Check-and-set the shared-surfaces guard, then register them on the first pass only. */
+function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOptions): void {
+  if (sharedSurfacesRegistered) return;
+  sharedSurfacesRegistered = true;
+  try {
+    options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS));
+  } catch (error) {
+    // 与页面注册同样的处置：一次注册失败不该把整个客户端带走。
+    console.error("[dsh-llm-account] could not register the sidebar card and the usage panel:", error);
   }
 }
 

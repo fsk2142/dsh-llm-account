@@ -156,14 +156,26 @@ function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftFie
   return undefined;
 }
 
-/** 底部保存条：只在有改动时渲染（`vendorBody` 已经判过）。 */
+/** 底部保存条：只在有改动时渲染（`vendorBody` 已经判过）；保存失败时带一条可读原因。 */
 function saveBar(props: PageShellProps, entry: VendorEntry): ReactElement {
   const { t } = props;
+  // 失败原因原文放在 data 属性上供排查，界面上只显示通用文案（宿主的错误串对用户没有意义）。
+  const error = props.state.saveErrors[entry.ns];
   return createElement(
     "div",
     { "data-save-bar": "true", className: CSS_CLASS.save },
     createElement("button", { type: "button", "data-save": entry.ns, onClick: () => props.onSave(entry.ns) }, t("save")),
     createElement("small", null, t("saveHint")),
+    ...(error === undefined
+      ? []
+      : [
+          createElement("small", {
+            key: "error",
+            "data-save-error": entry.ns,
+            "data-save-error-reason": error,
+            className: CSS_CLASS.failure,
+          }, t("save.failed")),
+        ]),
   );
 }
 

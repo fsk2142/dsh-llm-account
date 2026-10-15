@@ -4,20 +4,30 @@
  * 这里测的是「猜出来的宿主形状」被调用时**我们这一侧**的行为：调用参数对不对、成功/失败分别
  * 怎么降级、卸载时有没有把东西收干净。宿主那一侧到底接不接受这些形状，本机无法验证（计划 1c）。
  */
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import {
   describeVendorSnapshots,
   dispatchAccountAction,
+  ensureUsageRemote,
   mountUsageRemote,
+  noteSidebarSnapshots,
+  onUsageReady,
   readAccounts,
   readStatus,
   readSwitches,
-  registerSidebarCard,
   registerPanelCard,
+  registerSidebarCard,
+  resetSeams,
   saveSettings,
   selectPanel,
+  sidebarVendor,
+  sidebarVendorSeeded,
+  startSharedState,
+  startSidebarMirror,
   subscribeCredentials,
+  subscribeSidebarVendor,
+  usageNamespace,
   type ClientSeamContext,
   type RemoteSettings,
 } from "../../src/client/seams";
@@ -109,6 +119,9 @@ it("发现厂商：只认注册表里声明过的命名空间，行 id 与命名
   // `opencode-go` 是**行 id**，核心命名空间是 `llm-opencode-go`：两个都要认（与装配层同一顺序）。
   expect(snapshots.map((snapshot) => snapshot.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
   expect(snapshots[1]).toMatchObject({ ns: "llm-opencode-go", revision: 1, value: { usageDisplay: "off" } });
+  // 命中的**行名**带进快照：写路径必须用它（opencode 的行 id 与命名空间不同）。
+  expect(snapshots[0]!.row).toBe("llm-commandcode");
+  expect(snapshots[1]!.row).toBe("opencode-go");
 });
 
 it("发现厂商：远程缺席、没有 settings、describe 抛错都退化为空列表（不把页面弄崩）", async () => {
@@ -196,9 +209,30 @@ it("挂载远程面：还没挂上就卸下时，迟到的挂载结果被释放�
   });
 
   const handle = mountUsageRemote(ctx);
+  expect(handle.disposed()).toBe(false);
   handle.dispose();
+  expect(handle.disposed()).toBe(true);
   resolveMount?.(lateDispose);
   await vi.waitFor(() => expect(lateDispose).toHaveBeenCalledTimes(1));
+  expect(handle.namespace()).toBeUndefined();
+});
+
+it("挂载远程面：所在作用域清理后句柄报告已卸下（共享面据此重挂）", () => {
+  const disposers: (() => void)[] = [];
+  const ctx: ClientSeamContext = {
+    remote: { $mount: async () => () => undefined },
+    inject: (_names, callback) => callback(ctx),
+    effect: (callback) => {
+      const dispose = callback();
+      if (typeof dispose === "function") disposers.push(dispose);
+      return () => undefined;
+    },
+  };
+
+  const handle = mountUsageRemote(ctx);
+  expect(handle.disposed()).toBe(false);
+  disposers[0]!();
+  expect(handle.disposed()).toBe(true);
   expect(handle.namespace()).toBeUndefined();
 });
 
@@ -208,31 +242,38 @@ it("远程读取：命名空间缺席或方法不全时返回 undefined（页面
   await expect(readSwitches(undefined, "commandcode")).resolves.toBeUndefined();
 });
 
-it("保存设置：按字段逐条 set，带上修订号；失败返回 false 且不谎报成功", async () => {
+it("保存设置：写**命中的行名**（不是核心命名空间），按字段逐条 set，带上修订号", async () => {
   const settings = fakeSettings();
   const { ctx } = fakeContext({ settings: settings.service });
 
+  // opencode 的行 id 是 `opencode-go`、命名空间是 `llm-opencode-go`：写行名。
   await expect(
-    saveSettings(ctx, "llm-commandcode", [{ key: "apiBase", value: "https://b" }, { key: "protocol", value: "cli" }], 7),
-  ).resolves.toBe(true);
+    saveSettings(ctx, "opencode-go", [{ key: "baseURL", value: "https://b" }, { key: "requestTimeoutMs", value: 30_000 }], 7),
+  ).resolves.toBeUndefined();
   expect(settings.mutations).toEqual([
     {
-      ns: "llm-commandcode",
+      ns: "opencode-go",
       revision: 7,
       ops: [
-        { op: "set", path: ["apiBase"], value: "https://b" },
-        { op: "set", path: ["protocol"], value: "cli" },
+        { op: "set", path: ["baseURL"], value: "https://b" },
+        { op: "set", path: ["requestTimeoutMs"], value: 30_000 },
       ],
     },
   ]);
+});
+
+it("保存设置：失败返回可读原因（不静默 —— 用户以为保存成功而实际没有，比报错更糟）", async () => {
+  const settings = fakeSettings();
+  const { ctx } = fakeContext({ settings: settings.service });
 
   settings.fail = new Error("revision conflict");
-  await expect(saveSettings(ctx, "llm-commandcode", [{ key: "apiBase", value: "https://c" }], 8)).resolves.toBe(false);
+  await expect(saveSettings(ctx, "llm-commandcode", [{ key: "apiBase", value: "https://c" }], 8)).resolves.toContain("revision conflict");
   // 没有字段要写：不算失败，也不发一次空写入。
-  await expect(saveSettings(ctx, "llm-commandcode", [], 8)).resolves.toBe(true);
+  await expect(saveSettings(ctx, "llm-commandcode", [], 8)).resolves.toBeUndefined();
+  expect(settings.mutations).toEqual([]);
 
   const noSettings = fakeContext({});
-  await expect(saveSettings(noSettings.ctx, "llm-commandcode", [{ key: "apiBase", value: "x" }], 1)).resolves.toBe(false);
+  await expect(saveSettings(noSettings.ctx, "llm-commandcode", [{ key: "apiBase", value: "x" }], 1)).resolves.toContain("settings service");
 });
 
 it("中栏面板接缝：宿主没有 layout.selectPanel 时返回 false（供调用方降级）", () => {
@@ -364,4 +405,222 @@ it("账户操作派发：输入不合法或远程面不可用时**不发调用**
   expect(dispatchAccountAction(undefined, "commandcode", { kind: "add", label: "x", key: "y" })).toBeUndefined();
 
   expect(add).not.toHaveBeenCalled();
+});
+
+it("账户操作派发：名称与密钥在边界上 trim（粘贴常带换行/尾随空格）", async () => {
+  const calls: unknown[] = [];
+  const namespace = fakeNamespace({
+    addAccount: async (vendor, input) => {
+      calls.push(["add", vendor, input]);
+      return { ref: "new", label: input.label, configured: true, active: false };
+    },
+    renameAccount: async (vendor, ref, label) => void calls.push(["rename", vendor, ref, label]),
+    replaceKey: async (vendor, ref, key) => void calls.push(["replaceKey", vendor, ref, key]),
+  });
+
+  await dispatchAccountAction(namespace, "commandcode", { kind: "add", label: "  work \n", key: " sk-1\n" });
+  await dispatchAccountAction(namespace, "commandcode", { kind: "rename", ref: "a", label: "  renamed  ", key: "" });
+  await dispatchAccountAction(namespace, "commandcode", { kind: "key", ref: "a", label: "", key: "\tsk-2 " });
+
+  expect(calls).toEqual([
+    ["add", "commandcode", { label: "work", key: "sk-1" }],
+    ["rename", "commandcode", "a", "renamed"],
+    ["replaceKey", "commandcode", "a", "sk-2"],
+  ]);
+});
+
+// —— 插件级共享状态：usage 远程面单例 + 侧边栏开关存储 + 设置镜像 ——
+
+afterEach(() => {
+  resetSeams();
+});
+
+/** 两份设置行：opencode 用**行 id** 回来（与命名空间不同），另一家用命名空间。 */
+function settingsRows(toggle: boolean): { ns?: string; id?: string; value: Record<string, unknown>; revision: number }[] {
+  return [
+    { ns: "llm-commandcode", value: { showSidebarQuota: toggle }, revision: 1 },
+    { id: "opencode-go", value: { showSidebarQuota: toggle }, revision: 1 },
+  ];
+}
+
+it("共享 usage 远程面：两个 profile 行（两次 ensure）只 $mount 一次", async () => {
+  const mounted: { package: string; descriptors: readonly unknown[] }[] = [];
+  const namespace = fakeNamespace();
+  const { ctx } = fakeContext({
+    [USAGE_NAMESPACE]: namespace,
+    $mount: async (contribution: { package: string; descriptors: readonly unknown[] }) => {
+      mounted.push(contribution);
+      return () => undefined;
+    },
+  });
+
+  const first = ensureUsageRemote(ctx);
+  const second = ensureUsageRemote(ctx);
+  expect(first).toBe(second);
+  await vi.waitFor(() => expect(first.namespace()).toBe(namespace));
+  expect(mounted).toHaveLength(1);
+  expect(mounted[0]!.package).toBe(USAGE_PACKAGE);
+  expect(mounted[0]!.descriptors).toHaveLength(usageDescriptors().length);
+});
+
+it("onUsageReady：先用当前值调用一次，命名空间挂上后再调用；退订后不再调用", async () => {
+  const namespace = fakeNamespace();
+  const { ctx } = fakeContext({ [USAGE_NAMESPACE]: namespace, $mount: async () => () => undefined });
+  const seen: (UsageNamespace | undefined)[] = [];
+
+  const off = onUsageReady(ctx, (value) => seen.push(value));
+  expect(seen).toEqual([undefined]); // 挂载还是异步的：先给当前值（还没有）
+  await vi.waitFor(() => expect(seen).toHaveLength(2));
+  expect(seen[1]).toBe(namespace);
+
+  off();
+  ensureUsageRemote(ctx).dispose();
+  await vi.waitFor(() => expect(seen).toHaveLength(2)); // 卸下也不通知已退订的监听者
+});
+
+it("usageNamespace：先问共享句柄，再回落到 ctx.remote 上的命名空间", async () => {
+  const namespace = fakeNamespace();
+  const { ctx } = fakeContext({ [USAGE_NAMESPACE]: namespace, $mount: async () => () => undefined });
+  await vi.waitFor(() => expect(ensureUsageRemote(ctx).namespace()).toBe(namespace));
+  expect(usageNamespace(ctx)).toBe(namespace);
+
+  // 回落路径：共享句柄不可用（没有 $mount），但上下文上直接挂着命名空间。
+  resetSeams();
+  const bare = fakeContext({ [USAGE_NAMESPACE]: namespace });
+  expect(usageNamespace(bare.ctx)).toBe(namespace);
+});
+
+it("共享 usage 远程面：卸下后下一个消费者把它重挂回来（两行中一行卸载的自愈）", async () => {
+  const mounted: unknown[] = [];
+  const namespace = fakeNamespace();
+  const remote: Record<string, unknown> = {
+    [USAGE_NAMESPACE]: namespace,
+    $mount: async () => {
+      mounted.push(null);
+      return () => undefined;
+    },
+  };
+  const { ctx } = fakeContext(remote);
+
+  const first = ensureUsageRemote(ctx);
+  await vi.waitFor(() => expect(first.namespace()).toBe(namespace));
+  first.dispose();
+  expect(first.disposed()).toBe(true);
+
+  const second = ensureUsageRemote(ctx);
+  expect(second).not.toBe(first);
+  await vi.waitFor(() => expect(second.namespace()).toBe(namespace));
+  expect(mounted).toHaveLength(2);
+});
+
+it("侧边栏开关存储：按标签页顺序取第一家开启的厂商，关掉即清空", () => {
+  const commandCode = { ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 };
+  const opencode = { ns: "llm-opencode-go", row: "opencode-go", value: { showSidebarQuota: true }, revision: 1 };
+
+  noteSidebarSnapshots(VENDORS, [commandCode, opencode]);
+  expect(sidebarVendor()).toBe("commandcode");
+
+  noteSidebarSnapshots(VENDORS, [opencode]);
+  expect(sidebarVendor()).toBe("dsh-opencode-go");
+
+  noteSidebarSnapshots(VENDORS, [{ ...commandCode, value: { showSidebarQuota: false } }, { ...opencode, value: { showSidebarQuota: false } }]);
+  expect(sidebarVendor()).toBeUndefined();
+});
+
+it("侧边栏开关存储：空快照不清空、不 seed；非布尔值不算开启", () => {
+  noteSidebarSnapshots(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 }]);
+  expect(sidebarVendor()).toBe("commandcode");
+
+  // 空读（宿主设置服务缺席/未就绪）既不清掉已开启的厂商，也不把存储标记成已 seed ——
+  // 否则冷启动兜底就不再补救，一次时序抖动就会把卡片永久关掉。
+  noteSidebarSnapshots(VENDORS, []);
+  expect(sidebarVendor()).toBe("commandcode");
+  expect(sidebarVendorSeeded()).toBe(true);
+
+  resetSeams();
+  noteSidebarSnapshots(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: "true" }, revision: 1 }]);
+  expect(sidebarVendorSeeded()).toBe(true);
+  expect(sidebarVendor()).toBeUndefined();
+});
+
+it("侧边栏开关存储：订阅者在变化时收到通知，值不变不重复通知", () => {
+  const seen: (string | undefined)[] = [];
+  const off = subscribeSidebarVendor((vendor) => seen.push(vendor));
+  const on = { ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 };
+
+  noteSidebarSnapshots(VENDORS, [on]);
+  noteSidebarSnapshots(VENDORS, [on]); // 同值：不通知
+  noteSidebarSnapshots(VENDORS, []); // 空快照：不通知
+  noteSidebarSnapshots(VENDORS, [{ ...on, value: { showSidebarQuota: false } }]);
+  expect(seen).toEqual(["commandcode", undefined]);
+
+  off();
+  noteSidebarSnapshots(VENDORS, [on]);
+  expect(seen).toHaveLength(2);
+});
+
+it("设置镜像：首读 seed 存储，settings/document-updated 触发重读（事件潮合并）", async () => {
+  let toggle = false;
+  let describes = 0;
+  const listeners: (() => void)[] = [];
+  const { ctx } = fakeContext({
+    settings: {
+      describe: async () => {
+        describes += 1;
+        return settingsRows(toggle);
+      },
+      mutate: async () => undefined,
+    },
+    $on: (_event: string, listener: () => void) => {
+      listeners.push(listener);
+      return () => undefined;
+    },
+  });
+
+  startSidebarMirror(ctx, VENDORS);
+  await vi.waitFor(() => expect(sidebarVendorSeeded()).toBe(true));
+  const afterStart = describes;
+  expect(afterStart).toBeGreaterThanOrEqual(1);
+
+  toggle = true;
+  listeners[0]!();
+  listeners[0]!(); // 同一轮微任务里的两次事件只读一次
+  await vi.waitFor(() => expect(sidebarVendor()).toBe("commandcode"));
+  expect(describes).toBe(afterStart + 1);
+
+  // 幂等：第二次 start 不重复读、不重复订阅。
+  const before = describes;
+  startSidebarMirror(ctx, VENDORS);
+  await Promise.resolve();
+  expect(describes).toBe(before);
+  expect(listeners).toHaveLength(1);
+});
+
+it("startSharedState：远程面与设置镜像都就位（apply 期引导，幂等）", async () => {
+  let toggle = false;
+  let mounts = 0;
+  const listeners: (() => void)[] = [];
+  const { ctx } = fakeContext({
+    settings: { describe: async () => settingsRows(toggle), mutate: async () => undefined },
+    $mount: async () => {
+      mounts += 1;
+      return () => undefined;
+    },
+    $on: (_event: string, listener: () => void) => {
+      listeners.push(listener);
+      return () => undefined;
+    },
+  });
+
+  startSharedState(ctx, VENDORS);
+  startSharedState(ctx, VENDORS); // 第二个 profile 行：无副作用
+  await vi.waitFor(() => expect(sidebarVendorSeeded()).toBe(true));
+  expect(mounts).toBe(1);
+  expect(sidebarVendor()).toBeUndefined();
+
+  // 开关被拨开（设置页里的保存会走宿主发出的事件；这里直接触发它）。
+  toggle = true;
+  listeners[0]!();
+  await vi.waitFor(() => expect(sidebarVendor()).toBe("commandcode"));
+  expect(mounts).toBe(1); // 远程面没有重挂
 });

@@ -17,8 +17,8 @@ import { AccountCard, type AccountCardProps } from "./account-card";
 import { COPY } from "./copy";
 import { ModelsCard } from "./models-card";
 import { OpenCodeAccountCard } from "./opencode-account-card";
-import { createConnectedPage, type ClientSeamContext, type VendorCardsContext } from "./seams";
-import { applyShell, VENDORS } from "./shell";
+import { createConnectedPage, registerSharedSurfaces, startSharedState, type ClientSeamContext, type VendorCardsContext } from "./seams";
+import { applyShell, PAGE_LOCALE_NS, VENDORS } from "./shell";
 
 /**
  * Debug counter: how many times the host called `apply` (plan 1c reads it to
@@ -76,15 +76,28 @@ export const inject = ["slots", "locale", "remote"];
  */
 export function apply(ctx: unknown): void {
   console.debug("[dsh-llm-account] client bundle loaded");
+  const seamContext = ctx as ClientSeamContext;
+  // 插件级共享状态：usage 远程面单例 + 侧边栏开关的设置镜像。旧插件把这两样都挂在 apply 期
+  // （`lib/client.js` 的 `applyClientSurfaces`），不随设置页开闭起落 —— 侧边栏卡片与中栏
+  // 面板是独立的 React 根，设置页关掉不该带走它们的数据源。幂等：两行各调一次无副作用。
+  startSharedState(seamContext, VENDORS);
   applyShell(ctx, {
     copy: { zh: COPY.zh, en: COPY.en },
     pageComponent: (t) =>
       createConnectedPage({
         entries: VENDORS,
-        ctx: ctx as ClientSeamContext,
+        ctx: seamContext,
         t,
         // 专属卡片：账户卡片（Task 5）。模型卡片在 T7 接到这里，顺序即规格 §8 的卡片顺序。
         renderVendorCards: (cards) => renderVendorCards(cards),
+      }),
+    // 侧边栏卡片与中栏面板：常驻注册一次（守卫在 shell 里），门控在组件里按已存储的开关做。
+    sharedSurfaces: (context, t) =>
+      registerSharedSurfaces({
+        ctx: context as ClientSeamContext,
+        entries: VENDORS,
+        t,
+        localeNs: PAGE_LOCALE_NS,
       }),
   });
 }

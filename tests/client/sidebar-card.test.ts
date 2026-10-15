@@ -250,10 +250,10 @@ it("开关只读已存储的设置文档：草稿把开关拨开也不算", () =
   expect(sidebarQuotaEnabled({ showSidebarQuota: "true" })).toBe(false);
 
   // 页面状态里：草稿为 true、已存储为 false → 仍然不注册（旧插件同一条判定）。
-  let state = createPageState(VENDORS, [{ ns: "llm-commandcode", value: { showSidebarQuota: false }, revision: 1 }]);
+  let state = createPageState(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: false }, revision: 1 }]);
   state = { ...state, drafts: { "llm-commandcode": { showSidebarQuota: true } } };
   expect(sidebarVendorOf(VENDORS, state.snapshots)).toBeUndefined();
 
-  const stored = createPageState(VENDORS, [{ ns: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 }]);
+  const stored = createPageState(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 }]);
   expect(sidebarVendorOf(VENDORS, stored.snapshots)?.ns).toBe("llm-commandcode");
 });

@@ -17,12 +17,32 @@
  * **全部未验证**：本机没有与桌面端同版本（0.2.0-rc.2）的引擎，这些形状来自已装插件的**旁证**。
  * @module dsh-llm-account/src/client/seams
  */
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { createElement, useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 import { dictionaryOf } from "./copy";
 import { Dashboard } from "./dashboard";
 import { SidebarCard } from "./sidebar-card";
-import { createPageState, applyModelEdit, closeAction, dirtyFields, modelEditTarget, normalizeModels, noteCredentialChange, openAction, selectTab, setActionField, setField, sidebarVendorOf, toggleExpanded, vendorCardKinds, type AccountAction, type ModelEdit, type PageState, type VendorSnapshot } from "./page-state";
+import {
+  applyModelEdit,
+  closeAction,
+  createPageState,
+  dirtyFields,
+  modelEditTarget,
+  normalizeModels,
+  noteCredentialChange,
+  noteSaveResult,
+  openAction,
+  selectTab,
+  setActionField,
+  setField,
+  sidebarVendorOf,
+  toggleExpanded,
+  vendorCardKinds,
+  type AccountAction,
+  type ModelEdit,
+  type PageState,
+  type VendorSnapshot,
+} from "./page-state";
 import type { LoginView } from "./account-card";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
@@ -83,7 +103,8 @@ export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: r
   }
   // 宿主按 profile 行 id 建索引，旧宿主用命名空间，而 opencode 的**行 id 与核心命名空间不同**
   // （`opencode-go` vs `llm-opencode-go`）—— 所以按注册表声明的候选行名匹配，命中后一律用 `ns`
-  // 作为页面身份（标签页与草稿都以 `ns` 为键）。
+  // 作为页面身份（标签页与草稿都以 `ns` 为键），同时把**命中的行名**带进快照：写路径必须用
+  // 行名（宿主设置服务按条目 id 寻址），用 `ns` 会让 opencode 的保存落在一个不存在的条目上。
   const byRow = new Map<string, VendorEntry>();
   for (const entry of entries) {
     for (const rowId of entry.rowIds) byRow.set(rowId, entry);
@@ -92,10 +113,11 @@ export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: r
   const snapshots: VendorSnapshot[] = [];
   for (const row of rows) {
     const rowName = [row.ns, row.id].find((candidate): candidate is string => typeof candidate === "string");
-    const entry = rowName === undefined ? undefined : byRow.get(rowName);
+    if (rowName === undefined) continue;
+    const entry = byRow.get(rowName);
     if (entry === undefined) continue;
     const value = typeof row.value === "object" && row.value !== null ? (row.value as Record<string, unknown>) : {};
-    snapshots.push({ ns: entry.ns, value, revision: typeof row.revision === "number" ? row.revision : 0 });
+    snapshots.push({ ns: entry.ns, row: rowName, value, revision: typeof row.revision === "number" ? row.revision : 0 });
   }
   return snapshots;
 }
@@ -173,6 +195,8 @@ export interface UsageRemoteHandle {
   namespace(): UsageNamespace | undefined;
   /** 挂载失败的可读原因（供界面提示）。 */
   error(): string | undefined;
+  /** 是否已卸下（所在作用域清理或主动 `dispose` 之后为 `true`；共享面据此重挂）。 */
+  disposed(): boolean;
   /** 主动卸下（容器卸载时也会自动卸下）。 */
   dispose(): void;
 }
@@ -192,9 +216,16 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
   let namespace: UsageNamespace | undefined;
   let failure: string | undefined;
   let cancelled = false;
+  let gone = false;
   let unmount: (() => void) | undefined;
 
   const notify = (): void => onChange?.(namespace, failure);
+
+  const release = (): void => {
+    cancelled = true;
+    namespace = undefined;
+    unmount?.();
+  };
 
   const start = (): void => {
     if (remote?.$mount === undefined || typeof remote.$mount !== "function") {
@@ -235,9 +266,8 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
       () => {
         start();
         return () => {
-          cancelled = true;
-          namespace = undefined;
-          unmount?.();
+          gone = true;
+          release();
         };
       },
       "dsh-llm-account: usage remote",
@@ -249,10 +279,10 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
   return {
     namespace: () => namespace,
     error: () => failure,
+    disposed: () => gone,
     dispose: () => {
-      cancelled = true;
-      namespace = undefined;
-      unmount?.();
+      gone = true;
+      release();
     },
   };
 }
@@ -262,6 +292,9 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
  *
  * 为什么单独成函数：**哪个操作调哪个方法**、以及「空名称/空密钥不提交」这类判定都属于
  * 会出错的地方，而容器组件（唯一的 Hook 宿主）不参与单测（Ruling 22）。放在这里就能被测到。
+ *
+ * 名称与密钥都在**边界上 trim**：用户粘贴的密钥常带换行/尾随空格，名称常带无意空格，
+ * 原样提交会把它们写进宿主（标签页显示、凭据槽内容）。
  * @param usage - 已挂载的远程命名空间；还没挂上时为 `undefined`。
  * @param vendor - 厂商 id。
  * @param action - `page-state.ts` 里的操作草稿。
@@ -276,16 +309,25 @@ export function dispatchAccountAction(
   switch (action.kind) {
     case "add": {
       // 空名称不提交（宿主会拒绝，但我们先不发这次调用）。
-      if (action.label.trim() === "") return undefined;
-      return usage.addAccount(vendor, action.key.trim() === "" ? { label: action.label } : { label: action.label, key: action.key });
+      const label = action.label.trim();
+      if (label === "") return undefined;
+      const key = action.key.trim();
+      // 空密钥只建条目：`key` 字段整个不传，而不是传空串（那会被当成「要写空密钥」）。
+      return usage.addAccount(vendor, key === "" ? { label } : { label, key });
     }
-    case "rename":
-      if (action.ref === undefined || action.label.trim() === "") return undefined;
-      return usage.renameAccount(vendor, action.ref, action.label);
-    case "key":
+    case "rename": {
+      if (action.ref === undefined) return undefined;
+      const label = action.label.trim();
+      if (label === "") return undefined;
+      return usage.renameAccount(vendor, action.ref, label);
+    }
+    case "key": {
       // 空密钥不提交：那等于把账号的密钥清掉，用户不会想用这个方式做。
-      if (action.ref === undefined || action.key.trim() === "") return undefined;
-      return usage.replaceKey(vendor, action.ref, action.key);
+      if (action.ref === undefined) return undefined;
+      const key = action.key.trim();
+      if (key === "") return undefined;
+      return usage.replaceKey(vendor, action.ref, key);
+    }
   }
 }
 
@@ -295,8 +337,6 @@ export interface ConnectedPageOptions {
   ctx: ClientSeamContext;
   /** 取词函数；缺省按 `zh` 的本地字典（宿主 locale 绑定由 `shell.ts` 负责）。 */
   t?: (key: string) => string;
-  /** 页面文案命名空间（侧边栏卡片的 `locale` 用它）。 */
-  localeNs?: string;
   /**
    * 该厂商的专属卡片（账户卡片、模型卡片……）。T5–T7 从这里注入。
    *
@@ -367,12 +407,16 @@ export function shouldPollLogin(login: LoginView | undefined): boolean {
   return login?.state === "waiting";
 }
 
-/** 造**容器组件**：持有页面状态、挂载远程面、订阅宿主推送、把回调接上，然后渲染 `PageShell`。
+/** 造**容器组件**：持有页面状态、订阅宿主推送与共享远程面、把回调接上，然后渲染 `PageShell`。
  *
  * 这是本层唯一使用 Hook 的地方，刻意做得极薄：所有判定都在 `page-state.ts` / `dispatchAccountAction`
  * / `shouldPollLogin` 里（纯函数、完整单测），这里只负责「状态放哪、什么时候重新读」。
  * 因此它**不参与单测**（测试用的 React 替身会把 Hook 调用判为失败）—— 自觉的取舍，1c 的真机
  * 渲染是它的验证。
+ *
+ * 远程面是**插件级共享**的（`ensureUsageRemote`）：本容器只订阅它的可用性，不持有它的生命周期 ——
+ * 设置页关掉不该把侧边栏卡片与中栏面板的数据源一起带走（旧插件把 usage remote 挂在 apply 期，
+ * 本机产物可读）。
  * @param options - 见 {@link ConnectedPageOptions}。
  * @returns 一个 React 函数组件。
  */
@@ -390,21 +434,30 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
 
+    /** 采纳一次快照读取：页面状态与侧边栏开关存储（同一来源、两个消费者）。 */
+    const adopt = (snapshots: VendorSnapshot[]): void => {
+      // 只有拿到快照才重建：宿主设置服务缺席时不要用一个空快照把页面清空，也不要把开关存储抹掉。
+      if (snapshots.length === 0) return;
+      noteSidebarSnapshots(entries, snapshots);
+      setState((current) => createPageState(entries, snapshots, current));
+    };
+
     useEffect(() => {
       let alive = true;
-      void describeVendorSnapshots(ctx, entries).then((snapshots) => {
-        // 只有拿到快照才重建：宿主设置服务缺席时不要用一个空快照把页面清空。
-        if (alive && snapshots.length > 0) setState((current) => createPageState(entries, snapshots, current));
-      });
+      const guarded = (snapshots: VendorSnapshot[]): void => {
+        if (alive) adopt(snapshots);
+      };
+      void describeVendorSnapshots(ctx, entries).then(guarded);
       const off = subscribeCredentials(ctx, () => setState((current) => noteCredentialChange(current)));
       // 远程面在挂载完成后才可用；挂载前卡片按「数据不可用」显示。
-      const handle = mountUsageRemote(ctx, (namespace) => {
+      // 只订阅、不 dispose：它的生命周期属于插件，不属于这个页面。
+      const offUsage = onUsageReady(ctx, (namespace) => {
         if (alive) setUsage(namespace);
       });
       return () => {
         alive = false;
         off();
-        handle.dispose();
+        offUsage();
       };
     }, []);
 
@@ -415,7 +468,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       // 账户操作（排序、autoSwitch、增删改）会改设置文档，所以每次都把快照重读一遍；
       // 用户的未保存草稿由 `createPageState(…, previous)` 保留。
       void describeVendorSnapshots(ctx, entries).then((snapshots) => {
-        if (alive && snapshots.length > 0) setState((current) => createPageState(entries, snapshots, current));
+        if (alive) adopt(snapshots);
       });
       if (usage !== undefined) {
         for (const entry of entries) {
@@ -441,19 +494,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       return () => clearInterval(timer);
     }, [usage, waitingVendors.join(",")]);
 
-    // 侧边栏额度卡片：只有**已存储**的开关为真才注册（默认关闭、关闭时零后台查询）。
-    // 判定是纯函数 `sidebarVendorOf`/`sidebarQuotaEnabled`（草稿把开关拨开不算，见那里的文档）。
-    const sidebarVendor = sidebarVendorOf(entries, state.snapshots);
-    const sidebarVendorId = sidebarVendor?.providerId;
-    useEffect(() => {
-      return syncSidebarAndPanel({
-        ctx,
-        enabled: sidebarVendorId !== undefined,
-        vendor: sidebarVendorId ?? "",
-        t,
-        localeNs: options.localeNs ?? "settings.llm-account",
-      });
-    }, [sidebarVendorId]);
+    // 侧边栏卡片与中栏面板的注册在 apply 期一次完成（`registerSharedSurfaces`，常驻），
+    // 门控在卡片组件里按**已存储**的开关做（`createSidebarCardView`）—— 这里不再碰插槽。
 
     const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
     const activeVendor = activeEntry?.providerId;
@@ -467,9 +509,14 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       onSave: (ns) => {
         const fields = dirtyFields(state, ns);
         if (fields.length === 0) return;
-        void saveSettings(ctx, ns, fields, state.snapshots[ns]?.revision ?? 0).then((saved) => {
-          if (!saved) return; // 失败时草稿保留，用户可以重试。
-          setState((current) => createPageState(entries, mergeSnapshot(current, ns, fields), current));
+        // 写**命中的行名**（opencode 的行 id 与命名空间不同，用 ns 会写到一个不存在的条目上）。
+        const snapshot = state.snapshots[ns];
+        void saveSettings(ctx, snapshot?.row ?? ns, fields, snapshot?.revision ?? 0).then((error) => {
+          // 成败都记下来：失败时保存条显示可读原因（此前完全静默 —— 用户以为保存成功了）；
+          // 成功即清除。随后一律重读一遍宿主：基线以宿主为准，不猜修订号（紧接着的第二次
+          // 保存不会带着猜出来的围栏再次失败），已落盘的草稿条目随之清掉。
+          setState((current) => noteSaveResult(current, ns, error));
+          void describeVendorSnapshots(ctx, entries).then((snapshots) => adopt(snapshots));
         });
       },
       ...(options.renderVendorCards === undefined || activeEntry === undefined || activeVendor === undefined
@@ -519,8 +566,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                   setDraft: (value) => setModelDrafts((current) => ({ ...current, [activeEntry.ns]: value })),
                   draftInto: (ns, fields) => setState((current) => fields.reduce((acc, field) => setField(acc, ns, field.key, field.value), current)),
                   writeNow: (ns, fields) => {
-                    void saveSettings(ctx, ns, fields, state.snapshots[ns]?.revision ?? 0).then((saved) => {
-                      if (saved) setAccountRevision((current) => current + 1);
+                    // 立刻写（`immediate` 能力）：同样写行名；失败不静默 —— 记进保存错误，
+                    // 下一次快照重读会让控件回落到已存储的值（用户看得出这次没写进去）。
+                    const target = state.snapshots[ns];
+                    void saveSettings(ctx, target?.row ?? ns, fields, target?.revision ?? 0).then((error) => {
+                      setState((current) => noteSaveResult(current, ns, error));
+                      if (error === undefined) setAccountRevision((current) => current + 1);
                     });
                   },
                 }),
@@ -743,34 +794,61 @@ export const DASHBOARD_PANEL_ID = "llm-account-dashboard";
 export const SIDEBAR_CARD_ID = "llm-account-quota";
 
 /**
- * 造**侧边栏卡片的容器组件**：自己读状态、自己轮询，轮询随挂载起停。
+ * 造**侧边栏卡片的容器组件**：厂商从模块级开关存储里取，渲染与轮询都按它门控。
  *
- * 为什么轮询放在组件里而不是页面容器里：插槽组件是**另一个 React 根**，读不到设置页容器的
- * state。规格 §8.1 第 6 条要求「轮询随卡片生命周期起停」，所以卡片自己持有控制器最自然 ——
- * 卸载即停，关闭开关时页面容器会把注册撤掉（连同组件一起卸载）。
+ * **为什么门控在组件里而不是注册时**（旧插件 `CommandCodeFooterEntry` 的同一条判定，本机
+ * 已装产物可读）：插槽注册是**常驻**的（`apply` 期一次，注释原话 "The entry stays
+ * REGISTERED — this is a render decision, so nothing churns the slot ledger"），组件按
+ * **已存储**的开关决定 `if (!visible) return null`，并让自动刷新随 `visible` 起停。
+ * 反过来做（注册按开关条件化）看起来更干净，但插槽服务**不返回注销句柄** —— 关掉开关时
+ * 撤不下已注册的条目，卡片会带着定时器继续每 60s 请求，直接违背规格 §8.1 第 6 条。
  *
- * 这里用 Hook（与设置页容器同样的自觉取舍，Ruling 22）：全部判定都在
- * `createSidebarCardController` 与 `sidebarVendorOf` 里，那些都有单测。
- * @param options - 上下文、要显示哪一家、取词函数与「打开仪表盘」的动作。
+ * 存储的写者：插件级设置镜像（`settings/document-updated` 事件 + 首读）与设置页容器
+ * （每次快照重读后）——两者算的是同一个 `sidebarVendorOf`，幂等。
+ *
+ * 关闭状态（存储里没有厂商）：渲染 `null`、不轮询、不注册 `visibilitychange` ——
+ * 「关闭即静默」在**每一条路径**上成立（开启→关闭、卸载、从未开启）。
+ * @param options - 上下文、厂商声明、取词函数与「打开仪表盘」的动作。
  * @returns 一个 React 函数组件。
  */
 export function createSidebarCardView(options: {
   ctx: ClientSeamContext;
-  vendor: string;
+  entries: readonly VendorEntry[];
   t: (key: string) => string;
   onOpen: () => void;
   intervalMs?: number;
 }): () => ReactElement {
-  const { ctx, vendor, t } = options;
+  const { ctx, entries, t } = options;
   return function ConnectedSidebarCard(): ReactElement {
+    const [vendor, setVendor] = useState<string | undefined>(() => sidebarVendor());
     const [status, setStatus] = useState<VendorUsageStatus | undefined>(undefined);
 
+    // 订阅开关存储：设置页里保存（或外部改动设置文档）时，这里随之开关。
+    useEffect(() => subscribeSidebarVendor(setVendor), []);
+
+    // 冷启动兜底：设置页从未打开过时存储是冷的，卡片自己读一次已存储的开关
+    // （一次设置读取，不是用量查询；读不到就保持关闭，绝不轮询）。
     useEffect(() => {
-      // 注册由页面容器负责（它掌握「已存储的开关」）；这里只负责轮询的生命周期。
+      if (sidebarVendorSeeded()) return;
+      let alive = true;
+      void describeVendorSnapshots(ctx, entries).then((snapshots) => {
+        if (alive) noteSidebarSnapshots(entries, snapshots);
+      });
+      return () => {
+        alive = false;
+      };
+    }, []);
+
+    useEffect(() => {
+      // 关闭：停轮询、撤监听、清数据（旧插件同一分支：`if (!visible) return null`）。
+      if (vendor === undefined) {
+        setStatus(undefined);
+        return;
+      }
       const controller = createSidebarCardController({
         register: () => () => undefined,
         load: () => {
-          const usage = usageNamespaceOf(ctx);
+          const usage = usageNamespace(ctx);
           if (usage === undefined) return;
           void readStatus(usage, vendor).then((next) => {
             if (next !== undefined) setStatus(next);
@@ -779,6 +857,10 @@ export function createSidebarCardView(options: {
         ...(options.intervalMs === undefined ? {} : { intervalMs: options.intervalMs }),
       });
       controller.sync(true);
+      // 远程面挂载完成前第一次读取会落空：挂上时立刻补读一次，不用等一个轮询周期。
+      const offReady = onUsageReady(ctx, (namespace) => {
+        if (namespace !== undefined) controller.refreshIfEnabled();
+      });
       const onVisible = (): void => {
         // 只有真的可见时才刷新（`document` 缺席时这个监听根本不会注册）。
         const dom = domDocument();
@@ -787,12 +869,14 @@ export function createSidebarCardView(options: {
       const dom = domDocument();
       if (typeof dom?.addEventListener === "function") dom.addEventListener("visibilitychange", onVisible);
       return () => {
+        offReady();
         const current = domDocument();
         if (typeof current?.removeEventListener === "function") current.removeEventListener("visibilitychange", onVisible);
         controller.dispose();
       };
-    }, []);
+    }, [vendor]);
 
+    if (vendor === undefined) return null as unknown as ReactElement;
     return SidebarCard({ t, status, onOpen: () => options.onOpen() });
   };
 }
@@ -855,68 +939,120 @@ export function registerPanelCard(
 }
 
 /**
- * 造**仪表盘容器组件**：挂载时读一次状态与切换记录，手动刷新时再读一次。
+ * 造**仪表盘容器组件**：厂商同样从模块级开关存储里取（仪表盘由侧边栏卡片打开，
+ * 两者本就是同一家），挂载/切换时读一次，手动刷新时再读一次。
  *
  * **没有常驻轮询**：面板只在用户主动打开时存在，打开即读一次；之后由「刷新」按钮或重新打开
  * 触发。规格 §8.1 第 6 条的「不做无谓后台查询」在这里同样适用。
- * @param options - 上下文、厂商、取词函数与关闭动作。
+ *
+ * 存储里没有厂商（侧边栏开关关闭、且没有任何一家开启）时显示占位文案 —— 面板虽常驻注册，
+ * 但没有可显示的厂商就不编造一个。
+ * @param options - 上下文、厂商声明、取词函数与关闭动作。
  * @returns 一个 React 函数组件。
  */
 export function createDashboardView(options: {
   ctx: ClientSeamContext;
-  vendor: string;
+  entries: readonly VendorEntry[];
   t: (key: string) => string;
   onClose: () => void;
 }): () => ReactElement {
-  const { ctx, vendor, t } = options;
+  const { ctx, entries, t } = options;
   return function ConnectedDashboard(): ReactElement {
+    const [vendor, setVendor] = useState<string | undefined>(() => sidebarVendor());
     const [status, setStatus] = useState<VendorUsageStatus | undefined>(undefined);
     const [switches, setSwitches] = useState<SwitchRecord[] | undefined>(undefined);
 
-    const load = (): void => {
-      const usage = usageNamespaceOf(ctx);
-      if (usage === undefined) return;
-      void readStatus(usage, vendor).then((next) => {
-        if (next !== undefined) setStatus(next);
-      });
-      void readSwitches(usage, vendor).then((next) => {
-        if (next !== undefined) setSwitches(next);
-      });
-    };
+    useEffect(() => subscribeSidebarVendor(setVendor), []);
 
+    // 冷启动兜底：与侧边栏卡片同一条（设置页从未打开过时存储是冷的）。
     useEffect(() => {
-      load();
+      if (sidebarVendorSeeded()) return;
+      let alive = true;
+      void describeVendorSnapshots(ctx, entries).then((snapshots) => {
+        if (alive) noteSidebarSnapshots(entries, snapshots);
+      });
+      return () => {
+        alive = false;
+      };
     }, []);
 
-    return Dashboard({ t, status, switches, onClose: () => options.onClose(), onRefresh: load });
+    useEffect(() => {
+      if (vendor === undefined) {
+        setStatus(undefined);
+        setSwitches(undefined);
+        return;
+      }
+      const load = (): void => {
+        const usage = usageNamespace(ctx);
+        if (usage === undefined) return;
+        void readStatus(usage, vendor).then((next) => {
+          if (next !== undefined) setStatus(next);
+        });
+        void readSwitches(usage, vendor).then((next) => {
+          if (next !== undefined) setSwitches(next);
+        });
+      };
+      load();
+      // 远程面挂载完成前读取会落空：挂上时补读一次。
+      const offReady = onUsageReady(ctx, (namespace) => {
+        if (namespace !== undefined) load();
+      });
+      return offReady;
+    }, [vendor]);
+
+    if (vendor === undefined) {
+      return createElement("p", { "data-dashboard-empty": "true" }, t("dashboard.noData")) as ReactElement;
+    }
+    return Dashboard({
+      t,
+      status,
+      switches,
+      onClose: () => options.onClose(),
+      onRefresh: () => {
+        const usage = usageNamespace(ctx);
+        if (usage === undefined) return;
+        void readStatus(usage, vendor).then((next) => {
+          if (next !== undefined) setStatus(next);
+        });
+        void readSwitches(usage, vendor).then((next) => {
+          if (next !== undefined) setSwitches(next);
+        });
+      },
+    });
   };
 }
 
 /**
- * 按开关同步「侧边栏卡片 + 中栏面板」的注册，返回撤销函数。
+ * 把侧边栏卡片与中栏面板注册进各自的插槽 —— **常驻、无条件**。
  *
- * 单独成函数（而不是写在容器的 effect 里）的理由：这样**假客户端冒烟**可以不渲染 React 就把
- * 「关闭时零注册 / 开启时注册一次」这条路走一遍 —— 容器里的 effect 只有真挂载才会跑，1c 才能
- * 验证那条路（T10 的冒烟与 1c 的分工）。
- * @param options - 上下文、开关、要显示的厂商、取词函数与文案命名空间。
- * @returns 撤销函数（关闭时是空操作）。
+ * 形状逐字对齐旧插件（`lib/client.js:9321-9341`）：`main` 用 `ctx.slots` + `key`，
+ * `sidebar.footer.action` 用 `ctx.inject(["layout"], …)` + `id`/`order`，两处都 try/catch
+ * （注册失败只留一行错误，不把整个客户端带走）。
+ *
+ * **为什么无条件**：插槽服务不返回注销句柄，条件注册一旦开启就撤不下来（关掉开关时卡片会
+ * 带着定时器继续请求）。旧插件的处置是把条目**常驻**在插槽里，让组件按已存储的开关做渲染
+ * 决策（"The entry stays REGISTERED — this is a render decision, so nothing churns the
+ * slot ledger"）—— 本函数照此办理；门控在 {@link createSidebarCardView} 里。
+ *
+ * **幂等由调用方保证**：`applyShell` 的模块级守卫（与页面同一个）确保两个 profile 行各调
+ * 一次 `apply` 也只注册一份；直接调用本函数（测试）每次都会注册。
+ * @param options - 上下文、厂商声明、取词函数与文案命名空间。
+ * @returns 撤销函数（插槽注册不可撤，见上；保留形状供调用方在 effect 里登记）。
  */
-export function syncSidebarAndPanel(options: {
+export function registerSharedSurfaces(options: {
   ctx: ClientSeamContext;
-  enabled: boolean;
-  vendor: string;
+  entries: readonly VendorEntry[];
   t: (key: string) => string;
   localeNs: string;
 }): () => void {
-  if (!options.enabled) return () => undefined;
-  const { ctx, vendor, t, localeNs } = options;
+  const { ctx, entries, t, localeNs } = options;
   const disposeSidebar = registerSidebarCard(ctx, {
     id: SIDEBAR_CARD_ID,
     order: 1,
     locale: localeNs,
     component: createSidebarCardView({
       ctx,
-      vendor,
+      entries,
       t,
       onOpen: () => {
         selectPanel(ctx, DASHBOARD_PANEL_ID);
@@ -928,7 +1064,7 @@ export function syncSidebarAndPanel(options: {
     locale: localeNs,
     component: createDashboardView({
       ctx,
-      vendor,
+      entries,
       t,
       onClose: () => {
         selectPanel(ctx, null);
@@ -939,6 +1075,186 @@ export function syncSidebarAndPanel(options: {
     disposeSidebar();
     disposePanel();
   };
+}
+
+// —— 插件级共享状态：usage 远程面单例 + 侧边栏开关存储 + 设置镜像 ——
+//
+// 这个 bundle 被两个 profile 行共享（同一份模块实例），而三个界面（设置页、侧边栏卡片、
+// 中栏面板）分属不同的 React 根。下面三样东西因此都必须是**模块级**的：
+// 1. usage 远程面：$mount 一次，不随设置页开闭起落（旧插件挂在 apply 期，本机产物可读）；
+// 2. 侧边栏开关存储：哪一家的卡片该显示；
+// 3. 设置镜像：`settings/document-updated` 订阅 + 首读，让 2 在设置页关闭时也保持新鲜。
+
+/** 共享的 usage 远程面（`$mount` 只发一次）。 */
+let sharedUsage: UsageRemoteHandle | undefined;
+
+/** 远程面可用性变化的监听者（设置页容器、卡片、面板都挂在这里）。 */
+const usageReadyListeners = new Set<(namespace: UsageNamespace | undefined) => void>();
+
+/** 造一个不带 `effect` 的委托上下文：重挂不能挂在某一行（可能已卸载）的作用域上。 */
+function detachedContext(ctx: ClientSeamContext): ClientSeamContext {
+  return {
+    remote: ctx.remote,
+    inject: (names, callback) => ctx.inject?.(names, callback),
+  };
+}
+
+/**
+ * 取共享的 usage 远程面，必要时（首次、或上次已卸下/挂载失败）挂载。
+ *
+ * 重挂用**不带 effect 的委托上下文**：初次挂载归第一个调用者的作用域（与旧插件同形），
+ * 而那一行被卸载后，还活着的那一行要能把它救回来 —— 挂在任何单个行作用域上都会再次
+ * 随着那一行死掉。
+ * @param ctx - 调用方的客户端上下文（只在需要挂载时用到）。
+ * @returns 共享句柄；挂载进行中时 `namespace()` 为 `undefined`。
+ */
+export function ensureUsageRemote(ctx: ClientSeamContext): UsageRemoteHandle {
+  const current = sharedUsage;
+  if (current !== undefined && !current.disposed() && !(current.namespace() === undefined && current.error() !== undefined)) {
+    return current;
+  }
+  const handle = mountUsageRemote(current === undefined ? ctx : detachedContext(ctx), (namespace) => {
+    for (const listener of [...usageReadyListeners]) listener(namespace);
+  });
+  sharedUsage = handle;
+  return handle;
+}
+
+/**
+ * 订阅远程面的可用性：先用当前值调用一次，之后每次变化再调用。
+ *
+ * 设置页容器用它拿命名空间（而**不持有**远程面的生命周期 —— 页面关掉不该把两个插槽界面的
+ * 数据源一起带走）；卡片与面板用在「挂载完成前读取落空」的补读上。
+ * @param ctx - 客户端上下文。
+ * @param listener - 可用性变化回调（`undefined` = 还没挂上或已卸下）。
+ * @returns 退订函数。
+ */
+export function onUsageReady(ctx: ClientSeamContext, listener: (namespace: UsageNamespace | undefined) => void): () => void {
+  const handle = ensureUsageRemote(ctx);
+  listener(handle.namespace());
+  usageReadyListeners.add(listener);
+  return () => {
+    usageReadyListeners.delete(listener);
+  };
+}
+
+/**
+ * 当前可用的 usage 命名空间：先问共享句柄，再回落到上下文上的命名空间（旧宿主可能直接挂在
+ * `ctx.remote` 上）。两者都没有就是 `undefined`（调用方按「数据不可用」降级）。
+ * @param ctx - 客户端上下文。
+ * @returns 命名空间；还没挂上时为 `undefined`。
+ */
+export function usageNamespace(ctx: ClientSeamContext): UsageNamespace | undefined {
+  return ensureUsageRemote(ctx).namespace() ?? usageNamespaceOf(ctx);
+}
+
+/** 侧边栏卡片该显示哪一家（providerId）；没有开启的厂商时为 `undefined`。 */
+let sidebarVendorValue: string | undefined;
+
+/** 存储是否已被一次**非空**的设置读取 seed 过（冷启动兜底的依据）。 */
+let sidebarVendorSeededValue = false;
+
+/** 开关存储的监听者（侧边栏卡片与仪表盘容器）。 */
+const sidebarVendorListeners = new Set<(vendor: string | undefined) => void>();
+
+/** 当前侧边栏卡片该显示的厂商；存储是冷的时为 `undefined`。 */
+export function sidebarVendor(): string | undefined {
+  return sidebarVendorValue;
+}
+
+/** 存储是否已 seed（有过一次非空读取）。冷启动兜底只在未 seed 时读一次。 */
+export function sidebarVendorSeeded(): boolean {
+  return sidebarVendorSeededValue;
+}
+
+/** 订阅开关存储变化。 */
+export function subscribeSidebarVendor(listener: (vendor: string | undefined) => void): () => void {
+  sidebarVendorListeners.add(listener);
+  return () => {
+    sidebarVendorListeners.delete(listener);
+  };
+}
+
+/**
+ * 用一次设置快照读取更新开关存储（**唯一的写入口**）。
+ *
+ * 空快照不写入也不 seed：宿主设置服务缺席/未就绪时的一次空读，不该把「已经开着」的卡片
+ * 关掉，也不该把存储标记成已 seed（那样冷启动兜底就不再补救）。
+ * @param entries - 注册表里的厂商声明。
+ * @param snapshots - `describeVendorSnapshots` 的结果。
+ */
+export function noteSidebarSnapshots(entries: readonly VendorEntry[], snapshots: readonly VendorSnapshot[]): void {
+  if (snapshots.length === 0) return;
+  const map: Record<string, VendorSnapshot> = {};
+  for (const snapshot of snapshots) map[snapshot.ns] = snapshot;
+  const vendor = sidebarVendorOf(entries, map)?.providerId;
+  sidebarVendorSeededValue = true;
+  if (vendor === sidebarVendorValue) return;
+  sidebarVendorValue = vendor;
+  for (const listener of [...sidebarVendorListeners]) listener(vendor);
+}
+
+/** 设置镜像是否已启动（模块级守卫）。 */
+let sidebarMirrorStarted = false;
+
+/**
+ * 启动插件级的设置镜像：首读一次 + 订阅 `settings/document-updated` 事件重读。
+ *
+ * 事件名与旧插件逐字相同（`lib/client.js` 的 `createSettingsScope`：`remote.$on(
+ * "settings/document-updated", …)` 后 `mirror.ensure()`）—— 它是宿主在设置文档变化时发出的
+ * 失效信号。没有它，用户在**设置页之外**改动开关（外部工具、patch 文件）时，侧边栏卡片
+ * 要到下次宿主重启才知道。
+ *
+ * 事件潮合并：同一轮微任务里的多次事件只读一次（镜像的读是全量 describe，没必要重复）。
+ * @param ctx - 客户端上下文（apply 期的那个）。
+ * @param entries - 注册表里的厂商声明。
+ */
+export function startSidebarMirror(ctx: ClientSeamContext, entries: readonly VendorEntry[]): void {
+  if (sidebarMirrorStarted) return;
+  sidebarMirrorStarted = true;
+  const read = (): void => {
+    void describeVendorSnapshots(ctx, entries).then((snapshots) => noteSidebarSnapshots(entries, snapshots));
+  };
+  read();
+  // 设置命名空间可能晚到：注入回调里再读一次（旧插件同一顺序 —— 命名空间落地后才有的读）。
+  if (typeof ctx.inject === "function") {
+    ctx.inject(["remote.settings"], (scoped: ClientSeamContext) => {
+      void describeVendorSnapshots(scoped, entries).then((snapshots) => noteSidebarSnapshots(entries, snapshots));
+    });
+  }
+  const remote = remoteOf(ctx);
+  if (typeof remote?.$on === "function") {
+    let scheduled = false;
+    remote.$on("settings/document-updated", () => {
+      if (scheduled) return;
+      scheduled = true;
+      void Promise.resolve().then(() => {
+        scheduled = false;
+        read();
+      });
+    });
+  }
+}
+
+/**
+ * 启动插件级共享状态：usage 远程面 + 设置镜像（幂等，两个 profile 行各调一次无副作用）。
+ * @param ctx - 客户端上下文（apply 期的那个）。
+ * @param entries - 注册表里的厂商声明。
+ */
+export function startSharedState(ctx: ClientSeamContext, entries: readonly VendorEntry[]): void {
+  ensureUsageRemote(ctx);
+  startSidebarMirror(ctx, entries);
+}
+
+/** 复位全部模块级共享状态（测试隔离钩子；生产代码只增不减地复用同一份）。 */
+export function resetSeams(): void {
+  sharedUsage?.dispose();
+  sharedUsage = undefined;
+  usageReadyListeners.clear();
+  sidebarVendorValue = undefined;
+  sidebarVendorSeededValue = false;
+  sidebarVendorListeners.clear();
+  sidebarMirrorStarted = false;
 }
 
 /**
@@ -955,41 +1271,34 @@ function usageNamespaceOf(ctx: ClientSeamContext): UsageNamespace | undefined {
   return typeof namespace === "object" && namespace !== null ? (namespace as UsageNamespace) : undefined;
 }
 
-/** 把刚保存的字段并进快照（乐观更新本地基线，避免再读一次宿主）。 */
-function mergeSnapshot(state: PageState, ns: string, fields: readonly { key: string; value: unknown }[]): VendorSnapshot[] {
-  const previous = state.snapshots[ns];
-  const value: Record<string, unknown> = { ...(previous?.value ?? {}) };
-  for (const field of fields) value[field.key] = field.value;
-  const merged: VendorSnapshot = { ns, value, revision: (previous?.revision ?? 0) + 1 };
-  return Object.values(state.snapshots)
-    .filter((snapshot) => snapshot.ns !== ns)
-    .concat(merged);
-}
-
 /**
  * 保存字段到设置文档。
  *
- * 写的是**宿主上的真实行名**（opencode 的行 id 与核心命名空间不同），并按修订号做并发围栏。
+ * 写的是 describe 时**命中的行名**（`row`，不是核心命名空间）：宿主设置服务按 profile 条目 id
+ * 寻址（`SettingsForms.write` 找 `row.options.id === ns`），而 opencode 的条目 id
+ * （`opencode-go`）与核心命名空间（`llm-opencode-go`）不同 —— 用 `ns` 写会落到一个不存在
+ * 的条目上，保存必然失败。修订号做并发围栏。
  * @param ctx - 客户端上下文。
- * @param ns - 设置命名空间。
+ * @param row - 宿主上的设置行名（`describeVendorSnapshots` 快照里的 `row`）。
  * @param fields - 要写的字段。
  * @param revision - 读取时拿到的修订号。
- * @returns 是否写入成功。
+ * @returns `undefined` 表示写入成功；否则是宿主给出的可读失败原因（调用方显示给用户，
+ *   不静默 —— 用户以为保存成功而实际没有，比报错更糟）。
  */
 export async function saveSettings(
   ctx: ClientSeamContext,
-  ns: string,
+  row: string,
   fields: readonly { key: string; value: unknown }[],
   revision: number,
-): Promise<boolean> {
+): Promise<string | undefined> {
   const settings = remoteOf(ctx)?.settings;
-  if (settings === undefined || typeof settings.mutate !== "function") return false;
-  if (fields.length === 0) return true;
+  if (settings === undefined || typeof settings.mutate !== "function") return "the host settings service is unavailable";
+  if (fields.length === 0) return undefined;
   const ops = fields.map((field) => ({ op: "set" as const, path: [field.key], value: field.value }));
   try {
-    await settings.mutate(ns, ops, revision);
-    return true;
-  } catch {
-    return false;
+    await settings.mutate(row, ops, revision);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
 }
