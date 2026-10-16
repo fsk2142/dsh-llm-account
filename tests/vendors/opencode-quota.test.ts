@@ -608,6 +608,19 @@ it("move 支持排序（opencode 的能力清单里 reorder 为真），并把�
   expect(settings.mutations).toHaveLength(before);
 });
 
+it("move 不丢条目：读不出 ref 的与重复 ref 的条目原样缀在末尾", async () => {
+  // 手改坏的文档形状：一条读不出 ref（非对象）、一条与 "a" 重复 ref。
+  const broken = { id: "a-again", name: "A again", apiKeyEnv: "a" };
+  const unreadable = { id: "x", name: "X" };
+  const { port, settings } = accountsPort(emptyDoc({ accounts: [entry("A", "a"), broken, entry("B", "b"), unreadable] }));
+
+  await port.move!("b", 0);
+
+  const accounts = settings.doc().accounts as unknown[];
+  // 可读的按新顺序，重复与读不出 ref 的原样保留。
+  expect(accounts).toEqual([entry("B", "b"), entry("A", "a"), broken, unreadable]);
+});
+
 it("list 用 CredentialPort.describe 填充 configured 与 active，空值不算已配置", async () => {
   const { port } = accountsPort(
     emptyDoc({ accounts: [entry("A", "a"), entry("B", "b"), entry("C", "c")], apiKeyEnv: "b" }),

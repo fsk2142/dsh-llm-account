@@ -501,18 +501,28 @@ class OpencodeAccounts implements AccountPort {
     await this.#transaction("move", { ref, toIndex }, () =>
       this.#mutate((value) => {
         const accounts = rawAccounts(value);
-        const order = accounts.map((item) => refOf(item)).filter((candidate): candidate is string => candidate !== undefined);
+        // 顺序只收**可读且第一次出现**的 ref：文档里的重复 ref 条目（手改坏的形状）不参与
+        // 排序，原样缀在末尾 —— 本操作只动顺序，一个条目都不许丢。
+        const order: string[] = [];
+        const seen = new Set<string>();
+        for (const item of accounts) {
+          const itemRef = refOf(item);
+          if (itemRef === undefined || seen.has(itemRef)) continue;
+          seen.add(itemRef);
+          order.push(itemRef);
+        }
         const next = reorder(order, ref, toIndex);
         if (next.join("\u0000") === order.join("\u0000")) return { ops: [], result: undefined };
         const byRef = new Map<string, unknown>();
+        const extras: unknown[] = [];
         for (const item of accounts) {
           const itemRef = refOf(item);
-          if (itemRef !== undefined && !byRef.has(itemRef)) byRef.set(itemRef, item);
+          // 读不出 ref 的条目与重复 ref 的条目都原样保留：只动顺序，不丢未知形状的条目。
+          if (itemRef === undefined || byRef.has(itemRef)) extras.push(item);
+          else byRef.set(itemRef, item);
         }
-        // 读不出 ref 的条目原样缀在末尾：本操作只动顺序，不丢未知形状的条目。
-        const unknown = accounts.filter((item) => refOf(item) === undefined);
         const ops: SettingsOp[] = [
-          { op: "set", path: [ACCOUNTS_FIELD], value: [...next.map((candidate) => byRef.get(candidate)), ...unknown] },
+          { op: "set", path: [ACCOUNTS_FIELD], value: [...next.map((candidate) => byRef.get(candidate)), ...extras] },
         ];
         const head = next[0];
         if (head !== undefined && activeRefOf(value) !== head) {

@@ -37,6 +37,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 只接受布尔值：`modelVisibility` 中非布尔的键值对被丢弃，一个合法项都不剩时整个字段省略；
  * `visibleModels` 中非字符串的元素被丢弃（字段本身仍是数组时保留，空数组表示全部可见）。
  * 非对象输入（`null` / 字符串 / 数字 / 数组）返回空可见性，即不做任何限制。
+ *
+ * **空串与纯空白一律丢弃**（白名单与显隐键两处）：`[""]` 会被当成「非空白名单」，
+ * 让所有模型从选择器里消失 —— 旧插件 `storedAllowlist`（`lib/client.js` 第 1486 行）
+ * 过滤 `m !== ""`、`readVisibility` 过滤 `id !== ""`，客户端 `normalizeModels`
+ * 同样丢弃；三处对同一份字段的读法必须一致。
  * @param raw - 设置文档中的原始值。
  * @returns 收敛后的可见性设置；不修改入参。
  */
@@ -47,14 +52,14 @@ export function normalizeVisibility(raw: unknown): Visibility {
 
   const list = raw.visibleModels;
   if (Array.isArray(list)) {
-    result.visibleModels = list.filter((item): item is string => typeof item === "string");
+    result.visibleModels = list.filter((item): item is string => typeof item === "string" && item.trim() !== "");
   }
 
   const map = raw.modelVisibility;
   if (isRecord(map)) {
     const allowed: Record<string, boolean> = {};
     for (const [id, value] of Object.entries(map)) {
-      if (typeof value === "boolean") allowed[id] = value;
+      if (typeof value === "boolean" && id.trim() !== "") allowed[id] = value;
     }
     if (Object.keys(allowed).length > 0) result.modelVisibility = allowed;
   }

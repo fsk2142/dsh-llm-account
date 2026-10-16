@@ -43,6 +43,15 @@ it("normalizeVisibility 只保留 modelVisibility 中的布尔键值对", () => 
   });
 });
 
+it("normalizeVisibility 丢弃白名单里的空串与纯空白（[] 不能把模型全部筛掉）", () => {
+  // `[""]` 是非空白名单：不过滤的话所有模型都不命中，选择器里一个都不出。
+  expect(normalizeVisibility({ visibleModels: ["a", "", "  ", "b"] })).toEqual({ visibleModels: ["a", "b"] });
+  expect(isModelVisible(entry("a"), normalizeVisibility({ visibleModels: [""] }))).toBe(true);
+  expect(isModelVisible(entry("a"), normalizeVisibility({ visibleModels: ["  "] }))).toBe(true);
+  // 显隐表里的空串键同样丢弃（它永远匹配不上任何真实 id）。
+  expect(normalizeVisibility({ modelVisibility: { "": true, " ": false, a: true } })).toEqual({ modelVisibility: { a: true } });
+});
+
 it("normalizeVisibility 对非对象输入返回空可见性", () => {
   expect(normalizeVisibility(undefined)).toEqual({});
   expect(normalizeVisibility(null)).toEqual({});
