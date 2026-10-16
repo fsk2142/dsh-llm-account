@@ -527,6 +527,21 @@ function toHostFinishReason(
           }
         : { kind: "stop" };
     case "length":
+      // 打到输出上限却一个字都没产出：不能伪装成正常的 `max-tokens` 收尾 —— 空消息会让
+      // 这一轮什么都不说地结束（`dsh-llm` 的 `EMPTY_RESPONSE_CODE` 文档点名的失败模式）。
+      // 旧插件 `mapStopReason` 的同一分支给出**可执行建议**（调大「最大输出」或先
+      // `/compact`），这里沿用：请求级错误，不换账号、不进重试白名单。
+      if (message.content.length === 0) {
+        return {
+          kind: "error",
+          failure: {
+            message: `opencode model "${message.model}" produced no content at its output cap`
+              + `${contextWindow === undefined ? "" : ` in a ${contextWindow}-token window`}`
+              + ". The prompt may leave too little room for an answer. Compact the context (/compact) or raise this model's max output, then retry",
+            code: "INVALID_REQUEST",
+          },
+        };
+      }
       return { kind: "max-tokens" };
     case "toolUse":
       return { kind: "tool-calls" };

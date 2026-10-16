@@ -47,4 +47,12 @@ declare module "react" {
 
   /** 副作用；返回的清理函数在依赖变化或卸载时调用。 */
   export function useEffect(effect: () => void | (() => void), dependencies?: readonly unknown[]): void;
+
+  /** 跨渲染稳定的可变容器；`.current` 可在渲染间读写，不触发重渲染。 */
+  export interface MutableRefObject<Value> {
+    current: Value;
+  }
+
+  /** 创建可变引用（`useRef(false)` / `useRef(0)` 这类用法）。 */
+  export function useRef<Value>(initial: Value): MutableRefObject<Value>;
 }

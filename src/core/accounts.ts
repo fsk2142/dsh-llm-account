@@ -109,6 +109,23 @@ export function reorder(order: string[], ref: string, toIndex: number): string[]
 }
 
 /**
+ * 把一项提到首位，其余项的**相对顺序不变**（旧插件 `moveAccountFirst` 第 6779 行）。
+ *
+ * 与 {@link reorder} 的分工：`reorder` 服务于「用户拖动排序」这一写入路径（下标语义、
+ * 越界夹取），本函数服务于「当前账号是谁就显示在第一位」这一**派生**读取 —— 账号端口
+ * 的 `list()` 用它让界面顺序与轮换顺序（顶层引用恒在首位）一致，不因此写任何设置。
+ * ref 不在列表里、或已经是首位时原样返回（调用方据此跳过无谓的写入）。
+ * @param rows - 当前顺序。
+ * @param ref - 要提到首位的 ref。
+ * @returns 新数组；入参不被修改。
+ */
+export function moveFirst<T extends { ref: string }>(rows: readonly T[], ref: string): T[] {
+  const index = rows.findIndex((row) => row.ref === ref);
+  if (index <= 0) return [...rows];
+  return [rows[index]!, ...rows.slice(0, index), ...rows.slice(index + 1)];
+}
+
+/**
  * 把一组模型改派给某个账号：先从现有规则里逐个摘掉这些模型（被摘空的规则整条移除），
  * 再把它们作为一条新规则追加到末尾。由此保证一个模型同一时间只属于一个账号。
  *

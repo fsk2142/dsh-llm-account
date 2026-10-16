@@ -48,6 +48,7 @@ vi.mock("react", async () => {
     Fragment: stub.Fragment,
     useState: mini.useState,
     useEffect: mini.useEffect,
+    useRef: mini.useRef,
     // 测试侧要驱动这个运行时（挂载、排空、复位）。
     __mini: mini,
   };
@@ -339,10 +340,15 @@ describe("侧边栏卡片容器仿真", () => {
     expect(host.statusCalls).toEqual(["commandcode"]);
     vi.advanceTimersByTime(60_000);
     await settleSim(mini);
-    expect(host.statusCalls).toEqual(["commandcode", "commandcode"]);
-    vi.advanceTimersByTime(120_000);
+    expect(host.statusCalls).toEqual(["commandcode", "commandcode"]); // +60s：第二次（确认 60s 一拍）
+    // 分两次各推进 60s（而非一次 120s）：vitest 的假定时器在一次推进里**不会**触发「推进过程中
+    // 才排定的边界计时器」，一次 120s 会把 +180s 那一下丢掉；两次 +60s 能踩到边界。
+    vi.advanceTimersByTime(60_000);
     await settleSim(mini);
-    expect(host.statusCalls).toHaveLength(4);
+    expect(host.statusCalls).toHaveLength(3); // +120s：第三次
+    vi.advanceTimersByTime(60_000);
+    await settleSim(mini);
+    expect(host.statusCalls).toHaveLength(4); // +180s：第四次，确认仍是 60s 一拍
 
     // 再关闭：卡片重新变 null，定时器停掉（推进再久也不再请求）。
     host.rows.get("llm-commandcode")!.value = { ...host.rows.get("llm-commandcode")!.value, showSidebarQuota: false };
@@ -353,6 +359,30 @@ describe("侧边栏卡片容器仿真", () => {
     vi.advanceTimersByTime(600_000);
     await settleSim(mini);
     expect(host.statusCalls).toHaveLength(afterClose);
+    vi.useRealTimers();
+  });
+
+  it("侧边栏卡片用量刷新间隔跟随 quotaRefreshMinutes（分钟）设置，而不是写死 60s", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    const host = fakeHost(mini, { commandcodeToggle: true });
+    // 把刷新间隔设成 5 分钟（覆盖默认的 1 分钟），验证卡片按设置走、而非硬编码 60s。
+    host.rows.get("llm-commandcode")!.value = { ...host.rows.get("llm-commandcode")!.value, quotaRefreshMinutes: 5 };
+    const { card } = await applyLikeHost(host);
+    const cardView = mini.mount(card);
+    await settleSim(mini);
+    // 开启即读一次。
+    expect(cardView.tree()).not.toBeNull();
+    expect(host.statusCalls).toEqual(["commandcode"]);
+    // 推进 1 分钟（< 5 分钟间隔）：不应再发起请求。
+    vi.advanceTimersByTime(60_000);
+    await settleSim(mini);
+    expect(host.statusCalls).toHaveLength(1);
+    // 推进到 5 分钟边界：恰好一拍。
+    vi.advanceTimersByTime(5 * 60_000);
+    await settleSim(mini);
+    expect(host.statusCalls).toHaveLength(2);
     vi.useRealTimers();
   });
 

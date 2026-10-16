@@ -17,7 +17,7 @@
  * **全部未验证**：本机没有与桌面端同版本（0.2.0-rc.2）的引擎，这些形状来自已装插件的**旁证**。
  * @module dsh-llm-account/src/client/seams
  */
-import { createElement, useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { createElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import { dictionaryOf } from "./copy";
 import { Dashboard } from "./dashboard";
@@ -738,6 +738,40 @@ export interface SidebarCardController {
 /** 侧边栏卡片的轮询间隔（毫秒）。与旧插件一样按需起停，不做常驻。 */
 export const SIDEBAR_POLL_MS = 60_000;
 
+/** 失败退避的上限（毫秒）：连续失败时最多慢到 5 分钟一问，再慢用户就该以为是坏了。 */
+export const SIDEBAR_POLL_MAX_MS = 300_000;
+
+/**
+ * 失败退避间隔：连续失败 `failures` 次之后的下一次轮询间隔。
+ *
+ * 两个参考插件在读取失败时都仍按固定 60s 全速重问（参考实现的胶囊 `setInterval(refresh, 60_000)`
+ * 里没有任何退避），于是一次上游故障会让每个可见标签页每分钟空打一次。这里按连续失败
+ * 次数翻倍，到 {@link SIDEBAR_POLL_MAX_MS} 封顶；任何一次成功读数把计数清零、恢复常速。
+ *
+ * 纯函数（不藏时钟、不藏随机）：容器每次排下一拍时间时问它一次。
+ * @param base - 常规间隔（毫秒）。
+ * @param failures - 连续失败次数（`<= 0` 按常规间隔）。
+ * @returns 下一次轮询的间隔（毫秒）。
+ */
+export function backoffInterval(base: number, failures: number): number {
+  if (failures <= 0) return base;
+  const doubled = base * 2 ** Math.min(failures, 10);
+  return Math.min(doubled, SIDEBAR_POLL_MAX_MS);
+}
+
+/** 侧边栏用量轮询的基础间隔（毫秒），由设置字段 `quotaRefreshMinutes`（分钟）换算而来。
+ *
+ * 缺省/非法值回落到 {@link SIDEBAR_POLL_MS}（1 分钟），与旧插件一致；同时把值夹在
+ * `[1, 120]` 分钟之间（再长用量基本就是过期的）。纯函数、不藏时钟，便于单测。
+ * @param value - 设置文档里的 `quotaRefreshMinutes`（不可信，按 `unknown` 处理）。
+ * @returns 轮询间隔（毫秒）。
+ */
+export function quotaRefreshMs(value: unknown): number {
+  const minutes = typeof value === "number" && Number.isFinite(value) ? value : SIDEBAR_POLL_MS / 60_000;
+  const clamped = Math.max(1, Math.min(120, minutes));
+  return clamped * 60_000;
+}
+
 /**
  * 造侧边栏卡片控制器。
  * @param deps - 注册/注销、一次读取与轮询间隔。
@@ -747,15 +781,33 @@ export function createSidebarCardController(deps: {
   register: () => () => void;
   load: () => void;
   intervalMs?: number;
+  /**
+   * 动态轮询间隔（失败退避用）：每一拍重排时问一次，缺省用固定 `intervalMs`。
+   *
+   * 用「读完一拍再排下一拍」的 `setTimeout` 链而不是 `setInterval`：间隔要能跟着
+   * 读取结果变化（失败后退避、成功后恢复），`setInterval` 建好就改不了。
+   */
+  pollInterval?: () => number;
 }): SidebarCardController {
   const intervalMs = deps.intervalMs ?? SIDEBAR_POLL_MS;
   let unregister: (() => void) | undefined;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   const stopPolling = (): void => {
     if (timer === undefined) return;
-    clearInterval(timer);
+    clearTimeout(timer);
     timer = undefined;
+  };
+
+  /** 排下一拍（动态间隔下每拍重问，固定间隔下等价于常驻间隔）。 */
+  const schedule = (): void => {
+    stopPolling();
+    const next = deps.pollInterval === undefined ? intervalMs : deps.pollInterval();
+    timer = setTimeout(() => {
+      timer = undefined;
+      deps.load();
+      schedule();
+    }, next);
   };
 
   return {
@@ -770,7 +822,7 @@ export function createSidebarCardController(deps: {
         unregister = deps.register();
         // 开启的那一刻先读一次：否则要等一个轮询周期才有数字。
         deps.load();
-        timer = setInterval(() => deps.load(), intervalMs);
+        schedule();
       }
       return true;
     },
@@ -822,7 +874,45 @@ export function createSidebarCardView(options: {
   const { ctx, entries, t } = options;
   return function ConnectedSidebarCard(): ReactElement {
     const [vendor, setVendor] = useState<string | undefined>(() => sidebarVendor());
-    const [status, setStatus] = useState<VendorUsageStatus | undefined>(undefined);
+    // 一份合并的视图状态：要显示的状态 + 最近一次读的失败 + 是否在显示旧数据。
+    // 合成一个 state（而不是三个）是为了让「失败时保留上一份好数据」在一次 setState 里
+    // 原子完成 —— 三个各自 set 的中间态会闪一下「有数据但没标过期」。
+    const [view, setView] = useState<{ status?: VendorUsageStatus; failure?: string; stale: boolean }>({ stale: false });
+    // 渲染期间不重读的两个可变值（引用：不触发渲染，只在读取/排程时被读）。
+    const inFlight = useRef(false);
+    const failures = useRef(0);
+
+    /**
+     * 读一次状态。`manual` 为真时（用户点「刷新」）无视页面可见性 —— 手动要的就是立刻问；
+     * 其余读取在页面不可见时**跳过**（参考实现 UsagePill 的同一条：
+     * `!manual && document.visibilityState === 'hidden' → return`）：后台标签页继续每分钟
+     * 打用量请求是白烧用户的流量与上游配额，浏览器节流也只是让它慢一点，不会停。
+     *
+     * 单飞（`inFlight`）：慢网络下不叠请求（参考实现的 busy 守卫同一条）。
+     *
+     * 失败时**保留上一次完整读数**并标「上次数据」：把一次瞬时故障显示成「还没有请求经过
+     * 这个账号」是谎报（与空态文案同一族的问题）；部分失败（账号读到了、额度没读到）
+     * 同样按失败处理 —— 额度那一半的数据不可信。
+     */
+    const read = (manual: boolean): void => {
+      if (!manual && domDocument()?.visibilityState === "hidden") return;
+      if (inFlight.current) return;
+      const usage = usageNamespace(ctx);
+      if (usage === undefined) return;
+      inFlight.current = true;
+      void readStatus(usage, vendor ?? "").then((next) => {
+        inFlight.current = false;
+        if (next === undefined) return;
+        if (next.failures.length > 0) {
+          failures.current += 1;
+          const failure = next.failures[0] ?? t("usage.failed");
+          setView((current) => ({ status: current.status, failure, stale: current.status !== undefined }));
+          return;
+        }
+        failures.current = 0;
+        setView({ status: next, stale: false });
+      });
+    };
 
     // 订阅开关存储：设置页里保存（或外部改动设置文档）时，这里随之开关。
     useEffect(() => subscribeSidebarVendor(setVendor), []);
@@ -843,19 +933,17 @@ export function createSidebarCardView(options: {
     useEffect(() => {
       // 关闭：停轮询、撤监听、清数据（旧插件同一分支：`if (!visible) return null`）。
       if (vendor === undefined) {
-        setStatus(undefined);
+        setView({ stale: false });
         return;
       }
       const controller = createSidebarCardController({
         register: () => () => undefined,
-        load: () => {
-          const usage = usageNamespace(ctx);
-          if (usage === undefined) return;
-          void readStatus(usage, vendor).then((next) => {
-            if (next !== undefined) setStatus(next);
-          });
-        },
+        load: () => read(false),
         ...(options.intervalMs === undefined ? {} : { intervalMs: options.intervalMs }),
+        // 基础间隔由用户设置的 `quotaRefreshMinutes`（分钟）决定（见 `quotaRefreshMinutes` 字段）；
+        // 失败退避：连续失败翻倍、封顶 5 分钟；成功后由 `failures` 归零恢复常速。
+        // 每次重排都现读设置值，所以用户在设置页改了间隔会在下一个轮询周期即时生效。
+        pollInterval: () => backoffInterval(quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"]), failures.current),
       });
       controller.sync(true);
       // 远程面挂载完成前那次读取会落空，挂上时要补读一次 —— 但**只在第一次真的落空过**时补：
@@ -883,7 +971,14 @@ export function createSidebarCardView(options: {
     }, [vendor]);
 
     if (vendor === undefined) return null as unknown as ReactElement;
-    return SidebarCard({ t, status, onOpen: () => options.onOpen() });
+    return SidebarCard({
+      t,
+      status: view.status,
+      ...(view.failure === undefined ? {} : { failure: view.failure }),
+      ...(view.stale ? { stale: true } : {}),
+      onOpen: () => options.onOpen(),
+      onRefresh: () => read(true),
+    });
   };
 }
 
@@ -1157,6 +1252,9 @@ export function usageNamespace(ctx: ClientSeamContext): UsageNamespace | undefin
 /** 侧边栏卡片该显示哪一家（providerId）；没有开启的厂商时为 `undefined`。 */
 let sidebarVendorValue: string | undefined;
 
+/** 当前侧边栏厂商的设置文档值（轮询间隔等设置类控件从这里取，见 `quotaRefreshMs`）。 */
+let sidebarVendorSettingsValue: Record<string, unknown> | undefined;
+
 /** 存储是否已被一次**非空**的设置读取 seed 过（冷启动兜底的依据）。 */
 let sidebarVendorSeededValue = false;
 
@@ -1166,6 +1264,11 @@ const sidebarVendorListeners = new Set<(vendor: string | undefined) => void>();
 /** 当前侧边栏卡片该显示的厂商；存储是冷的时为 `undefined`。 */
 export function sidebarVendor(): string | undefined {
   return sidebarVendorValue;
+}
+
+/** 当前侧边栏厂商的设置文档值；存储是冷的时为 `undefined`。 */
+export function sidebarVendorSettings(): Record<string, unknown> | undefined {
+  return sidebarVendorSettingsValue;
 }
 
 /** 存储是否已 seed（有过一次非空读取）。冷启动兜底只在未 seed 时读一次。 */
@@ -1193,8 +1296,12 @@ export function noteSidebarSnapshots(entries: readonly VendorEntry[], snapshots:
   if (snapshots.length === 0) return;
   const map: Record<string, VendorSnapshot> = {};
   for (const snapshot of snapshots) map[snapshot.ns] = snapshot;
-  const vendor = sidebarVendorOf(entries, map)?.providerId;
+  const entry = sidebarVendorOf(entries, map);
+  const vendor = entry?.providerId;
   sidebarVendorSeededValue = true;
+  // 始终用最新快照刷新设置值：厂商没变但轮询间隔等设置改了也要即时生效（不能因为
+  // `vendor === sidebarVendorValue` 提前返回就漏掉这次更新）。
+  sidebarVendorSettingsValue = entry === undefined ? undefined : map[entry.ns]?.value;
   if (vendor === sidebarVendorValue) return;
   sidebarVendorValue = vendor;
   for (const listener of [...sidebarVendorListeners]) listener(vendor);
@@ -1258,6 +1365,7 @@ export function resetSeams(): void {
   sharedUsage = undefined;
   usageReadyListeners.clear();
   sidebarVendorValue = undefined;
+  sidebarVendorSettingsValue = undefined;
   sidebarVendorSeededValue = false;
   sidebarVendorListeners.clear();
   sidebarMirrorStarted = false;

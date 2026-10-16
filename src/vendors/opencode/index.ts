@@ -105,6 +105,8 @@ const SETTINGS_ROWS: SettingsRowIds = ["opencode-go", OPENCODE_SETTINGS_NS];
  * 旧插件里本期的非目标字段（`proxyURL`、`refreshMinutes`、`protocolOverrides`、
  * `requestPreparationTimeoutMs`、图片预算、`accountOperations` 等）没有声明：schemastery 的
  * object 解析会把未声明字段原样带过，所以它们仍然留在文档里，只是本期不读也不改。
+ * 侧边栏额度卡片的刷新间隔是本期新增的可配置项，对应本包的 `quotaRefreshMinutes`（与旧插件的
+ * 目录缓存 `refreshMinutes` 是两回事：一个是用量轮询、一个是模型目录缓存，不要混用）。
  *
  * 类型上显式标成「宿主要求的最小 Config 面」（{@link PluginConfigSchema}）：schemastery 的
  * 推断类型会展开出 cosmokit 的 `Dict`，dts 生成器无法为它写出可移植的引用（TS2883）；入口
@@ -142,6 +144,12 @@ export const Config: PluginConfigSchema = z.object(
      * 默认 `false`：存量文档不受影响，用户不开就不显示、也不轮询。
      */
     showSidebarQuota: z.boolean().default(false),
+    /**
+     * 侧边栏额度卡片的刷新间隔（分钟）。规格 §8.1 第 6 条只要求「关闭即静默」、没规定间隔，
+     * 旧插件把固定 60s 写死；这里交给用户。缺省 1 分钟（与旧插件一致的体验），下限 1 分钟、
+     * 上限 120 分钟（再长用量基本就是过期的，反而误导）。整数是因为 UI 用「分钟」步进输入框。
+     */
+    quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
     baseURL: z.string().default(DEFAULT_BASE_URL),
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),
@@ -236,6 +244,41 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     },
   };
 
+  /**
+   * 备用账号把请求服务完了：把它提成当前账号（旧插件 `GoAccountSelection.adopt` 的同一后果 ——
+   * 「开始正常输出的备用账号会移至首位并成为当前账号」）。
+   *
+   * 策略都在这一层（适配器只报告「这次是备用账号服务的」，判定可单测）：
+   * - 只在**显式** `autoSwitch: true` 时提位：关掉自动切换时顺序是用户的地盘，不擅自改；
+   * - 已经是当前账号就什么都不做（省掉一次 describe + mutate 往返）；
+   * - 按 ref 单飞：并发请求不会为同一账号排一串重复写入。
+   *
+   * 写入走账号端口的 `move(ref, 0)`：它自带修订围栏与冲突重试，并把顶层 `apiKeyEnv`
+   * 跟到新队首 —— 「第一行 = 当前账号」的不变量由此保持，`list()` 的派生顺序也随之跟上。
+   * 提位失败只留一行告警：一次成功的请求不该因为记不下功劳而变成失败，下次请求照常轮换。
+   */
+  const promoting = new Map<string, Promise<void>>();
+  const promoteServedAccount = (ref: string): void => {
+    const current = document();
+    if (current.autoSwitch !== true) return;
+    if (opencodeAccountSlot(current).ref === ref) return;
+    if (promoting.has(ref)) return;
+    // 端口类型上 `move` 是可选的（能力矩阵里有厂家不实现重排）；opencode 声明了
+    // `reorder: true`，这里照旧防御一次，免得类型上的可选在运行时变成未定义调用。
+    const move = accounts.move?.bind(accounts);
+    if (move === undefined) return;
+    const pending = move(ref, 0).then(
+      () => undefined,
+      (error: unknown) => {
+        warn(`llm-opencode-go: could not make "${ref}" the current account (${String(error)})`);
+      },
+    );
+    promoting.set(ref, pending);
+    void pending.finally(() => {
+      if (promoting.get(ref) === pending) promoting.delete(ref);
+    });
+  };
+
   const deps: OpencodeAdapterDeps = {
     config: () => adapterConfigOf(document()),
     // 适配器按请求现取引擎：账号库一改（含 `move` / `select` 改写的顶层 `apiKeyEnv`），
@@ -248,6 +291,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     fetchImpl: fetch,
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
+    promoteServed: promoteServedAccount,
   };
   const adapter = createOpencodeAdapter(deps);
 

@@ -106,6 +106,11 @@ export const Config: PluginConfigSchema = z.object(
       visibleModels: z.array(z.string()),
       modelVisibility: z.dict(z.boolean()),
       showSidebarQuota: z.boolean().default(false),
+      /**
+       * 侧边栏额度卡片的刷新间隔（分钟），与 opencode 对称。缺省 1 分钟、上限 120 分钟，
+       * 见 opencode 入口的同名字段说明。
+       */
+      quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
       accounts: z.array(
         z.object({
           label: z.string(),

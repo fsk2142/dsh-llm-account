@@ -24,6 +24,13 @@ export interface DashboardProps {
   onClose: () => void;
   /** 手动刷新（可选）。 */
   onRefresh?: () => void;
+  /**
+   * 最近一次读取的失败原因（宿主给出的可读文本）；读取正常时为 `undefined`。
+   * 与 {@link SidebarCardProps.failure} 同一条纪律：读失败与没有数据是两件事。
+   */
+  failure?: string;
+  /** 当前显示的是上一次成功读到的数据（失败时保留），不是刚刚读到的。 */
+  stale?: boolean;
 }
 
 /**
@@ -33,6 +40,7 @@ export interface DashboardProps {
  */
 export function Dashboard(props: DashboardProps): ReactElement {
   const { t, status } = props;
+  const failure = props.failure;
   return createElement(
     "div",
     { "data-card": "dashboard", className: CSS_CLASS.dashboard },
@@ -45,8 +53,29 @@ export function Dashboard(props: DashboardProps): ReactElement {
         : [createElement("button", { key: "refresh", type: "button", "data-dashboard-refresh": "true", onClick: () => props.onRefresh?.() }, t("dashboard.refresh"))]),
       createElement("button", { key: "close", type: "button", "data-dashboard-close": "true", onClick: () => props.onClose() }, t("dashboard.close")),
     ),
+    // 失败提示置顶（参考实现的用量胶囊同一条：失败时先说失败，再决定显示什么数据）。
+    ...(failure === undefined
+      ? []
+      : [
+          createElement(
+            "p",
+            {
+              key: "failure",
+              "data-dashboard-failure": "true",
+              ...(failure === "" ? {} : { "data-dashboard-failure-detail": failure }),
+            },
+            t("usage.failed"),
+            failure === "" ? "" : `：${failure}`,
+            props.stale === true ? createElement("small", { key: "stale", "data-dashboard-stale": "true" }, `（${t("usage.stale")}）`) : null,
+          ),
+        ]),
     ...(status === undefined
-      ? [createElement("p", { key: "nodata", "data-dashboard-empty": "true" }, t("dashboard.noData"))]
+      ? [
+          // 没有数据时：失败说失败，什么都不曾说才说「暂无数据」。
+          failure === undefined
+            ? createElement("p", { key: "nodata", "data-dashboard-empty": "true" }, t("dashboard.noData"))
+            : createElement("p", { key: "nodata-failed", "data-dashboard-empty": "true" }, t("usage.failed")),
+        ]
       : [
           createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
           // 与 account-card.ts 同一条纪律：结构校验只查「是不是数组」，渲染路径自己挑出

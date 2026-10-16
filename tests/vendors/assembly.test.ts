@@ -734,3 +734,67 @@ it("autoSwitch: true 时同一个网关会轮到第二个账号（同一份文�
     vi.unstubAllGlobals();
   }
 });
+
+it("备用账号服务成功后提为当前账号：move 走设置端口，顺序与顶层引用一起落地", async () => {
+  const credentials = fakeCredentials({ PREFERRED_REF: "key-preferred", OTHER_REF: "key-other" });
+  const settings = fakeSettings([{ ns: "opencode-go", value: twoAccountConfig(true), revision: 4 }]);
+  // 网关：第一把钥匙 402 配额用尽，第二把干净回复（备用账号服务成功）。
+  const keys: string[] = [];
+  vi.stubGlobal("fetch", (async (input: unknown, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("models.dev")) return new Response("{}", { status: 503 });
+    if (url.includes("/models")) {
+      return new Response(JSON.stringify({ object: "list", data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const headers = new Headers(init?.headers);
+    const key = (headers.get("x-api-key") ?? headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
+    keys.push(key);
+    if (key === "key-preferred") {
+      return new Response(JSON.stringify({ error: { type: "insufficientquota" } }), { status: 402, headers: { "content-type": "application/json" } });
+    }
+    return new Response(anthropicSse(TEXT_FRAMES), { status: 200, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch);
+  try {
+    const host = fakeHost({ credentials: credentials.service, settings: settings.service });
+    const bundle = opencode.apply(host.ctx, opencode.Config(twoAccountConfig(true)));
+    const { error } = await drain(bundle.adapter.stream(streamRequest()));
+    expect(error).toBeUndefined();
+    expect(keys).toEqual(["key-preferred", "key-other"]);
+
+    // 晋升是一次真实的设置写入：账号表顺序不变（只有一条），顶层引用改成服务成功的那个。
+    await vi.waitFor(() => expect(settings.valueOf("opencode-go")?.apiKeyEnv).toBe("OTHER_REF"));
+    expect(settings.valueOf("opencode-go")?.accounts).toEqual([{ id: "other", name: "other", apiKeyEnv: "OTHER_REF" }]);
+    // 提位后下一轮请求直接用新当前账号（引擎按文档重建，order 首位就是它）。
+    expect(bundle.rotation.current().pick({ model: "m1", tried: new Set() })).toBe("OTHER_REF");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("autoSwitch 关着时备用账号服务成功也不提位（顺序是用户的地盘）", async () => {
+  const credentials = fakeCredentials({ PREFERRED_REF: "key-preferred", OTHER_REF: "key-other" });
+  const settings = fakeSettings([{ ns: "opencode-go", value: twoAccountConfig(false), revision: 4 }]);
+  vi.stubGlobal("fetch", (async (input: unknown, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("models.dev")) return new Response("{}", { status: 503 });
+    if (url.includes("/models")) {
+      return new Response(JSON.stringify({ object: "list", data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const headers = new Headers(init?.headers);
+    const key = (headers.get("x-api-key") ?? headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
+    if (key === "key-preferred") {
+      return new Response(JSON.stringify({ error: { type: "insufficientquota" } }), { status: 402, headers: { "content-type": "application/json" } });
+    }
+    return new Response(anthropicSse(TEXT_FRAMES), { status: 200, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch);
+  try {
+    const host = fakeHost({ credentials: credentials.service, settings: settings.service });
+    const bundle = opencode.apply(host.ctx, opencode.Config(twoAccountConfig(false)));
+    // autoSwitch: false 时候选集只有当前账号：第二个账号根本不会被联系，遑论提位。
+    const { error } = await drain(bundle.adapter.stream(streamRequest()));
+    expect(error).toMatchObject({ code: "QUOTA" });
+    expect(settings.mutations).toEqual([]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

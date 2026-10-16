@@ -17,6 +17,7 @@
 /** 一个 Hook 槽位：状态或副作用（两类共用一个顺序空间，与 React 的 Hook 顺序契约一致）。 */
 export type SimHook =
   | { kind: "state"; value: unknown }
+  | { kind: "ref"; value: { current: unknown } }
   | { kind: "effect"; fn: () => void | (() => void); deps?: readonly unknown[]; cleanup?: (() => void) | undefined; pending: boolean };
 
 export interface SimInstance {
@@ -45,6 +46,8 @@ export interface MiniReact {
   useState: <S,>(initial: S | (() => S)) => [S, (next: S | ((previous: S) => S)) => void];
   /** React 形状的 `useEffect`。 */
   useEffect: (fn: () => void | (() => void), deps?: readonly unknown[]) => void;
+  /** React 形状的 `useRef`（跨渲染稳定的可变容器）。 */
+  useRef: <V>(initial: V) => { current: V };
 }
 
 /**
@@ -110,6 +113,20 @@ export function installMiniReact(): MiniReact {
     }
   };
 
+  const useRef = <V,>(initial: V): { current: V } => {
+    const instance = rendering;
+    if (instance === undefined) throw new Error("mini-react: useRef outside of render");
+    const index = instance.cursor;
+    instance.cursor += 1;
+    let hook = instance.hooks[index];
+    // 与真实 React 一致：ref 对象只在首次渲染创建，之后跨渲染返回同一个对象。
+    if (hook === undefined || hook.kind !== "ref") {
+      hook = { kind: "ref", value: { current: initial } };
+      instance.hooks[index] = hook;
+    }
+    return hook.value as { current: V };
+  };
+
   const renderOnce = (instance: SimInstance): void => {
     instance.cursor = 0;
     rendering = instance;
@@ -170,6 +187,7 @@ export function installMiniReact(): MiniReact {
     },
     useState,
     useEffect,
+    useRef,
   };
 }
 

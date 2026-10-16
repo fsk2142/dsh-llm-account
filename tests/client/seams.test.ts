@@ -13,6 +13,7 @@ import {
   mountUsageRemote,
   noteSidebarSnapshots,
   onUsageReady,
+  quotaRefreshMs,
   readAccounts,
   readStatus,
   readSwitches,
@@ -23,6 +24,7 @@ import {
   selectPanel,
   sidebarVendor,
   sidebarVendorSeeded,
+  sidebarVendorSettings,
   startSharedState,
   startSidebarMirror,
   subscribeCredentials,
@@ -557,6 +559,38 @@ it("侧边栏开关存储：订阅者在变化时收到通知，值不变不重�
   off();
   noteSidebarSnapshots(VENDORS, [on]);
   expect(seen).toHaveLength(2);
+});
+
+it("quotaRefreshMs：分钟换算毫秒，缺省/非法回落到 60s，并夹在 [1, 120] 分钟", () => {
+  expect(quotaRefreshMs(undefined)).toBe(60_000); // 缺省 = 1 分钟，与旧插件一致的体验
+  expect(quotaRefreshMs("not-a-number")).toBe(60_000);
+  expect(quotaRefreshMs(NaN)).toBe(60_000);
+  expect(quotaRefreshMs(5)).toBe(5 * 60_000);
+  expect(quotaRefreshMs(1)).toBe(60_000);
+  expect(quotaRefreshMs(120)).toBe(120 * 60_000);
+  // 越界值被夹回边界，而不是原样放大成荒谬的间隔。
+  expect(quotaRefreshMs(0)).toBe(60_000);
+  expect(quotaRefreshMs(-3)).toBe(60_000);
+  expect(quotaRefreshMs(10_000)).toBe(120 * 60_000);
+});
+
+it("侧边栏设置存储：随快照刷新当前厂商的设置值，厂商不变但间隔改了也要即时生效", () => {
+  const commandCode = { ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: true, quotaRefreshMinutes: 5 }, revision: 1 };
+
+  noteSidebarSnapshots(VENDORS, [commandCode]);
+  expect(sidebarVendor()).toBe("commandcode");
+  expect(sidebarVendorSettings()).toMatchObject({ quotaRefreshMinutes: 5 });
+
+  // 同一家、只把间隔从 5 改到 30：厂商没变（不触发 vendor 通知），但设置值必须刷新 ——
+  // 否则 `pollInterval` 读到的是旧的 5 分钟，用户在设置页改了间隔不会在下一拍生效。
+  noteSidebarSnapshots(VENDORS, [{ ...commandCode, value: { showSidebarQuota: true, quotaRefreshMinutes: 30 } }]);
+  expect(sidebarVendor()).toBe("commandcode");
+  expect(sidebarVendorSettings()).toMatchObject({ quotaRefreshMinutes: 30 });
+
+  // 关闭后设置值清空（卡片不再需要它）。
+  noteSidebarSnapshots(VENDORS, [{ ...commandCode, value: { showSidebarQuota: false } }]);
+  expect(sidebarVendor()).toBeUndefined();
+  expect(sidebarVendorSettings()).toBeUndefined();
 });
 
 it("设置镜像：首读 seed 存储，settings/document-updated 触发重读（事件潮合并）", async () => {

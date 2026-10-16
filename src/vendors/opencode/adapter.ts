@@ -138,6 +138,13 @@ export interface OpencodeAdapterDeps {
   accounts: AccountPort;
   /** 注入的 `fetch`（测试用假实现；生产传全局 `fetch`）。同时也是 pi-ai 的 HTTP 通道。 */
   fetchImpl: typeof fetch;
+  /**
+   * 「这次请求由**备用账号**服务成功了」的报告口（策略在装配层，见 `index.ts` 的
+   * `promoteServedAccount`）：旧插件把这种账号提成当前账号（`GoAccountSelection.adopt`），
+   * 本适配器只负责判定「成功的不是本轮第一个被选中的账号」—— 判定是纯逻辑，可单测；
+   * 提位要不要真写设置（自动开关、单飞、写什么）由掌握设置文档的那一层决定。
+   */
+  promoteServed?: (ref: string) => void;
   /** `stored` 来源：凭据库读取（宿主 `credentials.resolve(ref)?.value` 的注入点）。 */
   resolveStored?: (ref: string) => Promise<string | undefined>;
   /** `environment` 来源：启动环境读取（宿主 `launchEnvironmentOf(ctx).get(name)` 的注入点）。 */
@@ -270,6 +277,8 @@ class OpencodeAdapter extends LlmAdapter {
     const raw = this.#deps.config();
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
+    /** 本轮第一个被选中的账号；`undefined` 表示还没选过（见下面的晋升判定）。 */
+    let firstPick: string | undefined;
 
     for (;;) {
       // 取成局部布尔量：`options.signal` 是只读参数对象上的属性，直接比较会让
@@ -287,6 +296,8 @@ class OpencodeAdapter extends LlmAdapter {
         );
       }
       tried.add(ref);
+      // 本轮第一个被选中的账号 = 这次的「首选」；后面成功的都是备用账号（晋升判定用）。
+      if (firstPick === undefined) firstPick = ref;
 
       const key = await this.#resolveKey(ref);
       if (key === undefined) {
@@ -365,6 +376,9 @@ class OpencodeAdapter extends LlmAdapter {
         if (pendingUsage !== undefined) yield pendingUsage;
         // 请求由这个账号**服务完了**：规格 §8.1 第 1 条的「最近成功者」（卡片跟随真实账号）。
         this.#deps.rotation.noteSettled(ref);
+        // 服务成功的不是本轮首选 → 它是备用账号：报告给装配层提位（旧插件
+        // `GoAccountSelection.adopt` 的同一后果）。提位失败不影响这次请求的结果。
+        if (firstPick !== undefined && ref !== firstPick) this.#deps.promoteServed?.(ref);
         return;
       }
 

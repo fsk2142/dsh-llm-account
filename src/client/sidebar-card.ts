@@ -23,6 +23,18 @@ export interface SidebarCardProps {
   status: VendorUsageStatus | undefined;
   /** 打开中栏仪表盘。 */
   onOpen: () => void;
+  /**
+   * 最近一次读取的失败原因（宿主给出的可读文本）；读取正常时为 `undefined`。
+   *
+   * 存在的理由是把「读失败」和「没有请求」分开：两者都表现为没有额度数字，但成因
+   * 完全相反 —— 把一次瞬时故障显示成「还没有请求经过这个账号」是谎报（参考实现的
+   * 用量胶囊在失败时给的是失败提示 + 「上次数据」，不是空态）。
+   */
+  failure?: string;
+  /** 当前显示的是上一次成功读到的数据（失败时保留），不是刚刚读到的。 */
+  stale?: boolean;
+  /** 手动重试（失败时用户要能立刻再问一次，参考实现的「立即重试」）。 */
+  onRefresh?: () => void;
 }
 
 /**
@@ -40,26 +52,62 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   const effective = status?.effective ?? undefined;
   const pinned = status?.pinned ?? null;
   const effectiveRow = effective === undefined ? undefined : status?.accounts.find((account) => account.ref === effective.ref);
+  const hasData = status !== undefined && effective !== undefined;
 
   return createElement(
     "div",
     { "data-card": "sidebar-quota", className: CSS_CLASS.sidebar },
-    ...(status === undefined || effective === undefined
+    ...(hasData
       ? [
-          // 还没有任何请求（或状态还没读到）：占位，**不显示 0%**。
-          createElement("p", { key: "empty", "data-sidebar-empty": "true" }, t("sidebar.noRequest")),
-        ]
-      : [
           // `switch` 与 `effective` 同一条纪律：可选字段，线上可能是 `null`。
           switchNotice(t, effective, pinned, status.switch ?? undefined),
           createElement("h3", { key: "title", "data-sidebar-title": "true" }, titleOf(props, effectiveRow)),
           ...effectiveQuota(props, effectiveRow),
+        ]
+      : [
+          // 没有可显示的数据：失败时说失败（附上一次数据标记），什么都没发生过时才说
+          // 「还没有请求」—— 前者是故障，后者是空态，混为一谈就是谎报。
+          props.failure === undefined
+            ? createElement("p", { key: "empty", "data-sidebar-empty": "true" }, t("sidebar.noRequest"))
+            : failureNote(props),
+        ]),
+    ...(hasData && props.failure !== undefined ? [failureNote(props)] : []),
+    ...(props.onRefresh === undefined
+      ? []
+      : [
+          createElement(
+            "button",
+            { key: "refresh", type: "button", "data-sidebar-refresh": "true", onClick: () => props.onRefresh?.() },
+            t("usage.refresh"),
+          ),
         ]),
     createElement(
       "button",
       { key: "open", type: "button", "data-sidebar-open": "true", onClick: () => props.onOpen() },
       t("sidebar.open"),
     ),
+  );
+}
+
+/**
+ * 失败提示行：可读的原因文案 + 「上次数据」标记。
+ *
+ * 原因文本由容器从宿主读数里带出来（`status.failures`）；没有文本时只显示通用文案，
+ * 不留一行光秃秃的「失败」。
+ */
+function failureNote(props: SidebarCardProps): ReactElement {
+  const { t } = props;
+  const detail = props.failure ?? "";
+  return createElement(
+    "p",
+    {
+      key: "failure",
+      "data-sidebar-failure": "true",
+      ...(detail === "" ? {} : { "data-sidebar-failure-detail": detail }),
+    },
+    t("usage.failed"),
+    detail === "" ? "" : `：${detail}`,
+    props.stale === true ? createElement("small", { key: "stale", "data-sidebar-stale": "true" }, `（${t("usage.stale")}）`) : null,
   );
 }
 

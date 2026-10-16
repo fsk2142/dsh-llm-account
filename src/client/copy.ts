@@ -27,8 +27,8 @@ export type CopyKey =
   | "group.advanced.hint"
   | "field.showSidebarQuota"
   | "field.showSidebarQuota.hint"
-  | "field.usageDisplay"
-  | "field.usageDisplay.hint"
+  | "field.quotaRefreshMinutes"
+  | "field.quotaRefreshMinutes.hint"
   | "field.apiBase"
   | "field.apiBase.hint"
   | "field.baseURL"
@@ -41,9 +41,6 @@ export type CopyKey =
   | "field.streamIdleTimeoutMs.hint"
   | "field.defaultMaxTokens"
   | "field.defaultMaxTokens.hint"
-  | "options.auto"
-  | "options.always"
-  | "options.off"
   | "options.openai"
   | "options.messages"
   | "options.cli"
@@ -87,6 +84,9 @@ export type CopyKey =
   | "sidebar.effective"
   | "sidebar.open"
   | "sidebar.noRequest"
+  | "usage.failed"
+  | "usage.stale"
+  | "usage.refresh"
   | "rejection.unavailable"
   | "rejection.server"
   | "rejection.network"
@@ -136,8 +136,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "group.advanced.hint": "请求构造、协议与超时。",
     "field.showSidebarQuota": "侧边栏额度卡片",
     "field.showSidebarQuota.hint": "开启后侧边栏底部显示额度卡片；关闭时不发起任何后台用量查询。",
-    "field.usageDisplay": "用量显示",
-    "field.usageDisplay.hint": "会话费用读数的显示时机。",
+    "field.quotaRefreshMinutes": "用量刷新间隔（分钟）",
+    "field.quotaRefreshMinutes.hint": "侧边栏卡片刷新用量数据的间隔；标签页隐藏时暂停刷新，连续的刷新失败会自动放慢。",
     "field.apiBase": "API 基地址",
     "field.apiBase.hint": "留空使用默认地址。",
     "field.baseURL": "服务地址",
@@ -150,9 +150,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.streamIdleTimeoutMs.hint": "超过此时长没有任何数据即判定失败。",
     "field.defaultMaxTokens": "默认最大输出 token",
     "field.defaultMaxTokens.hint": "留空使用模型默认值。",
-    "options.auto": "自动",
-    "options.always": "总是",
-    "options.off": "关闭",
     "options.openai": "OpenAI 兼容",
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
@@ -196,6 +193,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.effective": "当前",
     "sidebar.open": "打开用量面板",
     "sidebar.noRequest": "还没有请求经过这个账号。",
+    "usage.failed": "用量读取失败",
+    "usage.stale": "上次数据",
+    "usage.refresh": "刷新",
     "rejection.unavailable": "服务暂不可用",
     "rejection.server": "服务端错误",
     "rejection.network": "网络错误",
@@ -240,8 +240,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "group.advanced.hint": "Request construction, protocol and timeouts.",
     "field.showSidebarQuota": "Sidebar quota card",
     "field.showSidebarQuota.hint": "Shows a quota card at the bottom of the sidebar; while off, no background usage request is made.",
-    "field.usageDisplay": "Usage display",
-    "field.usageDisplay.hint": "When the session cost readout appears.",
+    "field.quotaRefreshMinutes": "Usage refresh interval (minutes)",
+    "field.quotaRefreshMinutes.hint": "How often the sidebar card refreshes usage data; paused while the tab is hidden, and failures are slowed down automatically.",
     "field.apiBase": "API base URL",
     "field.apiBase.hint": "Leave blank for the default endpoint.",
     "field.baseURL": "Service URL",
@@ -254,9 +254,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.streamIdleTimeoutMs.hint": "Fail when no data arrives for this long.",
     "field.defaultMaxTokens": "Default max output tokens",
     "field.defaultMaxTokens.hint": "Leave blank for the model default.",
-    "options.auto": "Auto",
-    "options.always": "Always",
-    "options.off": "Off",
     "options.openai": "OpenAI compatible",
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
@@ -300,6 +297,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.effective": "Current",
     "sidebar.open": "Open the usage panel",
     "sidebar.noRequest": "No request has used this account yet.",
+    "usage.failed": "Usage read failed",
+    "usage.stale": "Last data",
+    "usage.refresh": "Refresh",
     "rejection.unavailable": "Service unavailable",
     "rejection.server": "Server error",
     "rejection.network": "Network error",

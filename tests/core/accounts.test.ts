@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 
-import { accountRef, assignModelRule, dedupeByRef, dropAccount, reorder } from "../../src/core/accounts";
+import { accountRef, assignModelRule, dedupeByRef, dropAccount, moveFirst, reorder } from "../../src/core/accounts";
 
 it("同一模型只属于一个账号：改派给另一账号后旧规则移除", () => {
   const r1 = assignModelRule([], ["m1"], "acc-a");
@@ -85,6 +85,19 @@ it("删除账号只清目标账号：其他账号的规则与固定标记保留�
 it("排序：ref 不在列表里时原样返回，负索引夹到开头", () => {
   expect(reorder(["a", "b"], "zzz", 0)).toEqual(["a", "b"]);
   expect(reorder(["a", "b"], "b", -5)).toEqual(["b", "a"]);
+});
+
+it("moveFirst：把一项提到首位，其余相对顺序不变；缺项/首位是恒等", () => {
+  // 「第一行 = 当前账号」的派生读取（旧插件 moveAccountFirst 同一形状）。
+  expect(moveFirst([{ ref: "a" }, { ref: "b" }, { ref: "c" }], "c")).toEqual([{ ref: "c" }, { ref: "a" }, { ref: "b" }]);
+  expect(moveFirst([{ ref: "a" }, { ref: "b" }, { ref: "c" }], "b")).toEqual([{ ref: "b" }, { ref: "a" }, { ref: "c" }]);
+  // 已经在首位 / 不在表里：原样返回（调用方据此跳过无谓写入）。
+  expect(moveFirst([{ ref: "a" }, { ref: "b" }], "a")).toEqual([{ ref: "a" }, { ref: "b" }]);
+  expect(moveFirst([{ ref: "a" }, { ref: "b" }], "zzz")).toEqual([{ ref: "a" }, { ref: "b" }]);
+  // 入参不被修改。
+  const rows = [{ ref: "a" }, { ref: "b" }];
+  moveFirst(rows, "b");
+  expect(rows).toEqual([{ ref: "a" }, { ref: "b" }]);
 });
 
 it("五个函数都是纯函数：不修改入参", () => {

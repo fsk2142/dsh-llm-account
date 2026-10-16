@@ -171,9 +171,19 @@ it("字段列表按声明顺序展开，值来自草稿 → 基线 → 声明默
   const state = setField(createPageState(VENDORS, SNAPSHOTS), "llm-commandcode", "protocol", "cli");
   const fields = fieldsOf(state, commandCode);
 
-  expect(fields.map((field) => field.spec.key)).toEqual(["showSidebarQuota", "apiBase", "protocol", "requestTimeoutMs", "streamIdleTimeoutMs", "defaultMaxTokens"]);
+  expect(fields.map((field) => field.spec.key)).toEqual([
+    "showSidebarQuota",
+    "quotaRefreshMinutes",
+    "apiBase",
+    "protocol",
+    "requestTimeoutMs",
+    "streamIdleTimeoutMs",
+    "defaultMaxTokens",
+  ]);
   const byKey = new Map(fields.map((field) => [field.spec.key, field]));
   expect(byKey.get("showSidebarQuota")?.value).toBe(false); // 基线没有 → 声明默认
+  // 用量刷新间隔：宿主文档没给时回落到声明默认（1 分钟），不是整数 0 也不是 undefined。
+  expect(byKey.get("quotaRefreshMinutes")?.value).toBe(1);
   expect(byKey.get("apiBase")?.value).toBe("https://a.example"); // 基线
   expect(byKey.get("protocol")?.value).toBe("cli"); // 草稿
   expect(byKey.get("protocol")?.changed).toBe(true);

@@ -54,7 +54,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AccountPort, AccountView, CredentialPort, SettingsOp, SettingsPort } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN, dedupeByRef, readAccountSlot, reorder } from "../../core/accounts";
+import { CREDENTIAL_REF_PATTERN, dedupeByRef, moveFirst, readAccountSlot, reorder } from "../../core/accounts";
 import type { AccountSlotReading } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { AccountIntent, AccountIntentKind, IntentLog } from "../../core/recovery";
@@ -305,11 +305,17 @@ class OpencodeAccounts implements AccountPort {
   /**
    * @returns 账号行视图：身份取自 `apiKeyEnv`，`configured` 来自凭据服务。
    *
-   * **合成的默认槽在第一行**（旧插件 `accountsOf` 第 6783-6790 行：当前账号不在 `accounts[]`
-   * 里时补一条 `{ id: "legacy:<ref>", name: "", apiKeyEnv: ref }`）。顶层 `apiKeyEnv` 就是
-   * 「当前账号」（`select` 写它、`move` 把队首跟到它），用户现有的 opencode 行根本没有
-   * `accounts` 键 —— 只列 `accounts[]` 会让正在服务请求的那个账号一行都不显示、也固定不了。
-   * 只有当真账号条目已经占用了这个 ref 时才不合成（同 ref 的重复行不该出现）。
+   * **当前账号显示在第一行**（旧插件 `accountsOf` 第 6783-6790 行 + `moveAccountFirst`
+   * 第 6779 行的同一派生）：顶层 `apiKeyEnv` 就是「当前账号」（`select` 写它、`move`
+   * 把队首跟到它），所以列表顺序必须让用户一眼看出谁在服务 —— 参考实现的会话面板
+   * 「第一行成为当前账号；顺序也决定自动尝试备用账号的次序」说的就是这件事。
+   * 派生（读时提位）而不是写设置：`select` 已经改了顶层引用，顺序显示跟着派生即可，
+   * 不值得为用户点一次「切换」就多写一次文档。
+   *
+   * 当前账号不在 `accounts[]` 里时（用户现有的 opencode 行根本没有 `accounts` 键），
+   * 合成一条默认槽行补在最前面（旧插件同一形状：`legacy:<ref>`）—— 只列 `accounts[]`
+   * 会让正在服务请求的那个账号一行都不显示、也固定不了。真账号条目已占用这个 ref 时
+   * 不合成（同 ref 的重复行不该出现）。
    */
   async list(): Promise<AccountView[]> {
     const snapshot = await this.#deps.settings.describe(OPENCODE_SETTINGS_NS);
@@ -325,7 +331,7 @@ class OpencodeAccounts implements AccountPort {
         .map((item) => ({ ref: item.ref, label: item.label ?? item.ref, configured: false, active: item.ref === slot.pinned })),
     );
     // 重复 ref 只保留第一个：同一个凭据槽不该在轮换里被算两轮（Review Focus 1）。
-    const unique = dedupeByRef(views);
+    const unique = dedupeByRef(moveFirst(views, slot.ref));
     const info = await this.#deps.credentials.describe(unique.map((view) => view.ref));
     return unique.map((view) => ({ ...view, configured: info[view.ref]?.configured === true }));
   }
@@ -512,7 +518,6 @@ class OpencodeAccounts implements AccountPort {
           order.push(itemRef);
         }
         const next = reorder(order, ref, toIndex);
-        if (next.join("\u0000") === order.join("\u0000")) return { ops: [], result: undefined };
         const byRef = new Map<string, unknown>();
         const extras: unknown[] = [];
         for (const item of accounts) {
@@ -521,13 +526,20 @@ class OpencodeAccounts implements AccountPort {
           if (itemRef === undefined || byRef.has(itemRef)) extras.push(item);
           else byRef.set(itemRef, item);
         }
-        const ops: SettingsOp[] = [
-          { op: "set", path: [ACCOUNTS_FIELD], value: [...next.map((candidate) => byRef.get(candidate)), ...extras] },
-        ];
+        // 两个写入目标**各自**判定：「顺序没变」不写 accounts，「队首没变」不写 apiKeyEnv。
+        // 曾经这里只要顺序没变就整体返回空 ops —— 于是「数组里只有一个备用账号」时
+        // （顺序自然是恒等），把队首写成它的那一步也被跳过，晋升静默失效：
+        // 文档仍旧指着旧当前账号，下一轮请求又重新选回旧账号。
         const head = next[0];
-        if (head !== undefined && activeRefOf(value) !== head) {
-          ops.push({ op: "set", path: [ACTIVE_FIELD], value: head });
+        const active = activeRefOf(value);
+        const orderChanged = next.join("\u0000") !== order.join("\u0000");
+        const activeChanged = head !== undefined && active !== head;
+        if (!orderChanged && !activeChanged) return { ops: [], result: undefined };
+        const ops: SettingsOp[] = [];
+        if (orderChanged) {
+          ops.push({ op: "set", path: [ACCOUNTS_FIELD], value: [...next.map((candidate) => byRef.get(candidate)), ...extras] });
         }
+        if (activeChanged) ops.push({ op: "set", path: [ACTIVE_FIELD], value: head });
         return { ops, result: undefined };
       }),
     );

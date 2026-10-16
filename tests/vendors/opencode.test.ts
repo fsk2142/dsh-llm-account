@@ -137,6 +137,34 @@ const TEXT_FRAMES: readonly (readonly [string, unknown])[] = [
 ];
 
 /**
+ * 打到输出上限却一个字都没产出的回复：**不开任何内容块**（`content` 是块数组，开一个空块
+ * 也算「有内容」），`stop_reason: "max_tokens"` 经 pi-ai 映射为 `stopReason: "length"`。
+ */
+const EMPTY_LENGTH_FRAMES: readonly (readonly [string, unknown])[] = [
+  [
+    "message_start",
+    {
+      type: "message_start",
+      message: {
+        id: "msg_3",
+        type: "message",
+        role: "assistant",
+        model: "m1",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 8, output_tokens: 0 },
+      },
+    },
+  ],
+  [
+    "message_delta",
+    { type: "message_delta", delta: { stop_reason: "max_tokens", stop_sequence: null }, usage: { output_tokens: 0 } },
+  ],
+  ["message_stop", { type: "message_stop" }],
+];
+
+/**
  * 先产出可见文本、再在流中途报错的回复。
  *
  * 报错文案刻意选**账号级可归类**的额度措辞：这两条用例要问的是「闸门在已输出时是否
@@ -227,6 +255,7 @@ function harness(
   generate: (key: string) => Response,
   modelVisibility?: Record<string, boolean>,
   order: readonly string[] = ["a", "b"],
+  promoteServed?: (ref: string) => void,
 ) {
   const calls: string[] = [];
   const fetchImpl = (async (input: unknown, init?: RequestInit): Promise<Response> => {
@@ -249,6 +278,7 @@ function harness(
     accounts: stubAccounts(),
     fetchImpl,
     resolveStored: async (ref) => KEYS[ref] ?? `key-${ref}`,
+    ...(promoteServed === undefined ? {} : { promoteServed }),
   });
   return { adapter, rotation, gate, calls };
 }
@@ -412,4 +442,38 @@ it("失败响应的正文读不动时按已有证据降级，不会卡住请求"
   expect(elapsed).toBeLessThan(BODY_READ_TIMEOUT_MS + 1_500); // 有期限，不是无限等
   expect(evidence?.status).toBe(402); // 状态永远在：正文读不动就按状态分类
   expect(evidence?.body).toBeUndefined();
+});
+
+it("备用账号把请求服务成功后被报告晋升；首选账号服务成功时安静", async () => {
+  // (1) a 配额用尽 → b 服务成功：b 是备用账号，适配器必须把它报告给装配层提位
+  //     （旧插件 `GoAccountSelection.adopt`：「开始正常输出的备用账号会移至首位并成为当前账号」）。
+  const promoted: string[] = [];
+  const switched = harness(
+    (key) => (key === "key-a" ? jsonResponse(402, { error: { type: "insufficientquota" } }) : sseResponse(TEXT_FRAMES)),
+    undefined,
+    ["a", "b"],
+    (ref) => promoted.push(ref),
+  );
+  await collect(switched.adapter.stream(request()));
+  expect(promoted).toEqual(["b"]);
+
+  // (2) 首选账号一次成功：没有任何晋升报告（每次都报就等于每次请求都写一次设置）。
+  const quiet: string[] = [];
+  const direct = harness(() => sseResponse(TEXT_FRAMES), undefined, ["a", "b"], (ref) => quiet.push(ref));
+  await collect(direct.adapter.stream(request()));
+  expect(quiet).toEqual([]);
+
+  // (3) 晋升报告口缺席（装配层没接）也不影响请求路径。
+  const bare = harness((key) => (key === "key-a" ? jsonResponse(402, { error: { type: "insufficientquota" } }) : sseResponse(TEXT_FRAMES)));
+  expect(textOf(await collect(bare.adapter.stream(request())))).toBe("hello");
+});
+
+it("length 终态一个字都没产出时给出可执行建议，而不是伪装成 max-tokens", async () => {
+  // 空消息会让一轮什么都不说地结束（dsh-llm 的 EMPTY_RESPONSE_CODE 文档点名的失败模式）。
+  const { adapter } = harness(() => sseResponse(EMPTY_LENGTH_FRAMES));
+  const settled = await collectSettled(adapter.stream(request()));
+  expect(settled.error).toBeDefined();
+  expect((settled.error as { code?: string }).code).toBe("INVALID_REQUEST");
+  expect(String((settled.error as Error).message)).toContain("/compact");
+  expect(String((settled.error as Error).message)).toContain("max output");
 });

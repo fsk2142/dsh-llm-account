@@ -79,6 +79,15 @@ export const VENDORS: readonly VendorEntry[] = [
             hintKey: "field.showSidebarQuota.hint",
             fallback: false,
           },
+          {
+            key: "quotaRefreshMinutes",
+            kind: "number",
+            labelKey: "field.quotaRefreshMinutes",
+            hintKey: "field.quotaRefreshMinutes.hint",
+            // 与各自 Config 的 `default(1)` 对齐：宿主文档没给这个字段时，页面按 1 分钟显示，
+            // 而不是空白或 undefined（用户没配过就该看到与旧插件一致的 1 分钟体验）。
+            fallback: 1,
+          },
         ],
       },
       {
@@ -138,16 +147,20 @@ export const VENDORS: readonly VendorEntry[] = [
             fallback: false,
           },
           {
-            key: "usageDisplay",
-            kind: "select",
-            labelKey: "field.usageDisplay",
-            hintKey: "field.usageDisplay.hint",
-            options: [
-              { value: "auto", labelKey: "options.auto" },
-              { value: "always", labelKey: "options.always" },
-              { value: "off", labelKey: "options.off" },
-            ],
+            key: "quotaRefreshMinutes",
+            kind: "number",
+            labelKey: "field.quotaRefreshMinutes",
+            hintKey: "field.quotaRefreshMinutes.hint",
+            // 与各自 Config 的 `default(1)` 对齐：宿主文档没给这个字段时，页面按 1 分钟显示，
+            // 而不是空白或 undefined（用户没配过就该看到与旧插件一致的 1 分钟体验）。
+            fallback: 1,
           },
+          // **刻意不声明 `usageDisplay`**（自动/常驻/关闭）：那个三模式开关属于参考插件的
+          // **会话内用量胶囊**，而胶囊是本期声明不做的东西（`vendors/opencode/index.ts`
+          // 模块头的非目标清单）。在页面上放一个没有任何代码读取的开关，就是把「看起来
+          // 能配、其实无效」的控件卖给用户 —— 用户拨到「常驻」什么都不会发生。
+          // 字段本身仍留在 opencode 的 Config schema 里（存量 profile patch 兼容），
+          // 只是不从本页提供编辑入口。
         ],
       },
       {

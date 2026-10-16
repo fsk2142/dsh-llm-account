@@ -608,6 +608,26 @@ it("move 支持排序（opencode 的能力清单里 reorder 为真），并把�
   expect(settings.mutations).toHaveLength(before);
 });
 
+it("move 只差「成为当前账号」时也落盘：数组顺序没变不跳过 apiKeyEnv（晋升依赖这一步）", async () => {
+  // 最常见的多账号形状：顶层当前账号 + 账号表里**只有一条**备用账号。此时把备用账号
+  // 移到 0 位，数组顺序是恒等的 —— 但「成为当前账号」（写顶层 apiKeyEnv）正是这次
+  // 操作的全部意义。旧实现只要顺序没变就整体返回空 ops，晋升于是静默失效。
+  const { port, settings } = accountsPort(
+    emptyDoc({ accounts: [entry("B", "b")], apiKeyEnv: "a" }),
+  );
+
+  await port.move!("b", 0);
+
+  // 文档里只该多出 apiKeyEnv 一步（accounts 不该被无谓重写、推进修订号）。
+  expect(settings.doc().accounts).toEqual([entry("B", "b")]);
+  expect(settings.doc().apiKeyEnv).toBe("b");
+
+  // 已经是当前账号又已在队首：什么都不写（幂等，不白白推进修订号）。
+  const before = settings.mutations.length;
+  await port.move!("b", 0);
+  expect(settings.mutations).toHaveLength(before);
+});
+
 it("move 不丢条目：读不出 ref 的与重复 ref 的条目原样缀在末尾", async () => {
   // 手改坏的文档形状：一条读不出 ref（非对象）、一条与 "a" 重复 ref。
   const broken = { id: "a-again", name: "A again", apiKeyEnv: "a" };
@@ -630,11 +650,26 @@ it("list 用 CredentialPort.describe 填充 configured 与 active，空值不算
   const views = await port.list();
 
   // 顶层 `apiKeyEnv` 是 "b"，而 "b" 已经在账号表里 → 不合成默认槽行（同一 ref 不重复）。
+  // **当前账号显示在第一行**（旧插件 `accountsOf` + `moveAccountFirst` 的同一派生：
+  // 「第一行成为当前账号」），其余账号相对顺序不变 —— 派生，不写设置。
   expect(views).toEqual([
-    { ref: "a", label: "A", configured: true, active: false },
     { ref: "b", label: "B", configured: false, active: true },
+    { ref: "a", label: "A", configured: true, active: false },
     { ref: "c", label: "C", configured: false, active: false },
   ]);
+});
+
+it("list 的当前账号提位是派生：不改设置文档，select 之后顺序随即跟上", async () => {
+  const { port, settings } = accountsPort(emptyDoc({ accounts: [entry("A", "a"), entry("B", "b"), entry("C", "c")] }));
+
+  // 文档顺序原样不动（提位只发生在读侧）。
+  expect(settings.doc().accounts).toEqual([entry("A", "a"), entry("B", "b"), entry("C", "c")]);
+  expect((await port.list()).map((view) => view.ref)).toEqual(["OPENCODE_API_KEY", "a", "b", "c"]);
+
+  await port.select("c");
+  // 一次 select（写顶层引用）之后，列表顺序随即反映新当前账号；文档里 accounts 的顺序没变。
+  expect((await port.list()).map((view) => view.ref)).toEqual(["c", "a", "b"]);
+  expect(settings.doc().accounts).toEqual([entry("A", "a"), entry("B", "b"), entry("C", "c")]);
 });
 
 it("用户真实形状（没有 accounts 键）：顶层当前账号仍然列出并标成 active，且可固定、不可移除（I1）", async () => {
