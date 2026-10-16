@@ -136,6 +136,23 @@ function boundaryError(endpoint: string, detail: string): Error {
   return new Error(`${USAGE_PACKAGE}: ${endpoint} boundary violation: ${detail}`);
 }
 
+/**
+ * 把一个边界值写进错误消息。
+ *
+ * **不能直接用 `JSON.stringify`**：它对 BigInt 抛 `TypeError`、对循环引用也抛 ——
+ * 于是「报一个边界错误」这件事自己先崩了，调用方拿到的是一个跟边界毫无关系的
+ * TypeError（主机与客户端同进程，线上值不一定是 JSON 能序列化的东西）。
+ * @param value - 待描述的边界值。
+ * @returns 一段安全的文本；序列化不了就退到类型名。
+ */
+function describeValue(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
 /** 判定「普通对象」。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -148,41 +165,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function parseVendorId(value: unknown): string {
   if (typeof value === "string" && (VENDOR_IDS as readonly string[]).includes(value)) return value;
-  throw boundaryError(`${USAGE_NAMESPACE}/vendor`, `expected a known vendor id, got ${JSON.stringify(value)}`);
+  throw boundaryError(`${USAGE_NAMESPACE}/vendor`, `expected a known vendor id, got ${describeValue(value)}`);
 }
 
-/** 校验状态结果：只查结构（数据由宿主产生，深校验没有额外价值）。 */
-function parseVendorUsageStatus(value: unknown): VendorUsageStatus {
+/**
+ * 校验状态结果：只查结构（数据由宿主产生，深校验没有额外价值）。
+ * @param endpoint - 调用方端点名（错误消息要指名是哪条调用）。
+ * @param value - 边界值。
+ */
+function parseVendorUsageStatus(endpoint: string, value: unknown): VendorUsageStatus {
   if (!isRecord(value) || !Array.isArray(value.accounts)) {
-    throw boundaryError(`${USAGE_NAMESPACE}/status`, "expected an object with an accounts array");
+    throw boundaryError(endpoint, "expected an object with an accounts array");
   }
   return value as unknown as VendorUsageStatus;
 }
 
 /** 校验账号行数组。 */
-function parseAccountViews(value: unknown): AccountView[] {
-  if (!Array.isArray(value)) throw boundaryError(`${USAGE_NAMESPACE}/accounts`, "expected an array of account views");
+function parseAccountViews(endpoint: string, value: unknown): AccountView[] {
+  if (!Array.isArray(value)) throw boundaryError(endpoint, "expected an array of account views");
   return value as AccountView[];
 }
 
 /** 校验切换记录数组。 */
-function parseSwitchRecords(value: unknown): SwitchRecord[] {
-  if (!Array.isArray(value)) throw boundaryError(`${USAGE_NAMESPACE}/switches`, "expected an array of switch records");
+function parseSwitchRecords(endpoint: string, value: unknown): SwitchRecord[] {
+  if (!Array.isArray(value)) throw boundaryError(endpoint, "expected an array of switch records");
   return value as SwitchRecord[];
 }
 
 /** 校验一次登录尝试的状态。 */
-function parseLoginStatus(value: unknown): LoginStatus {
+function parseLoginStatus(endpoint: string, value: unknown): LoginStatus {
   if (!isRecord(value) || typeof value.state !== "string") {
-    throw boundaryError(`${USAGE_NAMESPACE}/login`, "expected a login status object with a state field");
+    throw boundaryError(endpoint, "expected a login status object with a state field");
   }
   return value as unknown as LoginStatus;
 }
 
 /** 校验一条账号行。 */
-function parseAccountView(value: unknown): AccountView {
+function parseAccountView(endpoint: string, value: unknown): AccountView {
   if (!isRecord(value) || typeof value.ref !== "string") {
-    throw boundaryError(`${USAGE_NAMESPACE}/accounts`, "expected an account view with a ref");
+    throw boundaryError(endpoint, "expected an account view with a ref");
   }
   return value as unknown as AccountView;
 }
@@ -202,29 +223,29 @@ function parseAddAccountInput(value: unknown): AddAccountInput {
 }
 
 /** 校验一个必填字符串。 */
-function parseString(value: unknown): string {
-  if (typeof value !== "string") throw boundaryError(USAGE_NAMESPACE, `expected a string, got ${JSON.stringify(value)}`);
+function parseString(endpoint: string, value: unknown): string {
+  if (typeof value !== "string") throw boundaryError(endpoint, `expected a string, got ${describeValue(value)}`);
   return value;
 }
 
 /** 校验一个数字（账号下标）。 */
-function parseNumber(value: unknown): number {
+function parseNumber(endpoint: string, value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw boundaryError(USAGE_NAMESPACE, `expected a finite number, got ${JSON.stringify(value)}`);
+    throw boundaryError(endpoint, `expected a finite number, got ${describeValue(value)}`);
   }
   return value;
 }
 
 /** 校验一个布尔值。 */
-function parseBoolean(value: unknown): boolean {
-  if (typeof value !== "boolean") throw boundaryError(USAGE_NAMESPACE, `expected a boolean, got ${JSON.stringify(value)}`);
+function parseBoolean(endpoint: string, value: unknown): boolean {
+  if (typeof value !== "boolean") throw boundaryError(endpoint, `expected a boolean, got ${describeValue(value)}`);
   return value;
 }
 
 /** 校验一个可空的字符串（`null` 表示「回到自动轮换」）。 */
-function parseNullableString(value: unknown): string | null {
+function parseNullableString(endpoint: string, value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  return parseString(value);
+  return parseString(endpoint, value);
 }
 
 /** 造一个强类型结果编解码（与旧插件 `makeStrictCodec` 同形）。 */
@@ -236,7 +257,8 @@ function strictCodec(typeSymbol: string, parse: (value: unknown) => unknown): Us
 interface ParamSpec {
   name: string;
   typeSymbol: string;
-  parse: (value: unknown) => unknown;
+  /** 边界校验；第一个参数是端点名，错误消息用它指名是哪条调用。 */
+  parse: (endpoint: string, value: unknown) => unknown;
   /** 允许缺席（线上 `undefined`）。 */
   optional?: boolean;
 }
@@ -246,8 +268,13 @@ const VENDOR_PARAM: ParamSpec = { name: "vendor", typeSymbol: "VendorId", parse:
 /** 账号 ref 参数。 */
 const REF_PARAM: ParamSpec = { name: "ref", typeSymbol: "AccountRef", parse: parseString };
 
-/** 造一个参数描述符。 */
-function parameterOf(spec: ParamSpec): unknown {
+/**
+ * 造一个参数描述符。
+ * @param spec - 参数规格。
+ * @param method - 所属方法名（拼端点用）。
+ */
+function parameterOf(spec: ParamSpec, method: string): unknown {
+  const parameterEndpoint = `${USAGE_NAMESPACE}/${method}#${spec.name}`;
   return {
     name: spec.name,
     wire: spec.name,
@@ -256,7 +283,7 @@ function parameterOf(spec: ParamSpec): unknown {
     codec: {
       mode: "strict",
       typeSymbol: `${USAGE_PACKAGE}#${spec.typeSymbol}`,
-      create: () => ({ parse: spec.parse }),
+      create: () => ({ parse: (value: unknown) => spec.parse(parameterEndpoint, value) }),
     },
   };
 }
@@ -265,17 +292,20 @@ function parameterOf(spec: ParamSpec): unknown {
 function makeDescriptor(
   method: UsageMethod,
   typeSymbol: string,
-  parse: (value: unknown) => unknown,
+  parse: (endpoint: string, value: unknown) => unknown,
   parameters: readonly ParamSpec[],
 ): UsageInvocationDescriptor {
+  const endpoint = `${USAGE_NAMESPACE}/${method}`;
   return {
-    id: `${USAGE_PACKAGE}#${USAGE_NAMESPACE}/${method}`,
+    id: `${USAGE_PACKAGE}#${endpoint}`,
     service: USAGE_SERVICE_KEY,
     namespace: USAGE_NAMESPACE,
     method,
     invocation: { kind: "direct" },
-    parameters: parameters.map(parameterOf),
-    result: strictCodec(typeSymbol, parse),
+    parameters: parameters.map((spec) => parameterOf(spec, method)),
+    // 结果解析器绑上**本条调用**的端点：复用同一个解析函数的端点（addAccount 与
+    // accounts 共用 parseAccountView）才不会把失败归错到别人头上。
+    result: strictCodec(typeSymbol, (value: unknown) => parse(endpoint, value)),
   };
 }
 

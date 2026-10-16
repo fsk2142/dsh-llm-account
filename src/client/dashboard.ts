@@ -49,10 +49,14 @@ export function Dashboard(props: DashboardProps): ReactElement {
       ? [createElement("p", { key: "nodata", "data-dashboard-empty": "true" }, t("dashboard.noData"))]
       : [
           createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
-          ...status.accounts.map((account) => accountBlock(props, account)),
-          ...(status.failures.length === 0
+          // 与 account-card.ts 同一条纪律：结构校验只查「是不是数组」，渲染路径自己挑出
+          // 能画的行；集合字段缺了就当作空，不让 `.map`/`.length` 抛在渲染路径上。
+          ...(status.accounts ?? [])
+            .filter((account): account is AccountUsageStatus => typeof account === "object" && account !== null)
+            .map((account) => accountBlock(props, account)),
+          ...((status.failures ?? []).length === 0
             ? []
-            : [createElement("ul", { key: "failures", "data-dashboard-failures": "true" }, ...status.failures.map((failure, index) => createElement("li", { key: index }, failure)))]),
+            : [createElement("ul", { key: "failures", "data-dashboard-failures": "true" }, ...(status.failures ?? []).map((failure, index) => createElement("li", { key: index }, failure)))]),
         ]),
     switchHistory(props),
   );
@@ -62,6 +66,11 @@ export function Dashboard(props: DashboardProps): ReactElement {
   const { t } = props;
   const effective = account.effective;
   const pinned = props.status?.pinned === account.ref;
+  // 契约里 `rejection` / `quota` 都是**可选**字段，而线上可能把它们序列化成 `null`
+  // （JSON 没有 undefined）。只写 `=== undefined` 会让 `null` 走进来，接着读 `.kind` /
+  // `.windows` 抛错 —— 渲染路径一抛，整块仪表盘变空白。与 `sidebar-card.ts` 同一条纪律。
+  const rejectionOf = account.rejection ?? undefined;
+  const quotaOf = account.quota ?? undefined;
   return createElement(
     "section",
     {
@@ -71,28 +80,28 @@ export function Dashboard(props: DashboardProps): ReactElement {
       // 生效账号高亮（规格 §8.1 第 5 条）。
       "data-dashboard-effective": effective,
       "data-dashboard-configured": account.configured,
-      ...(account.rejection === undefined ? {} : { "data-dashboard-rejection-kind": account.rejection.kind }),
-      ...(account.rejection?.until === undefined ? {} : { "data-dashboard-rejection-until": account.rejection.until }),
+      ...(rejectionOf === undefined ? {} : { "data-dashboard-rejection-kind": rejectionOf.kind }),
+      ...(rejectionOf?.until === undefined ? {} : { "data-dashboard-rejection-until": rejectionOf.until }),
     },
     createElement("h4", null, account.label),
     ...(effective ? [createElement("span", { key: "effective", "data-dashboard-mark": "effective" }, t("sidebar.effective"))] : []),
     ...(pinned ? [createElement("span", { key: "pinned", "data-dashboard-pinned": account.ref }, t("sidebar.pinned"))] : []),
     createElement("small", { key: "configured" }, account.configured ? t("account.configured") : t("account.missing")),
-    ...(account.rejection === undefined
+    ...(rejectionOf === undefined
       ? []
       : [
           createElement(
             "small",
-            { key: "rejection", "data-dashboard-rejection-label": account.rejection.kind },
-            rejectionText(t, account.rejection.kind),
+            { key: "rejection", "data-dashboard-rejection-label": rejectionOf.kind },
+            rejectionText(t, rejectionOf.kind),
           ),
         ]),
-    ...(account.quota?.plan === undefined ? [] : [createElement("small", { key: "plan", "data-dashboard-plan": account.quota.plan }, account.quota.plan)]),
+    ...(quotaOf?.plan === undefined ? [] : [createElement("small", { key: "plan", "data-dashboard-plan": quotaOf.plan }, quotaOf.plan)]),
     // 该账号额度读取里的**部分失败**照样列出来：不列就等于把一次不完整的读数呈现成完整的。
-    ...(account.quota?.failures ?? []).map((failure, index) =>
+    ...(quotaOf?.failures ?? []).map((failure, index) =>
       createElement("small", { key: `qf-${index}`, "data-dashboard-account-failure": `${account.ref}:${index}` }, failure),
     ),
-    ...(account.quota === undefined ? [] : account.quota.windows.map((window) => windowBlock(t, window))),
+    ...(quotaOf === undefined ? [] : (quotaOf.windows ?? []).map((window) => windowBlock(t, window))),
   );
 }
 

@@ -64,7 +64,11 @@ export interface AccountCardProps {
  */
 export function AccountCard(props: AccountCardProps): ReactElement {
   const { status, t } = props;
-  const accounts = status?.accounts ?? [];
+  // 线上 `accounts` 可能缺（`?? []`），也可能含**渲染不了的行**（非对象）—— 结构校验只查
+  // 「是不是数组」，不查每一行。渲染路径必须自己挑出能画的行：一行画不了不该让整张卡片崩。
+  const accounts = (status?.accounts ?? []).filter(
+    (account): account is AccountUsageStatus => typeof account === "object" && account !== null,
+  );
   return createElement(
     "section",
     { "data-card": "accounts", className: CSS_CLASS.card },
@@ -94,20 +98,26 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
   if (effective) marks.push(createElement("span", { key: "effective", "data-mark": "effective", className: CSS_CLASS.mark }, t("account.effectiveBy")));
 
   let rejection: ReactNode = null;
-  if (account.rejection !== undefined) {
+  // `?? undefined`：契约里 `rejection` 是可选字段，而线上可能把它序列化成 `null`
+  // （JSON 没有 undefined）。只写 `!== undefined` 会让 `null` 走进来，接着读
+  // `.kind` 抛错 —— 渲染路径一抛，整张卡片变空白。
+  const rejectionOf = account.rejection ?? undefined;
+  if (rejectionOf !== undefined) {
     rejection = createElement(
       "span",
       {
-        "data-rejection-kind": account.rejection.kind,
-        ...(account.rejection.until === undefined ? {} : { "data-rejection-until": account.rejection.until }),
+        "data-rejection-kind": rejectionOf.kind,
+        ...(rejectionOf.until === undefined ? {} : { "data-rejection-until": rejectionOf.until }),
       },
       // 可读文案，不是原始枚举（`quota`/`server`/…）；机器可读的值在 data 属性上。
-      rejectionText(t, account.rejection.kind),
+      rejectionText(t, rejectionOf.kind),
     );
   }
 
   const editingKey = action?.kind === "key" && action.ref === account.ref;
   const editingRename = action?.kind === "rename" && action.ref === account.ref;
+  // `quota` 同上：可选字段，线上可能是 `null`（当作「没有摘要」，不是「有摘要但为空」）。
+  const quotaOf = account.quota ?? undefined;
 
   return createElement(
     "div",
@@ -115,16 +125,16 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
       key: account.ref,
       "data-account": account.ref,
       className: CSS_CLASS.account,
-      ...(account.rejection === undefined ? {} : { "data-rejection-kind": account.rejection.kind }),
-      ...(account.rejection?.until === undefined ? {} : { "data-rejection-until": account.rejection.until }),
+      ...(rejectionOf === undefined ? {} : { "data-rejection-kind": rejectionOf.kind }),
+      ...(rejectionOf?.until === undefined ? {} : { "data-rejection-until": rejectionOf.until }),
     },
     createElement("span", { "data-account-label": account.ref }, account.label),
     createElement("span", { "data-account-status": account.configured ? "configured" : "missing" }, account.configured ? t("account.configured") : t("account.missing")),
     ...marks,
     rejection,
-    ...(account.quota === undefined ? [createElement("small", { key: "quota-none" }, t("account.quotaMissing"))] : []),
-    ...quotaBars(props, account.quota),
-    ...(props.status === undefined ? [] : [planLine(props, account.quota)]),
+    ...(quotaOf === undefined ? [createElement("small", { key: "quota-none" }, t("account.quotaMissing"))] : []),
+    ...quotaBars(props, quotaOf),
+    ...(props.status === undefined ? [] : [planLine(props, quotaOf)]),
     createElement(
       "button",
       {
@@ -174,8 +184,10 @@ function planLine(props: AccountCardProps, quota: QuotaSummary | undefined): Rea
  * `percent` 缺失也不补 0。全都缺就显示「暂无额度数据」。
  */
 function quotaBars(props: AccountCardProps, quota: QuotaSummary | undefined): ReactNode[] {
+  // `windows` 在 QuotaSummary 里是必填字段，但线上同样可能缺或为 null：当「没有窗口」处理，
+  // 而不是让 `.map` 抛在渲染路径上。
   if (quota === undefined) return [];
-  return quota.windows.map((window) => quotaBar(props, window));
+  return (quota.windows ?? []).map((window) => quotaBar(props, window));
 }
 
 /** 一个额度窗口。 */

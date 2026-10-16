@@ -50,7 +50,8 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
           createElement("p", { key: "empty", "data-sidebar-empty": "true" }, t("sidebar.noRequest")),
         ]
       : [
-          switchNotice(t, effective, pinned, status.switch),
+          // `switch` 与 `effective` 同一条纪律：可选字段，线上可能是 `null`。
+          switchNotice(t, effective, pinned, status.switch ?? undefined),
           createElement("h3", { key: "title", "data-sidebar-title": "true" }, titleOf(props, effectiveRow)),
           ...effectiveQuota(props, effectiveRow),
         ]),
