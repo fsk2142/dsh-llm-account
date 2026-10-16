@@ -571,6 +571,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                     const target = state.snapshots[ns];
                     void saveSettings(ctx, target?.row ?? ns, fields, target?.revision ?? 0).then((error) => {
                       setState((current) => noteSaveResult(current, ns, error));
+          void describeVendorSnapshots(ctx, entries).then((snapshots) => adopt(snapshots));
                       if (error === undefined) setAccountRevision((current) => current + 1);
                     });
                   },
@@ -857,9 +858,14 @@ export function createSidebarCardView(options: {
         ...(options.intervalMs === undefined ? {} : { intervalMs: options.intervalMs }),
       });
       controller.sync(true);
-      // 远程面挂载完成前第一次读取会落空：挂上时立刻补读一次，不用等一个轮询周期。
+      // 远程面挂载完成前那次读取会落空，挂上时要补读一次 —— 但**只在第一次真的落空过**时补：
+      // 远程面已经挂上（插件级单例，两个行共享，`apply` 期就引导了）的话，`sync(true)` 里那次
+      // 读取已经成功，`onUsageReady` 的立即回调再补一次就是白白多打一请求。
+      let readBeforeMount = usageNamespace(ctx) === undefined;
       const offReady = onUsageReady(ctx, (namespace) => {
-        if (namespace !== undefined) controller.refreshIfEnabled();
+        if (namespace === undefined || !readBeforeMount) return;
+        readBeforeMount = false;
+        controller.refreshIfEnabled();
       });
       const onVisible = (): void => {
         // 只有真的可见时才刷新（`document` 缺席时这个监听根本不会注册）。

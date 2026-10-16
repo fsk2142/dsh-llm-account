@@ -14,7 +14,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
 import { quotaShape, quotaWindowText } from "./quota";
-import type { AccountUsageStatus, VendorUsageStatus } from "./usage-contract";
+import type { AccountUsageStatus, SwitchNotice, VendorUsageStatus } from "./usage-contract";
 
 /** 卡片属性。 */
 export interface SidebarCardProps {
@@ -32,7 +32,13 @@ export interface SidebarCardProps {
  */
 export function SidebarCard(props: SidebarCardProps): ReactElement {
   const { t, status } = props;
-  const effective = status?.effective;
+  // `effective` 在契约里是**可省略**字段（`effective?: { ref; at }`），而这份数据跨远程边界
+  // 传输 —— 一个把 `undefined` 序列化成 `null` 的中间层就会让 `null !== undefined` 成立，
+  // 接着 `effective.ref` 在**渲染路径**上抛错，整块侧边栏变空白（`index.ts` 里点名过这个失败
+  // 模式）。所以这里把 `null` 一律收敛成「没有生效账号」，并把收敛后的值递给标注区，
+  // 全卡片只有这一处读它。
+  const effective = status?.effective ?? undefined;
+  const pinned = status?.pinned ?? null;
   const effectiveRow = effective === undefined ? undefined : status?.accounts.find((account) => account.ref === effective.ref);
 
   return createElement(
@@ -44,7 +50,7 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
           createElement("p", { key: "empty", "data-sidebar-empty": "true" }, t("sidebar.noRequest")),
         ]
       : [
-          switchNotice(props),
+          switchNotice(t, effective, pinned, status.switch),
           createElement("h3", { key: "title", "data-sidebar-title": "true" }, titleOf(props, effectiveRow)),
           ...effectiveQuota(props, effectiveRow),
         ]),
@@ -68,11 +74,16 @@ function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): 
  * 顶部提示与「固定/当前」两个标注。
  *
  * 提示**只在两者不同**时出现（规格 §8.1 第 3 条）；相同就只标一个「当前」，不重复刷屏。
+ *
+ * 三个值都由 {@link SidebarCard} 递进来（`effective` 已在那一处把 `null` 收敛成 `undefined`），
+ * 本函数不再自己读 `status` —— 两处各读一次就有一处可能忘掉收敛。
  */
-function switchNotice(props: SidebarCardProps): ReactNode {
-  const { t, status } = props;
-  const effective = status?.effective;
-  const pinned = status?.pinned ?? null;
+function switchNotice(
+  t: (key: string) => string,
+  effective: { ref: string; at: number } | undefined,
+  pinned: string | null,
+  switchRecord: SwitchNotice | undefined,
+): ReactNode {
   const differs = effective !== undefined && pinned !== null && pinned !== effective.ref;
   const marks: ReactNode[] = [];
 
@@ -83,7 +94,7 @@ function switchNotice(props: SidebarCardProps): ReactNode {
     marks.push(createElement("span", { key: "effective", "data-sidebar-effective": effective.ref }, `${t("sidebar.effective")}: ${effective.ref}`));
   }
 
-  const notice = status?.switch;
+  const notice = switchRecord;
   if (!differs || notice === undefined) {
     return createElement("div", { key: "marks", "data-sidebar-marks": "true" }, ...marks);
   }

@@ -66,6 +66,17 @@ afterEach(() => {
 
 // —— 卡片渲染 ——
 
+it("远程面把可省略字段序列化成 null 时也不崩（渲染路径抛错会整块面板变空白）", () => {
+  // 契约里 `effective` 是可省略字段（`effective?: { ref; at }`），跨远程边界后可能被写成 null。
+  // `null !== undefined`，旧写法会走进 effective 分支再读 `.ref` —— TypeError。
+  const nulled = statusOf({ effective: null as never, pinned: "a", accounts: [row("a")] });
+  const tree = renderCard(nulled);
+  // 没有生效账号 → 走占位（不显示 0%），且不抛。
+  expect(elementsOf(tree).filter((element) => element.props["data-sidebar-empty"] === "true")).toHaveLength(1);
+  expect(textsOf(tree).join(" ")).not.toContain("undefined");
+  expect(textsOf(tree).join(" ")).not.toContain("null");
+});
+
 it("开启后显示**生效账号**的额度（不是固定账号的）", () => {
   const tree = renderCard(
     statusOf({

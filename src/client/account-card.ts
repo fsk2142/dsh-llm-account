@@ -307,10 +307,23 @@ function reasonText(t: (key: string) => string, reason: string | undefined): str
   return text === key ? t("account.reason.error") : text;
 }
 
-/** 底部「添加账户」（受控输入）。 */
+/**
+ * 底部「添加账户」（受控输入）。
+ *
+ * **第一次输入就会打开 `add` 操作**（`openAction` + `setActionField` 一起调）：页面状态机里
+ * `setActionField` 在没有进行中操作时是恒等变换（`page-state.ts`），而这张卡片里**没有任何
+ * 按钮去打开 `add`** —— 只写 `onActionField` 的话，两个输入框永远是空的、「添加」按钮点了
+ * 什么也不会发生（`confirmAction` 拿到 `action === undefined` 直接返回）。这是接线层的漏口，
+ * 由容器渲染仿真（`tests/client/container-simulation.test.ts`）抓出来。
+ */
 function addSection(props: AccountCardProps): ReactNode {
   const { t, action } = props;
   const adding = action?.kind === "add";
+  /** 打开 add 操作（幂等：`openAction` 对同一 kind/ref 返回原对象）后再写字段。 */
+  const edit = (field: "label" | "key", value: string): void => {
+    if (!adding) props.onOpenAction({ kind: "add" });
+    props.onActionField(field, value);
+  };
   const nodes: ReactNode[] = [
     createElement("input", {
       key: "label",
@@ -318,7 +331,7 @@ function addSection(props: AccountCardProps): ReactNode {
       type: "text",
       value: adding ? action.label : "",
       placeholder: t("account.newLabel"),
-      onChange: (event: { target?: { value?: string } }) => props.onActionField("label", event.target?.value ?? ""),
+      onChange: (event: { target?: { value?: string } }) => edit("label", event.target?.value ?? ""),
     }),
     createElement("input", {
       key: "key",
@@ -326,9 +339,20 @@ function addSection(props: AccountCardProps): ReactNode {
       type: "password",
       value: adding ? action.key : "",
       placeholder: t("account.newKey"),
-      onChange: (event: { target?: { value?: string } }) => props.onActionField("key", event.target?.value ?? ""),
+      onChange: (event: { target?: { value?: string } }) => edit("key", event.target?.value ?? ""),
     }),
-    createElement("button", { key: "add", type: "button", "data-action": "add", onClick: () => props.onConfirmAction() }, t("account.add")),
+    createElement("button", {
+      key: "add",
+      type: "button",
+      "data-action": "add",
+      // 表单还没打开时（用户直接点按钮）先打开它：`confirmAction` 在 `action === undefined`
+      // 时什么都不做，那一次点击就会静默丢失。字段为空时派发仍然不发调用（见
+      // `dispatchAccountAction`），输入框会留着用户能看见。
+      onClick: () => {
+        if (!adding) props.onOpenAction({ kind: "add" });
+        props.onConfirmAction();
+      },
+    }, t("account.add")),
   ];
   if (adding) {
     nodes.push(createElement("button", { key: "cancel", type: "button", "data-action": "cancel", onClick: () => props.onCancelAction() }, t("account.cancel")));
