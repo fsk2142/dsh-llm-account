@@ -28,7 +28,7 @@ import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
 import type { AccountPort, AccountState, AccountView, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN } from "../../core/accounts";
+import { CREDENTIAL_REF_PATTERN, orderWithOverride } from "../../core/accounts";
 import { normalizeKey, pickApiKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -120,6 +120,8 @@ export const Config: PluginConfigSchema = z.object(
         }),
       ),
       activeAccount: z.string(),
+      /** 手动排序覆盖；缺省时沿用派生顺序（顶层默认账号 + `accounts[]`）。 */
+      accountOrder: z.array(z.string()),
       /**
        * 自动切换开关（设计 §6.4.5：`autoSwitch` 落库是两家共用的可靠性机制；2026-10-17 按
        * 交接文件 §4.2 的 C 项从 opencode 对齐过来）。关闭后轮换只试当前账号（固定账号；
@@ -189,7 +191,7 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
    * 经远程 `status()` 发布给页面（客户端不各写一份，否则两边迟早不一致）。
    */
   const capabilities: VendorCapabilities = {
-    reorder: false,
+    reorder: true,
     pin: true,
     browserLogin: true,
     modelAccountRules: true,
@@ -386,14 +388,15 @@ function accountRefsOf(document: Record<string, unknown>): string[] {
  * 存量用户会让 `RotationEngine.pick` 返回 `undefined`，适配器直接报 MISSING_CREDENTIAL。
  */
 function orderOf(document: Record<string, unknown>): string[] {
-  const order: string[] = [];
+  const derived: string[] = [];
   const seen = new Set<string>();
   for (const ref of [defaultRefOf(document), ...accountRefsOf(document)]) {
     if (seen.has(ref)) continue;
     seen.add(ref);
-    order.push(ref);
+    derived.push(ref);
   }
-  return order;
+  // 用户手动排序（`accountOrder`）优先于派生顺序；缺省/坏形状时原样返回派生顺序。
+  return orderWithOverride(derived, document.accountOrder);
 }
 
 /** 按模型绑定账号：只收形状完整的规则（模型列表非空、`account` 是合法 ref）。 */

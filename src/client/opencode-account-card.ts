@@ -16,11 +16,10 @@
  * 与其它卡片一样：纯 props → 元素树，没有 Hook、没有内部状态（Ruling 22/29）。
  * @module dsh-llm-account/src/client/opencode-account-card
  */
-import { createElement, Fragment, type ReactElement, type ReactNode } from "react";
+import { createElement, type ReactElement, type ReactNode } from "react";
 
-import { AccountCard, moveItems, type AccountCardProps } from "./account-card";
+import { AccountCard, type AccountCardProps } from "./account-card";
 import { CSS_CLASS } from "./css";
-import type { AccountUsageStatus } from "./usage-contract";
 
 /** 卡片属性：共享卡片的一切，加上设置快照与两个 OpenCode 专属回调。 */
 export interface OpenCodeAccountCardProps extends Omit<AccountCardProps, "rowExtras" | "cardFooter"> {
@@ -42,17 +41,12 @@ export interface OpenCodeAccountCardProps extends Omit<AccountCardProps, "rowExt
  * @returns 元素树。
  */
 export function OpenCodeAccountCard(props: OpenCodeAccountCardProps): ReactElement {
-  const accounts = (props.status?.accounts ?? []).filter(
-    (account): account is AccountUsageStatus => typeof account === "object" && account !== null,
-  );
   // 共享卡片**直接调用**（而不是 `createElement(AccountCard, …)`）：返回的元素树因此是完整展开的，
   // 上层的窗口/字段断言与 1c 的渲染都不需要再套一层未展开的组件元素。
-  const rows = AccountCard({
+  return AccountCard({
     ...props,
-    rowExtras: (account, index) => moveControl(props, accounts, account, index),
     cardFooter: autoSwitchRow(props),
   });
-  return createElement(Fragment, null, rows);
 }
 
 /** `autoSwitch` 开关：读设置文档，拨动即写。 */
@@ -78,17 +72,3 @@ function autoSwitchRow(props: OpenCodeAccountCardProps): ReactNode {
   );
 }
 
-/**
- * 一行账号的排序控件（菜单项形态，挂在 `⋯` 菜单末尾）。
- *
- * 不声明 `reorder` 能力的厂商**整块不渲染**（不是禁用）——页面上不该出现一个永远点不动的控件。
- */
-function moveControl(
-  props: OpenCodeAccountCardProps,
-  accounts: readonly AccountUsageStatus[],
-  account: AccountUsageStatus,
-  index: number,
-): ReactNode {
-  if (props.status?.capabilities.reorder !== true) return null;
-  return moveItems(props, account, index, accounts.length);
-}

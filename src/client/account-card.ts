@@ -60,6 +60,8 @@ export interface AccountCardProps {
   onRemove: (ref: string) => void;
   onToggleExpand: (ref: string) => void;
   onLoginBegin: () => void;
+  /** 调整顺序（目标账号、移动后的最终下标）；没有排序能力的厂商不传。 */
+  onMove?: (ref: string, toIndex: number) => void;
   /**
    * 追加到每一行 `⋯` 菜单末尾的厂商专属控件（T6 的排序控件由 `opencode-account-card.ts` 注入）。
    *
@@ -288,6 +290,20 @@ function accountMenu(props: AccountCardProps, account: AccountUsageStatus, index
       { className: CSS_CLASS.menuPanel, onClick: closeMenu },
       ...menuButtons(props, account),
       extras === undefined || extras === null ? null : extras,
+      ...(capabilitiesOf(props).reorder && props.onMove !== undefined
+        ? [
+            createElement(
+              Fragment,
+              { key: "move" },
+              moveItems(
+                { t: props.t, onMove: props.onMove },
+                account,
+                index,
+                Math.max(props.status?.accounts?.length ?? 0, index + 1),
+              ),
+            ),
+          ]
+        : []),
     ),
   );
 }

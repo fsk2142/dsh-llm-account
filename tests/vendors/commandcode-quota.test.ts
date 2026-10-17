@@ -447,8 +447,8 @@ it("setAutoSwitch 写自动切换开关：意图先落库、提交后清除，�
   expect(store.writeCount()).toBe(2);
   expect(settings.doc().autoSwitch).toBe(false);
   expect(settings.namespaces.every((ns) => ns === COMMAND_CODE_SETTINGS_NS)).toBe(true);
-  // 能力矩阵的另半边保持原样：`move` 仍然不实现（`reorder: false`），可选成员缺席、控件隐藏。
-  expect(port.move).toBeUndefined();
+  // 2026-10-17 起 Command Code 也支持手动排序（`reorder: true`），`move` 必须存在。
+  expect(typeof port.move).toBe("function");
 });
 
 it("remove 清掉该账号的模型规则并清理凭据", async () => {
@@ -816,14 +816,22 @@ it("真账号条目占用了顶层默认 ref 时不合成第二行（同 ref 不
   expect(settings.doc().activeAccount).toBe("COMMANDCODE_API_KEY");
 });
 
-it("move 不实现（能力声明已关闭）", () => {
+it("move 写 accountOrder 覆盖，且不改当前账号", async () => {
   const store = memoryStore();
+  const settings = fakeSettings({ accounts: [entry("A", "a"), entry("B", "b")], activeAccount: "b" });
   const port = createCommandCodeAccounts({
-    settings: fakeSettings({ accounts: [] }),
+    settings,
     credentials: fakeCredentials(),
     intents: new IntentLog(store.store),
   });
-  expect(port.move).toBeUndefined();
+
+  await port.move!("b", 0);
+
+  // 顺序 = 顶层默认账号 + accounts[]，把 b 提到首位（默认账号跟着后移）。
+  expect(settings.doc().accountOrder).toEqual(["b", "COMMANDCODE_API_KEY", "a"]);
+  // 排序不换号：当前账号仍是用户选的那个。
+  expect(settings.doc().activeAccount).toBe("b");
+  expect((await port.list()).map((view) => view.ref)).toEqual(["b", "COMMANDCODE_API_KEY", "a"]);
 });
 
 it("设置修订号冲突时重读并重放，而不是覆盖对方写入（Review Focus 5）", async () => {

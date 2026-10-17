@@ -51,7 +51,7 @@ declare module "@deepseek-ai/cordis" {
 }
 
 import type { AccountPort, AccountState, CredentialPort, QuotaPort, VendorCapabilities } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN } from "../../core/accounts";
+import { CREDENTIAL_REF_PATTERN, orderWithOverride } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -134,6 +134,8 @@ export const Config: PluginConfigSchema = z.object(
         ),
       ])
       .default(null),
+    /** 手动排序覆盖；缺省时沿用派生顺序（顶层 `apiKeyEnv` + `accounts[]`）。 */
+    accountOrder: z.array(z.string()),
     autoSwitch: z.boolean().default(false),
     /**
      * 侧边栏额度卡片开关（规格 §8.1 第 6 条：**默认关闭，关闭时不后台刷新**）。
@@ -482,14 +484,14 @@ function accountRefsOf(document: Record<string, unknown>): string[] {
  * 适配器直接报 MISSING_CREDENTIAL。
  */
 function orderOf(document: Record<string, unknown>): string[] {
-  const order: string[] = [];
+  const derived: string[] = [];
   const seen = new Set<string>();
   for (const ref of [defaultRefOf(document), ...accountRefsOf(document)]) {
     if (seen.has(ref)) continue;
     seen.add(ref);
-    order.push(ref);
+    derived.push(ref);
   }
-  return order;
+  return orderWithOverride(derived, document.accountOrder);
 }
 
 /**

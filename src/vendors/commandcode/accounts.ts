@@ -50,7 +50,7 @@ import type {
   SettingsPort,
   VendorId,
 } from "../../core/adapter";
-import { accountRef, CREDENTIAL_REF_PATTERN, dedupeByRef, readAccountSlot } from "../../core/accounts";
+import { accountRef, CREDENTIAL_REF_PATTERN, dedupeByRef, orderWithOverride, readAccountSlot, reorder } from "../../core/accounts";
 import type { AccountSlotReading } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { AccountIntent, AccountIntentKind, IntentLog } from "../../core/recovery";
@@ -98,6 +98,8 @@ const RULE_ACCOUNT_FIELD = "account";
 
 /** 当前固定账号字段。 */
 const ACTIVE_FIELD = "activeAccount";
+/** 手动排序覆盖（新字段；缺省时沿用「顶层默认账号 + accounts[]」的派生顺序）。 */
+const ORDER_FIELD = "accountOrder";
 
 /** 待清理凭据引用数组字段。 */
 const CLEANUP_FIELD = "credentialCleanupRefs";
@@ -267,6 +269,22 @@ function freeRef(value: Readonly<Record<string, unknown>>, label: string): strin
 }
 
 /** Command Code 的账号端口（设置变更实现）。 */
+/**
+ * 派生顺序（不含手动覆盖）：顶层默认账号 + `accounts[]`，按首次出现去重。
+ * @param value - 设置文档。
+ * @returns ref 顺序。
+ */
+function orderOf(value: Readonly<Record<string, unknown>>): string[] {
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  for (const ref of [commandCodeDefaultRef(value), ...rawAccounts(value).map(refOf)]) {
+    if (ref === undefined || seen.has(ref)) continue;
+    seen.add(ref);
+    refs.push(ref);
+  }
+  return refs;
+}
+
 class CommandCodeAccounts implements AccountPort {
   readonly #deps: CommandCodeAccountDeps;
 
@@ -307,8 +325,13 @@ class CommandCodeAccounts implements AccountPort {
     );
     // 重复 ref 只保留第一个：同一个凭据槽不该在轮换里被算两轮（Review Focus 1）。
     const unique = dedupeByRef(views);
-    const info = await this.#deps.credentials.describe(unique.map((view) => view.ref));
-    return unique.map((view) => ({ ...view, configured: info[view.ref]?.configured === true }));
+    // 列表顺序 = 轮换顺序（含用户手动排序覆盖）：`usage-remote.accounts()` 的顺序同时是页面顺序
+    // 与轮换顺序；两处各排一次会让「上移/下移」按错误的基准计算。
+    const order = orderWithOverride(unique.map((view) => view.ref), snapshot.value[ORDER_FIELD]);
+    const byRef = new Map(unique.map((view) => [view.ref, view]));
+    const ordered = order.map((ref) => byRef.get(ref)).filter((view): view is AccountView => view !== undefined);
+    const info = await this.#deps.credentials.describe(ordered.map((view) => view.ref));
+    return ordered.map((view) => ({ ...view, configured: info[view.ref]?.configured === true }));
   }
 
   /**
@@ -417,6 +440,8 @@ class CommandCodeAccounts implements AccountPort {
           { op: "set", path: [ACCOUNTS_FIELD], value: rawAccounts(value).filter((item) => refOf(item) !== ref) },
           { op: "set", path: [RULES_FIELD], value: rawRules(value).filter((item) => ruleAccountOf(item) !== ref) },
           { op: "set", path: [CLEANUP_FIELD], value: [...rawCleanupRefs(value).filter((item) => item !== ref), ref] },
+          // 手动顺序里也摘掉它：留下旧 ref 会让「上移/下移」的下标空间里多一个幽灵项。
+          { op: "set", path: [ORDER_FIELD], value: orderOf(value).filter((item) => item !== ref) },
         ];
         if (activeRefOf(value) === ref) ops.push({ op: "set", path: [ACTIVE_FIELD], value: ACTIVE_ACCOUNT_AUTO });
         return { ops, result: undefined };
@@ -454,9 +479,25 @@ class CommandCodeAccounts implements AccountPort {
     );
   }
 
-  // 刻意不实现 `move`：Command Code 不支持排序（设计 §7.3 `reorder: false`），能力声明
-  // 关掉它，UI 因此隐藏排序控件（`AccountPort.move` 是可选成员）；`list()` 因此也**不**做
-  // opencode 那样的「当前账号提位」。
+  /**
+   * 调整顺序：写 `accountOrder` 覆盖，**不改当前账号**。
+   *
+   * 与 `select` 的分工：排序只改「先试谁」的顺序，当前账号只由「切换到此账户」与切换策略决定。
+   * 旧实现把排序与提首都塞进 `accounts`/`apiKeyEnv`，于是「排一下序」会顺带换号。
+   * @param ref - 目标账号。
+   * @param toIndex - 移动后的最终下标（越界夹到两端）。
+   */
+  async move(ref: string, toIndex: number): Promise<void> {
+    await this.#require(ref);
+    await this.#transaction("move", { ref, toIndex }, () =>
+      this.#mutate((value) => {
+        const current = orderOf(value);
+        const next = reorder(current, ref, toIndex);
+        if (next.join("\u0000") === current.join("\u0000")) return { ops: [], result: undefined };
+        return { ops: [{ op: "set", path: [ORDER_FIELD], value: next }], result: undefined };
+      }),
+    );
+  }
 
   /**
    * 写自动切换开关（设计 §6.4.5：`autoSwitch` 落库是两家共用的可靠性机制；2026-10-17 按
@@ -486,7 +527,7 @@ class CommandCodeAccounts implements AccountPort {
    */
   async #transaction<T>(
     kind: AccountIntentKind,
-    fields: { ref?: string; label?: string; value?: boolean },
+    fields: { ref?: string; label?: string; value?: boolean; toIndex?: number },
     submit: (intent: AccountIntent) => Promise<T>,
   ): Promise<T> {
     const intent = this.#intent(kind, fields);
@@ -530,7 +571,7 @@ class CommandCodeAccounts implements AccountPort {
   }
 
   /** 造一条带唯一 id 的意图（`createdAt` 仅供展示，不参与排序）。 */
-  #intent(kind: AccountIntentKind, fields: { ref?: string; label?: string; value?: boolean }): AccountIntent {
+  #intent(kind: AccountIntentKind, fields: { ref?: string; label?: string; value?: boolean; toIndex?: number }): AccountIntent {
     return {
       id: randomUUID(),
       kind,
@@ -538,6 +579,7 @@ class CommandCodeAccounts implements AccountPort {
       ...(fields.ref === undefined ? {} : { ref: fields.ref }),
       ...(fields.label === undefined ? {} : { label: fields.label }),
       ...(fields.value === undefined ? {} : { value: fields.value }),
+      ...(fields.toIndex === undefined ? {} : { toIndex: fields.toIndex }),
     };
   }
 }
@@ -545,7 +587,7 @@ class CommandCodeAccounts implements AccountPort {
 /**
  * 造一个 Command Code 账号端口（真源在设置文档，密钥走凭据服务）。
  * @param deps - 设置、凭据与意图日志三个端口。
- * @returns 账号端口；`move` 不提供（`reorder: false` 的能力声明关闭它），其余命令全部实现。
+ * @returns 账号端口；`reorder: true` 后 `move` 一并实现（写 `accountOrder` 覆盖）。
  */
 export function createCommandCodeAccounts(deps: CommandCodeAccountDeps): AccountPort {
   return new CommandCodeAccounts(deps);

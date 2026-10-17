@@ -109,6 +109,38 @@ export function reorder(order: string[], ref: string, toIndex: number): string[]
 }
 
 /**
+ * 把「派生顺序」与用户手动排序（`accountOrder`）合并成最终顺序。
+ *
+ * 规则（设计 `2026-10-17-switching-models-density-design.md` §5.1）：
+ * 1. 覆盖值必须是数组；只收非空字符串、去重、**只保留派生顺序里存在的 ref**（不存在的
+ *    账号不参与轮换）；
+ * 2. 覆盖里合法的项按覆盖顺序排在前面，派生顺序里没出现的项追加在末尾（新账号不会因为
+ *    用户排过序就消失）；
+ * 3. 清洗后为空（字段缺失/坏形状/全部是旧 ref）→ 原样返回派生顺序。
+ *
+ * @param derived - 厂商从文档推导出的顺序（顶层默认账号 + `accounts[]`，已去重）。
+ * @param override - 设置文档里的 `accountOrder` 原始值（形状不可信）。
+ * @returns 最终轮换顺序；不修改入参。
+ */
+export function orderWithOverride(derived: readonly string[], override: unknown): string[] {
+  const base = [...new Set(derived)];
+  if (!Array.isArray(override)) return base;
+  const known = new Set(base);
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  for (const item of override) {
+    if (typeof item !== "string") continue;
+    const ref = item.trim();
+    if (ref === "" || !known.has(ref) || seen.has(ref)) continue;
+    seen.add(ref);
+    ordered.push(ref);
+  }
+  if (ordered.length === 0) return base;
+  for (const ref of base) if (!seen.has(ref)) ordered.push(ref);
+  return ordered;
+}
+
+/**
  * 把一项提到首位，其余项的**相对顺序不变**（旧插件 `moveAccountFirst` 第 6779 行）。
  *
  * 与 {@link reorder} 的分工：`reorder` 服务于「用户拖动排序」这一写入路径（下标语义、
