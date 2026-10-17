@@ -70,12 +70,31 @@ client.js   : D:\work\llm-acct-repo\lib\client.js exists: true
 
 顺带排除的两条：`preflight`/`prepareProfileEntries` 的兼容性判定（只校验 `engines.dsh` 或 `@deepseek-ai/dsh-*` 主机 peer，本包已含 `0.2.1-rc.1`，不会被 `disabled: true`）；profile 的 `cordis.yml` 根条目列表是 `[]`，两行确实由 patch 插入。
 
-### 三条约束合起来
+### F4 桌面端升级后 peer 闸门把整包静默禁用（让前两次修复全部白做的第三条）
+
+桌面端在 17:20:50 落到 **0.2.1-rc.2**（`@deepseek-ai/dsh-*` 全线 rc.2、cordis 4.0.5、schemastery 3.18.5）。本包 `dsh-*` peer 只写到 `0.2.1-rc.1`，于是宿主解析 patch 时的兼容性预检把**两行都判为不兼容**：
+
+```
+dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
+  manifest = manifestOf(ctx, row.name, base)      // 顺着行名找到本包 manifest
+  issue = evaluatePluginCompatibility(manifest, exemptions)
+  → deny(row, issue)  ⇒  row.disabled = true
+```
+
+只有一行 stderr（`dsh: disabling profile plugin row "opencode-go": ...`），UI 与启动图零痕迹。链路：行被 `disabled` → 加载器不导入 → 无 fiber → 客户端扫描的 `entry.fiber === void 0` 过滤跳过 → 启动图无本包 → UI 无。**这解释了为什么 F1/F3 修对了、两次重启仍然毫无变化**：rc.2 在第一次重启前就已经在磁盘上了。
+
+判定规则（`unmetRequirements`）：`engines.dsh` 若存在则**独自**决定、peer 全部忽略；否则每一条 `@deepseek-ai/dsh` 或 `@deepseek-ai/dsh-*` peer 都必须 `semver.satisfies(runtime, range, { includePrerelease: true })`。**cordis / schemastery 这类非 `dsh-*` peer 不参与闸门**，所以市场检查里那几条 peer 警告与能否挂载无关。
+
+**市场 `/dsh-market/check` 不能替代这个闸门**：它把 peer 与 profile 里 pnpm 解析出的版本比（本机仍是 `0.2.0-rc.2`），而闸门比的是**运行时 app-boot 的版本**（`0.2.1-rc.2`）。前者 `satisfied: true`、后者 DENIED 可以同时成立。
+
+### 四条约束合起来
 
 | 行 | `name` | 为什么必须是这个形态 |
 | --- | --- | --- |
 | `llm-commandcode` | `dsh-llm-account/commandcode`（子路径） | 加载器挂载用；对扫描不可见（F1），因此不与下一行争 source；用户 patch 按 id 覆盖它 |
 | `opencode-go` | `./lib/opencode.js`（包内相对路径） | 扫描可见（F1）+ 以 patch 文件为基准后真实存在（F3）+ `nearestPackage` 命中本包根；一个包只能一个 source（F2） |
+
+此外整包必须通过 F4 的版本闸门——`dsh-*` peer 范围要跟桌面端 rc 一起长，由 `tests/compatibility.test.ts` 逐版本锁死。
 
 ## 2. 落下的设计（`cordis.patch.yml`）
 
@@ -92,9 +111,11 @@ client.js   : D:\work\llm-acct-repo\lib\client.js exists: true
 
 ## 4. 复验方式（对 1c 清单的补充）
 
-1. 重启桌面端后重新 `GET /plugins/events`：`dsh-llm-account` 应出现在 `entries` 与某个 application batch。
+1. 重启桌面端后重新 `GET /plugins/events`（端口每次启动都变，先从 `DeepSeek Harness` 进程持有的端口里探测）：`dsh-llm-account` 应出现在 `entries` 与某个 application batch。
 2. 用图里的 `url`（形如 `plugins/??dsh-llm-account/client.js&rev=…`）拉取：应 200，body 含 `window.__ModuleLoader__.load({ id: "dsh-llm-account"`。
 3. 然后才看 UI：设置页出现统一段落、侧边栏底部出现额度卡（验收口径见设计文档与计划）。
+
+桌面端升级后重复第 1 步之前，先跑 `tests/compatibility.test.ts`（或把它支持的版本加进去）——F4 的闸门失败时第 1 步必然失败。
 
 ## 5. 图标接缝（顺带实测）
 
