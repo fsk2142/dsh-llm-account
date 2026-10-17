@@ -263,8 +263,8 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
       : DEFAULT_USAGE_TIMEOUT_MS;
 
   return {
-    async snapshot(): Promise<QuotaSnapshot> {
-      const ref = deps.ref();
+    async snapshot(accountRef?: string): Promise<QuotaSnapshot> {
+      const ref = accountRef ?? deps.ref();
       // 凭据**解析失败**与「解析成功但为空」是两回事（旧插件第 7864-7881 行）：
       // - 抛出，且 code 是 `MISSING_CREDENTIAL`：这个账号就是没配密钥，重试也不会变 → 不重试；
       // - 抛其它错：凭据服务/环境读取本身失败（可能瞬时），旧插件给 `retryable: true`

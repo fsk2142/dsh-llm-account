@@ -132,9 +132,15 @@ export interface QuotaSnapshot {
   failures: string[];
 }
 
-/** 额度端口：读取当前账号的归一化额度读数。 */
+/** 额度端口：读取归一化额度读数。 */
 export interface QuotaPort {
-  snapshot(): Promise<QuotaSnapshot>;
+  /**
+   * 读一次额度。
+   * @param ref - 指定账号；缺省时读「当前选中账号」（页面/侧边栏的既有行为）。
+   *   切换策略的额度优先模式用它逐个读候选账号，不需要临时改当前账号。
+   * @returns 归一化读数。
+   */
+  snapshot(ref?: string): Promise<QuotaSnapshot>;
 }
 
 /** 模型目录的最小统一形状。 */

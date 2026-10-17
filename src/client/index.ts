@@ -138,15 +138,11 @@ function renderVendorCards(cards: VendorCardsContext): ReactNode {
     onRemove: cards.remove,
     onToggleExpand: cards.toggleExpand,
     onLoginBegin: cards.loginBegin,
+    onMove: cards.move,
   };
   const accountCard =
     cards.vendor === "dsh-opencode-go"
-      ? createElement(OpenCodeAccountCard, {
-          ...shared,
-          settings: cards.settings,
-          onMove: cards.move,
-          onSetAutoSwitch: cards.setAutoSwitch,
-        })
+      ? createElement(OpenCodeAccountCard, shared)
       : createElement(AccountCard, shared);
   // 模型卡片：规则在 `vendorCardKinds` 里（可单测）——厂商没声明模型可见性时整张不渲染。
   if (!cards.cardKinds.includes("models")) return accountCard;

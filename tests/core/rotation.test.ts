@@ -395,3 +395,11 @@ it("引擎重建时可以继承观测状态：生效账号与切换记录都不�
   expect(replacement.switchNotice()).toEqual({ fromRef: "b", toRef: "a", reason: "manual", at: 5_000 });
   expect(replacement.switchNotices()).toHaveLength(2);
 });
+
+it("noteAutoSwitch 记一条 balance 切换提示，不改拒绝表", () => {
+  const e = new RotationEngine({ order: ["a", "b"], pinned: "a", rules: [] });
+  e.noteSelected("a");
+  e.noteAutoSwitch("b", "balance");
+  expect(e.switchNotice()).toMatchObject({ fromRef: "a", toRef: "b", reason: "balance" });
+  expect(e.rejections().size).toBe(0);
+});

@@ -100,7 +100,7 @@ export interface AccountUsageStatus extends AccountView {
 }
 
 /** 切换原因（规格 §8.1 第 3 条列出的四种）。 */
-export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual";
+export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual" | "balance";
 
 /** 一次切换：谁 → 谁、原因、时刻（`status()` 发布的最近一条。**不带**厂商标签）。 */
 export interface SwitchNotice {

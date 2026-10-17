@@ -79,6 +79,7 @@ import {
 import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
+import { SwitchingController } from "../switching";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opencode-go`）。 */
 export const name = "llm-opencode-go";
@@ -137,6 +138,12 @@ export const Config: PluginConfigSchema = z.object(
     /** 手动排序覆盖；缺省时沿用派生顺序（顶层 `apiKeyEnv` + `accounts[]`）。 */
     accountOrder: z.array(z.string()),
     autoSwitch: z.boolean().default(false),
+    /** 切换策略：手动顺序（只在耗尽时切）或额度优先。 */
+    switchStrategy: z.union(["order", "best-quota"]).default("order"),
+    /** 额度优先模式的评估间隔（分钟）；`0` 表示只在当前耗尽时评估。 */
+    switchIntervalMinutes: z.number().default(60),
+    /** 是否等回合结束再切（默认 `true`，任务进行中不换号）。 */
+    switchAtTurnEnd: z.boolean().default(true),
     /**
      * 侧边栏额度卡片开关（规格 §8.1 第 6 条：**默认关闭，关闭时不后台刷新**）。
      *
@@ -235,16 +242,26 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
 
   /** 额度端口：每次读数都用当时的配置（`apiBase` 是构造参数，跟着现读的配置走）。 */
   const quota: QuotaPort = {
-    async snapshot() {
+    async snapshot(accountRef?: string) {
       const apiBase = normalizeKey(document().baseURL) ?? DEFAULT_BASE_URL;
+      const ref = accountRef ?? selectedRefOf(document());
       return createOpencodeQuota({
-        ref: () => selectedRefOf(document()),
-        resolveKey: (ref) => resolveAccountKey(ctx, credentials, ref),
+        ref: () => ref,
+        resolveKey: (candidate) => resolveAccountKey(ctx, credentials, candidate),
         fetchImpl: fetch,
         apiBase,
       }).snapshot();
     },
   };
+
+  const switching = new SwitchingController({
+    accounts,
+    quota,
+    rotation,
+    document,
+    pinnedRef: () => pinnedRefOf(document()),
+    warn,
+  });
 
   /**
    * 备用账号把请求服务完了：把它提成当前账号（旧插件 `GoAccountSelection.adopt` 的同一后果 ——
@@ -294,6 +311,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
     promoteServed: promoteServedAccount,
+    beforeRequest: (input) => switching.beforeRequest(input),
   };
   const adapter = createOpencodeAdapter(deps);
 
@@ -321,6 +339,11 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
   ctx.on("loader/volatile-update", () => {
     applyRoute();
   });
+  // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
+  // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。
+  (ctx.on as (event: string, listener: (...args: unknown[]) => void) => () => void)("session/event", (...args) =>
+    switching.noteHostEvent(...args),
+  );
   ctx.effect(
     () => () => {
       registration?.();

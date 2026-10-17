@@ -71,7 +71,7 @@ export interface EffectiveAccount {
  * 刻意不包含 `unavailable`：它在失败分类里存在，但规格没有给它文案，硬塞进
  * `quota` 之类的桶里就是编造原因 —— 指不出原因的变化只更新生效账号、不产出提示。
  */
-export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual";
+export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual" | "balance";
 
 /** 一次切换提示：谁 → 谁、原因、时刻。 */
 export interface SwitchNotice {
@@ -203,6 +203,21 @@ export class RotationEngine {
     this.#effective = { ref, at };
     if (previous === undefined || previous.ref === ref) return;
     this.#record({ fromRef: previous.ref, toRef: ref, reason: "manual", at });
+  }
+
+  /**
+   * 切换策略（手动顺序/额度优先）主动换号：原因由调用方给定，时间取当前时刻。
+   *
+   * 不触碰拒绝表 —— 主动换号不是「这个账号被拒了」；拒绝表只由真实失败写入。
+   * @param ref - 目标账号 ref。
+   * @param reason - 切换原因（`quota` 或 `balance`）。
+   */
+  noteAutoSwitch(ref: string, reason: SwitchReason): void {
+    const previous = this.#effective;
+    const at = this.#now();
+    this.#effective = { ref, at };
+    if (previous === undefined || previous.ref === ref) return;
+    this.#record({ fromRef: previous.ref, toRef: ref, reason, at });
   }
 
   /**

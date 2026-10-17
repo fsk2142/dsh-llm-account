@@ -70,6 +70,43 @@ export const VENDORS: readonly VendorEntry[] = [
     models: { visible: "visibleModels", visibility: "modelVisibility" },
     cards: [
       {
+        group: "switch",
+        fields: [
+          {
+            key: "switchStrategy",
+            kind: "select",
+            labelKey: "field.switchStrategy",
+            hintKey: "field.switchStrategy.hint",
+            fallback: "order",
+            options: [
+              { value: "order", labelKey: "options.switchOrder" },
+              { value: "best-quota", labelKey: "options.switchBestQuota" },
+            ],
+          },
+          {
+            key: "switchIntervalMinutes",
+            kind: "number",
+            labelKey: "field.switchIntervalMinutes",
+            hintKey: "field.switchIntervalMinutes.hint",
+            fallback: 60,
+          },
+          {
+            key: "switchAtTurnEnd",
+            kind: "boolean",
+            labelKey: "field.switchAtTurnEnd",
+            hintKey: "field.switchAtTurnEnd.hint",
+            fallback: true,
+          },
+          {
+            key: "autoSwitch",
+            kind: "boolean",
+            labelKey: "field.autoSwitch",
+            hintKey: "field.autoSwitch.hint",
+            fallback: true,
+          },
+        ],
+      },
+      {
         group: "integrations",
         fields: [
           {
@@ -136,6 +173,43 @@ export const VENDORS: readonly VendorEntry[] = [
     labelKey: "vendor.opencodeGo",
     models: { visible: "visibleModels", visibility: "modelVisibility" },
     cards: [
+      {
+        group: "switch",
+        fields: [
+          {
+            key: "switchStrategy",
+            kind: "select",
+            labelKey: "field.switchStrategy",
+            hintKey: "field.switchStrategy.hint",
+            fallback: "order",
+            options: [
+              { value: "order", labelKey: "options.switchOrder" },
+              { value: "best-quota", labelKey: "options.switchBestQuota" },
+            ],
+          },
+          {
+            key: "switchIntervalMinutes",
+            kind: "number",
+            labelKey: "field.switchIntervalMinutes",
+            hintKey: "field.switchIntervalMinutes.hint",
+            fallback: 60,
+          },
+          {
+            key: "switchAtTurnEnd",
+            kind: "boolean",
+            labelKey: "field.switchAtTurnEnd",
+            hintKey: "field.switchAtTurnEnd.hint",
+            fallback: true,
+          },
+          {
+            key: "autoSwitch",
+            kind: "boolean",
+            labelKey: "field.autoSwitch",
+            hintKey: "field.autoSwitch.hint",
+            fallback: false,
+          },
+        ],
+      },
       {
         group: "integrations",
         fields: [

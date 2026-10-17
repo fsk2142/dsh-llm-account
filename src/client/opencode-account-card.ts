@@ -1,17 +1,12 @@
 /**
- * OpenCode 账户卡片：共享账户卡片 + 排序控件 + `autoSwitch` 开关。
+ * OpenCode 账户卡片：共享账户卡片 + 排序控件。
  *
- * 为什么单独一张卡片而不是给共享卡片加开关：`reorder` 只在这一家的能力矩阵里存在（Command
- * Code 的账号顺序由配置决定，设计 §7.3）；`autoSwitch` 两家都已实现并落库（设计 §6.4.5，
- * Command Code 的开关见 `src/vendors/commandcode/accounts.ts`），但 1b 只给 OpenCode
- * 渲染这个开关控件（Command Code 的开关目前经远程面调）。把它们留在这里，共享卡片就仍然
- * 是厂商无关的。
+ * 为什么单独一张卡片而不是直接渲染共享卡片：排序控件的 `reorder` 只在这一家的能力矩阵里
+ * 历史存在（Command Code 现在也支持，控件已并入共享卡片）；保留这个包装层是为了不把
+ * OpenCode 的调用点散到页面注册里。
  *
- * **排序交互的实现取舍**（Ruling 31）：计划写的是「拖动排序」，但本期的测试环境没有 DOM
- * （Ruling 22：没有 jsdom，组件按「纯 props → 元素树」测），真正的拖动需要 pointer 事件与
- * 布局测量，在这里既写不出可信的实现也测不了。所以用**上移/下移**表达同一个操作
- * （`moveAccount(ref, toIndex)`），越界的按钮禁用。1c 若确认要拖动，只需在同一个 `onMove`
- * 回调前面加一层手势，语义与参数都不变。
+ * `autoSwitch` 已改为「切换策略」卡片里的普通设置字段（底部保存条生效），不再挂在账户卡
+ * 底部 —— 同一件事有两个开关只会让人不知道哪个算数。
  *
  * 与其它卡片一样：纯 props → 元素树，没有 Hook、没有内部状态（Ruling 22/29）。
  * @module dsh-llm-account/src/client/opencode-account-card
@@ -21,19 +16,17 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { AccountCard, type AccountCardProps } from "./account-card";
 import { CSS_CLASS } from "./css";
 
-/** 卡片属性：共享卡片的一切，加上设置快照与两个 OpenCode 专属回调。 */
-export interface OpenCodeAccountCardProps extends Omit<AccountCardProps, "rowExtras" | "cardFooter"> {
-  /** 该厂商设置文档的当前值（`autoSwitch` 的当前值来源）。 */
-  settings: Record<string, unknown>;
+/** 卡片属性：共享卡片的一切，但没有厂商专属插槽。 */
+export type OpenCodeAccountCardProps = Omit<AccountCardProps, "rowExtras" | "cardFooter"> & {
   /**
-   * 调整顺序：目标账号与**移动后的最终下标**。
-   * @param ref - 目标账号。
-   * @param toIndex - 最终下标（越界由宿主侧的 `reorder` 夹到两端）。
+   * 旧调用点仍可传 `settings` + `onSetAutoSwitch`：只有两者都在时才渲染底部开关
+   * （页面已改为「切换策略」卡片里的普通字段，生产路径不再传）。
+   * @deprecated 用设置字段 `autoSwitch`。
    */
-  onMove: (ref: string, toIndex: number) => void;
-  /** 写自动切换开关（立即生效，不等保存条）。 */
-  onSetAutoSwitch: (value: boolean) => void;
-}
+  settings?: Record<string, unknown>;
+  /** @deprecated 用设置字段 `autoSwitch`。 */
+  onSetAutoSwitch?: (value: boolean) => void;
+};
 
 /**
  * OpenCode 账户卡片。
@@ -45,11 +38,14 @@ export function OpenCodeAccountCard(props: OpenCodeAccountCardProps): ReactEleme
   // 上层的窗口/字段断言与 1c 的渲染都不需要再套一层未展开的组件元素。
   return AccountCard({
     ...props,
-    cardFooter: autoSwitchRow(props),
+    ...(props.settings === undefined || props.onSetAutoSwitch === undefined ? {} : { cardFooter: autoSwitchRow(props) }),
   });
 }
 
-/** `autoSwitch` 开关：读设置文档，拨动即写。 */
+/**
+ * 兼容旧调用点的底部 `autoSwitch` 开关；生产路径已改走「切换策略」字段。
+ * @deprecated 用设置字段 `autoSwitch`。
+ */
 function autoSwitchRow(props: OpenCodeAccountCardProps): ReactNode {
   const { t } = props;
   return createElement(
@@ -66,9 +62,8 @@ function autoSwitchRow(props: OpenCodeAccountCardProps): ReactNode {
       type: "checkbox",
       className: CSS_CLASS.toggle,
       // 设置文档里没有这个字段就是关闭（声明默认值），不编造 true。
-      checked: props.settings.autoSwitch === true,
-      onChange: (event: { target?: { checked?: boolean } }) => props.onSetAutoSwitch(event.target?.checked === true),
+      checked: props.settings?.autoSwitch === true,
+      onChange: (event: { target?: { checked?: boolean } }) => props.onSetAutoSwitch?.(event.target?.checked === true),
     }),
   );
 }
-

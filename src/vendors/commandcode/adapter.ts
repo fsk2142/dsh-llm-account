@@ -137,6 +137,8 @@ export interface CommandCodeAdapterDeps {
   resolveStored?: (ref: string) => Promise<string | undefined>;
   /** `environment` 来源：启动环境读取（宿主 `launchEnvironmentOf(ctx).get(name)` 的注入点）。 */
   resolveEnvironment?: (name: string) => string | undefined;
+  /** 普通对话请求前的切换钩子；辅助调用（compaction/session-title）不调用。 */
+  beforeRequest?: (input: { sessionId?: string; purpose?: string }) => Promise<void>;
 }
 
 /** 填默认值；`0`/负数/NaN 一律回落到默认值，避免把坏配置变成「立即超时」。 */
@@ -295,6 +297,11 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       // 宿主契约：不支持的 stop 序列由适配器拒绝（旧插件第 7398 行的同一条）。
       throw new LlmError("Command Code adapter does not support stop sequences", "UNSUPPORTED_OPTION");
     }
+    // 账号切换策略：在选号之前决定要不要换当前账号（辅助调用直接跳过）。
+    await this.#deps.beforeRequest?.({
+      ...(options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) }),
+      ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
+    });
     const config = resolveConfig(this.#deps.config());
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;

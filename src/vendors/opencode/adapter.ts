@@ -145,6 +145,8 @@ export interface OpencodeAdapterDeps {
    * 提位要不要真写设置（自动开关、单飞、写什么）由掌握设置文档的那一层决定。
    */
   promoteServed?: (ref: string) => void;
+  /** 普通对话请求前的切换钩子；辅助调用（compaction/session-title）不调用。 */
+  beforeRequest?: (input: { sessionId?: string; purpose?: string }) => Promise<void>;
   /** `stored` 来源：凭据库读取（宿主 `credentials.resolve(ref)?.value` 的注入点）。 */
   resolveStored?: (ref: string) => Promise<string | undefined>;
   /** `environment` 来源：启动环境读取（宿主 `launchEnvironmentOf(ctx).get(name)` 的注入点）。 */
@@ -286,6 +288,11 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       // 宿主契约：不支持的 stop 序列由适配器拒绝（旧插件第 7465-7467 行的同一条）。
       throw new LlmError("OpenCode Go adapter does not support stop sequences", "UNSUPPORTED_OPTION");
     }
+    // 账号切换策略：在选号之前决定要不要换当前账号（辅助调用直接跳过）。
+    await this.#deps.beforeRequest?.({
+      ...(options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) }),
+      ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
+    });
     const raw = this.#deps.config();
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;

@@ -863,3 +863,17 @@ it("设置修订号冲突时重读并重放，而不是覆盖对方写入（Revi
   expect(store.writeCount()).toBe(2);
   expect(store.snapshot()).toEqual([]);
 });
+
+it("snapshot(ref) 用指定账号的密钥，而不是当前 ref getter", async () => {
+  const { fetchImpl, calls } = quotaFetch(fullRoutes());
+  const port = createCommandCodeQuota({
+    apiBase: "https://api.example.test",
+    ref: () => "acc-a",
+    resolveKey: async (ref) => (ref === "acc-b" ? "sk-b" : undefined),
+    fetchImpl,
+  });
+
+  await port.snapshot("acc-b");
+
+  expect(calls.some((call) => call.headers.get("authorization")?.includes("sk-b"))).toBe(true);
+});

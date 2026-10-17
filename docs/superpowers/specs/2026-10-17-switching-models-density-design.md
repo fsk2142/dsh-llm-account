@@ -335,7 +335,7 @@ orderWithOverride(derived: string[], override: unknown): string[]
 
 | 风险 | 处理 |
 | --- | --- |
-| `session/event` 的 `turn/end` 形状（事件是否带 `session.id`、是否在轮次关闭时必然触发） | 先用只读探针在真实宿主（临时 web profile）里验证一次；形状不符则退化为「下一次请求前应用」，并在设置页提示里说明不是严格轮次边界。 |
+| `session/event` 的 `turn/end` 形状 | **已核验（0.2.1-rc.2）**：`ctx.on("session/event", (session, event) => …)`，`event.type === "turn/end"`，`session.id` 是会话 id；代码在 `dsh-agent-loop/lib/index.js` 与 `dsh-session/lib/index.js` 里。控制器兼容 `(session, event)`、`(sessionId, event)` 与 `{ sessionId, event }` 三种形状。 |
 | 切换写入设置与用户保存设置冲突（修订号） | `select` 失败只记日志、保留 pending；不会重试循环；下一次边界再试。 |
 | `best-quota` 读取 N 个账号额度（每账号 3–4 个端点） | 只在间隔评估点读、TTL 缓存、并发 2、20 秒预算；失败按未知处理；界面上不承诺实时。 |
 | 目录端点需要可用凭据 | 失败时显示已配置项 + 原因 + 重试，不把「读不到」当空。 |

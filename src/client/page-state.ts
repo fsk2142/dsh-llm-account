@@ -102,7 +102,7 @@ export interface PageState {
 }
 
 /** 三组卡片的规范顺序（规格 §8 的卡片顺序：隐私与安全 → 集成与显示 → 高级设置）。 */
-const GROUP_ORDER: readonly CardGroupSpec["group"][] = ["privacy", "integrations", "advanced"];
+const GROUP_ORDER: readonly CardGroupSpec["group"][] = ["switch", "privacy", "integrations", "advanced"];
 
 /**
  * 建一个页面状态。

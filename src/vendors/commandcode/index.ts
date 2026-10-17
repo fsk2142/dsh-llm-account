@@ -60,6 +60,7 @@ import { DEFAULT_API_BASE } from "./protocol";
 import type { CommandCodeProtocol } from "./protocol";
 import { createCommandCodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
+import { SwitchingController } from "../switching";
 
 /** 插件名（fiber 名与日志前缀；行 id 由 patch 层给定，两者同名）。 */
 export const name = "llm-commandcode";
@@ -131,6 +132,12 @@ export const Config: PluginConfigSchema = z.object(
        * 零迁移要求默认保持这个行为 —— 用户文档里没有这个字段时行为一字不变。
        */
       autoSwitch: z.boolean().default(true),
+      /** 切换策略：手动顺序（只在耗尽时切）或额度优先。 */
+      switchStrategy: z.union(["order", "best-quota"]).default("order"),
+      /** 额度优先模式的评估间隔（分钟）；`0` 表示只在当前耗尽时评估。 */
+      switchIntervalMinutes: z.number().default(60),
+      /** 是否等回合结束再切（默认 `true`，任务进行中不换号）。 */
+      switchAtTurnEnd: z.boolean().default(true),
       modelAccountRules: z.array(z.object({ models: z.array(z.string()), account: z.string() })),
       credentialCleanupRefs: z.array(z.string().role("credential-ref")),
       // 意图日志的持久化字段：内容是恢复状态，对 schema 不透明（`z.any()` 只做「是数组」这一层
@@ -200,18 +207,28 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     automaticSwitch: true,
   };
 
-  /** 额度端口：每次读数都用当时的配置（`apiBase` 是构造参数，跟着现读的配置走）。 */
+  /** 额度端口：每次读数都用当时的配置；`snapshot(ref)` 可读指定账号（切换策略用）。 */
   const quota: QuotaPort = {
-    async snapshot() {
+    async snapshot(accountRef?: string) {
       const apiBase = normalizeKey(document().apiBase) ?? DEFAULT_API_BASE;
+      const ref = accountRef ?? selectedRefOf(document());
       return createCommandCodeQuota({
-        ref: () => selectedRefOf(document()),
-        resolveKey: (ref) => resolveAccountKey(ctx, document(), credentials, ref),
+        ref: () => ref,
+        resolveKey: (candidate) => resolveAccountKey(ctx, document(), credentials, candidate),
         fetchImpl: fetch,
         apiBase,
       }).snapshot();
     },
   };
+
+  const switching = new SwitchingController({
+    accounts,
+    quota,
+    rotation,
+    document,
+    pinnedRef: () => pinnedRefOf(document()),
+    warn,
+  });
 
   const deps: CommandCodeAdapterDeps = {
     config: () => adapterConfigOf(document()),
@@ -225,6 +242,7 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
     authFileFallback: authKeyFromAuthFile,
+    beforeRequest: (input) => switching.beforeRequest(input),
   };
   const adapter = createCommandCodeAdapter(deps);
 
@@ -252,6 +270,12 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
 
   const registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
   ctx.effect(() => () => registration(), "dsh-llm-account: commandcode provider route");
+
+  // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
+  // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。
+  (ctx.on as (event: string, listener: (...args: unknown[]) => void) => () => void)("session/event", (...args) =>
+    switching.noteHostEvent(...args),
+  );
 
   // Ruling 23：用户补上密钥后该账号必须能重新参与轮换。宿主 0.2.0-rc.2 的
   // `credentials/reference-updated` 就是这个接缝（凭据引用名与账号 ref 同一套标识空间）。

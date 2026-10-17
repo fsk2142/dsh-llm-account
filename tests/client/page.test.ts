@@ -137,9 +137,9 @@ it("三组通用卡片按厂商声明渲染：未声明的组不出现，空组�
   const commandCode = VENDORS.find((vendor) => vendor.ns === "llm-commandcode")!;
   const groups = cardGroupsOf(commandCode).map((group) => group.group);
 
-  // 本包两个厂商这一期都没有声明「隐私与安全」的字段（1a 把 zdr/webSearch 留到后续期），
-  // 所以该组不渲染 —— 「厂商未声明的组不渲染」这条规则的自然结果。
-  expect(groups).toEqual(["integrations", "advanced"]);
+  // 「切换策略」是 2026-10-17 新增的组，排在通用组最前；「隐私与安全」这一期两家都
+  // 没有声明字段，所以不渲染 —— 「厂商未声明的组不渲染」这条规则的自然结果。
+  expect(groups).toEqual(["switch", "integrations", "advanced"]);
 
   // 显式声明一个空组：同样不渲染（避免出现一个没有字段的空卡片）。
   const withEmpty = entryOf({
@@ -172,6 +172,10 @@ it("字段列表按声明顺序展开，值来自草稿 → 基线 → 声明默
   const fields = fieldsOf(state, commandCode);
 
   expect(fields.map((field) => field.spec.key)).toEqual([
+    "switchStrategy",
+    "switchIntervalMinutes",
+    "switchAtTurnEnd",
+    "autoSwitch",
     "showSidebarQuota",
     "quotaRefreshMinutes",
     "apiBase",
@@ -314,7 +318,7 @@ it("未声明的卡片组不渲染元素；声明了的组带着字段渲染", (
   const all = elementsOf(tree);
 
   const groups = all.filter((element) => element.props["data-card-group"] !== undefined).map((element) => element.props["data-card-group"]);
-  expect(groups).toEqual(["integrations", "advanced"]);
+  expect(groups).toEqual(["switch", "integrations", "advanced"]);
   // 「隐私与安全」这一期两家都没声明 → 连标题都不出现。
   expect(textOf(tree)).not.toContain(COPY.en["group.privacy"]);
 

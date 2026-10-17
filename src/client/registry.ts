@@ -17,7 +17,7 @@
  */
 
 /** 通用字段卡片的三组（规格 §8 的卡片顺序，厂商专属内容各自声明）。 */
-export type CardGroupId = "privacy" | "integrations" | "advanced";
+export type CardGroupId = "switch" | "privacy" | "integrations" | "advanced";
 
 /** 字段的控件种类（页面按它渲染，不认识的一律不渲染）。 */
 export type FieldKind = "boolean" | "text" | "number" | "select";

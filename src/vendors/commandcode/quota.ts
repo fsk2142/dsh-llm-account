@@ -317,8 +317,8 @@ export function createCommandCodeQuota(deps: CommandCodeQuotaDeps): QuotaPort {
   }
 
   return {
-    async snapshot(): Promise<QuotaSnapshot> {
-      const ref = deps.ref();
+    async snapshot(accountRef?: string): Promise<QuotaSnapshot> {
+      const ref = accountRef ?? deps.ref();
       const key = ref === undefined ? undefined : normalizeKey(await deps.resolveKey(ref));
       if (key === undefined) {
         const account = ref === undefined ? "(none selected)" : `"${ref}"`;

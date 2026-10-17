@@ -17,6 +17,8 @@ export type CopyKey =
   | "saveHint"
   | "advanced"
   | "advancedHint"
+  | "group.switch"
+  | "group.switch.hint"
   | "group.privacy"
   | "group.privacy.hint"
   | "group.accounts"
@@ -25,6 +27,16 @@ export type CopyKey =
   | "group.integrations.hint"
   | "group.advanced"
   | "group.advanced.hint"
+  | "field.autoSwitch"
+  | "field.autoSwitch.hint"
+  | "field.switchStrategy"
+  | "field.switchStrategy.hint"
+  | "field.switchIntervalMinutes"
+  | "field.switchIntervalMinutes.hint"
+  | "field.switchAtTurnEnd"
+  | "field.switchAtTurnEnd.hint"
+  | "options.switchOrder"
+  | "options.switchBestQuota"
   | "field.showSidebarQuota"
   | "field.showSidebarQuota.hint"
   | "field.quotaRefreshMinutes"
@@ -108,6 +120,7 @@ export type CopyKey =
   | "switch.reason.rate-limit"
   | "switch.reason.invalid-credential"
   | "switch.reason.manual"
+  | "switch.reason.balance"
   | "dashboard.title"
   | "dashboard.close"
   | "dashboard.refresh"
@@ -139,6 +152,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     saveHint: "账号操作立即生效；这里的保存只作用于下方设置字段。",
     advanced: "高级设置",
     advancedHint: "默认折叠。这些值影响请求构造与超时。",
+    "group.switch": "切换策略",
+    "group.switch.hint": "当前账号、手动顺序与额度优先的切换行为。",
     "group.privacy": "隐私与安全",
     "group.privacy.hint": "数据保留与联网相关开关。",
     "group.accounts": "账户",
@@ -147,6 +162,16 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "group.integrations.hint": "与宿主界面交互的开关。",
     "group.advanced": "高级设置",
     "group.advanced.hint": "请求构造、协议与超时。",
+    "field.autoSwitch": "自动切换账号",
+    "field.autoSwitch.hint": "关闭后只使用当前账号，额度耗尽也不换。",
+    "field.switchStrategy": "切换方式",
+    "field.switchStrategy.hint": "手动顺序只在上一个账号额度用尽时切；额度优先按间隔比较剩余额度。",
+    "field.switchIntervalMinutes": "额度评估间隔（分钟）",
+    "field.switchIntervalMinutes.hint": "仅额度优先模式使用；0 表示只在当前账号耗尽时评估。",
+    "field.switchAtTurnEnd": "等任务结束后再切换",
+    "field.switchAtTurnEnd.hint": "开启时回合内只记录决定，下一回合的首次请求才真正换号。",
+    "options.switchOrder": "按手动顺序",
+    "options.switchBestQuota": "按可用额度优先",
     "field.showSidebarQuota": "侧边栏额度卡片",
     "field.showSidebarQuota.hint": "开启后侧边栏底部显示额度卡片；关闭时不发起任何后台用量查询。",
     "field.quotaRefreshMinutes": "用量刷新间隔（分钟）",
@@ -230,6 +255,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.reason.rate-limit": "被限流",
     "switch.reason.invalid-credential": "凭据失效",
     "switch.reason.manual": "手动切换",
+    "switch.reason.balance": "额度更充足",
     "dashboard.title": "账号与用量",
     "dashboard.close": "关闭",
     "dashboard.refresh": "刷新",
@@ -256,6 +282,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     saveHint: "Account changes take effect immediately; Save only applies to the settings fields below.",
     advanced: "Advanced",
     advancedHint: "Collapsed by default. These values affect request construction and timeouts.",
+    "group.switch": "Switching",
+    "group.switch.hint": "Current account, manual order, and quota-first switching.",
     "group.privacy": "Privacy & security",
     "group.privacy.hint": "Data retention and web-related switches.",
     "group.accounts": "Accounts",
@@ -264,6 +292,16 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "group.integrations.hint": "Switches that interact with the host UI.",
     "group.advanced": "Advanced",
     "group.advanced.hint": "Request construction, protocol and timeouts.",
+    "field.autoSwitch": "Switch accounts automatically",
+    "field.autoSwitch.hint": "Off keeps using the current account even after its quota is exhausted.",
+    "field.switchStrategy": "Switching mode",
+    "field.switchStrategy.hint": "Manual order switches only when the previous account is exhausted; quota-first compares remaining quota on an interval.",
+    "field.switchIntervalMinutes": "Quota evaluation interval (minutes)",
+    "field.switchIntervalMinutes.hint": "Used by quota-first only; 0 evaluates only when the current account is exhausted.",
+    "field.switchAtTurnEnd": "Wait until the turn ends",
+    "field.switchAtTurnEnd.hint": "When on, a decision is parked during the turn and applied on the first request of the next turn.",
+    "options.switchOrder": "Manual order",
+    "options.switchBestQuota": "Quota-first",
     "field.showSidebarQuota": "Sidebar quota card",
     "field.showSidebarQuota.hint": "Shows a quota card at the bottom of the sidebar; while off, no background usage request is made.",
     "field.quotaRefreshMinutes": "Usage refresh interval (minutes)",
@@ -347,6 +385,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.reason.rate-limit": "rate limited",
     "switch.reason.invalid-credential": "credential rejected",
     "switch.reason.manual": "switched manually",
+    "switch.reason.balance": "more quota available",
     "dashboard.title": "Accounts & usage",
     "dashboard.close": "Close",
     "dashboard.refresh": "Refresh",
