@@ -282,6 +282,11 @@ export const PAGE_CSS = `
 .dsl-account { display: flex; flex-direction: column; gap: 8px; padding: 10px 0;
   border-bottom: .5px solid var(--dsw-alias-border-l2); }
 .dsl-account:last-of-type { border-bottom: none; padding-bottom: 0; }
+.dsl-account-group { display: flex; flex-direction: column; gap: 8px; padding-top: 10px;
+  border-top: .5px solid var(--dsw-alias-border-l1); }
+.dsl-account-group:first-of-type { border-top: none; padding-top: 0; }
+.dsl-account-group > h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600;
+  color: var(--dsw-alias-label-secondary); }
 .dsl-account-head { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dsl-account-actions { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center;
   gap: 2px; margin-left: auto; }
@@ -431,6 +436,7 @@ export const CSS_CLASS = {
   card: "dsl-card",
   cardFooter: "dsl-card-footer",
   account: "dsl-account",
+  accountGroup: "dsl-account-group",
   mark: "dsl-mark",
   quota: "dsl-quota",
   quotaRow: "dsl-quota-row",

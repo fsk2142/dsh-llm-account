@@ -34,7 +34,7 @@ export interface FakeHost {
   panels: (string | null)[];
   listeners: Map<string, (() => void)[]>;
   statusCalls: string[];
-  usageCalls: { method: string; vendor: string }[];
+  usageCalls: { method: string; vendor: string; input?: unknown }[];
   /** 让接下来的一次 mutate 撞上修订号冲突（并发写者的模拟）。 */
   conflictOnce: boolean;
   /** 让接下来的一次 mutate 以普通错误失败。 */
@@ -108,7 +108,7 @@ export function fakeHost(
     accounts: (): Promise<unknown[]> => mini.track([]),
     switches: (): Promise<unknown[]> => mini.track([]),
     addAccount: (vendor: string, input: { label: string; key?: string }): Promise<unknown> => {
-      host.usageCalls.push({ method: "addAccount", vendor });
+      host.usageCalls.push({ method: "addAccount", vendor, input });
       return mini.track({ ref: "DSH_NEW_ACCOUNT", label: input.label, configured: input.key !== undefined, active: false });
     },
     renameAccount: (vendor: string): Promise<void> => {

@@ -11,12 +11,10 @@
  * (`./registry`) and every host seam (`./shell`). No UI yet: the page component
  * arrives in Task 4.
  */
-import { createElement, Fragment, type ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 
-import { AccountCard, type AccountCardProps } from "./account-card";
 import { COPY } from "./copy";
 import { ModelsCard } from "./models-card";
-import { OpenCodeAccountCard } from "./opencode-account-card";
 import { createConnectedPage, registerSharedSurfaces, startSharedState, type ClientSeamContext, type VendorCardsContext } from "./seams";
 import { applyShell, PAGE_LOCALE_NS, VENDORS } from "./shell";
 
@@ -115,38 +113,15 @@ export function apply(ctx: unknown): void {
 }
 
 /**
- * 该厂商的专属卡片。
- *
- * OpenCode 多一层（排序 + `autoSwitch`），因为它有这两项独有语义；其余一切（账号行、额度条、
- * `⋯` 菜单、添加账户）两个厂商共用同一份实现，差异全由宿主发布的能力声明驱动
- * （`capabilities.pin`/`browserLogin`/`reorder`），不重复实现两遍。
+ * 该厂商的专属卡片：标签页里只剩模型卡片；账户已合并到标签页上方的常驻面板
+ * （`AccountsPanel`，设计 §7.2），不再按厂商各渲染一张账户卡。
  * @param cards - 容器递进来的数据与回调。
  * @returns 元素树。
  */
 function renderVendorCards(cards: VendorCardsContext): ReactNode {
-  const shared: AccountCardProps = {
-    status: cards.status,
-    t: cards.t,
-    action: cards.action,
-    expandedRef: cards.expandedRef,
-    login: cards.login,
-    onOpenAction: cards.openAction,
-    onActionField: cards.setActionField,
-    onConfirmAction: cards.confirmAction,
-    onCancelAction: cards.cancelAction,
-    onSelect: cards.select,
-    onRemove: cards.remove,
-    onToggleExpand: cards.toggleExpand,
-    onLoginBegin: cards.loginBegin,
-    onMove: cards.move,
-  };
-  const accountCard =
-    cards.vendor === "dsh-opencode-go"
-      ? createElement(OpenCodeAccountCard, shared)
-      : createElement(AccountCard, shared);
   // 模型卡片：规则在 `vendorCardKinds` 里（可单测）——厂商没声明模型可见性时整张不渲染。
-  if (!cards.cardKinds.includes("models")) return accountCard;
-  return createElement(Fragment, null, accountCard, modelsCard(cards));
+  if (!cards.cardKinds.includes("models")) return null;
+  return modelsCard(cards);
 }
 
 /** 模型卡片（T7）；该厂商没声明模型可见性时由调用方跳过。 */

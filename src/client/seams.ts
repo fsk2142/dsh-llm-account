@@ -19,6 +19,7 @@
  */
 import { createElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
+import { AccountsPanel } from "./accounts-panel";
 import { dictionaryOf } from "./copy";
 import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
@@ -810,10 +811,54 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       };
     }, [usage, activeVendor, modelCatalogRevision]);
 
+    const availableEntries = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
+    // 合并账户面板：两家放在同一张卡片里，动作按厂商路由（设计 §7.2）。
+    const accountsPanel = createElement(AccountsPanel, {
+      t,
+      vendors: availableEntries.map((entry) => ({
+        entry,
+        status: statuses[entry.providerId],
+        problem: usageProblem ?? statusProblems[entry.providerId],
+        ...(state.actionVendor === entry.providerId && state.action !== undefined ? { action: state.action } : {}),
+        ...(state.expandedVendor === entry.providerId && state.expandedRef !== undefined
+          ? { expandedRef: state.expandedRef }
+          : {}),
+        ...(logins[entry.providerId] === undefined ? {} : { login: logins[entry.providerId] }),
+      })),
+      onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string }) => setState((current) => openAction(current, action, vendor)),
+      onActionField: (field: "label" | "key", value: string) => setState((current) => setActionField(current, field, value)),
+      onConfirmAction: (vendor: string) => {
+        const pending = state.action === undefined ? undefined : dispatchAccountAction(usage, vendor, state.action);
+        if (pending === undefined) return;
+        void pending.then(() => {
+          setState((current) => closeAction(current));
+          setAccountRevision((current) => current + 1);
+        });
+      },
+      onCancelAction: () => setState((current) => closeAction(current)),
+      onSelect: (vendor: string, ref: string | null) => {
+        void usage?.selectAccount(vendor, ref).then(() => setAccountRevision((current) => current + 1));
+      },
+      onRemove: (vendor: string, ref: string) => {
+        void usage?.removeAccount(vendor, ref).then(() => setAccountRevision((current) => current + 1));
+      },
+      onMove: (vendor: string, ref: string, toIndex: number) => {
+        void usage?.moveAccount(vendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
+      },
+      onToggleExpand: (vendor: string, ref: string) => setState((current) => toggleExpanded(current, ref, vendor)),
+      onLoginBegin: (vendor: string) => {
+        void remoteValue<LoginView>(usage?.loginBegin(vendor)).then((status) => {
+          if (status !== undefined) setLogins((current) => ({ ...current, [vendor]: status }));
+        });
+      },
+    });
+    const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
+
     return PageShell({
       state,
       entries,
       t,
+      accounts,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
       onSave: (ns) => {

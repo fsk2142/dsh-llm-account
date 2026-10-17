@@ -182,12 +182,12 @@ it("modelEditTarget：按能力把编辑分流到草稿或立刻写", () => {
   expect(modelEditTarget("immediate")).toBe("now");
 });
 
-it("厂商不支持的卡片不渲染：没声明 models 的厂商只出账户卡片", () => {
+it("厂商不支持的卡片不渲染：没声明 models 的厂商没有专属卡片", () => {
   const withModels: VendorEntry = { ns: "llm-commandcode", rowIds: ["llm-commandcode"], providerId: "commandcode", order: 1, labelKey: "vendor.commandcode", cards: [], models: { visible: "visibleModels", visibility: "modelVisibility" } };
   const withoutModels: VendorEntry = { ...withModels, models: undefined };
 
-  expect(vendorCardKinds(withModels)).toEqual(["accounts", "models"]);
-  expect(vendorCardKinds(withoutModels)).toEqual(["accounts"]);
+  expect(vendorCardKinds(withModels)).toEqual(["models"]);
+  expect(vendorCardKinds(withoutModels)).toEqual([]);
 });
 
 it("目录里的模型也出现在列表里，勾选状态按可见性规则算（白名单外 = 未勾选）", () => {

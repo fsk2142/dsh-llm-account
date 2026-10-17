@@ -86,16 +86,30 @@ export interface AccountCardProps {
  * @returns 元素树。
  */
 export function AccountCard(props: AccountCardProps): ReactElement {
+  return createElement(
+    "section",
+    { "data-card": "accounts", className: CSS_CLASS.card },
+    createElement("h2", null, props.t("group.accounts")),
+    ...accountCardBody(props),
+  );
+}
+
+/**
+ * 账户卡片的内容（不含外层 `<section>` 与标题）。
+ *
+ * 合并面板把两家放进同一张卡片：每家一个分组标题，内容复用这里 —— 行的渲染只有一份实现，
+ * 面板与单卡不会长出两套额度条/菜单/登录逻辑。
+ * @param props - 见 {@link AccountCardProps}。
+ * @returns 元素数组。
+ */
+export function accountCardBody(props: AccountCardProps): ReactNode[] {
   const { status, t } = props;
   // 线上 `accounts` 可能缺（`?? []`），也可能含**渲染不了的行**（非对象）—— 结构校验只查
   // 「是不是数组」，不查每一行。渲染路径必须自己挑出能画的行：一行画不了不该让整张卡片崩。
   const accounts = (status?.accounts ?? []).filter(
     (account): account is AccountUsageStatus => typeof account === "object" && account !== null,
   );
-  return createElement(
-    "section",
-    { "data-card": "accounts", className: CSS_CLASS.card },
-    createElement("h2", null, t("group.accounts")),
+  return [
     // 空态分三种原因，文案不许混用：「远程面还没挂上」是数据不可用；「挂上了但一家账号都
     // 没有」是提示用户去添加 —— 都写成「暂无额度数据」会把没账号显示成额度故障。
     ...(status === undefined
@@ -121,7 +135,7 @@ export function AccountCard(props: AccountCardProps): ReactElement {
     ...loginSection(props),
     addSection(props),
     props.cardFooter === undefined ? null : props.cardFooter,
-  );
+  ];
 }
 
 /** 一行账号：身份行（名称 + 标记 + 动作）在上，额度表在下。 */

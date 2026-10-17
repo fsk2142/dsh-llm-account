@@ -26,7 +26,14 @@ export interface PageShellProps {
   onSetField: (ns: string, key: string, value: unknown) => void;
   onSave: (ns: string) => void;
   /**
-   * 该厂商的专属卡片（账户卡片、模型卡片……）。
+   * 常驻的合并账户面板（标签页之上）。
+   *
+   * 账户不属于某一家厂商的标签页 —— 它是「这台机器上我有哪些账号」，所以由容器渲染一张
+   * 跨厂商面板，页面外壳只负责把它放在标题与标签页之间（设计 §7.2）。
+   */
+  accounts?: ReactNode;
+  /**
+   * 该厂商的专属卡片（模型卡片……）。
    *
    * 扩展点：T5–T7 的卡片由此注入，页面外壳不需要认识它们 —— 外壳只保证顺序（专属卡片在通用
    * 字段卡片**之前**，与规格 §8 的卡片顺序一致）。
@@ -76,6 +83,7 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("h1", null, t("title")),
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
+    props.accounts === undefined ? null : props.accounts,
     tabRow(props),
     active === undefined
       ? createElement(

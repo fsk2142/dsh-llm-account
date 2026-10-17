@@ -81,8 +81,12 @@ export interface PageState {
   readonly credentialRevision: number;
   /** 正在进行的账户操作（`⋯` 菜单/添加账户/换密钥）；没有就是 `undefined`。 */
   readonly action: AccountAction | undefined;
+  /** 该操作属于哪家厂商；合并账户面板用它把动作路由回正确的远程面。 */
+  readonly actionVendor: string | undefined;
   /** 展开完整报告的账号 ref；没有就是 `undefined`。 */
   readonly expandedRef: string | undefined;
+  /** 展开的账号属于哪家厂商（两家可能都有同名 ref，必须带厂商判定）。 */
+  readonly expandedVendor: string | undefined;
   /**
    * 保存失败的可读原因：ns → 宿主给出的文案。
    *
@@ -151,8 +155,10 @@ export function createPageState(
     credentialRevision: previous?.credentialRevision ?? 0,
     // 账户操作的草稿跨快照刷新保留（重读设置不该把用户输入到一半的名字/密钥丢掉）。
     action: previous?.action,
+    actionVendor: previous?.actionVendor,
     // 展开状态也保留；卡片只在对应账号行存在时才用得上它。
     expandedRef: previous?.expandedRef,
+    expandedVendor: previous?.expandedVendor,
     // 保存失败的原因同样跨刷新保留：它描述的还是当前这份草稿的问题，下一次保存才可能改变它。
     saveErrors: previous?.saveErrors ?? {},
     // 发现成功即清空失败原因：上一次「读不到」不该在恢复后继续显示。
@@ -182,9 +188,17 @@ export function noteSaveResult(state: PageState, ns: string, error: string | und
  * @param action - 要打开的操作（`label`/`key` 可省略，默认空串）。
  * @returns 新状态。
  */
-export function openAction(state: PageState, action: { kind: AccountAction["kind"]; ref?: string }): PageState {
-  if (state.action?.kind === action.kind && state.action.ref === action.ref) return state;
-  return { ...state, action: { kind: action.kind, ...(action.ref === undefined ? {} : { ref: action.ref }), label: "", key: "" } };
+export function openAction(
+  state: PageState,
+  action: { kind: AccountAction["kind"]; ref?: string },
+  vendor?: string,
+): PageState {
+  if (state.action?.kind === action.kind && state.action.ref === action.ref && state.actionVendor === vendor) return state;
+  return {
+    ...state,
+    action: { kind: action.kind, ...(action.ref === undefined ? {} : { ref: action.ref }), label: "", key: "" },
+    actionVendor: vendor,
+  };
 }
 
 /**
@@ -206,7 +220,7 @@ export function setActionField(state: PageState, field: "label" | "key", value: 
  */
 export function closeAction(state: PageState): PageState {
   if (state.action === undefined) return state;
-  return { ...state, action: undefined };
+  return { ...state, action: undefined, actionVendor: undefined };
 }
 
 /**
@@ -215,8 +229,11 @@ export function closeAction(state: PageState): PageState {
  * @param ref - 目标账号。
  * @returns 新状态。
  */
-export function toggleExpanded(state: PageState, ref: string): PageState {
-  return { ...state, expandedRef: state.expandedRef === ref ? undefined : ref };
+export function toggleExpanded(state: PageState, ref: string, vendor?: string): PageState {
+  if (state.expandedRef === ref && state.expandedVendor === vendor) {
+    return { ...state, expandedRef: undefined, expandedVendor: undefined };
+  }
+  return { ...state, expandedRef: ref, expandedVendor: vendor };
 }
 
 /**
@@ -403,7 +420,8 @@ export function sidebarVendorOf(
  * @returns 要渲染的卡片种类。
  */
 export function vendorCardKinds(entry: VendorEntry): readonly ("accounts" | "models")[] {
-  return entry.models === undefined ? ["accounts"] : ["accounts", "models"];
+  // 账户卡片已合并到标签页上方的常驻面板（设计 §7.2），标签页里只剩厂商专属卡片。
+  return entry.models === undefined ? [] : ["models"];
 }
 
 /**

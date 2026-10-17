@@ -203,46 +203,10 @@ describe("设置页容器仿真", () => {
 
   it("账户操作经容器走到远程命名空间：填名称与密钥 → 添加 → addAccount(vendor, {label, key})", async () => {
     const mini = await runtime();
-    const { AccountCard } = await import("../../src/client/account-card");
-    const { createElement } = await import("react");
     await freshSeams();
     const host = fakeHost(mini);
-    /** 记录容器递给卡片的那份操作草稿（接线是否把 trim 后的输入送到了远程面）。 */
-    const seen: { label: string; key: string }[] = [];
-    const page = mini.mount(
-      await pageContainer(host, (cards) => {
-        const context = cards as {
-          t: (key: string) => string;
-          action?: { kind: string; label: string; key: string };
-          openAction: (action: unknown) => void;
-          setActionField: (field: string, value: string) => void;
-          confirmAction: () => void;
-          cancelAction: () => void;
-          select: (ref: string) => void;
-          remove: (ref: string) => void;
-          toggleExpand: (ref: string) => void;
-          loginBegin: () => void;
-        };
-        return createElement(AccountCard as never, {
-          status: undefined,
-          t: context.t,
-          // 生产 `index.ts` 也传这一项：受控输入的 value 来自它。
-          action: context.action,
-          onOpenAction: context.openAction,
-          onActionField: context.setActionField,
-          onConfirmAction: () => {
-            const action = context.action;
-            if (action?.kind === "add") seen.push({ label: action.label.trim(), key: action.key.trim() });
-            context.confirmAction();
-          },
-          onCancelAction: context.cancelAction,
-          onSelect: context.select,
-          onRemove: context.remove,
-          onToggleExpand: context.toggleExpand,
-          onLoginBegin: context.loginBegin,
-        } as never);
-      }),
-    );
+    // 生产路径：账户表在标签页上方的合并面板里，不在 `renderVendorCards` 的专属卡片里。
+    const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
 
     // 底部「添加账户」：点入口展开表单 → 填名称 + 密钥 → 点提交。
@@ -255,38 +219,14 @@ describe("设置页容器仿真", () => {
     await settleSim(mini);
 
     // 走到远程命名空间；名称/密钥在派发边界上 trim 过（派发本身由 seams.test.ts 覆盖）。
-    expect(host.usageCalls).toEqual([{ method: "addAccount", vendor: "commandcode" }]);
-    expect(seen).toEqual([{ label: "work", key: "sk-new" }]);
+    expect(host.usageCalls).toEqual([{ method: "addAccount", vendor: "commandcode", input: { label: "work", key: "sk-new" } }]);
   });
 
   it("点「添加账户」会展开表单（回归：入口与提交曾是同一个按钮，空提交毫无反应）", async () => {
     const mini = await runtime();
-    const { AccountCard } = await import("../../src/client/account-card");
-    const { createElement } = await import("react");
     await freshSeams();
     const host = fakeHost(mini);
-    const calls: string[] = [];
-    const page = mini.mount(
-      await pageContainer(host, (cards) =>
-        createElement(AccountCard as never, {
-          status: undefined,
-          t: cards.t,
-          // 生产 `index.ts` 也传这一项：受控输入的 value 来自它。
-          action: cards.action,
-          onOpenAction: (action: { kind: "add" | "rename" | "key"; ref?: string }) => {
-            calls.push(`open:${JSON.stringify(action)}`);
-            cards.openAction(action);
-          },
-          onActionField: cards.setActionField,
-          onConfirmAction: cards.confirmAction,
-          onCancelAction: cards.cancelAction,
-          onSelect: cards.select,
-          onRemove: cards.remove,
-          onToggleExpand: cards.toggleExpand,
-          onLoginBegin: cards.loginBegin,
-        } as never),
-      ),
-    );
+    const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
 
     // 收起时只有入口，没有输入框：点它才展开。
