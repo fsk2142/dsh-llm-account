@@ -150,16 +150,21 @@ export async function discoverVendors(ctx: ClientSeamContext, entries: readonly 
   try {
     described = await settings.describe();
   } catch (error) {
+    // 只有装配故障会走到这里（宿主契约：宿主侧失败走 ok:false 分支，不 reject）。
     return {
       snapshots: [],
       problem: { kind: "describe-failed", detail: error instanceof Error ? error.message : String(error) },
     };
   }
-  const rows = namespaceRowsOf(described);
+  const unwrapped = unwrapRemote(described);
+  if (!unwrapped.ok) {
+    return { snapshots: [], problem: { kind: "describe-failed", detail: unwrapped.error } };
+  }
+  const rows = namespaceRowsOf(unwrapped.value);
   if (rows === undefined) {
     return {
       snapshots: [],
-      problem: { kind: "unknown-shape", detail: `describe() returned ${describeShape(described)}` },
+      problem: { kind: "unknown-shape", detail: `describe() returned ${describeShape(unwrapped.value)}` },
     };
   }
   // 宿主按 profile 行 id 建索引，旧宿主用命名空间，而 opencode 的**行 id 与核心命名空间不同**
@@ -206,6 +211,46 @@ export async function discoverVendors(ctx: ClientSeamContext, entries: readonly 
  */
 export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: readonly VendorEntry[]): Promise<VendorSnapshot[]> {
   return (await discoverVendors(ctx, entries)).snapshots;
+}
+
+/**
+ * 拆开宿主远程调用的信封。
+ *
+ * 宿主契约（app.asar @17916049，`dsh-client-runtime` 的文档字符串）：**每一次一元调用都
+ * resolve 成 `RemoteResult<T>`**，即 `{ ok: true, value }` 或 `{ ok: false, error }`，
+ * **并且不会因为宿主侧失败而 reject**——离线载波与调用方中断都被折进 error 分支
+ * （`gateway/cancelled`）。只有装配层面的故障（arity 不对、方法未挂载、贡献被撤回、
+ * 缺 Context adapter）才会 reject。
+ *
+ * 实测（2026-10-17 桌面端 0.2.1-rc.1）：`remote.settings.describe()` 返回
+ * `{ ok: true, value: { writable, hasDocument, namespaces } }`——**不是**裸载荷。
+ * 之前把返回值直接当载荷，于是「命名空间列表」读成了信封本身。
+ *
+ * 未包信封的裸载荷也认（`ok` 缺席时整体当作载荷），这样本地替身与其它宿主形状都能用。
+ * @param result - 远程调用的原始返回值。
+ * @returns 成功时带载荷，失败时带可读原因（`error` 是活的 `RemoteError`，能取到 code）。
+ */
+function unwrapRemote(result: unknown): { ok: true; value: unknown } | { ok: false; error: string } {
+  if (typeof result !== "object" || result === null || !("ok" in result)) {
+    return { ok: true, value: result };
+  }
+  const envelope = result as { ok?: unknown; value?: unknown; error?: unknown };
+  if (envelope.ok === true) return { ok: true, value: envelope.value };
+  if (envelope.ok === false) return { ok: false, error: describeRemoteError(envelope.error) };
+  // `ok` 存在但既非 true 也非 false：不是信封，按裸载荷处理。
+  return { ok: true, value: result };
+}
+
+/** 把宿主的 `RemoteError` 压成一行可读文本（`code` 与 message 都带，排查要靠 code）。 */
+function describeRemoteError(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (typeof error === "object" && error !== null) {
+    const record = error as { code?: unknown; message?: unknown; name?: unknown };
+    const code = typeof record.code === "string" ? record.code : undefined;
+    const message = typeof record.message === "string" ? record.message : JSON.stringify(error);
+    return code === undefined ? message : `${code}: ${message}`;
+  }
+  return String(error);
 }
 
 /** 宿主返回值的形状摘要（诊断用，不含任何值）。 */
@@ -1533,10 +1578,15 @@ export async function saveSettings(
   if (settings === undefined || typeof settings.mutate !== "function") return "the host settings service is unavailable";
   if (fields.length === 0) return undefined;
   const ops = fields.map((field) => ({ op: "set" as const, path: [field.key], value: field.value }));
+  let result: unknown;
   try {
-    await settings.mutate(row, ops, revision);
-    return undefined;
+    result = await settings.mutate(row, ops, revision);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
+  // 宿主契约：宿主侧失败**不 reject**，而是 resolve 成 `{ ok: false, error }`。
+  // 不拆信封就会把一次被拒绝的保存当成成功——用户以为存上了，实际没有，
+  // 而草稿刷新即丢。这正是 `saveErrors` 这条状态存在的原因。
+  const unwrapped = unwrapRemote(result);
+  return unwrapped.ok ? undefined : unwrapped.error;
 }

@@ -23,14 +23,23 @@
  */
 import { describe as describeSuite, expect, it } from "vitest";
 
-import { describeVendorSnapshots, discoverVendors, type ClientSeamContext } from "../../src/client/seams";
+import { describeVendorSnapshots, discoverVendors, saveSettings, type ClientSeamContext } from "../../src/client/seams";
 import { createPageState } from "../../src/client/page-state";
 import { PageShell } from "../../src/client/page";
 import type { VendorEntry } from "../../src/client/registry";
 
-/** The host's real `describe()` return, per the measurement above. */
-function hostDescribe(namespaces: { ns?: string; value: Record<string, unknown>; revision?: number }[]): unknown {
-  return {
+/**
+ * The host's real `describe()` return, per the measurement above.
+ *
+ * Every unary remote call resolves to `RemoteResult<T>` — `{ ok: true, value }` or
+ * `{ ok: false, error }` — and does **not** reject for host-side failures
+ * (app.asar @17916049). Wrap the payload the way the host does.
+ */
+function hostDescribe(
+  namespaces: { ns?: string; value: Record<string, unknown>; revision?: number }[],
+  ok = true,
+): unknown {
+  const value = {
     writable: true,
     hasDocument: true,
     namespaces: namespaces.map((entry, index) => ({
@@ -43,6 +52,7 @@ function hostDescribe(namespaces: { ns?: string; value: Record<string, unknown>;
       revision: entry.revision ?? 1,
     })),
   };
+  return ok ? { ok: true, value } : { ok: false, error: { code: "gateway/internal", message: "settings service absent" } };
 }
 
 function contextWith(described: unknown): ClientSeamContext {
@@ -118,6 +128,26 @@ describeSuite("remote.settings.describe() shape", () => {
     expect(snapshots.map((s) => s.ns)).toEqual(["llm-commandcode"]);
   });
 
+  it("reads through the { ok, value } remote envelope the host actually returns", async () => {
+    // Measured 2026-10-17: `describe()` resolves to RemoteResult, not the payload.
+    // Treating the envelope as the payload is what produced 「unknown-shape …
+    // keys [ok, value]」 on the real desktop.
+    const snapshots = await describeVendorSnapshots(
+      contextWith(hostDescribe([{ ns: "llm-commandcode", value: { a: 1 } }])),
+      ENTRIES,
+    );
+    expect(snapshots.map((s) => s.ns)).toEqual(["llm-commandcode"]);
+  });
+
+  it("reports a host-side refusal, which arrives as ok:false and never rejects", async () => {
+    const refused = await discoverVendors(contextWith(hostDescribe([], false)), ENTRIES);
+    expect(refused.problem).toEqual({
+      kind: "describe-failed",
+      detail: "gateway/internal: settings service absent",
+    });
+    expect(refused.snapshots).toEqual([]);
+  });
+
   it("degrades to empty on an unrecognised shape instead of throwing", async () => {
     expect(await describeVendorSnapshots(contextWith({ nope: true }), ENTRIES)).toEqual([]);
     expect(await describeVendorSnapshots(contextWith("nonsense"), ENTRIES)).toEqual([]);
@@ -179,12 +209,37 @@ describeSuite("remote.settings.describe() shape", () => {
 
   it("carries the revision through as the write fence", async () => {
     const described = {
-      writable: true,
-      hasDocument: true,
-      namespaces: [{ ns: "llm-commandcode", value: { a: 1 }, revision: 42 }],
+      ok: true,
+      value: { writable: true, hasDocument: true, namespaces: [{ ns: "llm-commandcode", value: { a: 1 }, revision: 42 }] },
     };
     const snapshots = await describeVendorSnapshots(contextWith(described), ENTRIES);
     expect(snapshots[0]?.revision).toBe(42);
+  });
+
+  it("does not report a refused save as a success", async () => {
+    // The host resolves refusals as `{ ok: false, error }` instead of rejecting
+    // (app.asar @17916049). Awaiting the call and assuming success reported a
+    // rejected write as saved — the user saw "saved", the draft was never
+    // committed, and the next refresh dropped it.
+    const refused = await saveSettings(
+      {
+        remote: { settings: { describe: async () => ({}), mutate: async () => ({ ok: false, error: { code: "settings/conflict", message: "stale revision" } }) } },
+      } as unknown as ClientSeamContext,
+      "llm-commandcode",
+      [{ key: "showSidebarQuota", value: true }],
+      3,
+    );
+    expect(refused).toBe("settings/conflict: stale revision");
+
+    const accepted = await saveSettings(
+      {
+        remote: { settings: { describe: async () => ({}), mutate: async () => ({ ok: true, value: undefined }) } },
+      } as unknown as ClientSeamContext,
+      "llm-commandcode",
+      [{ key: "showSidebarQuota", value: true }],
+      3,
+    );
+    expect(accepted).toBeUndefined();
   });
 
   it("yields one tab per discovered vendor, in declared order", async () => {
