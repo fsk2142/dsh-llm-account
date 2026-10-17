@@ -17,6 +17,7 @@ import {
   quotaRefreshMs,
   readAccounts,
   readStatus,
+  readStatusDetail,
   readSwitches,
   registerPanelCard,
   registerSidebarCard,
@@ -107,6 +108,46 @@ describe("usage 远程面拆信封", () => {
     // 这两行正是此前崩在渲染期 / 谎报空态的地方。
     expect(next?.capabilities).toEqual(CAPABILITIES);
     expect(next?.failures.length).toBe(0);
+  });
+
+  /**
+   * 读不到时必须带得出**原因**。
+   *
+   * `status === undefined` 有四种病因而症状一模一样（远程面没挂上 / 读口没装配 /
+   * 调用报错 / 形状不认识）。只把它压成 `undefined` 的话，界面只能说一句对任何病因都
+   * 成立的「账号数据暂不可用」——本机实测里已经为这句话猜错了好几轮。
+   */
+  it("readStatusDetail 带得出原因：命名空间缺席、读口缺席、信封报错、reject", async () => {
+    const missing = await readStatusDetail(undefined, "commandcode");
+    expect(missing.status).toBeUndefined();
+    expect(missing.problem).toContain(USAGE_NAMESPACE);
+
+    const noStatus = await readStatusDetail({} as UsageNamespace, "commandcode");
+    expect(noStatus.status).toBeUndefined();
+    expect(noStatus.problem).toContain("status()");
+
+    // 信封的 ok:false：把宿主的 code 与 message 都带出来（排查要靠 code）。
+    const refused = await readStatusDetail(
+      usageOf({ ok: false, error: { code: "gateway/internal", message: "usage service absent" } }),
+      "commandcode",
+    );
+    expect(refused.status).toBeUndefined();
+    expect(refused.problem).toContain("gateway/internal");
+    expect(refused.problem).toContain("usage service absent");
+
+    // 只有装配层故障才会 reject；它也必须给出原因，而不是又一个 undefined。
+    const throwing = {
+      status: async () => {
+        throw new Error("arity mismatch on status()");
+      },
+    } as unknown as UsageNamespace;
+    expect((await readStatusDetail(throwing, "commandcode")).problem).toContain("arity mismatch");
+
+    // 成功时没有原因。
+    expect(await readStatusDetail(usageOf({ ok: true, value: status }), "commandcode")).toEqual({
+      status,
+      problem: undefined,
+    });
   });
 });
 

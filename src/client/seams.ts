@@ -335,14 +335,46 @@ export function selectPanel(ctx: ClientSeamContext, panel: string | null): boole
  * @returns 载荷；调用失败或形状不认识时为 `undefined`（调用方一律按「远程不可用」降级）。
  */
 async function remoteValue<T>(result: Promise<unknown> | unknown): Promise<T | undefined> {
+  const detailed = await remoteValueDetailed<T>(result);
+  return detailed.ok ? detailed.value : undefined;
+}
+
+/**
+ * {@link remoteValue} 的带原因版本：失败时把宿主给的原文一起带出来。
+ *
+ * 为什么需要它：`remoteValue` 把失败压成 `undefined`，而界面只能说「账号数据暂不可用」——
+ * 一句对四种不同病因（远程面没挂上 / 读口未装配 / 调用报错 / 形状不认识）都成立的空话。
+ * 把原因一路带到卡片上，空态才能自证；这也是本地实测里唯一起作用的办法。
+ * @param result - 远程调用的原始返回值。
+ * @returns 成功时带载荷；失败时 `ok: false` 且 `problem` 是宿主原文（可读一行）。
+ */
+async function remoteValueDetailed<T>(
+  result: Promise<unknown> | unknown,
+): Promise<{ ok: true; value: T | undefined } | { ok: false; problem: string }> {
   let raw: unknown;
   try {
     raw = await result;
-  } catch {
-    return undefined;
+  } catch (error: unknown) {
+    // 只有装配层面的故障会走到这里（读口调用本身不该 reject），但仍要给出原因而不是空话。
+    return { ok: false, problem: error instanceof Error ? error.message : String(error) };
   }
   const unwrapped = unwrapRemote(raw);
-  return unwrapped.ok ? (unwrapped.value as T | undefined) : undefined;
+  return unwrapped.ok ? { ok: true, value: unwrapped.value as T | undefined } : { ok: false, problem: unwrapped.error };
+}
+
+/** 带原因的状态读口：命名空间缺席也要给出原因（那是最常见的一种）。 */
+export async function readStatusDetail(
+  namespace: UsageNamespace | undefined,
+  vendor: string,
+): Promise<{ status: VendorUsageStatus | undefined; problem: string | undefined }> {
+  if (namespace === undefined) {
+    return { status: undefined, problem: `the ${USAGE_NAMESPACE} remote namespace is not mounted` };
+  }
+  if (typeof namespace.status !== "function") {
+    return { status: undefined, problem: `the ${USAGE_NAMESPACE} remote namespace has no status()` };
+  }
+  const detailed = await remoteValueDetailed<VendorUsageStatus>(namespace.status(vendor));
+  return detailed.ok ? { status: detailed.value, problem: undefined } : { status: undefined, problem: detailed.problem };
 }
 
 /**
@@ -545,6 +577,13 @@ export interface VendorCardsContext {
   usage: UsageNamespace | undefined;
   /** 该厂商最新的状态（生效账号、账号行、额度摘要）；还没读到时为 `undefined`。 */
   status: VendorUsageStatus | undefined;
+  /**
+   * 状态读不出来时的**原因**（挂载失败或读口报错时的宿主原文）。
+   *
+   * 与 `status === undefined` 配套：症状一样（读不到数据），病因不同（远程面没挂上 vs
+   * 读口调用失败 vs 形状不认识）。空态必须显示它，否则就只能猜。
+   */
+  problem: string | undefined;
   /** 该厂商设置文档的当前值（`autoSwitch` 等设置类控件的当前值来源）。 */
   settings: Record<string, unknown>;
   t: (key: string) => string;
@@ -624,6 +663,10 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
   return function ConnectedPage(): ReactElement {
     const [state, setState] = useState<PageState>(() => createPageState(entries, []));
     const [usage, setUsage] = useState<UsageNamespace | undefined>(undefined);
+    /** usage 远程面**挂载**失败的原因（`undefined` = 没失败或在挂载中）。 */
+    const [usageProblem, setUsageProblem] = useState<string | undefined>(undefined);
+    /** 逐厂商的状态读口失败原因（读口在、但调用失败）。 */
+    const [statusProblems, setStatusProblems] = useState<Record<string, string | undefined>>({});
     const [logins, setLogins] = useState<Record<string, LoginView | undefined>>({});
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
     /** 「添加模型」的输入草稿（按厂商分开）。 */
@@ -655,8 +698,10 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       const off = subscribeCredentials(ctx, () => setState((current) => noteCredentialChange(current)));
       // 远程面在挂载完成后才可用；挂载前卡片按「数据不可用」显示。
       // 只订阅、不 dispose：它的生命周期属于插件，不属于这个页面。
-      const offUsage = onUsageReady(ctx, (namespace) => {
-        if (alive) setUsage(namespace);
+      const offUsage = onUsageReady(ctx, (namespace, problem) => {
+        if (!alive) return;
+        setUsage(namespace);
+        setUsageProblem(problem);
       });
       return () => {
         alive = false;
@@ -676,8 +721,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       });
       if (usage !== undefined) {
         for (const entry of entries) {
-          void readStatus(usage, entry.providerId).then((status) => {
-            if (alive && status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
+          // 用带原因的读口：状态读不出来时把宿主原文存起来，卡片据此自证，
+          // 而不是只显示一句对任何病因都成立的「账号数据暂不可用」。
+          void readStatusDetail(usage, entry.providerId).then(({ status, problem }) => {
+            if (!alive) return;
+            if (status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
+            setStatusProblems((current) => ({ ...current, [entry.providerId]: problem }));
           });
         }
       }
@@ -734,6 +783,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                 vendor: activeVendor,
                 usage,
                 status: statuses[activeVendor],
+                // 挂载失败的原因优先（那时连读口都发不出去），其次是读口本身的报错。
+                problem: usageProblem ?? statusProblems[activeVendor],
                 settings: state.snapshots[activeEntry.ns]?.value ?? {},
                 t,
                 action: state.action,
@@ -1122,11 +1173,26 @@ export function createSidebarCardView(options: {
       if (!manual && domDocument()?.visibilityState === "hidden") return;
       if (inFlight.current) return;
       const usage = usageNamespace(ctx);
-      if (usage === undefined) return;
+      if (usage === undefined) {
+        // 远程面还没挂上是一次**失败**，不是「还没有请求经过这个账号」—— 静默返回会让卡片
+        // 一直停在谎报的空态上（这正是本机实测看到的症状）。
+        failures.current += 1;
+        setView((current) => ({
+          status: current.status,
+          failure: usageRemoteProblem(ctx) ?? t("usage.remoteUnavailable"),
+          stale: current.status !== undefined,
+        }));
+        return;
+      }
       inFlight.current = true;
-      void readStatus(usage, vendor ?? "").then((next) => {
+      void readStatusDetail(usage, vendor ?? "").then(({ status: next, problem }) => {
         inFlight.current = false;
-        if (next === undefined) return;
+        if (next === undefined) {
+          // 读口调用失败：同样记成失败（附宿主原文），而不是假装「还没有请求」。
+          failures.current += 1;
+          setView((current) => ({ status: current.status, failure: problem ?? t("usage.failed"), stale: current.status !== undefined }));
+          return;
+        }
         if (next.failures.length > 0) {
           failures.current += 1;
           const failure = next.failures[0] ?? t("usage.failed");
@@ -1286,6 +1352,8 @@ export function createDashboardView(options: {
     const [vendor, setVendor] = useState<string | undefined>(() => sidebarVendor());
     const [status, setStatus] = useState<VendorUsageStatus | undefined>(undefined);
     const [switches, setSwitches] = useState<SwitchRecord[] | undefined>(undefined);
+    /** 读不到数据时的原因（远程面没挂上 / 读口报错）；`undefined` = 没失败。 */
+    const [problem, setProblem] = useState<string | undefined>(undefined);
 
     useEffect(() => subscribeSidebarVendor(setVendor), []);
 
@@ -1309,9 +1377,14 @@ export function createDashboardView(options: {
       }
       const load = (): void => {
         const usage = usageNamespace(ctx);
-        if (usage === undefined) return;
-        void readStatus(usage, vendor).then((next) => {
+        if (usage === undefined) {
+          // 远程面还没挂上：记原因，别让面板显示「暂无数据」把故障说成空态。
+          setProblem(usageRemoteProblem(ctx) ?? t("usage.remoteUnavailable"));
+          return;
+        }
+        void readStatusDetail(usage, vendor).then(({ status: next, problem: why }) => {
           if (next !== undefined) setStatus(next);
+          setProblem(why);
         });
         void readSwitches(usage, vendor).then((next) => {
           if (next !== undefined) setSwitches(next);
@@ -1335,14 +1408,19 @@ export function createDashboardView(options: {
       onClose: () => options.onClose(),
       onRefresh: () => {
         const usage = usageNamespace(ctx);
-        if (usage === undefined) return;
-        void readStatus(usage, vendor).then((next) => {
+        if (usage === undefined) {
+          setProblem(usageRemoteProblem(ctx) ?? t("usage.remoteUnavailable"));
+          return;
+        }
+        void readStatusDetail(usage, vendor).then(({ status: next, problem: why }) => {
           if (next !== undefined) setStatus(next);
+          setProblem(why);
         });
         void readSwitches(usage, vendor).then((next) => {
           if (next !== undefined) setSwitches(next);
         });
       },
+      failure: problem,
     });
   };
 }
@@ -1413,8 +1491,16 @@ export function registerSharedSurfaces(options: {
 /** 共享的 usage 远程面（`$mount` 只发一次）。 */
 let sharedUsage: UsageRemoteHandle | undefined;
 
-/** 远程面可用性变化的监听者（设置页容器、卡片、面板都挂在这里）。 */
-const usageReadyListeners = new Set<(namespace: UsageNamespace | undefined) => void>();
+/**
+ * 远程面可用性变化的监听者（设置页容器、卡片、面板都挂在这里）。
+ *
+ * 第二个参数是**挂载失败的原因**：挂载失败时命名空间仍是 `undefined`，与「还在挂载中」
+ * 症状完全一样。不把原因一并送来，界面就只能显示一句「账号数据暂不可用」——而本机
+ * 实测里让空态自证的原因，永远是同一个：那一句空话本身。
+ */
+type UsageReadyListener = (namespace: UsageNamespace | undefined, problem?: string) => void;
+
+const usageReadyListeners = new Set<UsageReadyListener>();
 
 /** 造一个不带 `effect` 的委托上下文：重挂不能挂在某一行（可能已卸载）的作用域上。 */
 function detachedContext(ctx: ClientSeamContext): ClientSeamContext {
@@ -1438,8 +1524,8 @@ export function ensureUsageRemote(ctx: ClientSeamContext): UsageRemoteHandle {
   if (current !== undefined && !current.disposed() && !(current.namespace() === undefined && current.error() !== undefined)) {
     return current;
   }
-  const handle = mountUsageRemote(current === undefined ? ctx : detachedContext(ctx), (namespace) => {
-    for (const listener of [...usageReadyListeners]) listener(namespace);
+  const handle = mountUsageRemote(current === undefined ? ctx : detachedContext(ctx), (namespace, problem) => {
+    for (const listener of [...usageReadyListeners]) listener(namespace, problem);
   });
   sharedUsage = handle;
   return handle;
@@ -1451,12 +1537,12 @@ export function ensureUsageRemote(ctx: ClientSeamContext): UsageRemoteHandle {
  * 设置页容器用它拿命名空间（而**不持有**远程面的生命周期 —— 页面关掉不该把两个插槽界面的
  * 数据源一起带走）；卡片与面板用在「挂载完成前读取落空」的补读上。
  * @param ctx - 客户端上下文。
- * @param listener - 可用性变化回调（`undefined` = 还没挂上或已卸下）。
+ * @param listener - 可用性变化回调（`undefined` = 还没挂上或已卸下；第二参是失败原因）。
  * @returns 退订函数。
  */
-export function onUsageReady(ctx: ClientSeamContext, listener: (namespace: UsageNamespace | undefined) => void): () => void {
+export function onUsageReady(ctx: ClientSeamContext, listener: UsageReadyListener): () => void {
   const handle = ensureUsageRemote(ctx);
-  listener(handle.namespace());
+  listener(handle.namespace(), handle.error());
   usageReadyListeners.add(listener);
   return () => {
     usageReadyListeners.delete(listener);
@@ -1471,6 +1557,18 @@ export function onUsageReady(ctx: ClientSeamContext, listener: (namespace: Usage
  */
 export function usageNamespace(ctx: ClientSeamContext): UsageNamespace | undefined {
   return ensureUsageRemote(ctx).namespace() ?? usageNamespaceOf(ctx);
+}
+
+/**
+ * usage 远程面**挂载**失败的原因；没失败（或还在挂载中）时为 `undefined`。
+ *
+ * 与 {@link usageNamespace} 配套：两者都给出「命名空间不可用」这一事实，但只有它能说明
+ * 为什么。侧边栏与设置页都靠它把「读不到」从空态里区分出来。
+ * @param ctx - 客户端上下文。
+ * @returns 可读的失败原因。
+ */
+export function usageRemoteProblem(ctx: ClientSeamContext): string | undefined {
+  return ensureUsageRemote(ctx).error();
 }
 
 /** 侧边栏卡片该显示哪一家（providerId）；没有开启的厂商时为 `undefined`。 */

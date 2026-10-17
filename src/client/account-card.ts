@@ -30,6 +30,12 @@ export interface LoginView {
 export interface AccountCardProps {
   /** 该厂商的状态；远程面还没挂上时为 `undefined`（卡片显示「暂无数据」而不是报错）。 */
   status: VendorUsageStatus | undefined;
+  /**
+   * 读不到状态时的原因（宿主原文）。
+   *
+   * `status === undefined` 有四种病因而症状一模一样，界面必须显示它，否则每次都得靠猜。
+   */
+  problem?: string | undefined;
   t: (key: string) => string;
   /** 正在进行的账户操作（来自 `page-state.ts`）。 */
   action?: AccountAction | undefined;
@@ -77,7 +83,20 @@ export function AccountCard(props: AccountCardProps): ReactElement {
     // 空态分三种原因，文案不许混用：「远程面还没挂上」是数据不可用；「挂上了但一家账号都
     // 没有」是提示用户去添加 —— 都写成「暂无额度数据」会把没账号显示成额度故障。
     ...(status === undefined
-      ? [createElement("p", { key: "unavailable", "data-accounts-empty": "true" }, t("account.unavailable"))]
+      ? [
+          createElement("p", { key: "unavailable", "data-accounts-empty": "true" }, t("account.unavailable")),
+          // 原因必须显示：上面那句话对「远程面没挂上」「读口没装配」「调用报错」「形状不认识」
+          // 四种病因都成立，不显示就只能靠猜（本机实测里已经猜错过好几轮）。
+          ...(props.problem === undefined
+            ? []
+            : [
+                createElement(
+                  "pre",
+                  { key: "problem", "data-usage-problem": "true", className: CSS_CLASS.diagnostic },
+                  props.problem,
+                ),
+              ]),
+        ]
       : accounts.length === 0
         ? [createElement("p", { key: "empty", "data-accounts-empty": "true" }, t("account.empty"))]
         : []),

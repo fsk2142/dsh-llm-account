@@ -381,6 +381,19 @@ it("状态还没到（远程面未挂载）时给出说明而不是空白", () =
   expect(elementsOf(tree).filter((element) => element.props["data-account"] !== undefined)).toEqual([]);
 });
 
+it("读不到状态时把原因显示出来（空态必须能自证，不能只有一句空话）", () => {
+  const { tree } = renderCard({ status: undefined, problem: "gateway/internal: usage service absent" });
+  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.unavailable"));
+  const pre = elementsOf(tree).filter((element) => element.props["data-usage-problem"] === "true");
+  expect(pre).toHaveLength(1);
+  expect(textsOf(tree).join(" ")).toContain("gateway/internal");
+});
+
+it("有状态时不显示原因条（没有失败就没有诊断噪音）", () => {
+  const { tree } = renderCard({ status: statusOf({ accounts: [row({ ref: "a" })] }), problem: "stale reason" });
+  expect(elementsOf(tree).filter((element) => element.props["data-usage-problem"] === "true")).toEqual([]);
+});
+
 it("一家账号都没有时提示添加账户，而不是显示成额度故障", () => {
   const { tree } = renderCard({ status: statusOf({ accounts: [] }) });
   expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.empty"));

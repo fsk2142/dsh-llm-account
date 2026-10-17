@@ -85,6 +85,7 @@ export type CopyKey =
   | "sidebar.open"
   | "sidebar.noRequest"
   | "usage.failed"
+  | "usage.remoteUnavailable"
   | "usage.stale"
   | "usage.refresh"
   | "rejection.unavailable"
@@ -194,6 +195,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.open": "打开用量面板",
     "sidebar.noRequest": "还没有请求经过这个账号。",
     "usage.failed": "用量读取失败",
+    "usage.remoteUnavailable": "用量远程面还没挂上",
     "usage.stale": "上次数据",
     "usage.refresh": "刷新",
     "rejection.unavailable": "服务暂不可用",
@@ -298,6 +300,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.open": "Open the usage panel",
     "sidebar.noRequest": "No request has used this account yet.",
     "usage.failed": "Usage read failed",
+    "usage.remoteUnavailable": "Usage remote is not mounted",
     "usage.stale": "Last data",
     "usage.refresh": "Refresh",
     "rejection.unavailable": "Service unavailable",
