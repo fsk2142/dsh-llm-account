@@ -24,6 +24,8 @@
 import { describe as describeSuite, expect, it } from "vitest";
 
 import { describeVendorSnapshots, type ClientSeamContext } from "../../src/client/seams";
+import { createPageState } from "../../src/client/page-state";
+import { PageShell } from "../../src/client/page";
 import type { VendorEntry } from "../../src/client/registry";
 
 /** The host's real `describe()` return, per the measurement above. */
@@ -126,4 +128,42 @@ describeSuite("remote.settings.describe() shape", () => {
     const snapshots = await describeVendorSnapshots(contextWith(described), ENTRIES);
     expect(snapshots[0]?.revision).toBe(42);
   });
+
+  it("yields one tab per discovered vendor, in declared order", async () => {
+    // The tab row is derived from discovery: no vendors found means no tabs and
+    // the page shows the empty notice. This is the user-visible symptom of the
+    // shape regression, so pin the whole chain rather than just the snapshot.
+    const described = hostDescribe([
+      { ns: "llm-commandcode", value: { showSidebarQuota: true } },
+      { ns: "llm-opencode-go", value: { showSidebarQuota: false } },
+    ]);
+    const snapshots = await describeVendorSnapshots(contextWith(described), ENTRIES);
+    const state = createPageState(ENTRIES, snapshots);
+    expect(state.tabs.map((tab) => tab.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
+    expect(state.activeNs).toBe("llm-commandcode");
+
+    const shell = PageShell({ state, entries: ENTRIES, t: (key) => key, onSelectTab: () => undefined, onSetField: () => undefined, onSave: () => undefined });
+    const rendered = flatten(shell);
+    expect(rendered.some((node) => node.props?.["data-tab"] === "llm-commandcode")).toBe(true);
+    expect(rendered.some((node) => node.props?.["data-tab"] === "llm-opencode-go")).toBe(true);
+    expect(rendered.some((node) => node.props?.["data-empty"] === "vendor")).toBe(false);
+  });
 });
+
+/** Depth-first walk over the element tree the React stub produces. */
+function flatten(node: unknown): { props?: Record<string, unknown> }[] {
+  const out: { props?: Record<string, unknown> }[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    out.push(value as { props?: Record<string, unknown> });
+    const props = (value as { props?: Record<string, unknown> }).props;
+    const children = props?.["children"];
+    if (children !== undefined) visit(children);
+  };
+  visit(node);
+  return out;
+}
