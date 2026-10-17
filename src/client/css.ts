@@ -17,67 +17,159 @@
 /** 本包样式表的 id（`<style data-plugin-css="…">` 的值，注入幂等的依据）。 */
 export const PAGE_CSS_ID = "@dsh-llm-account/page.css";
 
-/** 统一页面 + 卡片 + 侧边栏 + 仪表盘的样式。 */
+/**
+ * 统一页面 + 卡片 + 侧边栏 + 仪表盘的样式。
+ *
+ * 三处界面（设置页 / 侧边栏额度卡 / 中栏用量面板）共用这一套 token 与形状，**这是它们
+ * 看起来像同一个东西的唯一依据**——分成三份样式各写各的，是「一边精致一边像调试输出」
+ * 的根源。
+ *
+ * token 用法（对照桌面端实际发布的 422 个 `--dsw-*` 变量与三个在跑插件的取用）：
+ * - 圆角走刻度 `--dsw-radius-*`，不写死像素；
+ * - 阴影/描边走 `--dsw-shadow-lv*` 与 `--dsw-alias-border-l*`；
+ * - 设置卡片本身有专用 token（`--dsw-alias-settings-card-fill/stroke`），比通用层更贴主题；
+ * - 焦点环用 `--dsw-focus-ring-*`（此前完全没有，控件在键盘操作下是「发死」的）；
+ * - 字重有 strong 变体（`--dsw-font-xxs-strong-12` 等），标题/字段名靠它分层。
+ *
+ * 颜色一律走宿主变量：不写死颜色是为了深色主题不坏（`tests/client/css.test.ts` 有护栏）。
+ */
 export const PAGE_CSS = `
-.dsl-root { display: flex; flex-direction: column; gap: 16px; padding: 4px 0 72px; color: var(--dsw-alias-label-primary); }
-.dsl-root h1 { font-size: var(--dsw-font-s-14); margin: 0; }
-.dsl-root h2 { font-size: var(--dsw-font-xxs-12); margin: 0 0 6px; color: var(--dsw-alias-label-primary); }
-.dsl-root h3 { font-size: var(--dsw-font-xxs-12); margin: 12px 0 6px; }
-.dsl-root h4 { font-size: var(--dsw-font-xxs-12); margin: 0; }
-.dsl-root small { display: block; font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); }
-.dsl-intro { margin: 0; color: var(--dsw-alias-label-secondary); font-size: var(--dsw-font-xxs-12); }
-/* 发现失败的原因：等宽、小字、弱化，但必须可读——它是排障的唯一线索。 */
-.dsl-diagnostic { margin: 8px 0 0; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 6px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary);
-  font-family: var(--dsw-font-mono, ui-monospace, monospace);
-  font-size: var(--dsw-font-xxxs-11); word-break: break-word; }
+.dsl-root { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 72px; color: var(--dsw-alias-label-primary); }
 
-.dsl-tabs { display: flex; flex-direction: row; gap: 6px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.dsl-tabs button { background: none; border: none; border-bottom: 2px solid transparent; padding: 6px 10px; cursor: pointer;
-  color: var(--dsw-alias-label-secondary); font-size: var(--dsw-font-xxs-12); }
-.dsl-tabs button[aria-selected="true"] { color: var(--dsw-alias-brand-primary); border-bottom-color: var(--dsw-alias-brand-primary); }
-.dsl-tabs button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+/* —— 标题层级 —— */
+.dsl-root h1 { font-size: var(--dsw-font-s-strong-14); font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+.dsl-root h2 { font-size: var(--dsw-font-xxs-strong-12); font-weight: 600; margin: 0;
+  color: var(--dsw-alias-label-primary); }
+.dsl-root h3, .dsl-root h4 { font-size: var(--dsw-font-xxs-strong-12); font-weight: 600;
+  margin: 0; color: var(--dsw-alias-label-secondary); }
+.dsl-root small { display: block; font-size: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary); line-height: 1.5; }
+.dsl-intro { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: var(--dsw-font-xxs-12); line-height: 1.6; }
 
-.dsl-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
+/* —— 标签页：分段控件，不是下划线 —— */
+.dsl-tabs { display: inline-flex; flex-direction: row; gap: 2px; padding: 2px; align-self: flex-start;
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1); }
+.dsl-tabs button { background: none; border: none; border-radius: var(--dsw-radius-sm); padding: 5px 14px;
+  cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: var(--dsw-font-xxs-12);
+  font-weight: 500; transition: background 120ms ease, color 120ms ease; }
+.dsl-tabs button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.dsl-tabs button[aria-selected="true"] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary);
+  font-weight: 600; box-shadow: var(--dsw-shadow-lv1); }
+.dsl-tabs button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color); outline-offset: 1px; }
 
-.dsl-account { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px;
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; }
-.dsl-account[data-dashboard-effective="true"] { border-color: var(--dsw-alias-brand-primary); }
-.dsl-account[data-rejection-kind] { border-color: var(--dsw-alias-state-warn-primary); }
-.dsl-mark { font-size: var(--dsw-font-xxxs-11); padding: 1px 6px; border-radius: 999px;
-  border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
+/* —— 卡片 —— */
+.dsl-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-settings-card-fill); box-shadow: var(--dsw-shadow-lv1); }
+.dsl-card > summary { cursor: pointer; color: var(--dsw-alias-label-secondary);
+  font-size: var(--dsw-font-xxs-strong-12); font-weight: 600; list-style: none; }
+.dsl-card > summary::-webkit-details-marker { display: none; }
+.dsl-card > summary::before { content: "▸"; display: inline-block; margin-right: 6px;
+  font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); transition: transform 120ms ease; }
+.dsl-card[open] > summary::before { transform: rotate(90deg); }
+.dsl-card[data-card-hint] { margin: -4px 0 0; }
 
-.dsl-quota { display: flex; flex-direction: column; gap: 2px; min-width: 160px; }
-.dsl-quota-row { display: flex; flex-direction: row; justify-content: space-between; gap: 8px; font-size: var(--dsw-font-xxxs-11); }
-.dsl-quota-missing { color: var(--dsw-alias-label-tertiary); }
-.dsl-failure { color: var(--dsw-alias-state-warn-primary); }
+/* —— 字段：标签在上、控件在下，整行可点 —— */
+.dsl-field { display: flex; flex-direction: column; gap: 5px; color: var(--dsw-alias-label-secondary);
+  font-size: var(--dsw-font-xxs-12); }
+.dsl-field > span:first-child { color: var(--dsw-alias-label-primary); font-size: var(--dsw-font-xxs-12); }
+.dsl-field small { margin-top: 1px; }
 
-.dsl-field { display: flex; flex-direction: column; gap: 2px; }
-.dsl-field input[type="text"], .dsl-field input[type="number"], .dsl-field select,
-.dsl-inline input[type="text"], .dsl-inline input[type="password"] {
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 4px 8px; font-size: var(--dsw-font-xxs-12); }
+.dsl-field input[type="text"], .dsl-field input[type="number"], .dsl-field input[type="password"],
+.dsl-field select, .dsl-inline input[type="text"], .dsl-inline input[type="password"] {
+  background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm);
+  padding: 6px 10px; font-size: var(--dsw-font-xxs-12); font-family: inherit; width: 100%;
+  transition: border-color 120ms ease, box-shadow 120ms ease; }
+.dsl-field input:hover, .dsl-field select:hover { border-color: var(--dsw-alias-border-l3); }
+.dsl-field input:focus, .dsl-field select:focus { outline: none; border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 var(--dsw-focus-ring-width) var(--dsw-focus-ring-color); }
+.dsl-field input::placeholder { color: var(--dsw-alias-label-quaternary); }
 
-.dsl-actions { display: flex; flex-direction: row; gap: 8px; align-items: center; }
+/* 复选框与它的标签同行：控件不再独占一行，也不撑满 */
+.dsl-field input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--dsw-alias-brand-primary);
+  cursor: pointer; }
+.dsl-field:has(> input[type="checkbox"]) { flex-direction: row; align-items: center; gap: 8px; }
+.dsl-field:has(> input[type="checkbox"]) > span:first-child { order: 2; flex: 1; }
+
+/* —— 按钮 —— */
+.dsl-actions { display: flex; flex-direction: row; gap: 8px; align-items: center; flex-wrap: wrap; }
 .dsl-actions button, .dsl-inline button, .dsl-card button {
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary);
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 3px 8px; cursor: pointer;
-  font-size: var(--dsw-font-xxxs-11); }
-.dsl-actions button:hover, .dsl-inline button:hover, .dsl-card button:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.dsl-actions button:disabled { color: var(--dsw-alias-label-dimmed); cursor: default; }
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm);
+  padding: 5px 12px; cursor: pointer; font-size: var(--dsw-font-xxxs-11); font-family: inherit;
+  text-wrap: nowrap; transition: background 120ms ease, border-color 120ms ease; }
+.dsl-actions button:hover, .dsl-inline button:hover, .dsl-card button:hover {
+  background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l3); }
+.dsl-actions button:active, .dsl-inline button:active, .dsl-card button:active {
+  background: var(--dsw-alias-interactive-bg-active); }
+.dsl-actions button:focus-visible, .dsl-inline button:focus-visible, .dsl-card button:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color); outline-offset: 1px; }
+.dsl-actions button:disabled { color: var(--dsw-alias-label-dimmed); cursor: not-allowed;
+  background: var(--dsw-alias-bg-layer-1); border-color: var(--dsw-alias-border-l1); }
+.dsl-inline { display: flex; flex-direction: row; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-.dsl-save { position: sticky; bottom: 0; display: flex; flex-direction: row; gap: 10px; align-items: center;
-  padding: 8px 12px; border-top: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+/* 「移除」这类次要动作不抢视觉重量 */
+.dsl-card button[data-model-remove] { color: var(--dsw-alias-label-tertiary); border-color: transparent;
+  background: none; padding: 2px 8px; }
+.dsl-card button[data-model-remove]:hover { color: var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-interactive-bg-hover); border-color: transparent; }
+
+/* —— 模型行：名称 + 开关 + 移除挤在一行 —— */
+.dsl-field[data-model] { flex-direction: row; align-items: center; gap: 10px; padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-1); }
+.dsl-field[data-model] > span:first-child { flex: 1; font-family: var(--dsw-font-mono);
+  font-size: var(--dsw-font-xxxs-11); word-break: break-all; }
+
+/* —— 账号行 —— */
+.dsl-account { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1); }
+.dsl-account[data-dashboard-effective="true"] { border-color: var(--dsw-alias-brand-primary);
+  box-shadow: var(--dsw-shadow-lv1); }
+.dsl-account[data-rejection-kind] { border-color: var(--dsw-alias-state-warn-primary); }
+.dsl-mark { font-size: var(--dsw-font-xxxs-strong-11); font-weight: 600; padding: 2px 8px;
+  border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary);
+  text-wrap: nowrap; }
+.dsl-mark[data-state="success"], .dsl-mark[data-configured="true"] {
+  color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-primary); }
+.dsl-mark[data-state="warn"] { color: var(--dsw-alias-state-warn-primary);
+  border-color: var(--dsw-alias-state-warn-primary); }
+
+/* —— 额度 —— */
+.dsl-quota { display: flex; flex-direction: column; gap: 3px; min-width: 160px; flex: 1; }
+.dsl-quota-row { display: flex; flex-direction: row; justify-content: space-between; gap: 10px;
+  font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-secondary); }
+.dsl-quota-row > span:last-child { color: var(--dsw-alias-label-primary); font-weight: 500;
+  font-family: var(--dsw-font-mono); }
+.dsl-quota-missing { color: var(--dsw-alias-label-tertiary); font-size: var(--dsw-font-xxxs-11); }
+.dsl-failure { color: var(--dsw-alias-state-warn-primary); font-size: var(--dsw-font-xxxs-11); }
+.dsl-diagnostic { margin: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-state-error-primary);
+  border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary); font-family: var(--dsw-font-mono);
+  font-size: var(--dsw-font-xxxs-11); line-height: 1.6; word-break: break-word; }
+
+/* —— 保存条 —— */
+.dsl-save { position: sticky; bottom: 0; z-index: 1; display: flex; flex-direction: row; gap: 12px;
+  align-items: center; margin-top: 4px; padding: 10px 14px; border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-shadow-lv2); }
 .dsl-save button { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground);
-  border: none; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  border: none; border-radius: var(--dsw-radius-sm); padding: 6px 16px; cursor: pointer;
+  font-size: var(--dsw-font-xxxs-strong-11); font-weight: 600; font-family: inherit; }
+.dsl-save button:hover { background: var(--dsw-alias-interactive-bg-hover-accent); }
 
-.dsl-sidebar { display: flex; flex-direction: column; gap: 4px; padding: 8px; font-size: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-secondary); }
-.dsl-switch { display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap; color: var(--dsw-alias-state-warn-label);
-  font-size: var(--dsw-font-xxxs-11); }
+/* —— 侧边栏额度卡：与设置页同一套形状，只是更紧凑 —— */
+.dsl-sidebar { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-secondary); }
+.dsl-switch { display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap; align-items: center;
+  color: var(--dsw-alias-state-warn-label); font-size: var(--dsw-font-xxxs-11); }
 .dsl-dashboard { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
-.dsl-dashboard section { border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 8px; background: var(--dsw-alias-bg-layer-1); }
+.dsl-dashboard section { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
+  border: 1px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-settings-card-fill); box-shadow: var(--dsw-shadow-lv1); }
 .dsl-dashboard section[data-dashboard-effective="true"] { border-color: var(--dsw-alias-brand-primary); }
 `;
 
