@@ -248,6 +248,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     return records.map((record) => ({
       id: record.entry.id,
       ...(record.entry.name === "" ? {} : { name: record.entry.name }),
+      ...(record.company === undefined ? {} : { company: record.company }),
+      ...(record.free === true ? { free: true } : {}),
     }));
   }
 

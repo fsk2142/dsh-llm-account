@@ -107,6 +107,14 @@ export function fakeHost(
     },
     accounts: (): Promise<unknown[]> => mini.track([]),
     switches: (): Promise<unknown[]> => mini.track([]),
+    models: (): Promise<unknown> =>
+      mini.track({
+        models: [
+          { id: "m1", name: "M1", company: "anthropic" },
+          { id: "m2", name: "M2", free: true },
+        ],
+        failures: [],
+      }),
     addAccount: (vendor: string, input: { label: string; key?: string }): Promise<unknown> => {
       host.usageCalls.push({ method: "addAccount", vendor, input });
       return mini.track({ ref: "DSH_NEW_ACCOUNT", label: input.label, configured: input.key !== undefined, active: false });

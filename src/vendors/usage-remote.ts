@@ -28,6 +28,7 @@ import type {
   VendorId,
 } from "../core/adapter";
 import type { RotationAccess } from "./assembly";
+import type { SwitchDecision, SwitchRuntimeState } from "../core/switching";
 import {
   USAGE_NAMESPACE,
   USAGE_PACKAGE,
@@ -36,6 +37,7 @@ import {
   type AccountUsageStatus,
   type AddAccountInput,
   type QuotaSummary,
+  type SwitchNowResult,
   type SwitchRecord,
   type UsageInvocationDescriptor,
   type VendorUsageStatus,
@@ -95,6 +97,9 @@ export interface UsageVendorDeps {
    * 隐藏的模型不在里面；这个返回厂商的全量目录，页面才能在「隐藏」之后重新勾上。
    */
   readonly models?: () => Promise<CatalogModel[]>;
+  /** 切换策略运行态（倒计时/待切换）；页面「立即切换」也走这里。 */
+  readonly switchState?: () => SwitchRuntimeState;
+  readonly switchNow?: () => Promise<SwitchDecision | undefined>;
 }
 
 /** 宿主 `ctx.typert` 的最小形状（只认本项目用到的 `register`）。 */
@@ -222,6 +227,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
       pinned,
       ...(effective === undefined ? {} : { effective }),
       ...(latestSwitch === undefined ? {} : { switch: latestSwitch }),
+      ...(deps.switchState === undefined ? {} : { switchState: deps.switchState() }),
       accounts,
       failures,
     };
@@ -349,6 +355,20 @@ export class LlmAccountUsageService extends TypertRemoteService {
       throw new Error(`dsh-llm-account: vendor "${vendor}" has no auto-switch setting`);
     }
     await setAutoSwitch.call(this.requireVendor(vendor).accounts, value);
+  }
+
+  /**
+   * 立即执行一次切换（页面按钮）：有 pending 先应用；否则强制评估一次并立即写选择。
+   * @param vendor - 厂商 id。
+   * @returns 是否真的切了、切到谁、原因。
+   */
+  async switchNow(vendor: VendorId): Promise<SwitchNowResult> {
+    const switchNow = this.requireVendor(vendor).switchNow;
+    if (switchNow === undefined) return { switched: false };
+    const decision = await switchNow();
+    return decision === undefined
+      ? { switched: false }
+      : { switched: true, target: decision.target, reason: decision.reason };
   }
 
   /**

@@ -21,6 +21,7 @@ import {
   switchSettingsOf,
   type SwitchCandidate,
   type SwitchDecision,
+  type SwitchRuntimeState,
 } from "../core/switching";
 import type { RotationAccess } from "./assembly";
 
@@ -79,6 +80,13 @@ function remember<T>(map: Map<string, T>, key: string, value: T): void {
     if (oldest !== undefined) map.delete(oldest);
   }
   map.set(key, value);
+}
+
+/** 手动顺序里的下一个可用账号（当前之后，绕回开头）。 */
+function nextInOrder(current: string, candidates: readonly SwitchCandidate[]): string | undefined {
+  const at = candidates.findIndex((candidate) => candidate.ref === current);
+  const rotated = at === -1 ? candidates : [...candidates.slice(at + 1), ...candidates.slice(0, at)];
+  return rotated.find((candidate) => candidate.ref !== current && candidate.rejected !== true && !quotaExhausted(candidate.quota))?.ref;
 }
 
 /**
@@ -188,25 +196,76 @@ export class SwitchingController {
   }
 
   /**
-   * 到点就评估一次。
-   * @param input - 本次请求信息。
-   * @param now - 当前时刻。
+   * 页面运行态：倒计时与待切换。
+   * @returns 当前策略、上次/下次评估与 pending。
    */
-  async #evaluate(input: BeforeRequestInput, now: number): Promise<void> {
+  snapshot(): SwitchRuntimeState {
+    const settings = switchSettingsOf(this.#deps.document());
+    const now = this.#now();
+    const nextAt =
+      settings.strategy === "best-quota" && settings.intervalMinutes > 0
+        ? this.#lastEvaluatedAt > 0
+          ? this.#lastEvaluatedAt + settings.intervalMinutes * 60_000
+          : now
+        : undefined;
+    return {
+      ...settings,
+      evaluatedAt: this.#lastEvaluatedAt,
+      ...(nextAt === undefined ? {} : { nextAt }),
+      ...(this.#pending === undefined ? {} : { pending: { ...this.#pending } }),
+    };
+  }
+
+  /**
+   * 「立即切换」：有 pending 就先应用它；否则强制评估一次并立即应用（不等间隔、不等回合末）。
+   * @returns 实际发生的切换；没有可切的目标时 `undefined`。
+   */
+  async switchNow(): Promise<SwitchDecision | undefined> {
+    if (this.#busy) return undefined;
+    this.#busy = true;
+    try {
+      if (this.#pending !== undefined) {
+        const pending = this.#pending;
+        this.#pending = undefined;
+        await this.#apply(pending);
+        return pending;
+      }
+      return await this.#evaluate(undefined, this.#now(), { force: true });
+    } catch (error) {
+      this.#warn(`switching: ${messageOf(error)}`);
+      return undefined;
+    } finally {
+      this.#busy = false;
+    }
+  }
+
+  /**
+   * 到点就评估一次。
+   * @param input - 本次请求信息；`undefined` 表示页面「立即切换」。
+   * @param now - 当前时刻。
+   * @param options - `force` 跳过 autoSwitch/间隔/回合末门控。
+   * @returns 实际应用的切换；只记 pending 或没有目标时 `undefined`。
+   */
+  async #evaluate(
+    input: BeforeRequestInput | undefined,
+    now: number,
+    options: { force?: boolean } = {},
+  ): Promise<SwitchDecision | undefined> {
+    const force = options.force === true;
     const document = this.#deps.document();
-    // `autoSwitch: false` 是用户的明确关闭：自动换号整体停用（当前账号仍可手动切）。
-    if (document.autoSwitch === false) return;
+    // `autoSwitch: false` 停用自动换号；但用户点「立即切换」是手动动作，仍然生效。
+    if (!force && document.autoSwitch === false) return undefined;
     const settings = switchSettingsOf(document);
     const current = this.#deps.pinnedRef();
-    if (current === null) return;
+    if (current === null) return undefined;
 
     const engine = this.#deps.rotation.current();
     const rejections = engine.rejections();
     const currentExhausted = rejections.has(current) || quotaExhausted(this.#freshQuota(current, now));
 
-    // 手动顺序模式没有「按时间评估」：只等当前耗尽。
-    if (settings.strategy === "order" && !currentExhausted) return;
-    if (!isDue(this.#lastEvaluatedAt, now, settings.intervalMinutes, currentExhausted)) return;
+    // 手动顺序模式没有「按时间评估」：只等当前耗尽（force 时允许手动轮换到下一个）。
+    if (!force && settings.strategy === "order" && !currentExhausted) return undefined;
+    if (!force && !isDue(this.#lastEvaluatedAt, now, settings.intervalMinutes, currentExhausted)) return undefined;
 
     // 账号列表的顺序就是轮换顺序（含手动排序覆盖）。
     const views = (await this.#deps.accounts.list()).filter((view) => view.configured);
@@ -230,21 +289,29 @@ export class SwitchingController {
     if (settings.strategy === "best-quota" && currentSnapshot === undefined) {
       currentSnapshot = await this.#readQuota(current, now);
     }
-    const decision = chooseSwitch({
-      strategy: settings.strategy,
-      candidates,
-      current,
-      ...(currentSnapshot === undefined ? {} : { currentQuota: currentSnapshot }),
-      currentRejected: rejections.has(current),
-      due: true,
-    });
-    if (decision === undefined) return;
+    let decision: SwitchDecision | undefined;
+    if (force && settings.strategy === "order" && !currentExhausted) {
+      // 「立即切换」在手动顺序模式下就是：切到当前之后的第一个可用账号。
+      const target = nextInOrder(current, candidates);
+      decision = target === undefined ? undefined : { target, reason: "manual" };
+    } else {
+      decision = chooseSwitch({
+        strategy: settings.strategy,
+        candidates,
+        current,
+        ...(currentSnapshot === undefined ? {} : { currentQuota: currentSnapshot }),
+        currentRejected: rejections.has(current),
+        due: true,
+      });
+    }
+    if (decision === undefined) return undefined;
 
-    if (settings.atTurnEnd && !this.#atTurnBoundary(input)) {
+    if (!force && settings.atTurnEnd && input !== undefined && !this.#atTurnBoundary(input)) {
       this.#pending = decision;
-      return;
+      return undefined;
     }
     await this.#apply(decision);
+    return decision;
   }
 
   /**

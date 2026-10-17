@@ -242,6 +242,46 @@ describe("设置页容器仿真", () => {
     expect(findSim(page.tree(), "data-action", "cancel")).toBeDefined();
     expect(findSim(page.tree(), "data-action", "confirmAdd")).toBeDefined();
   });
+
+  it("模型勾选在保存前就反映到草稿（回归：点了没反应）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini);
+    const { ModelsCard } = await import("../../src/client/models-card");
+    const { createElement } = await import("react");
+    const page = mini.mount(
+      await pageContainer(host, (cards) =>
+        createElement(ModelsCard as never, {
+          t: cards.t,
+          models: cards.models,
+          visibility: cards.modelVisibility,
+          visibleModels: cards.visibleModels,
+          modelInfo: cards.modelInfo,
+          catalogFailure: cards.catalogFailure,
+          catalogLoading: cards.catalogLoading,
+          onRetryCatalog: cards.onRetryCatalog,
+          draft: cards.modelDraft,
+          filter: cards.modelFilter,
+          onFilterChange: cards.setModelFilter,
+          mode: cards.modelMode,
+          onToggleModel: (model: string, visible: boolean) => cards.editModel({ kind: "toggle", model, visible }),
+          onRemoveModel: (model: string) => cards.editModel({ kind: "remove", model }),
+          onDraftChange: cards.setModelDraft,
+          onAddModel: (model: string) => cards.editModel({ kind: "add", model }),
+        } as never),
+      ),
+    );
+    await settleSim(mini);
+
+    // 目录里的 m1 初始可见；点一下必须立刻变成未勾选（还没保存）。
+    const toggle = find(page.tree(), "data-model-visible", "m1");
+    expect(toggle.props.checked).toBe(true);
+    fireSim(toggle, "onChange", { target: { checked: false } });
+    await settleSim(mini);
+    expect(find(page.tree(), "data-model-visible", "m1").props.checked).toBe(false);
+    // 草稿已经脏了：保存条出现，勾选不是假象。
+    expect(findSim(page.tree(), "data-save-bar")).toBeDefined();
+  });
 });
 
 // —— 仿真 2：侧边栏卡片 ————————

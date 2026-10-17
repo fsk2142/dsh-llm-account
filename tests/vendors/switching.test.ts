@@ -164,3 +164,39 @@ it("额度优先时某个候选读取失败不拖垮整次评估", async () => {
   // a 已耗尽；b 读失败（未知，不当作 0）；c 最充足 → c。
   expect(selects).toEqual(["c"]);
 });
+
+it("snapshot：额度优先给出下次评估时刻，手动顺序没有倒计时", async () => {
+  let clock = 1_000;
+  const best = harness({
+    document: { switchStrategy: "best-quota", switchIntervalMinutes: 60, switchAtTurnEnd: true },
+    now: () => clock,
+  });
+  expect(best.controller.snapshot().nextAt).toBe(1_000); // 还没评估：现在就该评估
+  await best.controller.beforeRequest({ sessionId: "s1" });
+  expect(best.controller.snapshot().nextAt).toBe(1_000 + 60 * 60_000);
+
+  clock = 5_000;
+  const order = harness({ document: { switchStrategy: "order", switchIntervalMinutes: 60 }, now: () => clock });
+  await order.controller.beforeRequest({ sessionId: "s1" });
+  expect(order.controller.snapshot().nextAt).toBeUndefined();
+});
+
+it("switchNow：手动顺序下强制切到下一个可用账号（原因 manual），并清掉 pending", async () => {
+  let clock = 1_000;
+  const { controller, engine, selects } = harness({ now: () => clock });
+
+  // 没有 pending 时：强制轮换到下一个。
+  await controller.switchNow();
+  expect(selects).toEqual(["b"]);
+  expect(engine.switchNotice()).toMatchObject({ fromRef: "a", toRef: "b", reason: "manual" });
+
+  // 造一个 pending（回合内被拒），switchNow 应立刻应用而不是等 turn/end。
+  const deferred = harness({ now: () => clock });
+  await deferred.controller.beforeRequest({ sessionId: "s1" });
+  deferred.engine.markRejected("a", { kind: "quota", message: "exhausted" });
+  await deferred.controller.beforeRequest({ sessionId: "s1" });
+  expect(deferred.controller.snapshot().pending?.target).toBe("b");
+  await deferred.controller.switchNow();
+  expect(deferred.selects).toEqual(["b"]);
+  expect(deferred.controller.snapshot().pending).toBeUndefined();
+});

@@ -20,7 +20,7 @@
 export type CardGroupId = "switch" | "privacy" | "integrations" | "advanced";
 
 /** 字段的控件种类（页面按它渲染，不认识的一律不渲染）。 */
-export type FieldKind = "boolean" | "text" | "number" | "select";
+export type FieldKind = "boolean" | "text" | "number" | "select" | "duration";
 
 /**
  * 一个设置字段的声明。

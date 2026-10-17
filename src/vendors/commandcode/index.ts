@@ -54,7 +54,7 @@ import {
 } from "./accounts";
 import { createCommandCodeAdapter } from "./adapter";
 import type { CommandCodeAdapterDeps, CommandCodeConfig } from "./adapter";
-import { createCommandCodeLogin, CredentialSlotTakenError } from "./login";
+import { createCommandCodeLogin } from "./login";
 import type { CommandCodeLogin } from "./login";
 import { DEFAULT_API_BASE } from "./protocol";
 import type { CommandCodeProtocol } from "./protocol";
@@ -250,14 +250,17 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     fetchImpl: fetch,
     // 登录端口的基地址是构造期参数：本期只构造，跟随 volatile 变更留给计划 1b 的远程页。
     apiBase: normalizeKey(document().apiBase) ?? DEFAULT_API_BASE,
-    // Task 5 Step 7（第 1a 期交接项）：登录的 ref 由 userName 推导，**可能与既有账号的凭据槽
-    // 撞名**。撞名时必须拒绝并给出可读原因，**绝不静默覆盖**别人的凭据槽。
-    // 判定用账号端口的 `list()`（它包含合成的默认槽，与页面看到的是同一份视图）；
-    // 同一账号的重新登录（名字相同）允许刷新密钥 —— 见 `loginSlotHolder` 的契约。
+    // Task 5 Step 7（第 1a 期交接项）：登录的 ref 由 userName 推导。统一账户面板里，
+    // 网页登录既可能更新既有账号、也可能新增账号：同 ref/同标签就换密钥，否则 add 一个。
+    // 同一账号的重新登录（名字相同）允许刷新密钥。
     storeKey: async (ref, key, userName) => {
-      const holder = loginSlotHolder(await accounts.list(), ref, userName);
-      if (holder !== undefined) throw new CredentialSlotTakenError(ref, holder.label);
-      await credentials.set(ref, key);
+      const views = await accounts.list();
+      const existing = views.find((view) => view.ref === ref) ?? views.find((view) => view.label === userName);
+      if (existing !== undefined) {
+        await credentials.set(existing.ref, key);
+        return;
+      }
+      await accounts.add({ label: userName, key });
     },
   });
   ctx.effect(
@@ -296,6 +299,8 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     login,
     // 设置页的模型勾选：未过滤的完整目录（页面把目录 ∪ 已配置项一起渲染）。
     models: () => adapter.catalogModels(),
+    switchState: () => switching.snapshot(),
+    switchNow: () => switching.switchNow(),
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。

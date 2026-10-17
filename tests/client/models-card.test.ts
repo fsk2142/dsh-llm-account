@@ -220,3 +220,24 @@ it("目录读取中/失败时不谎报空态：显示加载或原因 + 重试", 
   fire(retry, "onClick");
   expect(onRetry).toHaveBeenCalledTimes(1);
 });
+
+it("模型按公司分组，免费组第一，并带折叠箭头", () => {
+  const { tree } = renderCard({
+    mode: "onSave",
+    models: ["claude-haiku-5-5", "gpt-6-luna", "beam-free"],
+    modelInfo: { "claude-haiku-5-5": { company: "anthropic" }, "gpt-6-luna": { company: "openai" }, "beam-free": { free: true } },
+  });
+  const groups = elementsOf(tree)
+    .filter((element) => element.props["data-model-group"] !== undefined)
+    .map((element) => element.props["data-model-group"]);
+  expect(groups).toEqual(["free", "anthropic", "openai"]);
+  const labels = elementsOf(tree)
+    .filter((element) => element.props["data-model-group"] !== undefined)
+    .map((element) => textsOf(element)[0]);
+  expect(labels).toEqual(["免费模型", "Anthropic", "OpenAI"]);
+  // 整张卡片是可收起的 details；箭头就是 summary 的 chevron。
+  const collapse = elementsOf(tree).find((element) => element.props["data-model-collapse"] === "true");
+  expect(collapse).toBeDefined();
+  const details = elementsOf(tree).find((element) => element.props["data-card"] === "models");
+  expect(details?.props.open).toBe(true);
+});

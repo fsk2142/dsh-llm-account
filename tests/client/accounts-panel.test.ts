@@ -1,8 +1,5 @@
 /**
- * 合并账户面板：一张卡片、两家分组、动作按厂商路由。
- *
- * 这不是「渲染得像不像」，而是验证容器接线最关键的一条：同一个「添加/固定/登录」控件
- * 出现在哪一家分组里，回调就必须带上哪一家的 provider id。
+ * 平铺账户面板：所有账号在同一列表里，账号名后跟供应商；添加/登录是全局入口。
  */
 import { expect, it, vi } from "vitest";
 
@@ -24,14 +21,13 @@ const COMMAND_CODE: VendorCapabilities = {
 const OPENCODE: VendorCapabilities = {
   reorder: true,
   pin: false,
-  browserLogin: false,
+  browserLogin: true,
   modelAccountRules: false,
   quotaShape: "percent",
   modelVisibilityWrite: "immediate",
   automaticSwitch: true,
 };
 
-/** 展平元素树。 */
 function elementsOf(node: unknown): StubElement[] {
   if (node === null || node === undefined || typeof node !== "object") return [];
   if (Array.isArray(node)) return node.flatMap((child) => elementsOf(child));
@@ -40,13 +36,11 @@ function elementsOf(node: unknown): StubElement[] {
   return [element, ...elementsOf(element.props.children)];
 }
 
-/** 一份最小账号行。 */
-function account(ref: string): AccountUsageStatus {
-  return { ref, label: ref, configured: true, active: false, effective: false };
+function account(ref: string, label = ref): AccountUsageStatus {
+  return { ref, label, configured: true, active: false, effective: false };
 }
 
-/** 一份最小状态。 */
-function status(vendor: string, capabilities: VendorCapabilities, accounts: AccountUsageStatus[] = [account("a")]): VendorUsageStatus {
+function status(vendor: string, capabilities: VendorCapabilities, accounts: AccountUsageStatus[]): VendorUsageStatus {
   return { vendor, capabilities, pinned: null, accounts, failures: [] };
 }
 
@@ -67,13 +61,12 @@ const OPENCODE_ENTRY: VendorEntry = {
   cards: [],
 };
 
-/** 渲染一次。 */
 function render(overrides: Partial<AccountsPanelProps> = {}): { tree: StubElement; props: AccountsPanelProps } {
   const props: AccountsPanelProps = {
     t: dictionaryOf("zh"),
     vendors: [
-      { entry: COMMAND_CODE_ENTRY, status: status("commandcode", COMMAND_CODE) },
-      { entry: OPENCODE_ENTRY, status: status("dsh-opencode-go", OPENCODE) },
+      { entry: COMMAND_CODE_ENTRY, status: status("commandcode", COMMAND_CODE, [account("cc-1", "Work")]) },
+      { entry: OPENCODE_ENTRY, status: status("dsh-opencode-go", OPENCODE, [account("oc-1", "Personal")]) },
     ],
     onOpenAction: vi.fn(),
     onActionField: vi.fn(),
@@ -89,19 +82,6 @@ function render(overrides: Partial<AccountsPanelProps> = {}): { tree: StubElemen
   return { tree: AccountsPanel(props), props };
 }
 
-/** 某一家分组里的全部元素。 */
-function groupOf(tree: StubElement, vendor: string): StubElement {
-  const group = elementsOf(tree).find((element) => element.props["data-accounts-vendor"] === vendor);
-  expect(group, `group for ${vendor}`).toBeDefined();
-  return group!;
-}
-
-/** 某一家分组里的一个菜单/行内动作按钮。 */
-function actionIn(tree: StubElement, vendor: string, action: string): StubElement | undefined {
-  return elementsOf(groupOf(tree, vendor).props.children).find((element) => element.props["data-action"] === action);
-}
-
-/** 触发回调。 */
 function fire(element: StubElement | undefined, name: string): void {
   expect(element, `element with ${name}`).toBeDefined();
   const handler = element!.props[name];
@@ -109,49 +89,75 @@ function fire(element: StubElement | undefined, name: string): void {
   (handler as () => void)();
 }
 
-it("两家在同一个卡片里各成一个分组，顺序与传入顺序一致", () => {
+/** 树里所有文本。 */
+function textsOf(node: unknown): string[] {
+  const out: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value === "string" || typeof value === "number") {
+      out.push(String(value));
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const child of value) walk(child);
+      return;
+    }
+    if (value !== null && typeof value === "object" && "props" in (value as StubElement)) {
+      walk((value as StubElement).props.children);
+    }
+  };
+  walk(node);
+  return out;
+}
+
+it("账号平铺在同一列表：没有供应商分组标题，账号名后跟供应商标签", () => {
   const { tree } = render();
-  const groups = elementsOf(tree)
-    .filter((element) => element.props["data-accounts-vendor"] !== undefined)
-    .map((element) => element.props["data-accounts-vendor"]);
-  expect(groups).toEqual(["commandcode", "dsh-opencode-go"]);
-  // 行渲染复用共享实现：每家分组里都有自己的账号行。
-  expect(elementsOf(groupOf(tree, "commandcode").props.children).some((element) => element.props["data-account"] === "a")).toBe(true);
-  expect(elementsOf(groupOf(tree, "dsh-opencode-go").props.children).some((element) => element.props["data-account"] === "a")).toBe(true);
+  const rows = elementsOf(tree).filter((element) => element.props["data-account"] !== undefined);
+  expect(rows.map((element) => element.props["data-account"])).toEqual(["cc-1", "oc-1"]);
+  const badges = elementsOf(tree)
+    .filter((element) => element.props["data-account-vendor"] !== undefined)
+    .map((element) => element.props["data-account-vendor"]);
+  expect(badges).toEqual(["Command Code", "OpenCode"]);
+  expect(elementsOf(tree).filter((element) => element.props["data-accounts-group"] !== undefined)).toEqual([]);
 });
 
-it("「添加账户」把动作路由到所在分组的那一家", () => {
+it("全局添加入口：Command Code 与 OpenCode 各自路由到自己的厂商", () => {
   const { tree, props } = render();
-  fire(actionIn(tree, "dsh-opencode-go", "add"), "onClick");
-  expect(props.onOpenAction).toHaveBeenCalledWith("dsh-opencode-go", { kind: "add" });
+  const addCc = elementsOf(tree).find((element) => element.props["data-action"] === "add");
+  const addOc = elementsOf(tree).find((element) => element.props["data-action"] === "add-dsh-opencode-go");
+  fire(addCc, "onClick");
+  fire(addOc, "onClick");
+  expect(props.onOpenAction).toHaveBeenNthCalledWith(1, "commandcode", { kind: "add" });
+  expect(props.onOpenAction).toHaveBeenNthCalledWith(2, "dsh-opencode-go", { kind: "add" });
 });
 
-it("固定账号只出现在声明了 pin 的能力矩阵里，并带上厂商", () => {
+it("全局网页登录入口：两家都能发起；等待时显示 user code 与授权网址", () => {
   const { tree, props } = render();
-  const pin = actionIn(tree, "commandcode", "pin");
-  expect(pin).toBeDefined();
-  fire(pin, "onClick");
-  expect(props.onSelect).toHaveBeenCalledWith("commandcode", "a");
-  // OpenCode 的 pin 是 false：它的菜单里没有固定项。
-  expect(actionIn(tree, "dsh-opencode-go", "pin")).toBeUndefined();
+  fire(elementsOf(tree).find((element) => element.props["data-action"] === "login"), "onClick");
+  fire(elementsOf(tree).find((element) => element.props["data-action"] === "login-dsh-opencode-go"), "onClick");
+  expect(props.onLoginBegin).toHaveBeenNthCalledWith(1, "commandcode");
+  expect(props.onLoginBegin).toHaveBeenNthCalledWith(2, "dsh-opencode-go");
+
+  const waiting = render({
+    vendors: [
+      {
+        entry: OPENCODE_ENTRY,
+        status: status("dsh-opencode-go", OPENCODE, []),
+        login: { state: "waiting", userCode: "ABCD", authUrl: "https://opencode.ai/device" },
+      },
+    ],
+  }).tree;
+  expect(textsOf(waiting).join(" ")).toContain("ABCD");
+  expect(elementsOf(waiting).some((element) => element.props["data-login-panel"] === "dsh-opencode-go")).toBe(true);
 });
 
-it("某一家读不到状态时，原因显示在它自己的分组里", () => {
+it("没有账号时只显示一次空态；某家状态读不到时原因带厂商名", () => {
   const { tree } = render({
     vendors: [
-      { entry: COMMAND_CODE_ENTRY, status: status("commandcode", COMMAND_CODE) },
+      { entry: COMMAND_CODE_ENTRY, status: status("commandcode", COMMAND_CODE, []) },
       { entry: OPENCODE_ENTRY, problem: "opencode status read failed" },
     ],
   });
-  const problem = elementsOf(groupOf(tree, "dsh-opencode-go").props.children).find(
-    (element) => element.props["data-usage-problem"] !== undefined,
-  );
-  expect(problem?.props.children).toBe("opencode status read failed");
-});
-
-it("网页登录入口按厂商路由；没有能力的那家不出现", () => {
-  const { tree, props } = render();
-  fire(actionIn(tree, "commandcode", "login"), "onClick");
-  expect(props.onLoginBegin).toHaveBeenCalledWith("commandcode");
-  expect(actionIn(tree, "dsh-opencode-go", "login")).toBeUndefined();
+  expect(elementsOf(tree).filter((element) => element.props["data-accounts-empty"] !== undefined)).toHaveLength(1);
+  expect(textsOf(tree).join(" ")).toContain("opencode status read failed");
+  expect(textsOf(tree).join(" ")).toContain("OpenCode");
 });

@@ -119,6 +119,12 @@ export interface ModelMetadata {
   api?: OpencodeApi;
   /** 是否声明了推理能力。 */
   reasoning?: boolean;
+  /** 归属公司（`canonical_model_id` 的斜杠前一段）。 */
+  company?: string;
+  /** 输入/输出单价都为 0：免费模型。 */
+  free?: boolean;
+  /** 是否开源权重（用于未来的分组/标记，先透传）。 */
+  openWeights?: boolean;
 }
 
 /**
@@ -156,6 +162,18 @@ export function parseModelMetadata(payload: unknown): Map<string, ModelMetadata>
     const npm = (isRecord(value.provider) ? value.provider.npm : undefined) ?? fallbackNpm;
     const api = apiForNpm(npm);
     if (api !== undefined) metadata.api = api;
+    const canonical = stringValue(value.canonical_model_id);
+    if (canonical !== undefined) {
+      const company = canonical.split("/")[0];
+      if (company !== undefined && company !== "") metadata.company = company;
+    }
+    const cost = isRecord(value.cost) ? value.cost : undefined;
+    if (cost !== undefined) {
+      const input = typeof cost.input === "number" ? cost.input : undefined;
+      const output = typeof cost.output === "number" ? cost.output : undefined;
+      if (input === 0 && output === 0) metadata.free = true;
+    }
+    if (typeof value.open_weights === "boolean") metadata.openWeights = value.open_weights;
     result.set(id, metadata);
   }
   return result;
@@ -184,6 +202,10 @@ export interface OpencodeCatalogRecord {
   reasoning: boolean;
   /** 该模型声明的推理档位。 */
   efforts: readonly string[];
+  /** 归属公司键（canonical id 的斜杠前一段）。 */
+  company?: string;
+  /** 目录明确标成免费。 */
+  free?: boolean;
 }
 
 /** 目录来源：`list()` 交回合并后的记录（带 TTL 缓存）。 */
@@ -274,6 +296,8 @@ export function createOpencodeCatalog(input: {
         api: meta?.api ?? DEFAULT_API,
         reasoning: meta?.reasoning === true,
         efforts: meta?.efforts ?? [],
+        ...(meta?.company === undefined ? {} : { company: meta.company }),
+        ...(meta?.free === true ? { free: true } : {}),
       };
     });
     return records;

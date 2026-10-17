@@ -11,6 +11,7 @@
 import { createElement, Fragment, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
+import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
 import { cardGroupsOf, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
 import type { CardGroupSpec, VendorEntry } from "./registry";
@@ -129,14 +130,20 @@ function tabRow(props: PageShellProps): ReactNode {
   );
 }
 
-/** 当前厂商的主体：专属卡片 → 通用字段卡片 → 保存条。 */
+/**
+ * 当前厂商的主体：通用字段卡片 → 专属卡片 → 保存条。
+ *
+ * 专属卡片（模型列表）放在设置之后：OpenCode 的模型目录有几十个，若把它放在最前面，
+ * 「切换策略」会被推到一屏之外，看起来像消失。模型卡片自己带折叠箭头，需要长时间浏览时
+ * 仍可收起。
+ */
 function vendorBody(props: PageShellProps, entry: VendorEntry): ReactNode {
   const extras = props.renderVendorCards?.(entry.ns);
   return createElement(
     Fragment,
     null,
-    extras === undefined ? null : extras,
     ...cardGroupsOf(entry).map((group) => cardGroupElement(props, entry, group)),
+    extras === undefined ? null : extras,
     isDirty(props.state, entry.ns) ? saveBar(props, entry) : null,
   );
 }
@@ -201,6 +208,35 @@ function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftFie
         onChange: (event: { target?: { value?: string } }) => change(event.target?.value ?? ""),
       },
       ...(spec.options ?? []).map((option) => createElement("option", { key: option.value, value: option.value }, props.t(option.labelKey))),
+    );
+  }
+  if (spec.kind === "duration") {
+    const parts = durationPartsOf(value);
+    const changePart = (part: "days" | "hours" | "minutes", raw: string): void => {
+      change(minutesOfDurationParts({ ...parts, [part]: Number(raw) }));
+    };
+    return createElement(
+      "div",
+      { className: CSS_CLASS.duration, "data-duration-input": spec.key },
+      ...([
+        ["days", 30],
+        ["hours", 24],
+        ["minutes", 60],
+      ] as const).map(([part, max]) =>
+        createElement(
+          "span",
+          { key: part, className: CSS_CLASS.durationPart },
+          createElement("input", {
+            type: "number",
+            min: 0,
+            max,
+            value: String(parts[part]),
+            "data-duration-part": part,
+            onChange: (event: { target?: { value?: string } }) => changePart(part, event.target?.value ?? ""),
+          }),
+          createElement("span", null, props.t(`duration.${part}`)),
+        ),
+      ),
     );
   }
   if (spec.kind === "number" || spec.kind === "text") {

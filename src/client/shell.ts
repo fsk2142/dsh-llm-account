@@ -85,7 +85,7 @@ export const VENDORS: readonly VendorEntry[] = [
           },
           {
             key: "switchIntervalMinutes",
-            kind: "number",
+            kind: "duration",
             labelKey: "field.switchIntervalMinutes",
             hintKey: "field.switchIntervalMinutes.hint",
             fallback: 60,
@@ -189,7 +189,7 @@ export const VENDORS: readonly VendorEntry[] = [
           },
           {
             key: "switchIntervalMinutes",
-            kind: "number",
+            kind: "duration",
             labelKey: "field.switchIntervalMinutes",
             hintKey: "field.switchIntervalMinutes.hint",
             fallback: 60,

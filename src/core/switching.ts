@@ -23,7 +23,20 @@ export interface SwitchSettings {
 export const SWITCH_MARGIN = 0.1;
 
 /** 切换原因（与 `core/rotation.ts` 的 `SwitchReason` 对齐）。 */
-export type SwitchDecisionReason = "quota" | "balance";
+export type SwitchDecisionReason = "quota" | "balance" | "manual";
+
+/** 控制器对页面发布的运行态（倒计时/待切换）。 */
+export interface SwitchRuntimeState {
+  strategy: SwitchStrategy;
+  intervalMinutes: number;
+  atTurnEnd: boolean;
+  /** 上次评估时刻（0 = 还没评估过）。 */
+  evaluatedAt: number;
+  /** 下次评估时刻；手动顺序或间隔为 0 时缺省。 */
+  nextAt?: number;
+  /** 已决定、等回合结束的切换。 */
+  pending?: { target: string; reason: SwitchDecisionReason };
+}
 
 /** 一个候选账号。 */
 export interface SwitchCandidate {

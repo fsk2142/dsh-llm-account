@@ -393,6 +393,8 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     capabilities,
     // 设置页的模型勾选：未过滤的完整目录。
     models: () => adapter.catalogModels(),
+    switchState: () => switching.snapshot(),
+    switchNow: () => switching.switchNow(),
     // 实验性设备码网页登录。
     login,
   });

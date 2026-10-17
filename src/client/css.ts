@@ -88,6 +88,12 @@ export const PAGE_CSS = `
 .dsl-card > summary::-webkit-details-marker { display: none; }
 .dsl-card > summary > svg { flex: none; color: var(--dsw-alias-label-tertiary); }
 .dsl-card[open] > summary > svg { transform: rotate(180deg); }
+.dsl-model-summary-title { font-size: 15px; font-weight: 600; line-height: 24px; }
+.dsl-model-group { display: flex; flex-direction: column; gap: 2px; padding-top: 6px;
+  border-top: .5px solid var(--dsw-alias-border-l1); }
+.dsl-model-group:first-of-type { border-top: none; padding-top: 0; }
+.dsl-model-group > h3 { margin: 4px 0 2px; font-size: 12px; line-height: 18px; font-weight: 600;
+  color: var(--dsw-alias-label-secondary); }
 .dsl-card > summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 4px; border-radius: var(--dsw-radius-xs); }
 /* 卡片底部的常驻开关（如 OpenCode 的自动切换）：一条分隔线把它们与账号列表分开。 */
@@ -119,6 +125,10 @@ export const PAGE_CSS = `
   border-color: var(--dsw-alias-state-business-primary); }
 .dsl-field input::placeholder, .dsl-inline input::placeholder, .dsl-add-field input::placeholder,
 .dsl-search input::placeholder, .dsl-actions input::placeholder { color: var(--dsw-alias-label-dimmed); }
+.dsl-duration { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dsl-duration-part { display: inline-flex; flex-direction: row; align-items: center; gap: 4px;
+  color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
+.dsl-duration-part > input { width: 64px; }
 .dsl-field input:disabled, .dsl-field select:disabled { cursor: not-allowed;
   background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-dimmed); }
 .dsl-field input[type="number"] { font-variant-numeric: tabular-nums; }
@@ -291,6 +301,8 @@ export const PAGE_CSS = `
 .dsl-account-actions { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center;
   gap: 2px; margin-left: auto; }
 .dsl-account-actions > .dsl-actions { gap: 2px; flex-wrap: nowrap; }
+.dsl-vendor-badge { flex: none; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 999px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; }
 .dsl-dot { flex: none; box-sizing: border-box; width: 7px; height: 7px; border-radius: 50%;
   background: var(--dsw-alias-border-l3); transition: background 150ms ease; }
 .dsl-account[data-effective="true"] .dsl-dot,
@@ -437,6 +449,12 @@ export const CSS_CLASS = {
   cardFooter: "dsl-card-footer",
   account: "dsl-account",
   accountGroup: "dsl-account-group",
+  vendorBadge: "dsl-vendor-badge",
+  modelSummary: "dsl-model-summary",
+  modelSummaryTitle: "dsl-model-summary-title",
+  modelGroup: "dsl-model-group",
+  duration: "dsl-duration",
+  durationPart: "dsl-duration-part",
   mark: "dsl-mark",
   quota: "dsl-quota",
   quotaRow: "dsl-quota-row",

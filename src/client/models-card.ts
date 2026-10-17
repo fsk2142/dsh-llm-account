@@ -15,8 +15,9 @@
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { isModelIdVisible } from "../core/catalog";
+import { companyLabelOf, groupModels } from "../core/model-groups";
 import { CSS_CLASS, cls } from "./css";
-import { RemoveIcon } from "./icons";
+import { ChevronIcon, RemoveIcon } from "./icons";
 
 /** 模型卡片的写模式（来自宿主的 `capabilities.modelVisibilityWrite`）。 */
 export type ModelsWriteMode = "onSave" | "immediate";
@@ -35,6 +36,8 @@ export interface ModelsCardProps {
   visibility: Record<string, boolean>;
   /** 白名单；缺省或为空表示不按白名单限制。 */
   visibleModels?: readonly string[];
+  /** 目录带下来的公司/免费标记（分组用）；缺省时按 id 前缀兜底。 */
+  modelInfo?: Record<string, { company?: string; free?: boolean }>;
   /** 目录读取失败原因（宿主原文）；读取正常时缺省。 */
   catalogFailure?: string;
   /** 目录正在读取（还没有结果）。 */
@@ -95,20 +98,41 @@ export function ModelsCard(props: ModelsCardProps): ReactElement {
           t("models.retry"),
         );
 
+  // 分组只影响展示：免费组第一，其余按公司首次出现顺序（`core/model-groups` 单测）。
+  const groups = groupModels(
+    shown.map((id) => ({ id, ...(props.modelInfo?.[id] ?? {}) })),
+  );
+  const groupNodes = groups.map((group) =>
+    createElement(
+      "div",
+      { key: group.key, "data-model-group": group.key, className: CSS_CLASS.modelGroup },
+      createElement(
+        "h3",
+        null,
+        group.key === "free" ? t("models.freeGroup") : group.key === "other" ? t("models.otherCompany") : companyLabelOf(group.key),
+      ),
+      ...group.models.map((model) => modelRow(props, model, visibility, configured)),
+    ),
+  );
+  const emptyState: ReactNode[] = loading
+    ? [createElement("p", { key: "loading", "data-models-loading": "true", className: CSS_CLASS.note }, t("models.loading"))]
+    : props.catalogFailure !== undefined
+      ? [catalogFailure, ...(retry === null ? [] : [retry])]
+      : [createElement("p", { key: "empty", className: CSS_CLASS.empty }, t("models.empty"))];
+
   return createElement(
-    "section",
-    { "data-card": "models", className: CSS_CLASS.card },
-    createElement("h2", null, t("models.title")),
+    "details",
+    { "data-card": "models", className: CSS_CLASS.card, open: true },
+    createElement(
+      "summary",
+      { className: CSS_CLASS.modelSummary, "data-model-collapse": "true" },
+      createElement("span", { className: CSS_CLASS.modelSummaryTitle }, t("models.title")),
+      createElement(ChevronIcon, null),
+    ),
     // 提示必须与真实行为一致：立即生效时不该再出现「保存后生效」。
     createElement("small", { "data-models-mode": props.mode }, props.mode === "immediate" ? t("models.immediate") : t("models.onSave")),
     ...(props.models.length === 0
-      ? [
-          loading
-            ? createElement("p", { key: "loading", "data-models-loading": "true", className: CSS_CLASS.note }, t("models.loading"))
-            : props.catalogFailure !== undefined
-              ? [catalogFailure, ...(retry === null ? [] : [retry])]
-              : [createElement("p", { key: "empty", className: CSS_CLASS.empty }, t("models.empty"))],
-        ]
+      ? emptyState
       : [
           createElement(
             "div",
@@ -138,7 +162,7 @@ export function ModelsCard(props: ModelsCardProps): ReactElement {
               ]
             : []),
           ...(needle !== "" && shown.length === 0 ? [createElement("p", { key: "no-match", className: CSS_CLASS.empty }, t("models.noMatch"))] : []),
-          ...shown.map((model) => modelRow(props, model, visibility, configured)),
+          ...groupNodes,
         ]),
     addRow(props),
   );

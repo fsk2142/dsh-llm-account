@@ -21,6 +21,7 @@
  * @module dsh-llm-account/src/client/usage-contract
  */
 import type { AccountView, CatalogModelsResult, FailureKind, QuotaWindow, VendorCapabilities } from "../core/adapter";
+import type { SwitchRuntimeState } from "../core/switching";
 
 // 客户端其它模块（页面、接缝）需要这几个形状时也从这里取，不必各自去 import `src/core/**`：
 // 这个模块是客户端侧唯一允许提到 core 的地方，而且是**纯类型**导入（`verbatimModuleSyntax`
@@ -33,6 +34,7 @@ export type {
   QuotaWindow,
   VendorCapabilities,
 } from "../core/adapter";
+export type { SwitchRuntimeState } from "../core/switching";
 
 /** 贡献所属的 npm 包（描述符 id 的前缀）。 */
 export const USAGE_PACKAGE = "dsh-llm-account";
@@ -60,6 +62,8 @@ export const USAGE_METHODS = [
   // 排序与自动切换（Task 6：只有声明了相应能力的厂商才实现）
   "moveAccount",
   "setAutoSwitch",
+  // 切换策略：页面「立即切换」
+  "switchNow",
   // 网页登录（Task 5：Command Code 的登录入口）
   "loginBegin",
   "loginStatus",
@@ -119,6 +123,13 @@ export interface SwitchRecord extends SwitchNotice {
   vendor: string;
 }
 
+/** 「立即切换」的结果。 */
+export interface SwitchNowResult {
+  switched: boolean;
+  target?: string;
+  reason?: SwitchReason;
+}
+
 /** 一个厂商的完整状态。 */
 export interface VendorUsageStatus {
   vendor: string;
@@ -129,6 +140,8 @@ export interface VendorUsageStatus {
   effective?: { ref: string; at: number };
   /** 最近一次切换；从未切换过时**没有**这个字段。 */
   switch?: SwitchNotice;
+  /** 切换策略运行态（倒计时/待切换）；老宿主没有这个字段。 */
+  switchState?: SwitchRuntimeState;
   accounts: AccountUsageStatus[];
   failures: string[];
 }
@@ -226,7 +239,12 @@ function parseCatalogModels(endpoint: string, value: unknown): CatalogModelsResu
   const models = value.models
     .filter((item): item is Record<string, unknown> => isRecord(item))
     .filter((item) => typeof item.id === "string")
-    .map((item) => ({ id: item.id as string, ...(typeof item.name === "string" ? { name: item.name } : {}) }));
+    .map((item) => ({
+      id: item.id as string,
+      ...(typeof item.name === "string" ? { name: item.name } : {}),
+      ...(typeof item.company === "string" ? { company: item.company } : {}),
+      ...(item.free === true ? { free: true } : {}),
+    }));
   const failures = Array.isArray(value.failures)
     ? value.failures.filter((item): item is string => typeof item === "string")
     : [];
@@ -273,6 +291,18 @@ function parseNumber(endpoint: string, value: unknown): number {
 function parseBoolean(endpoint: string, value: unknown): boolean {
   if (typeof value !== "boolean") throw boundaryError(endpoint, `expected a boolean, got ${describeValue(value)}`);
   return value;
+}
+
+/** 校验「立即切换」的结果。 */
+function parseSwitchNowResult(endpoint: string, value: unknown): SwitchNowResult {
+  if (!isRecord(value) || typeof value.switched !== "boolean") {
+    throw boundaryError(endpoint, "expected { switched: boolean }");
+  }
+  return {
+    switched: value.switched,
+    ...(typeof value.target === "string" ? { target: value.target } : {}),
+    ...(typeof value.reason === "string" ? { reason: value.reason as SwitchReason } : {}),
+  };
 }
 
 /** 校验一个可空的字符串（`null` 表示「回到自动轮换」）。 */
@@ -405,6 +435,7 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
       VENDOR_PARAM,
       { name: "value", typeSymbol: "AutoSwitch", parse: parseBoolean },
     ]),
+    makeDescriptor("switchNow", "SwitchNowResult", parseSwitchNowResult, [VENDOR_PARAM]),
     // 登录的 ref 由宿主按登录返回的用户名推导（`accountRef`），客户端**不能**指定它 ——
     // 能指定就等于让页面决定把密钥写进哪个凭据槽，那正是 T5 Step 7 要防的事。
     makeDescriptor("loginBegin", "LoginStatus", parseLoginStatus, [VENDOR_PARAM]),
@@ -426,6 +457,7 @@ export interface UsageNamespace {
   selectAccount(vendor: string, ref: string | null): Promise<void>;
   moveAccount(vendor: string, ref: string, toIndex: number): Promise<void>;
   setAutoSwitch(vendor: string, value: boolean): Promise<void>;
+  switchNow?(vendor: string): Promise<SwitchNowResult>;
   loginBegin(vendor: string): Promise<LoginStatus>;
   loginStatus(vendor: string): Promise<LoginStatus>;
   loginCancel(vendor: string): Promise<void>;

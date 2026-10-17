@@ -293,6 +293,18 @@ it("页面外壳渲染标题、简介与每个厂商一个标签页", () => {
   expect(texts).toContain(COPY.en["vendor.commandcode"]);
 });
 
+it("额度评估间隔用天/小时/分钟编辑：默认 60 分钟显示为 0 天 1 小时 0 分钟", () => {
+  const tree = render(createPageState(VENDORS, SNAPSHOTS), dictionaryOf("zh"));
+  const parts = elementsOf(tree)
+    .filter((element) => element.props["data-duration-part"] !== undefined)
+    .map((element) => [element.props["data-duration-part"], element.props.value]);
+  expect(parts).toEqual([
+    ["days", "0"],
+    ["hours", "1"],
+    ["minutes", "0"],
+  ]);
+});
+
 it("渲染期抛错时显示错误面板，而不是整页空白", () => {
   // React 丢弃整棵已渲染的树，所以抛错的表象是「这一段什么都没有」——连标题都没有，
   // 与「没有可显示的厂商」那种有明确文案的空态完全不同，排查时极易误判成没注册上。

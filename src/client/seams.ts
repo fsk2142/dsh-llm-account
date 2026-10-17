@@ -49,7 +49,7 @@ import type { LoginView } from "./account-card";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import type { VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type CatalogModelsResult, type SwitchRecord, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type CatalogModelsResult, type SwitchRecord, type SwitchRuntimeState, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
 
 /** 一个「设置命名空间」在客户端看到的面（`remote.settings`）。 */
 export interface RemoteSettings {
@@ -634,6 +634,8 @@ export interface VendorCardsContext {
   visibleModels: readonly string[];
   /** 逐模型显隐（缺省视为可见）。 */
   modelVisibility: Record<string, boolean>;
+  /** 目录带下来的公司/免费标记（供模型卡片分组）；页面会按 id 前缀兜底。 */
+  modelInfo: Record<string, { company?: string; free?: boolean }>;
   /** 模型目录读取失败原因（宿主原文）；读取正常时缺省。 */
   catalogFailure?: string;
   /** 模型目录正在读取。 */
@@ -650,6 +652,12 @@ export interface VendorCardsContext {
   setModelDraft: (value: string) => void;
   /** 做一次模型编辑（按生效时机分派到草稿或立刻写）。 */
   editModel: (edit: ModelEdit) => void;
+  /** 切换策略运行态（倒计时/待切换）。 */
+  switchState?: SwitchRuntimeState;
+  /** 容器每秒推进的时钟（卡片自己不设定时器）。 */
+  now: number;
+  /** 立即执行一次切换。 */
+  switchNow: () => void;
   loginBegin: () => void;
 }
 
@@ -714,6 +722,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [modelCatalogRevision, setModelCatalogRevision] = useState(0);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
+    /** 每秒推进的时钟：切换倒计时用；卡片保持纯 props。 */
+    const [clock, setClock] = useState(() => Date.now());
+    useEffect(() => {
+      const timer = setInterval(() => setClock(Date.now()), 1_000);
+      return () => clearInterval(timer);
+    }, []);
 
     /** 采纳一次发现结果：页面状态与侧边栏开关存储（同一来源、两个消费者）。 */
     const adopt = (discovery: VendorDiscovery): void => {
@@ -941,6 +955,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                     });
                   },
                 }),
+                switchState: statuses[activeVendor]?.switchState,
+                now: clock,
+                switchNow: () => {
+                  if (usage === undefined || typeof usage.switchNow !== "function") return;
+                  void usage.switchNow(activeVendor).then(() => setAccountRevision((current) => current + 1));
+                },
                 loginBegin: () => {
                   void remoteValue<LoginView>(usage?.loginBegin(activeVendor)).then((status) => {
                     if (status !== undefined) setLogins((current) => ({ ...current, [activeVendor]: status }));
@@ -1001,6 +1021,7 @@ function modelCardContext(input: {
   | "models"
   | "visibleModels"
   | "modelVisibility"
+  | "modelInfo"
   | "modelDraft"
   | "modelMode"
   | "setModelDraft"
@@ -1013,7 +1034,10 @@ function modelCardContext(input: {
 > {
   const { entry, state, mode } = input;
   const spec = entry.models;
-  const settings = state.snapshots[entry.ns]?.value ?? {};
+  // **草稿覆盖基线**：`onSave` 模式下控件必须立刻反映用户刚点的值；只看基线会让勾选看起来
+  // 「点了没反应」，直到按保存。连续点两个模型也不能互相覆盖（第二次要以第一次的草稿为底）。
+  const baseline = state.snapshots[entry.ns]?.value ?? {};
+  const settings = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
   const visible = spec === undefined ? [] : normalizeModels(settings[spec.visible]);
   const rawVisibility = spec === undefined ? undefined : settings[spec.visibility];
   const modelVisibility =
@@ -1026,6 +1050,15 @@ function modelCardContext(input: {
   // - 显式隐藏了一个不在目录里的模型时，它也看得见（否则没有入口改回来）。
   const catalogIds = (input.catalog?.models ?? []).map((model) => model.id);
   const models = [...new Set([...catalogIds, ...visible, ...Object.keys(modelVisibility)])];
+  const modelInfo = Object.fromEntries(
+    (input.catalog?.models ?? []).map((model) => [
+      model.id,
+      {
+        ...(model.company === undefined ? {} : { company: model.company }),
+        ...(model.free === true ? { free: true } : {}),
+      },
+    ]),
+  );
   const catalogFailure = input.catalog === undefined || input.catalog.failures.length === 0
     ? undefined
     : input.catalog.failures.join("；");
@@ -1035,6 +1068,7 @@ function modelCardContext(input: {
     models,
     visibleModels: visible,
     modelVisibility,
+    modelInfo,
     modelDraft: input.draft,
     modelMode: mode,
     setModelDraft: input.setDraft,
@@ -1051,8 +1085,9 @@ function modelCardContext(input: {
         { key: spec.visibility, value: patch.modelVisibility },
       ];
       // 生效时机由能力声明决定：`onSave` 进草稿（底部保存条提交），`immediate` 立刻写。
+      // 两种模式都**先写草稿**：控件立即反映点击；immediate 的落盘成功后重读基线、清掉草稿。
+      input.draftInto(entry.ns, fields);
       if (modelEditTarget(mode) === "now") input.writeNow(entry.ns, fields);
-      else input.draftInto(entry.ns, fields);
       // 添加完成后清空输入框（草稿已经落到设置里）。
       if (edit.kind === "add") input.setDraft("");
     },

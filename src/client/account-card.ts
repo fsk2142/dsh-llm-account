@@ -53,6 +53,8 @@ export interface AccountCardProps {
   action?: AccountAction | undefined;
   /** 展开完整报告的账号。 */
   expandedRef?: string | undefined;
+  /** 平铺账户列表里跟在账号名后的供应商标签；单卡模式不传。 */
+  vendorLabel?: string | undefined;
   /** 网页登录的当前状态（没有登录入口的厂商为 `undefined`）。 */
   login?: LoginView | undefined;
   onOpenAction: (action: { kind: AccountAction["kind"]; ref?: string }) => void;
@@ -134,12 +136,28 @@ export function accountCardBody(props: AccountCardProps): ReactNode[] {
       : accounts.length === 0
         ? [createElement("p", { key: "empty", "data-accounts-empty": "true", className: CSS_CLASS.note }, t("account.empty"))]
         : []),
-    ...accounts.map((account, index) => accountRow(props, account, index)),
-    ...failureNotes(props),
+    ...accountRows(props),
     ...loginSection(props),
     addSection(props),
     props.cardFooter === undefined ? null : props.cardFooter,
   ];
+}
+
+/**
+ * 只渲染账号行与失败项（不含空态/添加/登录），供平铺账户列表使用。
+ * @param props - 见 {@link AccountCardProps}。
+ * @returns 元素数组；调用方自己决定空态与全局添加区。
+ */
+export function accountRows(props: AccountCardProps): ReactNode[] {
+  const accounts = (props.status?.accounts ?? []).filter(
+    (account): account is AccountUsageStatus => typeof account === "object" && account !== null,
+  );
+  return [...accounts.map((account, index) => accountRow(props, account, index)), ...failureNotes(props)];
+}
+
+/** 添加入口/表单（平铺列表复用）。 */
+export function accountAddSection(props: AccountCardProps): ReactNode {
+  return addSection(props);
 }
 
 /** 一行账号：身份行（名称 + 标记 + 动作）在上，额度表在下。 */
@@ -209,6 +227,9 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
             "span",
             { className: CSS_CLASS.nameRow },
             createElement("strong", { "data-account-label": account.ref }, account.label),
+            ...(props.vendorLabel === undefined
+              ? []
+              : [createElement("small", { key: "vendor", "data-account-vendor": props.vendorLabel, className: CSS_CLASS.vendorBadge }, props.vendorLabel)]),
             ...marks,
             ...(quotaOf?.plan === undefined
               ? []

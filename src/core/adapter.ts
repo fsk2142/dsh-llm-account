@@ -170,6 +170,10 @@ export interface CatalogModel {
   id: string;
   /** 用户可见名称；端点没给时缺省。 */
   name?: string;
+  /** 归属公司键（canonical id 的斜杠前一段；没有时由页面按 id 前缀兜底）。 */
+  company?: string;
+  /** 目录明确标成免费（例如 cost 为 0）。 */
+  free?: boolean;
 }
 
 /** `models()` 远程方法的结果：目录 + 读取失败项（失败不抛）。 */

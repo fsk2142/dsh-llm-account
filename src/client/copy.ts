@@ -37,6 +37,17 @@ export type CopyKey =
   | "field.switchAtTurnEnd.hint"
   | "options.switchOrder"
   | "options.switchBestQuota"
+  | "duration.days"
+  | "duration.hours"
+  | "duration.minutes"
+  | "switch.title"
+  | "switch.now"
+  | "switch.pending"
+  | "switch.nextIn"
+  | "switch.due"
+  | "switch.order"
+  | "switch.noInterval"
+  | "switch.unknown"
   | "field.showSidebarQuota"
   | "field.showSidebarQuota.hint"
   | "field.quotaRefreshMinutes"
@@ -64,6 +75,8 @@ export type CopyKey =
   | "account.empty"
   | "account.unavailable"
   | "account.add"
+  | "account.addFor"
+  | "account.loginFor"
   | "account.rename"
   | "account.replaceKey"
   | "account.pin"
@@ -101,6 +114,8 @@ export type CopyKey =
   | "models.loading"
   | "models.summary"
   | "models.retry"
+  | "models.freeGroup"
+  | "models.otherCompany"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -168,11 +183,22 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.switchStrategy": "切换方式",
     "field.switchStrategy.hint": "手动顺序只在上一个账号额度用尽时切；额度优先按间隔比较剩余额度。",
     "field.switchIntervalMinutes": "额度评估间隔（分钟）",
-    "field.switchIntervalMinutes.hint": "仅额度优先模式使用；0 表示只在当前账号耗尽时评估。",
+    "field.switchIntervalMinutes.hint": "仅额度优先模式使用。最大 30 天；分钟满 60 进小时、小时满 24 进天。全为 0 表示只在当前账号耗尽时评估。",
     "field.switchAtTurnEnd": "等任务结束后再切换",
     "field.switchAtTurnEnd.hint": "开启时回合内只记录决定，下一回合的首次请求才真正换号。",
     "options.switchOrder": "按手动顺序",
     "options.switchBestQuota": "按可用额度优先",
+    "duration.days": "天",
+    "duration.hours": "小时",
+    "duration.minutes": "分钟",
+    "switch.title": "切换倒计时",
+    "switch.now": "立即切换",
+    "switch.pending": "已决定切换到 {target}，等待本回合结束后生效。",
+    "switch.nextIn": "距离下次额度评估：{time}",
+    "switch.due": "即将评估",
+    "switch.order": "当前账号额度耗尽时自动切换。",
+    "switch.noInterval": "仅在当前账号额度耗尽时评估。",
+    "switch.unknown": "切换状态暂不可用。",
     "field.showSidebarQuota": "侧边栏额度卡片",
     "field.showSidebarQuota.hint": "开启后侧边栏底部显示额度卡片；关闭时不发起任何后台用量查询。",
     "field.quotaRefreshMinutes": "用量刷新间隔（分钟）",
@@ -200,6 +226,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.empty": "还没有添加任何账户。",
     "account.unavailable": "账号数据暂不可用。",
     "account.add": "添加账户",
+    "account.addFor": "添加 {vendor} 账户",
+    "account.loginFor": "{vendor} 网页登录",
     "account.rename": "重命名",
     "account.replaceKey": "更换密钥",
     "account.pin": "切换到此账户",
@@ -237,6 +265,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.loading": "正在读取模型目录…",
     "models.summary": "已显示 {n} / 共 {total} 个模型",
     "models.retry": "重试",
+    "models.freeGroup": "免费模型",
+    "models.otherCompany": "其他",
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "打开用量面板",
@@ -299,11 +329,22 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.switchStrategy": "Switching mode",
     "field.switchStrategy.hint": "Manual order switches only when the previous account is exhausted; quota-first compares remaining quota on an interval.",
     "field.switchIntervalMinutes": "Quota evaluation interval (minutes)",
-    "field.switchIntervalMinutes.hint": "Used by quota-first only; 0 evaluates only when the current account is exhausted.",
+    "field.switchIntervalMinutes.hint": "Quota-first only. Up to 30 days; 60 minutes carry into an hour and 24 hours into a day. All zero evaluates only when the current account is exhausted.",
     "field.switchAtTurnEnd": "Wait until the turn ends",
     "field.switchAtTurnEnd.hint": "When on, a decision is parked during the turn and applied on the first request of the next turn.",
     "options.switchOrder": "Manual order",
     "options.switchBestQuota": "Quota-first",
+    "duration.days": "days",
+    "duration.hours": "hours",
+    "duration.minutes": "minutes",
+    "switch.title": "Switch countdown",
+    "switch.now": "Switch now",
+    "switch.pending": "Switching to {target} after this turn ends.",
+    "switch.nextIn": "Next quota check in {time}",
+    "switch.due": "Due now",
+    "switch.order": "Switches automatically when the current account is exhausted.",
+    "switch.noInterval": "Only checked when the current account is exhausted.",
+    "switch.unknown": "Switch state is unavailable.",
     "field.showSidebarQuota": "Sidebar quota card",
     "field.showSidebarQuota.hint": "Shows a quota card at the bottom of the sidebar; while off, no background usage request is made.",
     "field.quotaRefreshMinutes": "Usage refresh interval (minutes)",
@@ -331,6 +372,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.empty": "No accounts yet.",
     "account.unavailable": "Account data is not available yet.",
     "account.add": "Add account",
+    "account.addFor": "Add {vendor} account",
+    "account.loginFor": "{vendor} web login",
     "account.rename": "Rename",
     "account.replaceKey": "Replace key",
     "account.pin": "Switch to this account",
@@ -368,6 +411,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.loading": "Loading the model catalog…",
     "models.summary": "{n} of {total} models shown",
     "models.retry": "Retry",
+    "models.freeGroup": "Free models",
+    "models.otherCompany": "Other",
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Open the usage panel",

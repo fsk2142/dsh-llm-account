@@ -11,12 +11,13 @@
  * (`./registry`) and every host seam (`./shell`). No UI yet: the page component
  * arrives in Task 4.
  */
-import { createElement, type ReactNode } from "react";
+import { createElement, Fragment, type ReactNode } from "react";
 
 import { COPY } from "./copy";
 import { ModelsCard } from "./models-card";
 import { createConnectedPage, registerSharedSurfaces, startSharedState, type ClientSeamContext, type VendorCardsContext } from "./seams";
 import { applyShell, PAGE_LOCALE_NS, VENDORS } from "./shell";
+import { SwitchCard } from "./switch-card";
 
 /**
  * Debug counter: how many times the host called `apply` (plan 1c reads it to
@@ -119,9 +120,15 @@ export function apply(ctx: unknown): void {
  * @returns 元素树。
  */
 function renderVendorCards(cards: VendorCardsContext): ReactNode {
+  const switchStatus = createElement(SwitchCard, {
+    t: cards.t,
+    state: cards.switchState,
+    now: cards.now,
+    onSwitchNow: cards.switchNow,
+  });
   // 模型卡片：规则在 `vendorCardKinds` 里（可单测）——厂商没声明模型可见性时整张不渲染。
-  if (!cards.cardKinds.includes("models")) return null;
-  return modelsCard(cards);
+  if (!cards.cardKinds.includes("models")) return switchStatus;
+  return createElement(Fragment, null, switchStatus, modelsCard(cards));
 }
 
 /** 模型卡片（T7）；该厂商没声明模型可见性时由调用方跳过。 */
@@ -131,6 +138,7 @@ function modelsCard(cards: VendorCardsContext): ReactNode {
     models: cards.models,
     visibility: cards.modelVisibility,
     visibleModels: cards.visibleModels,
+    modelInfo: cards.modelInfo,
     catalogFailure: cards.catalogFailure,
     catalogLoading: cards.catalogLoading,
     onRetryCatalog: cards.onRetryCatalog,
