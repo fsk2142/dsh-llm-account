@@ -8,7 +8,7 @@
 
 ## 0. 一句话
 
-给两家厂商增加**可配置的账号切换策略**（手动顺序 / 额度优先）、**只在任务轮次结束后应用切换**、两家都能**手动排序**；把两家账号**合并到设置页顶部的一张常驻账户卡片**（仍各管各的凭据与顺序）；把模型卡片从「只显示已配置的模型」改为「厂商目录 ∪ 已配置」的勾选式可见性；并把设置页间距整体收紧一档。所有新行为都有默认值，默认值与现状一致（零迁移、零行为突变）。
+给两家厂商增加**可配置的账号切换策略**（手动顺序 / 额度优先）、**只在任务轮次结束后应用切换**、两家都能**手动排序**；把两家账号**合并到设置页顶部的一张常驻账户卡片**（仍各管各的凭据与顺序）；把模型卡片从「只显示已配置的模型」改为「厂商目录 ∪ 已配置」的勾选式可见性；并给 OpenCode 增加**实验性的设备码网页登录**（手动 API key 保留）；最后把设置页间距整体收紧一档。所有新行为都有默认值，默认值与现状一致（零迁移、零行为突变）。
 
 ## 1. 现状与证据
 
@@ -50,6 +50,8 @@
 5. **标题/压缩请求不触发切换**：`purpose` 为 `session-title` / `compaction` 的调用不评估、不应用、不清 pending。
 6. **切换与排序都写设置文档**，不直接改运行时内存里的顺序；读写路径仍只有 `SettingsPort` / `AccountPort`。
 7. **不做后台轮询**：`order` 策略或 `interval = 0` 时不注册任何定时器；`best-quota` 的评估也只在「请求前」或「轮次边界后的第一次请求」按间隔触发。
+8. **OAuth 凭据只进凭据服务**：access/refresh token 不写设置文档、不进日志、不进错误文案；设置文档只存工作区名。
+9. **登录只由用户触发**：没有点击「网页登录」就不会发起设备码或创建账号。
 
 ## 4. 设置面
 
@@ -192,6 +194,12 @@ orderWithOverride(derived: string[], override: unknown): string[]
 - `UsageVendorDeps` 增加 `models?: () => Promise<CatalogModel[]>`；两家 `index.ts` 传入 adapter 的实现；没有实现的厂商该方法返回 `failures: ["models: not supported"]`。
 - 目录读取失败不抛：返回 `{ models: [], failures: [原因] }`；页面对「失败」和「目录为空」显示不同文案。
 
+### 7.3 登录状态
+
+- `LoginStatus`（core 与客户端 `usage-contract` 两处）新增 `userCode?`（设备码）、`expiresAt?`（设备码过期时刻）。
+- 现有 `loginBegin` / `loginStatus` / `loginCancel` 三个方法与描述符不变；OpenCode 的登录端口实现同一套接口。
+- 登录成功不返回 token（只返回 `success` 与账号名）；token 只在宿主侧写入凭据服务。
+
 ## 8. 页面
 
 ### 8.1 页面结构（账户合并、其余仍按厂商）
@@ -214,7 +222,7 @@ orderWithOverride(derived: string[], override: unknown): string[]
 - 菜单项：`切换到此账户`（对该厂商调用 `selectAccount`，立即生效并持久化）；`上移` / `下移`（两家都出现，按 `capabilities.reorder`）。
 - 行顺序 = 该厂商 `list()` 顺序（不再把当前账号提前）。
 - 切换成功后：重读该厂商 `status` 与设置快照（已有 `accountRevision` 机制）。
-- 网页登录入口只出现在 Command Code 组（能力声明决定）。
+- 网页登录入口由能力声明驱动：Command Code 的现有入口不变；OpenCode 新增设备码登录（实验性），等待态显示链接 + 设备码。
 
 ### 8.3 切换规则卡片（两家共用形状，各自一份）
 
@@ -254,7 +262,59 @@ orderWithOverride(derived: string[], override: unknown): string[]
 | `.dsl-dashboard` padding / gap | 20px 24px 40px / 14px | 16px 20px 32px / 12px |
 | `.dsl-dashboard section` padding / gap | 14px 16px / 10px | 12px 14px / 8px |
 
-## 9. 测试计划
+## 9. OpenCode 网页登录（实验性）
+
+### 9.1 实机探针证据（2026-10-17）
+
+- 设备码流程可用：`POST https://opencode.ai/console/auth/device/code`（client_id `opencode-cli`）→ 浏览器批准 → `POST /auth/device/token` 拿到 access/refresh，有效期约 30 天。
+- 该账号只有一个工作区（`Default`）；请求必须带 `x-opencode-org-id`。
+- 本插件网关 `GET https://opencode.ai/zen/go/v1/models`：带 `x-opencode-org-id` → 200（37 个模型）；不带 → 403 `Workspace selection is required`。
+- 本插件额度端点 `GET https://opencode.ai/zen/go/v1/usage`：403 `EntitlementError: OpenCode Go subscription required` —— 当前工作区**没有 Go 订阅**，这是权益失败，不是 token 被拒。
+- 聊天链路未验证：需要已订阅 Go 的账号才能测。
+
+**结论**：鉴权层可行（token + org 头被网关接受），因此提供实验性的「网页登录」；手动粘贴 API key 的路径**完整保留**。聊天链路在用 Go 订阅账号真机跑通之前，登录入口与文档都标注实验性。
+
+### 9.2 凭据格式与刷新
+
+- 登录成功后，凭据服务里存一个带前缀的 JSON：`ocoauth1:` + `{ v:1, type:"oauth", access, refresh, expires, org, orgName }`。
+- 设置文档**不存 token**；账号条目仍是 `{ id, name, apiKeyEnv }`，`name` 用工作区名。`org` 只在凭据 blob 里。
+- 读取凭据：前缀命中 → OAuth 材料；否则按 API key 处理（存量账号行为不变）。
+- 过期前 5 分钟用 `POST /console/auth/device/token`（`grant_type=refresh_token`）刷新，把新 blob 写回凭据服务。刷新失败按凭据失效处理（进入现有 `invalid-credential` 拒绝/提示路径）。
+- 刷新按 ref 做进程内单飞锁：并发请求共用一次刷新，写回一次；失败后下一次请求再试。
+
+### 9.3 请求头
+
+- OAuth 账号的目录、推理与额度请求都带：`Authorization: Bearer <access>`、`User-Agent: opencode/cli`、`x-opencode-org-id: <org>`。
+- API key 账号保持现状：只有 `Authorization: Bearer <key>` 与 attribution 头。
+- 推理链路：opencode 适配器的凭据解析从「返回字符串 key」升级为「返回 `{ apiKey, headers }`」，交给 pi-ai provider 的 auth 配置；额度端口写同一组头。
+- 目录请求：OAuth 账号加认证头；API key 账号保持现状（目录原本不带 Authorization）。
+- `x-opencode-session` 暂不引入（Go 文档的建议项；未验证的路由/缓存影响留给后续）。
+
+### 9.4 登录端口（复用现有远程方法）
+
+- 新模块 `src/vendors/opencode/login.ts` 实现现有 `LoginPort`（`begin`/`status`/`cancel`），**不新增远程方法**。
+- `begin`：`POST /console/auth/device/code`（client_id `opencode-cli`），保存 attempt（deviceCode、userCode、verificationUrl、interval、expiresAt、generation），返回 `waiting` + `authUrl` + `userCode` + `expiresAt`。
+- `status`：只有到达轮询间隔才真正请求 `POST /auth/device/token`；`authorization_pending` → 继续 waiting；`slow_down` → interval += 5s；拿到 token → 读 `/console/api/orgs`，取**第一个**工作区，调用账号端口 `add({ label: 工作区名, key: oauthBlob })` → `success`（附 label）；`access_denied` / `expired_token` / 网络 → `failed` + 稳定 reason 键。
+- `cancel`：清空 attempt；迟到的响应按 generation 丢弃（与 Command Code 登录同一条纪律）。
+- 10 分钟超时；同一时间只有一个 attempt，新的 `begin` 取代旧的。
+- 账号创建失败（账号数上限、设置冲突）→ `failed` + 可读原因；因为 `add` 先写账号条目再写凭据，不会出现「凭据写了账号没落地」。
+- 多工作区：本期取第一个并在成功状态里显示工作区名；工作区选择器留到后续。
+
+### 9.5 客户端
+
+- `LoginStatus`（core 与客户端契约同步）新增 `userCode?`、`expiresAt?`；客户端账户卡片的 `LoginView` 同步加 `userCode?`，等待态才能显示设备码。
+- 等待态：显示「在浏览器打开链接并输入代码：XXXX」；链接沿用 `authUrl`；现有 1s 轮询继续（登录端口自己按 device interval 限流）。
+- 成功：刷新账号列表与状态；失败：按原因显示可读文案（新增 `account.reason.login-expired`、`account.reason.login-denied`、`account.reason.login-network`）。
+- 能力：OpenCode 的 `browserLogin` 改为 `true`；登录入口由能力驱动，出现在合并账户卡的 OpenCode 组。
+- 账户行不区分 OAuth / API key（凭据内容不对外）；「更换密钥」仍可用，会用 API key 覆盖该账号的 OAuth 凭据。
+- 同一工作区重复登录会创建一个同名新账号（ref 自动加 `_2`），实验期接受；文档提示可删除旧的，不做静默覆盖（避免冲掉手动 key）。
+
+### 9.6 额度与目录的错误语义
+
+- `/usage` 的 403 `EntitlementError` 映射为可读失败「需要 OpenCode Go 订阅」，而不是通用「读取失败」。
+- 目录 401/403（OAuth 头缺失或 token 失效）同样给出可读失败，不把「读不到」显示成「没有模型」。
+
+## 10. 测试计划
 
 - `tests/core/switching.test.ts`（新）：`remainingScore` 的单位/未知/除零/`exceeded`；排名与迟滞；`nextInOrder` 绕回；未知不触发换出。
 - `tests/vendors/switching.test.ts`（新）：控制器状态机（假时钟、假事件、假额度）：轮次边界前不应用、边界后应用、pending 失效重算、写入冲突保留 pending、purpose 跳过、并发串行。
@@ -265,10 +325,13 @@ orderWithOverride(derived: string[], override: unknown): string[]
 - `tests/client/accounts-panel.test.ts`（新）：两家账号在一张卡里按厂商分组；两家的「当前使用」互不影响；组内添加表单落在正确的厂商组；操作携带 vendor；同 ref 的展开状态不串台；一个厂商读不到状态时只影响该组。
 - `tests/client/account-card.test.ts`：「当前使用」、菜单文案、两家排序项；`AccountRows` 与 `AccountCard` 的拆分不改变既有结构断言。
 - `tests/client/seams.test.ts`：账户操作按 `action.vendor` 派发；登录、排序、添加、移除都走到对应厂商。
+- `tests/vendors/opencode-login.test.ts`（新）：设备流程状态机（fake fetch）——waiting / slow_down / success / access_denied / expired / cancel / 迟到响应丢弃；工作区读取；账号创建失败；10 分钟超时。
+- `tests/vendors/opencode-auth.test.ts`（新）：`ocoauth1:` blob 解析、过期前刷新、刷新单飞、刷新失败转凭据失效；OAuth 头注入（推理/额度/目录）；API key 账号头不变；token 不出现在设置/日志/错误文案。
+- `tests/client/account-card.test.ts` 增补：等待态显示 userCode + 链接；成功刷新账号；失败原因文案。
 - `tests/client/style-contract.test.ts` / `css.test.ts`：新类名/按钮类、无硬编码颜色、间距契约（可选：钉住关键 padding）。
 - 现有 518 条测试全部更新并保持绿色；`pnpm typecheck` / `pnpm build`。
 
-## 10. 风险与未验证接缝
+## 11. 风险与未验证接缝
 
 | 风险 | 处理 |
 | --- | --- |
@@ -279,8 +342,12 @@ orderWithOverride(derived: string[], override: unknown): string[]
 | `accountOrder` 改变了 OpenCode 的排序副作用（不再顺带改当前账号） | 文档与测试明确：排序只改顺序，切换只走「切换到此账户」/策略。 |
 | 新 typert 方法 `models` 的 arity/描述符不一致会在边界被拒 | 与现有方法同款：`parameters`/`result` 描述符 + 边界测试。 |
 | 取消/中止时控制器仍在应用切换 | `apply` 不依赖请求 AbortSignal；只写设置，不阻塞请求失败路径。 |
+| OpenCode OAuth 的聊天链路尚未用 Go 订阅账号验证（探针只证明了鉴权层） | 登录标注实验性；手动 API key 完整保留；失败时按凭据失效提示重新登录；后续用已订阅账号做一次真机聊天验证。 |
+| OAuth token 刷新与请求并发（多个请求同时发现过期） | 按 ref 的进程内单飞锁；写回一次；失败只影响该账号的请求，不波及其它账号。 |
+| 设备码被用户取消/过期 | 登录端口返回 `failed` + 稳定 reason；页面显示原因与「重试」；不残留 attempt。 |
+| 把 refresh token 写进设置文档或日志 | 凭据只进凭据服务；设置文档只存工作区名；日志与错误文案只出现账号名，不出现 token。 |
 
-## 11. 兼容与迁移
+## 12. 兼容与迁移
 
 - 新字段全部有默认值，存量文档不加字段也能启动；`accountOrder` 缺省时顺序与现在一致。
 - 不迁移、不改写现有 `visibleModels` / `modelVisibility` / `autoSwitch` / 账号数组。
@@ -288,16 +355,19 @@ orderWithOverride(derived: string[], override: unknown): string[]
 - 「固定」相关文案删除；`VendorUsageStatus.pinned` 字段暂时保留（兼容），页面不再显示它。
 - 账户合并是**页面结构变化**，不影响两套账号文档/凭据/远程方法；账户操作状态多带一个 `vendor` 字段（内部状态，不持久化）。
 - 标签页仍按厂商存在；账户卡片移出标签页后，任何标签页下都能看到与操作两家账号。
+- OpenCode 的 OAuth 凭据以 `ocoauth1:` 前缀存进凭据服务；没有该前缀的值一律按 API key 读，存量账号零迁移。
+- OpenCode 的 `browserLogin` 由 `false` 改为 `true`，只是多一个登录入口；不登录的用户完全不受影响。
 
-## 12. 非目标
+## 13. 非目标
 
 - 不做跨厂商负载均衡、不做按模型绑定账号的 UI（`modelAccountRules` 仍是配置级能力）。
 - 不做后台定时轮询（`order` 或间隔 0 时零定时器；`best-quota` 只在评估点读）。
-- 不自动创建/登录账号，不自动改凭据。
+- 不在用户未点击登录时自动创建/登录账号；登录只由账户组里的按钮触发。
+- OpenCode 登录不提供多工作区选择器与「登出」按钮（删除账号会走现有凭据清理）；多工作区取第一个。
 - 不重做仪表盘视觉，只补「当前使用/balance」文案与必要标记。
 - 不改变「已输出/已消耗 token 不换号」的请求内回退规则。
 
-## 13. 验收标准
+## 14. 验收标准
 
 1. 不配置新字段时，行为与现在一致（既有测试不因默认值改变语义）。
 2. 手动顺序：当前账号额度用尽后，轮次结束后的下一次请求切到下一个可用账号；界面「当前使用」跟随。
@@ -306,5 +376,6 @@ orderWithOverride(derived: string[], override: unknown): string[]
 5. 两家都能手动排序并持久化；没有 `accountOrder` 的存量配置顺序不变；删除账号后顺序自动清理。
 6. 模型卡片显示厂商目录；取消勾选后宿主模型选择器不再出现该模型，重新勾选恢复；目录读取失败有可读原因与重试；手工添加仍可用。
 7. 设置页顶部一张常驻账户卡片同时显示两家账号：分组、各自的「当前使用」、各自的排序与操作都正确；切换标签页不影响账户卡片；一个厂商读不到状态只影响它那一组。
-8. 设置页间距明显收紧，不出现竖排标签或挤压；暗色主题不坏。
-9. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿。
+8. OpenCode 网页登录（实验性）：点击后显示设备码 + 链接，浏览器批准后自动创建账号；取消/过期有可读原因；手动粘贴 API key 仍可用；token 不进入设置文档/日志。聊天链路在已订阅 Go 的账号上做一次真机验证（未通过前保持实验性标注）。
+9. 设置页间距明显收紧，不出现竖排标签或挤压；暗色主题不坏。
+10. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿。
