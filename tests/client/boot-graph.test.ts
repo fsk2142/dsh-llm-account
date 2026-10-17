@@ -11,13 +11,19 @@
  * - A `dsh.client` package must be the source of **exactly one** row: two
  *   visible rows throw `ClientPackageCompositionError` and take the whole
  *   client boot down.
+ * - An inserted **path-form** row name is not resolved against the profile:
+ *   the host rewrites it to an absolute `file:` URL anchored **beside this
+ *   patch file** (`anchorInsertedPluginNames`). A path that does not exist
+ *   after that anchoring throws `ERR_MODULE_NOT_FOUND` on import, so the
+ *   entry ends up with no fiber and the scan skips it silently.
  *
  * So the patch must keep the `llm-commandcode` row a subpath (invisible to the
  * scan but still mounted, and still the target of the user profile patch's
  * by-id override) and give the `opencode-go` row the single scan-visible,
- * path-form name whose `nearestPackage` walk lands on this package root.
+ * package-relative path whose `nearestPackage` walk lands on this package root.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -51,6 +57,15 @@ function scanVisible(name: string): boolean {
   return pathLike || packageRootSpecifier(name) !== undefined;
 }
 
+/**
+ * Mirrors the host's `anchorInsertedPluginNames`: an inserted path-ish name
+ * becomes an absolute path beside the patch file. Non-path names are left as-is.
+ */
+function anchoredRowTarget(name: string): string | undefined {
+  if (!isAbsolute(name) && !name.startsWith("./") && !name.startsWith("../")) return undefined;
+  return resolve(dirname(PATCH), name);
+}
+
 type Row = { id: string; name: string };
 
 /** Reads the insert section's rows: `- id:` directly followed by `name: "…"`. */
@@ -78,7 +93,20 @@ describe("cordis.patch.yml boot-graph contract", () => {
   it("keeps the opencode row the single scan-visible name, as a path into this package", () => {
     const visible = rows.filter((row) => scanVisible(row.name));
     expect(visible.map((row) => row.id)).toEqual(["opencode-go"]);
-    expect(visible[0]?.name).toBe("./node_modules/dsh-llm-account/lib/opencode.js");
+    expect(visible[0]?.name).toBe("./lib/opencode.js");
+  });
+
+  it("anchors every inserted path name to a file that exists beside the patch", () => {
+    // The host anchors path rows beside THIS file, not beside the profile: a name
+    // that only resolves from the profile directory imports as ERR_MODULE_NOT_FOUND,
+    // leaves the entry fiber-less, and the client scan drops it without a word.
+    const anchored = rows
+      .map((row) => ({ id: row.id, target: anchoredRowTarget(row.name) }))
+      .filter((row): row is { id: string; target: string } => row.target !== undefined);
+    expect(anchored.length).toBeGreaterThan(0);
+    for (const row of anchored) {
+      expect(existsSync(row.target), `${row.id} anchors to a missing file: ${row.target}`).toBe(true);
+    }
   });
 
   it("ships the ./client export and the manifest icon", () => {

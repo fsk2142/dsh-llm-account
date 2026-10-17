@@ -43,18 +43,52 @@ if (sources.length > 1) {
 
 路径名的可见分支：`pathLike` 为真时用 `internal.resolveSync(baseUrl, { specifier })` 解析，再 `nearestPackage(moduleUrl)` **向上**找第一个带字符串 `name` 的 `package.json`——指向包内任一文件（如 `lib/opencode.js`）即命中本包根（声明 `dsh.client` 的那个 manifest）。
 
+### F3 插入行的路径名以 **patch 文件所在目录** 为基准（这条把修复又推翻了一次）
+
+`dsh-app-boot` 的 `parsePatchList` 末尾会跑 `anchorInsertedPluginNames(patches, file)`：
+
+```js
+const base = dirname(resolve(file));            // = 本包根（patch 文件所在目录）
+if (isAbsolute(entry.name) || entry.name.startsWith("./") || entry.name.startsWith("../"))
+  entry.name = pathToFileURL(resolve(base, entry.name)).href;
+```
+
+即：**插入行里的相对路径不是相对 profile，而是相对这个 bundle 自己的 patch 文件**。因此第一次修复用的 `./node_modules/dsh-llm-account/lib/opencode.js` 被改写成
+`file:///D:/work/repo/node_modules/dsh-llm-account/lib/opencode.js`——不存在；加载器导入抛 `ERR_MODULE_NOT_FOUND`，`Entry._init` 只 `logger.error` 后 `return`，**`entry.fiber` 从未赋值**；`processOne` 的 `entry.fiber === void 0` 过滤把它静默跳过，于是启动图里依旧没有本包，客户端零报错。
+
+本机复现（`node --expose-internals` 直接调宿主的 `internal.import` / `internal.resolveSync`）：
+
+```
+anchored to : file:///D:/work/repo/node_modules/dsh-llm-account/lib/opencode.js
+IMPORT      : FAILED -> ERR_MODULE_NOT_FOUND
+--- 改成 ./lib/opencode.js ---
+anchored to : file:///D:/work/repo/lib/opencode.js   (exists)
+IMPORT      : OK -> Config,PROVIDER_ID,apply,inject,name
+package     : dsh-llm-account | dsh.client: {"platform":"web",...}
+client.js   : D:\work\llm-acct-repo\lib\client.js exists: true
+```
+
+顺带排除的两条：`preflight`/`prepareProfileEntries` 的兼容性判定（只校验 `engines.dsh` 或 `@deepseek-ai/dsh-*` 主机 peer，本包已含 `0.2.1-rc.1`，不会被 `disabled: true`）；profile 的 `cordis.yml` 根条目列表是 `[]`，两行确实由 patch 插入。
+
+### 三条约束合起来
+
+| 行 | `name` | 为什么必须是这个形态 |
+| --- | --- | --- |
+| `llm-commandcode` | `dsh-llm-account/commandcode`（子路径） | 加载器挂载用；对扫描不可见（F1），因此不与下一行争 source；用户 patch 按 id 覆盖它 |
+| `opencode-go` | `./lib/opencode.js`（包内相对路径） | 扫描可见（F1）+ 以 patch 文件为基准后真实存在（F3）+ `nearestPackage` 命中本包根；一个包只能一个 source（F2） |
+
 ## 2. 落下的设计（`cordis.patch.yml`）
 
 - 行 id 保持 `llm-commandcode` / `opencode-go`（用户 profile patch 的按 id 覆盖、设置命名空间、provider id 全部不变）。
 - `llm-commandcode` 行保持子路径名：加载器照常挂载；对扫描不可见，**不参与 source 竞争**。
-- `opencode-go` 行改为路径名 `./node_modules/dsh-llm-account/lib/opencode.js`：扫描可见、`nearestPackage` 命中本包，成为唯一 source；它挂载的模块与 `./opencode` 子路径导出是**同一个产物文件**，opencode provider 行为不变。
+- `opencode-go` 行改为**包内相对路径** `./lib/opencode.js`：扫描可见、`nearestPackage` 命中本包，成为唯一 source；它挂载的模块与 `./opencode` 子路径导出是**同一个产物文件**，opencode provider 行为不变。
 - 设计文档 §5.1 的两行写法以本包 `cordis.patch.yml` 为准（`opencode-go` 一行被此约束取代）。
 
-加载器一侧：相对名是加载器文档里的一等用法（`name: ./plugins/app`，见 `@deepseek-ai/cordis-plugin-loader` README）；且本机所有其他插件都用裸名正常解析，说明 tree 的 `baseUrl` 是目录基准，`./node_modules/...` 必然落在 profile 根下。
+加载器一侧：相对名确实是加载器的一等用法（`name: ./plugins/app`，见 `@deepseek-ai/cordis-plugin-loader` README），但**基准由 patch 解析阶段改写**（F3），所以语义是「相对本包根」。别用裸包名去凑可见性：裸名/子路径虽能挂载，却都过不了扫描（F1）。
 
 ## 3. 锁定
 
-`tests/client/boot-graph.test.ts` 镜像 `exactPackageSpecifier` / `pathLike` 判定，断言：两行 id 不变、**恰好一行**扫描可见、可见行是 `opencode-go` 且名字为上述路径、`commandcode` 行保持子路径，外加 `./client` 导出与 manifest `icon` 存在。
+`tests/client/boot-graph.test.ts` 镜像 `exactPackageSpecifier` / `pathLike` 判定与 `anchorInsertedPluginNames`，断言：两行 id 不变、**恰好一行**扫描可见、可见行是 `opencode-go` 且名字为 `./lib/opencode.js`、`commandcode` 行保持子路径、**每个路径行以 patch 所在目录为基准改写后必须真实存在**（这条正是杀死第一次修复的原因），外加 `./client` 导出与 manifest `icon` 存在。
 
 ## 4. 复验方式（对 1c 清单的补充）
 

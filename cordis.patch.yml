@@ -10,10 +10,14 @@
 # - **子路径说明符**（`dsh-llm-account/commandcode`）：宿主加载器能挂载（走 Node 的
 #   `exports`），但扫描的 `exactPackageSpecifier` 对子路径返回 undefined，这一行**不产生
 #   客户端 source**——不报错，`./client` bundle 也永远不进浏览器启动图。
-# - **路径说明符**（`./node_modules/...`，相对 profile 根）：扫描按 `pathLike` 分支解析后
-#   向上找最近的 `package.json`，命中本包（声明了 `dsh.client`），成为**唯一客户端
-#   source**。入口与 `./opencode` 导出指向同一产物（`lib/opencode.js`），只是换成扫描
-#   认得的写法。
+# - **路径说明符**（`./lib/opencode.js`）：扫描按 `pathLike` 分支解析后向上找最近的
+#   `package.json`，命中本包（声明了 `dsh.client`），成为**唯一客户端 source**。入口与
+#   `./opencode` 子路径导出指向同一产物（`lib/opencode.js`），只是换成扫描认得的写法。
+#   **基准目录不是 profile**：宿主解析 patch 时会把插入行里的相对/绝对路径改写成
+#   「以本 patch 文件所在目录（本包根）为基准」的绝对 `file:` URL
+#   （`anchorInsertedPluginNames`）。所以这里必须写**包内相对路径**；写成 profile 相对
+#   路径（`./node_modules/dsh-llm-account/...`）会被改写成不存在的路径，导入抛
+#   `ERR_MODULE_NOT_FOUND` → 该行没有 fiber → 扫描静默跳过（不报错、不进启动图）。
 #
 # 一个声明 `dsh.client` 的包**只能有一个** source：两行同时可见会让组合阶段抛
 # `ClientPackageCompositionError`（整个客户端启动失败）。因此这里**恰好一行用路径名**。
@@ -23,4 +27,4 @@
     - id: llm-commandcode
       name: "dsh-llm-account/commandcode"
     - id: opencode-go
-      name: "./node_modules/dsh-llm-account/lib/opencode.js"
+      name: "./lib/opencode.js"

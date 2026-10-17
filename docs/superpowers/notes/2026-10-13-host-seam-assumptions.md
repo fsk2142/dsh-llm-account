@@ -32,7 +32,7 @@
 - **验证方式**：Task 14 Step 2 —— `pnpm build && node -e "import('dsh-llm-account/commandcode').then(m => console.log(Object.keys(m)))"`，期望打印出 `apply`、`Config`、`inject`、`PROVIDER_ID` 且无 `ERR_MODULE_NOT_FOUND`。
   注意：这一步只证明 **Node 能解析**该导出，不等于**宿主加载器**能解析；宿主加载器一侧列在 §4 清单第 2 项，由计划 1c 实测。
 - **假设错误的后果**：两行的 `name` 要退回**包根 + 参数化的单入口**（`dsh.bundle.patch` 两行同指包根，入口靠参数区分厂商）。改动集中在装配层，不影响 `src/core/` 与两个适配器。
-- **结论（2026-10-17 实测，回填）**：宿主加载器**能**解析子路径（两行都能挂载），但客户端 `client-modules` 的启动图扫描**对子路径返回 `undefined`**——子路径行不产生客户端 source，`./client` bundle 不进启动图，浏览器端**零 UI、零报错**。另：同一个声明 `dsh.client` 的包**只能有一个** source，两行同时可见会失败整个客户端启动。最终只保留 `llm-commandcode` 一行用子路径，`opencode-go` 行改用扫描可见的路径名；完整证据与设计见 `2026-10-17-client-boot-graph.md`。
+- **结论（2026-10-17 实测，回填）**：宿主加载器**能**解析子路径（两行都能挂载），但客户端 `client-modules` 的启动图扫描**对子路径返回 `undefined`**——子路径行不产生客户端 source，`./client` bundle 不进启动图，浏览器端**零 UI、零报错**。另：同一个声明 `dsh.client` 的包**只能有一个** source，两行同时可见会失败整个客户端启动；且插入行的相对路径以**本 patch 文件所在目录**为基准（不是 profile）。最终只保留 `llm-commandcode` 一行用子路径，`opencode-go` 行改用 `./lib/opencode.js`；完整证据与设计见 `2026-10-17-client-boot-graph.md`。
 
 ### 假设 ② 同一个包插入两行时，客户端 `apply` 被调用两次（每行一次）
 
