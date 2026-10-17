@@ -116,6 +116,8 @@ export type CopyKey =
   | "models.retry"
   | "models.freeGroup"
   | "models.otherCompany"
+  | "models.allTitle"
+  | "models.allHint"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -267,6 +269,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.retry": "重试",
     "models.freeGroup": "免费模型",
     "models.otherCompany": "其他",
+    "models.allTitle": "全部模型",
+    "models.allHint": "两家厂商的模型放在一起；勾选立即写入所属厂商。",
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "打开用量面板",
@@ -413,6 +417,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.retry": "Retry",
     "models.freeGroup": "Free models",
     "models.otherCompany": "Other",
+    "models.allTitle": "All models",
+    "models.allHint": "Models from both providers; a toggle writes through to its provider immediately.",
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Open the usage panel",

@@ -33,6 +33,8 @@ export interface PageShellProps {
    * 跨厂商面板，页面外壳只负责把它放在标题与标签页之间（设计 §7.2）。
    */
   accounts?: ReactNode;
+  /** 常驻的全局模型卡片（标签页之上）。 */
+  models?: ReactNode;
   /**
    * 该厂商的专属卡片（模型卡片……）。
    *
@@ -85,6 +87,7 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
     props.accounts === undefined ? null : props.accounts,
+    props.models === undefined ? null : props.models,
     tabRow(props),
     active === undefined
       ? createElement(

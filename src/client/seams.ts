@@ -23,6 +23,7 @@ import { AccountsPanel } from "./accounts-panel";
 import { dictionaryOf } from "./copy";
 import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
+import { AllModelsCard } from "./all-models-card";
 import { SidebarCard } from "./sidebar-card";
 import {
   applyModelEdit,
@@ -722,6 +723,10 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [modelCatalogRevision, setModelCatalogRevision] = useState(0);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
+    /** 全局模型卡的搜索/添加草稿。 */
+    const [allModelFilter, setAllModelFilter] = useState("");
+    const [allModelDraft, setAllModelDraft] = useState("");
+    const [allModelVendor, setAllModelVendor] = useState(() => entries[0]?.providerId ?? "");
     /** 每秒推进的时钟：切换倒计时用；卡片保持纯 props。 */
     const [clock, setClock] = useState(() => Date.now());
     useEffect(() => {
@@ -812,22 +817,33 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
     const activeVendor = activeEntry?.providerId;
 
-    // 读当前厂商的**未过滤**模型目录：只在标签页需要时读一次，失败可重试；不参与后台轮询。
+    const availableEntries = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
+    const modelVendorKey = availableEntries.map((entry) => entry.providerId).join(",");
+
+    // 读**所有**可用厂商的未过滤模型目录：全局模型卡要把两家放在一起；只读当前标签页会让
+    // 另一家的模型在切换标签页前一直缺一块。
     useEffect(() => {
-      if (usage === undefined || activeVendor === undefined) return;
+      if (usage === undefined) return;
+      const targets = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
+      if (targets.length === 0) return;
       let alive = true;
-      setModelCatalogLoading((current) => ({ ...current, [activeVendor]: true }));
-      void readModels(usage, activeVendor).then((result) => {
-        if (!alive) return;
-        setModelCatalogs((current) => ({ ...current, [activeVendor]: result }));
-        setModelCatalogLoading((current) => ({ ...current, [activeVendor]: false }));
+      setModelCatalogLoading((current) => {
+        const next = { ...current };
+        for (const entry of targets) next[entry.providerId] = true;
+        return next;
       });
+      for (const entry of targets) {
+        void readModels(usage, entry.providerId).then((result) => {
+          if (!alive) return;
+          setModelCatalogs((current) => ({ ...current, [entry.providerId]: result }));
+          setModelCatalogLoading((current) => ({ ...current, [entry.providerId]: false }));
+        });
+      }
       return () => {
         alive = false;
       };
-    }, [usage, activeVendor, modelCatalogRevision]);
+    }, [usage, modelVendorKey, modelCatalogRevision]);
 
-    const availableEntries = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
     // 合并账户面板：两家放在同一张卡片里，动作按厂商路由（设计 §7.2）。
     const accountsPanel = createElement(AccountsPanel, {
       t,
@@ -870,11 +886,81 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
 
+    /** 全局模型卡的一次写：先落草稿让勾选立刻变化，再立刻写回所属厂商。 */
+    const writeGlobalModel = (vendor: string, edit: ModelEdit): void => {
+      const entry = entries.find((candidate) => candidate.providerId === vendor);
+      const spec = entry?.models;
+      if (entry === undefined || spec === undefined) return;
+      const baseline = state.snapshots[entry.ns]?.value ?? {};
+      const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
+      const patch = applyModelEdit(
+        { visible: effective[spec.visible], visibility: effective[spec.visibility] },
+        edit,
+      );
+      const fields = [
+        { key: spec.visible, value: patch.visibleModels },
+        { key: spec.visibility, value: patch.modelVisibility },
+      ];
+      setState((current) => {
+        const withVisible = setField(current, entry.ns, spec.visible, patch.visibleModels);
+        return setField(withVisible, entry.ns, spec.visibility, patch.modelVisibility);
+      });
+      const snapshot = state.snapshots[entry.ns];
+      void saveSettings(ctx, snapshot?.row ?? entry.ns, fields, snapshot?.revision ?? 0).then((error) => {
+        setState((current) => noteSaveResult(current, entry.ns, error));
+        void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
+      });
+      if (edit.kind === "add") setAllModelDraft("");
+    };
+
+    const modelVendors = availableEntries
+      .filter((entry) => entry.models !== undefined)
+      .map((entry) => {
+        const baseline = state.snapshots[entry.ns]?.value ?? {};
+        const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
+        const spec = entry.models!;
+        const rawVisibility = effective[spec.visibility];
+        return {
+          vendor: entry.providerId,
+          label: t(entry.labelKey),
+          catalog: modelCatalogs[entry.providerId]?.models ?? [],
+          visibleModels: normalizeModels(effective[spec.visible]),
+          visibility:
+            typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
+              ? { ...(rawVisibility as Record<string, boolean>) }
+              : {},
+          ...(modelCatalogLoading[entry.providerId] === true ? { loading: true } : {}),
+          ...(modelCatalogs[entry.providerId] === undefined || modelCatalogs[entry.providerId]!.failures.length === 0
+            ? {}
+            : { failure: modelCatalogs[entry.providerId]!.failures.join("；") }),
+        };
+      });
+    const models =
+      modelVendors.length === 0
+        ? undefined
+        : createElement(AllModelsCard, {
+            t,
+            vendors: modelVendors,
+            filter: allModelFilter,
+            onFilterChange: setAllModelFilter,
+            onToggle: (vendor: string, model: string, visible: boolean) =>
+              writeGlobalModel(vendor, { kind: "toggle", model, visible }),
+            onRemove: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "remove", model }),
+            onAdd: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "add", model }),
+            draft: allModelDraft,
+            onDraftChange: setAllModelDraft,
+            draftVendor: availableEntries.some((entry) => entry.providerId === allModelVendor)
+              ? allModelVendor
+              : availableEntries[0]?.providerId ?? "",
+            onDraftVendorChange: setAllModelVendor,
+          });
+
     return PageShell({
       state,
       entries,
       t,
       accounts,
+      models,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
       onSave: (ns) => {
