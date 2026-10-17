@@ -540,8 +540,18 @@ function cliUsage(raw: unknown): TokenUsage | undefined {
   return usage;
 }
 
-/** 线上的结束原因 → 宿主结束原因（两套词汇表共用）。 */
-function mapFinishReason(raw: string | undefined): FinishReason {
+/**
+ * 线上的结束原因 → 宿主结束原因（两套词汇表共用）。
+ *
+ * `length` / `max_tokens` 的特殊处理（与 opencode 的 `toHostFinishReason` 对齐）：打到输出上限
+ * **却一个字都没产出**时，不能伪装成正常的 `max-tokens` 收尾 —— 空响应会让这一轮什么都不说地
+ * 结束，且多半是提示词/上下文把回答空间挤没了，重试续写无济于事。此时报 `INVALID_REQUEST`
+ * （带可执行建议），宿主不重试、不换账号。
+ * @param raw - 线上原始结束原因（大小写敏感，按厂商原样传）。
+ * @param producedContent - 本流是否真的产出过内容（文本/推理/工具调用）；`finish` 调用前由
+ *   装配器据累计状态判定，调用方无需自己算。
+ */
+function mapFinishReason(raw: string | undefined, producedContent: boolean): FinishReason {
   switch (raw) {
     case "tool_calls":
     case "function_call":
@@ -549,6 +559,16 @@ function mapFinishReason(raw: string | undefined): FinishReason {
       return { kind: "tool-calls" };
     case "length":
     case "max_tokens":
+      if (!producedContent) {
+        return {
+          kind: "error",
+          failure: {
+            message:
+              'the model produced no content at its output cap (finish_reason "length"). The prompt may leave too little room for an answer. Compact the context or raise this model\'s max output, then retry',
+            code: "INVALID_REQUEST",
+          },
+        };
+      }
       return { kind: "max-tokens" };
     default:
       return { kind: "stop" };
@@ -625,6 +645,11 @@ class StreamAssembler {
   #messagesFinishReason: string | undefined;
   /** 是否已经交出过终止 finish：EOF 兜底不得再补第二条。 */
   #finished = false;
+  /**
+   * 本流是否真的产出过内容（文本/推理/工具调用）。`length`/`max_tokens` 结束原因且本值为
+   * `false` 时，表示打到输出上限却一个字都没产出 —— 此时不能伪装成正常的 `max-tokens` 收尾。
+   */
+  #producedContent = false;
 
   #openText(): StreamChunk[] {
     if (this.#textIndex >= 0) return [];
@@ -671,6 +696,7 @@ class StreamAssembler {
     if (text === "") return [];
     const chunks = [...this.closeReasoning(), ...this.#openText()];
     this.#text += text;
+    this.#producedContent = true;
     chunks.push({ type: "text-delta", index: this.#textIndex, text });
     return chunks;
   }
@@ -680,12 +706,14 @@ class StreamAssembler {
     if (text === "") return [];
     const chunks = [...this.closeText(), ...this.#openReasoning()];
     this.#reasoning += text;
+    this.#producedContent = true;
     chunks.push({ type: "reasoning-delta", index: this.#reasoningIndex, text });
     return chunks;
   }
 
   /** 合并一个 Chat Completions 工具调用片段。 */
   addOpenAiToolCall(fragment: { index: number; id?: string; name?: string; arguments?: string }): void {
+    this.#producedContent = true;
     let existing = this.#openAiTools.find((call) => call.index === fragment.index);
     if (existing === undefined) {
       existing = { index: fragment.index, id: fragment.id ?? "", name: fragment.name ?? "", arguments: "" };
@@ -706,6 +734,14 @@ class StreamAssembler {
    */
   get hasBufferedToolCall(): boolean {
     return this.#openAiTools.length > 0;
+  }
+
+  /**
+   * 本流是否真的产出过内容（文本/推理/工具调用）。供结束原因映射判定「打到输出上限却一个字
+   * 都没产出」的失败模式（`finish` 调用前读取，反映的是截至此刻的累计状态）。
+   */
+  get producedOutput(): boolean {
+    return this.#producedContent;
   }
 
   /** 交出所有缓冲的 Chat Completions 工具调用（在 finish 之前调用）。 */
@@ -731,6 +767,7 @@ class StreamAssembler {
    * @returns 该块的三个 chunk。
    */
   openToolCall(id: ReturnType<typeof ToolCallId>, name: string, args: string): StreamChunk[] {
+    this.#producedContent = true;
     const index = this.#nextIndex;
     this.#nextIndex += 1;
     return [
@@ -774,6 +811,7 @@ class StreamAssembler {
     const partial = stringValue(delta.partial_json) ?? "";
     if (partial === "") return [];
     block.arguments += partial;
+    this.#producedContent = true;
     return [{ type: "tool-call-delta", index: block.index, id: block.id, argumentsDelta: partial }];
   }
 
@@ -871,7 +909,7 @@ class StreamAssembler {
   messagesStop(): StreamChunk[] {
     if (this.#finished) return [];
     this.#finished = true;
-    return [...this.#emitMessagesUsage(), { type: "finish", reason: mapFinishReason(this.#messagesFinishReason) }];
+    return [...this.#emitMessagesUsage(), { type: "finish", reason: mapFinishReason(this.#messagesFinishReason, this.producedOutput) }];
   }
 
   /**
@@ -905,7 +943,11 @@ class StreamAssembler {
         EMPTY_RESPONSE_CODE,
       );
     }
-    return [...this.#emitMessagesUsage(), ...this.finish(mapFinishReason(this.#messagesFinishReason))];
+    // 断流兜底的 finish 是**合成**的（正文被截断、没有真正的终止事件），故这里的
+    // length/max_tokens 一律按截断（max-tokens）处理，**不**套用「空内容打上限 → INVALID_REQUEST」
+    // —— 后者只针对 API 真正给出的终止事件（message_stop / finish_reason / finish），见
+    // mapFinishReason 与 messagesStop/openAiChunks/cliChunks。
+    return [...this.#emitMessagesUsage(), ...this.finish(mapFinishReason(this.#messagesFinishReason, true))];
   }
 
   /** 交出尚未发出的 Messages usage；已经交过或根本没有时为 `[]`。 */
@@ -950,7 +992,7 @@ function openAiChunks(assembler: StreamAssembler, event: Record<string, unknown>
   if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
     const usage = openAiUsage(event.usage);
     if (usage !== undefined) chunks.push({ type: "usage", usage });
-    chunks.push(...assembler.finish(mapFinishReason(stringValue(choice.finish_reason))));
+    chunks.push(...assembler.finish(mapFinishReason(stringValue(choice.finish_reason), assembler.producedOutput)));
   }
   return chunks;
 }
@@ -1015,7 +1057,7 @@ function cliChunks(assembler: StreamAssembler, event: Record<string, unknown>): 
       const chunks: StreamChunk[] = [];
       const usage = cliUsage(event.totalUsage);
       if (usage !== undefined) chunks.push({ type: "usage", usage });
-      chunks.push(...assembler.finish(mapFinishReason(stringValue(event.finishReason))));
+      chunks.push(...assembler.finish(mapFinishReason(stringValue(event.finishReason), assembler.producedOutput)));
       return chunks;
     }
     case "error":

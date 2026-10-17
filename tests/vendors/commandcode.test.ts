@@ -302,6 +302,88 @@ it("Messages 的 max_tokens 截断只有一条 finish，且 reason 是 max-token
 });
 
 // ---------------------------------------------------------------------------
+// 对称修复：打到输出上限却一个字都没产出时，不能伪装成正常的 max-tokens 收尾
+// （opencode 已在 toHostFinishReason 修过，commandcode 此前漏了）。三种传输都要报
+// INVALID_REQUEST（带可执行建议），宿主不重试、不换账号。
+// ---------------------------------------------------------------------------
+
+it("OpenAI 流 finish_reason=length 且无内容时，结束原因是 INVALID_REQUEST 错误（空内容打上限）", async () => {
+  const chunks = await decodeSse(
+    "openai",
+    [
+      '{"choices":[{"delta":{},"finish_reason":"length"}]}',
+      "[DONE]",
+    ].join("\n"),
+  );
+
+  const finishes = chunks.filter((chunk) => chunk.type === "finish");
+  expect(finishes).toHaveLength(1);
+  expect(finishes[0]).toEqual({
+    type: "finish",
+    reason: {
+      kind: "error",
+      failure: expect.objectContaining({ code: "INVALID_REQUEST" }),
+    },
+  });
+  expect(String((finishes[0] as { reason: { failure: { message: string } } }).reason.failure.message)).toMatch(
+    /produced no content at its output cap/i,
+  );
+});
+
+it("Messages 流 stop_reason=max_tokens 且无内容块时，结束原因是 INVALID_REQUEST 错误", async () => {
+  const chunks = await decodeMessagesSse(
+    "event: message_start\n" +
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":100,"output_tokens":1}}}\n\n' +
+      "event: message_delta\n" +
+      'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":50}}\n\n' +
+      "event: message_stop\n" +
+      'data: {"type":"message_stop"}\n',
+  );
+
+  const finishes = chunks.filter((chunk) => chunk.type === "finish");
+  expect(finishes).toHaveLength(1);
+  expect(finishes[0]).toEqual({
+    type: "finish",
+    reason: {
+      kind: "error",
+      failure: expect.objectContaining({ code: "INVALID_REQUEST" }),
+    },
+  });
+});
+
+it("CLI 流 finishReason=length 且无内容时，结束原因是 INVALID_REQUEST 错误", async () => {
+  const chunks = await decodeSse(
+    "cli",
+    ['{"type":"finish","finishReason":"length"}'].join("\n"),
+  );
+
+  const finishes = chunks.filter((chunk) => chunk.type === "finish");
+  expect(finishes).toHaveLength(1);
+  expect(finishes[0]).toEqual({
+    type: "finish",
+    reason: {
+      kind: "error",
+      failure: expect.objectContaining({ code: "INVALID_REQUEST" }),
+    },
+  });
+});
+
+it("OpenAI 流 finish_reason=length 但有内容时仍是正常的 max-tokens（非退化回归）", async () => {
+  const chunks = await decodeSse(
+    "openai",
+    [
+      '{"choices":[{"delta":{"content":"partial answer"}}]}',
+      '{"choices":[{"delta":{},"finish_reason":"length"}]}',
+      "[DONE]",
+    ].join("\n"),
+  );
+
+  const finishes = chunks.filter((chunk) => chunk.type === "finish");
+  expect(finishes).toHaveLength(1);
+  expect(finishes[0]).toEqual({ type: "finish", reason: { kind: "max-tokens" } });
+});
+
+// ---------------------------------------------------------------------------
 // Finding 2：usage 只在 message_start 里有输入/缓存计数；合并后仅交出**一条** usage chunk
 //（宿主拒绝第二条 usage：dsh-llm 的流不变式 "LLM stream emitted usage more than once"）。
 // ---------------------------------------------------------------------------
