@@ -10,6 +10,7 @@
  * @module dsh-llm-account/src/client/page-state
  */
 import type { CardGroupSpec, FieldSpec, VendorEntry } from "./registry";
+import type { DiscoveryProblem } from "./seams";
 
 /** 宿主设置命名空间的一份快照：值 + 修订号（保存时要用它做并发围栏）。 */
 export interface VendorSnapshot {
@@ -90,6 +91,14 @@ export interface PageState {
    * 即清除。
    */
   readonly saveErrors: Readonly<Record<string, string>>;
+  /**
+   * 厂商发现的失败原因；`undefined` 表示发现成功（或还没有发现过）。
+   *
+   * 与 `saveErrors` 同理：没有它，「没有可显示的厂商」这一句话对应四种完全不同的病因
+   * （远程面缺席 / `describe()` 抛错 / 返回形状不认识 / 命名空间对不上），页面无法自证，
+   * 排障只能靠猜。空态把它显示出来。
+   */
+  readonly discovery: DiscoveryProblem | undefined;
 }
 
 /** 三组卡片的规范顺序（规格 §8 的卡片顺序：隐私与安全 → 集成与显示 → 高级设置）。 */
@@ -101,12 +110,14 @@ const GROUP_ORDER: readonly CardGroupSpec["group"][] = ["privacy", "integrations
  * @param snapshots - 宿主上实际存在的设置命名空间快照（发现的依据，见 Ruling 2）。
  * @param previous - 上一个状态：提供了就**保留草稿与凭据计数**（重新读设置不该把用户没保存的
  *   输入丢掉）。与快照已经一致的草稿会被清掉（那种「改动」已经没有意义）。
+ * @param discovery - 本次厂商发现的失败原因（`undefined` 表示成功，空态据此自证）。
  * @returns 新状态：没有草稿时选中的是第一个标签页。
  */
 export function createPageState(
   entries: readonly VendorEntry[],
   snapshots: readonly VendorSnapshot[],
   previous?: PageState,
+  discovery?: DiscoveryProblem,
 ): PageState {
   const available = new Set(snapshots.map((snapshot) => snapshot.ns));
   const tabs = entries
@@ -144,6 +155,8 @@ export function createPageState(
     expandedRef: previous?.expandedRef,
     // 保存失败的原因同样跨刷新保留：它描述的还是当前这份草稿的问题，下一次保存才可能改变它。
     saveErrors: previous?.saveErrors ?? {},
+    // 发现成功即清空失败原因：上一次「读不到」不该在恢复后继续显示。
+    discovery,
   };
 }
 

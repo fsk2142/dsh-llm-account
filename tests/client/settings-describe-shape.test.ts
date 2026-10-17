@@ -23,7 +23,7 @@
  */
 import { describe as describeSuite, expect, it } from "vitest";
 
-import { describeVendorSnapshots, type ClientSeamContext } from "../../src/client/seams";
+import { describeVendorSnapshots, discoverVendors, type ClientSeamContext } from "../../src/client/seams";
 import { createPageState } from "../../src/client/page-state";
 import { PageShell } from "../../src/client/page";
 import type { VendorEntry } from "../../src/client/registry";
@@ -49,6 +49,20 @@ function contextWith(described: unknown): ClientSeamContext {
   return {
     remote: {
       settings: { describe: async () => described, mutate: async () => undefined },
+    },
+  } as unknown as ClientSeamContext;
+}
+
+/** A `describe()` that rejects, standing in for a gateway-side failure. */
+function contextWithThrowing(error: Error): ClientSeamContext {
+  return {
+    remote: {
+      settings: {
+        describe: async () => {
+          throw error;
+        },
+        mutate: async () => undefined,
+      },
     },
   } as unknown as ClientSeamContext;
 }
@@ -108,6 +122,50 @@ describeSuite("remote.settings.describe() shape", () => {
     expect(await describeVendorSnapshots(contextWith({ nope: true }), ENTRIES)).toEqual([]);
     expect(await describeVendorSnapshots(contextWith("nonsense"), ENTRIES)).toEqual([]);
     expect(await describeVendorSnapshots(contextWith(null), ENTRIES)).toEqual([]);
+  });
+
+  it("reports WHY discovery failed, so the empty page can say so", async () => {
+    // Four distinct causes behind one identical symptom; the page renders the
+    // reason, so each must be distinguishable (and never silently succeed).
+    const missing = await discoverVendors({} as ClientSeamContext, ENTRIES);
+    expect(missing.problem?.kind).toBe("remote-absent");
+
+    const threw = await discoverVendors(contextWithThrowing(new Error("gateway/boom")), ENTRIES);
+    expect(threw.problem).toEqual({ kind: "describe-failed", detail: "gateway/boom" });
+
+    const odd = await discoverVendors(contextWith({ namespaces: "not-an-array" }), ENTRIES);
+    expect(odd.problem?.kind).toBe("unknown-shape");
+    // The detail must name the keys, otherwise it cannot be acted on.
+    expect(odd.problem?.detail).toContain("namespaces");
+
+    const unmatched = await discoverVendors(
+      contextWith(hostDescribe([{ ns: "someone-elses-plugin", value: {} }])),
+      ENTRIES,
+    );
+    expect(unmatched.problem?.kind).toBe("no-match");
+    expect(unmatched.problem?.detail).toContain("someone-elses-plugin");
+    expect(unmatched.problem?.detail).toContain("llm-commandcode");
+
+    const ok = await discoverVendors(contextWith(hostDescribe([{ ns: "llm-commandcode", value: {} }])), ENTRIES);
+    expect(ok.problem).toBeUndefined();
+    expect(ok.snapshots).toHaveLength(1);
+  });
+
+  it("renders the reason in the empty state", () => {
+    const state = createPageState(ENTRIES, [], undefined, {
+      kind: "no-match",
+      detail: "host namespaces: (none) | this package looks for: llm-commandcode",
+    });
+    const shell = PageShell({
+      state,
+      entries: ENTRIES,
+      t: (key) => key,
+      onSelectTab: () => undefined,
+      onSetField: () => undefined,
+      onSave: () => undefined,
+    });
+    const diagnostic = flatten(shell).find((node) => node.props?.["data-discovery"] === "no-match");
+    expect(diagnostic, "the empty state must show why discovery failed").toBeDefined();
   });
 
   it("degrades to empty when the remote settings seam is absent", async () => {

@@ -113,7 +113,7 @@ describe("client bundle build", () => {
     // Cordis *service* names, not npm module ids: the loader arms exactly these
     // before calling apply, and the list intentionally differs from
     // package.json `dsh.client.inject`.
-    expect(exports.inject).toEqual(["slots", "locale", "remote"]);
+    expect(exports.inject).toEqual(["slots", "locale", "remote", "remote.settings"]);
   });
 
   it("客户端入口不导入任何 node 内置模块（静态 / require / 动态 import 三种形态）", () => {

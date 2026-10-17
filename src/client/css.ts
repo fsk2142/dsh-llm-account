@@ -26,6 +26,11 @@ export const PAGE_CSS = `
 .dsl-root h4 { font-size: var(--dsw-font-xxs-12); margin: 0; }
 .dsl-root small { display: block; font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); }
 .dsl-intro { margin: 0; color: var(--dsw-alias-label-secondary); font-size: var(--dsw-font-xxs-12); }
+/* 发现失败的原因：等宽、小字、弱化，但必须可读——它是排障的唯一线索。 */
+.dsl-diagnostic { margin: 8px 0 0; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: var(--dsw-font-xxxs-11); word-break: break-word; }
 
 .dsl-tabs { display: flex; flex-direction: row; gap: 6px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
 .dsl-tabs button { background: none; border: none; border-bottom: 2px solid transparent; padding: 6px 10px; cursor: pointer;
@@ -80,6 +85,7 @@ export const PAGE_CSS = `
 export const CSS_CLASS = {
   root: "dsl-root",
   intro: "dsl-intro",
+  diagnostic: "dsl-diagnostic",
   tabs: "dsl-tabs",
   card: "dsl-card",
   account: "dsl-account",

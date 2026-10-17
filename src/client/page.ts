@@ -49,7 +49,20 @@ export function PageShell(props: PageShellProps): ReactElement {
     createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     tabRow(props),
     active === undefined
-      ? createElement("p", { "data-empty": "vendor" }, t("empty.noVendor"))
+      ? createElement(
+          "div",
+          { "data-empty": "vendor" },
+          createElement("p", null, t("empty.noVendor")),
+          // 「发现不到厂商」有四种病因（远程面缺席 / describe 抛错 / 形状不认识 /
+          // 命名空间对不上），而症状完全一样。把原因显示出来，否则只能靠猜。
+          state.discovery === undefined
+            ? null
+            : createElement(
+                "pre",
+                { "data-discovery": state.discovery.kind, className: CSS_CLASS.diagnostic },
+                `${state.discovery.kind}: ${state.discovery.detail}`,
+              ),
+        )
       : vendorBody(props, active),
   );
 }

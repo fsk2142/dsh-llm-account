@@ -51,7 +51,8 @@ import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, typ
 
 /** 一个「设置命名空间」在客户端看到的面（`remote.settings`）。 */
 export interface RemoteSettings {
-  describe(): Promise<{ ns?: string; id?: string; value?: unknown; revision?: number }[]>;
+  /** 返回命名空间视图；宿主实际返回 `{ writable, hasDocument, namespaces }`（见下）。 */
+  describe(): Promise<unknown>;
   mutate(ns: string, ops: readonly { op: "set"; path: readonly string[]; value: unknown }[], revision?: number): Promise<unknown>;
 }
 
@@ -85,6 +86,28 @@ export function remoteOf(ctx: ClientSeamContext): RemoteService | undefined {
 }
 
 /**
+ * 厂商发现的结果：**快照 + 失败诊断**。
+ *
+ * 诊断不是调试脚手架，而是一个设置页该有的诚实：发现不到厂商时，用户（和排障的人）
+ * 需要知道是「远程面缺席」「`describe()` 抛错」「返回形状不认识」还是「命名空间对不上」。
+ * 之前每条失败路径都返回空数组且丢掉原因，页面只显示一句「没有可显示的厂商」——
+ * 同一个症状对应四种完全不同的病因，排查只能靠猜。
+ */
+export interface VendorDiscovery {
+  /** 命中的厂商快照（页面身份用 `ns`，写路径用 `row`）。 */
+  snapshots: VendorSnapshot[];
+  /** 发现失败的原因；`undefined` 表示成功。 */
+  problem?: DiscoveryProblem;
+}
+
+/** 发现失败的分类，附带足以定位的细节。 */
+export type DiscoveryProblem =
+  | { kind: "remote-absent"; detail: string }
+  | { kind: "describe-failed"; detail: string }
+  | { kind: "unknown-shape"; detail: string }
+  | { kind: "no-match"; detail: string };
+
+/**
  * 读已注册厂商的设置快照（页面「发现厂商」的依据，Ruling 2）。
  *
  * 只保留注册表里声明过的命名空间：宿主上可能还有别的插件命名空间，页面不该把它们当厂商。
@@ -106,23 +129,39 @@ export function remoteOf(ctx: ClientSeamContext): RemoteService | undefined {
  * ```
  *
  * 之前把返回值当数组遍历，于是永远遍历不到元素 → 页面显示「没有可显示的厂商」。
- * 这里两种形状都认（对象包 `namespaces` / 裸数组），不认识则按「读不到」降级。
+ * 这里两种形状都认（对象包 `namespaces` / 裸数组），不认识则按「读不到」降级并**报告原因**。
  *
  * @param ctx - 客户端上下文。
  * @param entries - 注册表里的厂商声明。
- * @returns 快照；远程不可用、形状不认识或读取失败时返回空数组（页面显示「没有可显示的厂商」，而不是崩掉）。
+ * @returns 快照与失败诊断（读不到时快照为空数组、problem 有值）。
  */
-export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: readonly VendorEntry[]): Promise<VendorSnapshot[]> {
+export async function discoverVendors(ctx: ClientSeamContext, entries: readonly VendorEntry[]): Promise<VendorDiscovery> {
   const settings = remoteOf(ctx)?.settings;
-  if (settings === undefined || typeof settings.describe !== "function") return [];
+  if (settings === undefined || typeof settings.describe !== "function") {
+    return {
+      snapshots: [],
+      problem: {
+        kind: "remote-absent",
+        detail: `ctx.remote${settings === undefined ? "" : ".settings"} is unavailable; injected services: ${describeInject(ctx)}`,
+      },
+    };
+  }
   let described: unknown;
   try {
     described = await settings.describe();
-  } catch {
-    return [];
+  } catch (error) {
+    return {
+      snapshots: [],
+      problem: { kind: "describe-failed", detail: error instanceof Error ? error.message : String(error) },
+    };
   }
   const rows = namespaceRowsOf(described);
-  if (rows === undefined) return [];
+  if (rows === undefined) {
+    return {
+      snapshots: [],
+      problem: { kind: "unknown-shape", detail: `describe() returned ${describeShape(described)}` },
+    };
+  }
   // 宿主按 profile 行 id 建索引，旧宿主用命名空间，而 opencode 的**行 id 与核心命名空间不同**
   // （`opencode-go` vs `llm-opencode-go`）—— 所以按注册表声明的候选行名匹配，命中后一律用 `ns`
   // 作为页面身份（标签页与草稿都以 `ns` 为键），同时把**命中的行名**带进快照：写路径必须用
@@ -141,7 +180,47 @@ export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: r
     const value = typeof row.value === "object" && row.value !== null ? (row.value as Record<string, unknown>) : {};
     snapshots.push({ ns: entry.ns, row: rowName, value, revision: typeof row.revision === "number" ? row.revision : 0 });
   }
-  return snapshots;
+  if (snapshots.length === 0) {
+    const seen = rows
+      .map((row) => [row.ns, row.id].find((candidate): candidate is string => typeof candidate === "string"))
+      .filter((name): name is string => name !== undefined);
+    const wanted = entries.flatMap((entry) => [entry.ns, ...entry.rowIds]);
+    return {
+      snapshots,
+      problem: {
+        kind: "no-match",
+        detail: `host namespaces: ${seen.length ? seen.join(", ") : "(none)"} | this package looks for: ${wanted.join(", ")}`,
+      },
+    };
+  }
+  return { snapshots };
+}
+
+/**
+ * 读已注册厂商的设置快照（页面「发现厂商」的依据，Ruling 2）。
+ *
+ * 只要快照的薄封装；需要失败原因时用 {@link discoverVendors}。
+ * @param ctx - 客户端上下文。
+ * @param entries - 注册表里的厂商声明。
+ * @returns 快照；读不到时为空数组。
+ */
+export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: readonly VendorEntry[]): Promise<VendorSnapshot[]> {
+  return (await discoverVendors(ctx, entries)).snapshots;
+}
+
+/** 宿主返回值的形状摘要（诊断用，不含任何值）。 */
+function describeShape(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `an array of ${value.length}`;
+  if (typeof value !== "object") return typeof value;
+  return `an object with keys [${Object.keys(value as Record<string, unknown>).join(", ")}]`;
+}
+
+/** 本包在客户端读到的服务（诊断用：说明哪些接缝到位了）。 */
+function describeInject(ctx: ClientSeamContext): string {
+  const remote = ctx.remote;
+  if (typeof remote !== "object" || remote === null) return "no ctx.remote at all";
+  return `ctx.remote keys [${Object.keys(remote as Record<string, unknown>).join(", ")}]`;
 }
 
 /** One namespace view as the host reports it: `ns` is the identity, `id` is the legacy field name. */
@@ -472,20 +551,27 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
 
-    /** 采纳一次快照读取：页面状态与侧边栏开关存储（同一来源、两个消费者）。 */
-    const adopt = (snapshots: VendorSnapshot[]): void => {
-      // 只有拿到快照才重建：宿主设置服务缺席时不要用一个空快照把页面清空，也不要把开关存储抹掉。
-      if (snapshots.length === 0) return;
+    /** 采纳一次发现结果：页面状态与侧边栏开关存储（同一来源、两个消费者）。 */
+    const adopt = (discovery: VendorDiscovery): void => {
+      const { snapshots, problem } = discovery;
+      // 读不到时**不**用空快照清空页面（宿主设置服务缺席不该抹掉已有状态），
+      // 但要把失败原因记进状态：空态据此自证，而不是只说一句「没有可显示的厂商」。
+      if (snapshots.length === 0) {
+        if (problem !== undefined) {
+          setState((current) => createPageState(entries, snapshots, current, problem));
+        }
+        return;
+      }
       noteSidebarSnapshots(entries, snapshots);
-      setState((current) => createPageState(entries, snapshots, current));
+      setState((current) => createPageState(entries, snapshots, current, problem));
     };
 
     useEffect(() => {
       let alive = true;
-      const guarded = (snapshots: VendorSnapshot[]): void => {
-        if (alive) adopt(snapshots);
+      const guarded = (discovery: VendorDiscovery): void => {
+        if (alive) adopt(discovery);
       };
-      void describeVendorSnapshots(ctx, entries).then(guarded);
+      void discoverVendors(ctx, entries).then(guarded);
       const off = subscribeCredentials(ctx, () => setState((current) => noteCredentialChange(current)));
       // 远程面在挂载完成后才可用；挂载前卡片按「数据不可用」显示。
       // 只订阅、不 dispose：它的生命周期属于插件，不属于这个页面。
@@ -505,8 +591,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       let alive = true;
       // 账户操作（排序、autoSwitch、增删改）会改设置文档，所以每次都把快照重读一遍；
       // 用户的未保存草稿由 `createPageState(…, previous)` 保留。
-      void describeVendorSnapshots(ctx, entries).then((snapshots) => {
-        if (alive) adopt(snapshots);
+      void discoverVendors(ctx, entries).then((discovery) => {
+        if (alive) adopt(discovery);
       });
       if (usage !== undefined) {
         for (const entry of entries) {
@@ -554,7 +640,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           // 成功即清除。随后一律重读一遍宿主：基线以宿主为准，不猜修订号（紧接着的第二次
           // 保存不会带着猜出来的围栏再次失败），已落盘的草稿条目随之清掉。
           setState((current) => noteSaveResult(current, ns, error));
-          void describeVendorSnapshots(ctx, entries).then((snapshots) => adopt(snapshots));
+          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
         });
       },
       ...(options.renderVendorCards === undefined || activeEntry === undefined || activeVendor === undefined
@@ -609,7 +695,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                     const target = state.snapshots[ns];
                     void saveSettings(ctx, target?.row ?? ns, fields, target?.revision ?? 0).then((error) => {
                       setState((current) => noteSaveResult(current, ns, error));
-          void describeVendorSnapshots(ctx, entries).then((snapshots) => adopt(snapshots));
+          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
                       if (error === undefined) setAccountRevision((current) => current + 1);
                     });
                   },
