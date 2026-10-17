@@ -77,6 +77,8 @@ export type CopyKey =
   | "account.add"
   | "account.addFor"
   | "account.loginFor"
+  | "account.addAccount"
+  | "account.addAccount.hint"
   | "account.rename"
   | "account.replaceKey"
   | "account.pin"
@@ -118,6 +120,10 @@ export type CopyKey =
   | "models.otherCompany"
   | "models.allTitle"
   | "models.allHint"
+  | "models.hideGroup"
+  | "models.showGroup"
+  | "models.hideVendor"
+  | "models.showVendor"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -228,8 +234,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.empty": "还没有添加任何账户。",
     "account.unavailable": "账号数据暂不可用。",
     "account.add": "添加账户",
-    "account.addFor": "添加 {vendor} 账户",
-    "account.loginFor": "{vendor} 网页登录",
+    "account.addFor": "{vendor} · 使用 API Key",
+    "account.loginFor": "{vendor} · 网页登录",
+    "account.addAccount": "新增账户",
+    "account.addAccount.hint": "先选供应商，再选 API Key 或网页登录。",
     "account.rename": "重命名",
     "account.replaceKey": "更换密钥",
     "account.pin": "切换到此账户",
@@ -271,6 +279,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.otherCompany": "其他",
     "models.allTitle": "全部模型",
     "models.allHint": "两家厂商的模型放在一起；勾选立即写入所属厂商。",
+    "models.hideGroup": "隐藏本组全部模型",
+    "models.showGroup": "显示本组全部模型",
+    "models.hideVendor": "隐藏该厂商全部模型",
+    "models.showVendor": "显示该厂商全部模型",
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "打开用量面板",
@@ -376,8 +388,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.empty": "No accounts yet.",
     "account.unavailable": "Account data is not available yet.",
     "account.add": "Add account",
-    "account.addFor": "Add {vendor} account",
-    "account.loginFor": "{vendor} web login",
+    "account.addFor": "{vendor} · API key",
+    "account.loginFor": "{vendor} · web login",
+    "account.addAccount": "Add account",
+    "account.addAccount.hint": "Pick a provider, then an API key or web login.",
     "account.rename": "Rename",
     "account.replaceKey": "Replace key",
     "account.pin": "Switch to this account",
@@ -419,6 +433,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.otherCompany": "Other",
     "models.allTitle": "All models",
     "models.allHint": "Models from both providers; a toggle writes through to its provider immediately.",
+    "models.hideGroup": "Hide all models in this group",
+    "models.showGroup": "Show all models in this group",
+    "models.hideVendor": "Hide all models from this provider",
+    "models.showVendor": "Show all models from this provider",
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Open the usage panel",

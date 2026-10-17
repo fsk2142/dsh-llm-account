@@ -913,6 +913,40 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       if (edit.kind === "add") setAllModelDraft("");
     };
 
+    /** 批量设置一组模型的可见性（公司分组/供应商分组）。 */
+    const writeGlobalModelGroup = (vendor: string, ids: readonly string[], visible: boolean): void => {
+      const entry = entries.find((candidate) => candidate.providerId === vendor);
+      const spec = entry?.models;
+      if (entry === undefined || spec === undefined) return;
+      const baseline = state.snapshots[entry.ns]?.value ?? {};
+      const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
+      let visibleModels = normalizeModels(effective[spec.visible]);
+      let modelVisibility =
+        typeof effective[spec.visibility] === "object" &&
+        effective[spec.visibility] !== null &&
+        !Array.isArray(effective[spec.visibility])
+          ? { ...(effective[spec.visibility] as Record<string, boolean>) }
+          : {};
+      for (const model of ids) {
+        const patch = applyModelEdit({ visible: visibleModels, visibility: modelVisibility }, { kind: "toggle", model, visible });
+        visibleModels = patch.visibleModels;
+        modelVisibility = patch.modelVisibility;
+      }
+      const fields = [
+        { key: spec.visible, value: visibleModels },
+        { key: spec.visibility, value: modelVisibility },
+      ];
+      setState((current) => {
+        const withVisible = setField(current, entry.ns, spec.visible, visibleModels);
+        return setField(withVisible, entry.ns, spec.visibility, modelVisibility);
+      });
+      const snapshot = state.snapshots[entry.ns];
+      void saveSettings(ctx, snapshot?.row ?? entry.ns, fields, snapshot?.revision ?? 0).then((error) => {
+        setState((current) => noteSaveResult(current, entry.ns, error));
+        void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
+      });
+    };
+
     const modelVendors = availableEntries
       .filter((entry) => entry.models !== undefined)
       .map((entry) => {
@@ -946,6 +980,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
             onToggle: (vendor: string, model: string, visible: boolean) =>
               writeGlobalModel(vendor, { kind: "toggle", model, visible }),
             onRemove: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "remove", model }),
+            onGroupVisibility: writeGlobalModelGroup,
             onAdd: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "add", model }),
             draft: allModelDraft,
             onDraftChange: setAllModelDraft,

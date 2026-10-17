@@ -1,9 +1,9 @@
 /**
- * 全局模型卡片：两家厂商的模型放在同一张卡片里，按公司/免费分组，行上标供应商。
+ * 全局模型卡片：两家厂商的模型放在同一张卡片里；先按供应商分组，再按模型公司分组。
  *
- * 与旧的按标签页模型卡的区别：模型是「这台机器能用哪些模型」，不该因为正在看哪家的设置而
- * 消失。勾选/移除由容器**立即写回所属厂商**的设置文档（草稿先更新，界面立刻有反馈）。
- * 纯 props → 元素树；搜索、折叠与添加草稿由容器持有。
+ * 两级都可折叠：供应商分组与公司分组各有一个箭头；每个公司分组（以及供应商分组）都有
+ * 「隐藏/显示本组全部模型」，一次点击就能批量处理。勾选/移除/批量由容器立即写回所属厂商。
+ * 纯 props → 元素树；搜索与添加草稿由容器持有。
  * @module dsh-llm-account/src/client/all-models-card
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
@@ -16,19 +16,12 @@ import { ChevronIcon, RemoveIcon } from "./icons";
 
 /** 一个厂商的模型视图。 */
 export interface AllModelsVendor {
-  /** provider id（动作路由键）。 */
   vendor: string;
-  /** 展示名（Command Code / OpenCode）。 */
   label: string;
-  /** 未过滤目录。 */
   catalog: readonly CatalogModel[];
-  /** 白名单。 */
   visibleModels: readonly string[];
-  /** 逐模型显隐。 */
   visibility: Record<string, boolean>;
-  /** 目录读取中。 */
   loading?: boolean;
-  /** 目录读取失败原因。 */
   failure?: string;
 }
 
@@ -40,15 +33,15 @@ export interface AllModelsCardProps {
   onFilterChange: (value: string) => void;
   onToggle: (vendor: string, model: string, visible: boolean) => void;
   onRemove: (vendor: string, model: string) => void;
+  /** 批量设置一组模型的可见性（公司分组/供应商分组用）。 */
+  onGroupVisibility: (vendor: string, models: readonly string[], visible: boolean) => void;
   onAdd: (vendor: string, model: string) => void;
   draft: string;
   onDraftChange: (value: string) => void;
-  /** 手动添加的目标厂商。 */
   draftVendor: string;
   onDraftVendorChange: (vendor: string) => void;
 }
 
-/** 展示行。 */
 interface Row {
   vendor: string;
   label: string;
@@ -60,7 +53,6 @@ interface Row {
   configured: boolean;
 }
 
-/** 分组。 */
 interface Group {
   key: string;
   rows: Row[];
@@ -70,11 +62,7 @@ interface Group {
 function rowsOf(vendor: AllModelsVendor): Row[] {
   const catalog = new Map(vendor.catalog.map((model) => [model.id, model]));
   const ids = [
-    ...new Set([
-      ...vendor.catalog.map((model) => model.id),
-      ...vendor.visibleModels,
-      ...Object.keys(vendor.visibility),
-    ]),
+    ...new Set([...vendor.catalog.map((model) => model.id), ...vendor.visibleModels, ...Object.keys(vendor.visibility)]),
   ];
   const configured = new Set([...vendor.visibleModels, ...Object.keys(vendor.visibility)]);
   const visibility = { visibleModels: vendor.visibleModels, modelVisibility: vendor.visibility };
@@ -93,7 +81,7 @@ function rowsOf(vendor: AllModelsVendor): Row[] {
   });
 }
 
-/** 按免费 → 公司首次出现 → 其他 分组；组内保持两种目录的输入顺序。 */
+/** 免费 → 公司首次出现 → 其他。 */
 function groupsOf(rows: readonly Row[]): Group[] {
   const free: Row[] = [];
   const byCompany = new Map<string, Row[]>();
@@ -118,6 +106,16 @@ function groupsOf(rows: readonly Row[]): Group[] {
   return groups;
 }
 
+/** 一组是否全部可见。 */
+function allVisible(rows: readonly Row[]): boolean {
+  return rows.length > 0 && rows.every((row) => row.visible);
+}
+
+/** 组文案。 */
+function groupLabel(t: (key: string) => string, key: string): string {
+  return key === "free" ? t("models.freeGroup") : key === "other" ? t("models.otherCompany") : companyLabelOf(key);
+}
+
 /**
  * 全局模型卡片。
  * @param props - 见 {@link AllModelsCardProps}。
@@ -125,24 +123,22 @@ function groupsOf(rows: readonly Row[]): Group[] {
  */
 export function AllModelsCard(props: AllModelsCardProps): ReactElement {
   const { t } = props;
-  const vendors = props.vendors;
-  const rows = vendors.flatMap((vendor) => rowsOf(vendor));
   const needle = props.filter.trim().toLowerCase();
-  const filtered = needle === "" ? rows : rows.filter((row) => `${row.id} ${row.name ?? ""}`.toLowerCase().includes(needle));
-  const groups = groupsOf(filtered);
-  const visibleCount = rows.filter((row) => row.visible).length;
-  const loading = vendors.some((vendor) => vendor.loading === true);
-  const failures = vendors.flatMap((vendor) => (vendor.failure === undefined ? [] : [`${vendor.label}: ${vendor.failure}`]));
-  const addVendor = vendors.find((vendor) => vendor.vendor === props.draftVendor) ?? vendors[0];
+  const vendorSections = props.vendors.map((vendor) => {
+    const all = rowsOf(vendor);
+    const matching = needle === "" ? all : all.filter((row) => `${row.id} ${row.name ?? ""}`.toLowerCase().includes(needle));
+    return { vendor, all, matching, groups: groupsOf(matching) };
+  });
+  const totalRows = vendorSections.flatMap((section) => section.all);
+  const visibleCount = totalRows.filter((row) => row.visible).length;
+  const failures = props.vendors.flatMap((vendor) => (vendor.failure === undefined ? [] : [`${vendor.label}: ${vendor.failure}`]));
+  const loading = props.vendors.some((vendor) => vendor.loading === true);
+  const addVendor = props.vendors.find((vendor) => vendor.vendor === props.draftVendor) ?? props.vendors[0];
 
   const body: ReactNode[] = [];
-  if (rows.length === 0) {
+  if (totalRows.length === 0) {
     body.push(
-      createElement(
-        "p",
-        { key: "empty", className: CSS_CLASS.note },
-        loading ? t("models.loading") : t("models.empty"),
-      ),
+      createElement("p", { key: "empty", className: CSS_CLASS.note }, loading ? t("models.loading") : t("models.empty")),
     );
   } else {
     body.push(
@@ -159,65 +155,85 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
       ),
       createElement(
         "small",
-        { key: "summary", "data-all-model-summary": `${visibleCount}/${rows.length}`, className: CSS_CLASS.searchCount },
-        t("models.summary").replace("{n}", String(visibleCount)).replace("{total}", String(rows.length)),
+        { key: "summary", "data-all-model-summary": `${visibleCount}/${totalRows.length}`, className: CSS_CLASS.searchCount },
+        t("models.summary").replace("{n}", String(visibleCount)).replace("{total}", String(totalRows.length)),
       ),
     );
-    if (needle !== "" && filtered.length === 0) {
+    if (needle !== "" && vendorSections.every((section) => section.matching.length === 0)) {
       body.push(createElement("p", { key: "no-match", className: CSS_CLASS.empty }, t("models.noMatch")));
     }
-    for (const group of groups) {
+    for (const section of vendorSections) {
+      if (section.matching.length === 0) continue;
+      const showVendor = allVisible(section.matching);
       body.push(
         createElement(
-          "div",
-          { key: group.key, "data-all-model-group": group.key, className: CSS_CLASS.modelGroup },
+          "details",
+          {
+            key: section.vendor.vendor,
+            "data-all-model-vendor-group": section.vendor.vendor,
+            className: CSS_CLASS.modelVendorGroup,
+            open: true,
+          },
           createElement(
-            "h3",
-            null,
-            group.key === "free"
-              ? t("models.freeGroup")
-              : group.key === "other"
-                ? t("models.otherCompany")
-                : companyLabelOf(group.key),
+            "summary",
+            { className: CSS_CLASS.modelGroupSummary, "data-all-model-vendor-collapse": section.vendor.vendor },
+            createElement("span", { className: CSS_CLASS.modelGroupTitle }, section.vendor.label),
+            createElement("small", null, `${section.matching.filter((row) => row.visible).length}/${section.matching.length}`),
+            createElement(ChevronIcon, null),
           ),
-          ...group.rows.map((row) =>
-            createElement(
-              "div",
-              { key: `${row.vendor}:${row.id}`, "data-all-model": `${row.vendor}:${row.id}`, className: CSS_CLASS.field },
-              createElement(
-                "span",
-                { className: CSS_CLASS.fieldText },
-                createElement(
-                  "span",
-                  { className: CSS_CLASS.nameRow },
-                  createElement("span", { "data-model-label": row.id, className: CSS_CLASS.mono }, row.name ?? row.id),
-                  createElement("small", { "data-model-vendor": row.vendor, className: CSS_CLASS.vendorBadge }, row.label),
+          createElement(
+            "button",
+            {
+              type: "button",
+              "data-all-model-vendor-toggle": section.vendor.vendor,
+              className: CSS_CLASS.buttonGhost,
+              onClick: () =>
+                props.onGroupVisibility(
+                  section.vendor.vendor,
+                  section.matching.map((row) => row.id),
+                  !showVendor,
                 ),
-              ),
-              createElement("input", {
-                "data-all-model-visible": `${row.vendor}:${row.id}`,
-                type: "checkbox",
-                className: CSS_CLASS.toggle,
-                checked: row.visible,
-                onChange: (event: { target?: { checked?: boolean } }) =>
-                  props.onToggle(row.vendor, row.id, event.target?.checked === true),
-              }),
-              row.configured
-                ? createElement(
-                    "button",
-                    {
-                      type: "button",
-                      "data-all-model-remove": `${row.vendor}:${row.id}`,
-                      className: CSS_CLASS.iconDanger,
-                      title: t("models.remove"),
-                      "aria-label": t("models.remove"),
-                      onClick: () => props.onRemove(row.vendor, row.id),
-                    },
-                    createElement(RemoveIcon, null),
-                  )
-                : null,
-            ),
+            },
+            showVendor ? t("models.hideVendor") : t("models.showVendor"),
           ),
+          ...section.groups.flatMap((group) => {
+            const label = groupLabel(t, group.key);
+            const show = allVisible(group.rows);
+            return [
+              createElement(
+                "details",
+                {
+                  key: `${section.vendor.vendor}:${group.key}`,
+                  "data-all-model-group": `${section.vendor.vendor}:${group.key}`,
+                  className: CSS_CLASS.modelGroup,
+                  open: true,
+                },
+                createElement(
+                  "summary",
+                  { className: CSS_CLASS.modelGroupSummary, "data-all-model-group-collapse": `${section.vendor.vendor}:${group.key}` },
+                  createElement("span", { className: CSS_CLASS.modelGroupTitle }, label),
+                  createElement("small", null, `${group.rows.filter((row) => row.visible).length}/${group.rows.length}`),
+                  createElement(ChevronIcon, null),
+                ),
+                createElement(
+                  "button",
+                  {
+                    type: "button",
+                    "data-all-model-group-toggle": `${section.vendor.vendor}:${group.key}`,
+                    className: CSS_CLASS.buttonGhost,
+                    onClick: () =>
+                      props.onGroupVisibility(
+                        section.vendor.vendor,
+                        group.rows.map((row) => row.id),
+                        !show,
+                      ),
+                  },
+                  show ? t("models.hideGroup") : t("models.showGroup"),
+                ),
+                ...group.rows.map((row) => modelRow(props, row)),
+              ),
+            ];
+          }),
         ),
       );
     }
@@ -249,7 +265,7 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
               value: addVendor.vendor,
               onChange: (event: { target?: { value?: string } }) => props.onDraftVendorChange(event.target?.value ?? ""),
             },
-            ...vendors.map((vendor) => createElement("option", { key: vendor.vendor, value: vendor.vendor }, vendor.label)),
+            ...props.vendors.map((vendor) => createElement("option", { key: vendor.vendor, value: vendor.vendor }, vendor.label)),
           ),
           createElement("input", {
             "data-all-model-add-draft": "true",
@@ -270,5 +286,45 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
             t("models.add"),
           ),
         ),
+  );
+}
+
+/** 一行模型。 */
+function modelRow(props: AllModelsCardProps, row: Row): ReactNode {
+  return createElement(
+    "div",
+    { key: `${row.vendor}:${row.id}`, "data-all-model": `${row.vendor}:${row.id}`, className: CSS_CLASS.field },
+    createElement(
+      "span",
+      { className: CSS_CLASS.fieldText },
+      createElement(
+        "span",
+        { className: CSS_CLASS.nameRow },
+        createElement("span", { "data-model-label": row.id, className: CSS_CLASS.mono }, row.name ?? row.id),
+        createElement("small", { "data-model-vendor": row.vendor, className: CSS_CLASS.vendorBadge }, row.label),
+      ),
+    ),
+    createElement("input", {
+      "data-all-model-visible": `${row.vendor}:${row.id}`,
+      type: "checkbox",
+      className: CSS_CLASS.toggle,
+      checked: row.visible,
+      onChange: (event: { target?: { checked?: boolean } }) =>
+        props.onToggle(row.vendor, row.id, event.target?.checked === true),
+    }),
+    row.configured
+      ? createElement(
+          "button",
+          {
+            type: "button",
+            "data-all-model-remove": `${row.vendor}:${row.id}`,
+            className: CSS_CLASS.iconDanger,
+            title: props.t("models.remove"),
+            "aria-label": props.t("models.remove"),
+            onClick: () => props.onRemove(row.vendor, row.id),
+          },
+          createElement(RemoveIcon, null),
+        )
+      : null,
   );
 }

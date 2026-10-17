@@ -69,32 +69,38 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
     { "data-card": "accounts-panel", className: CSS_CLASS.card },
     createElement("h2", null, t("group.accounts")),
     createElement(
-      "div",
-      { "data-account-add-actions": "true", className: CSS_CLASS.actions },
-      ...vendors.flatMap((group) => [
-        createElement(
-          "button",
-          {
-            key: `${group.entry.providerId}-add`,
-            type: "button",
-            "data-action": group.entry.providerId === "commandcode" ? "add" : `add-${group.entry.providerId}`,
-            className: CSS_CLASS.buttonSecondary,
-            onClick: () => props.onOpenAction(group.entry.providerId, { kind: "add" }),
-          },
-          t("account.addFor").replace("{vendor}", t(group.entry.labelKey)),
-        ),
-        createElement(
-          "button",
-          {
-            key: `${group.entry.providerId}-login`,
-            type: "button",
-            "data-action": group.entry.providerId === "commandcode" ? "login" : `login-${group.entry.providerId}`,
-            className: CSS_CLASS.buttonGhost,
-            onClick: () => props.onLoginBegin(group.entry.providerId),
-          },
-          t("account.loginFor").replace("{vendor}", t(group.entry.labelKey)),
-        ),
-      ]),
+      "details",
+      { "data-add-chooser": "true", className: CSS_CLASS.addChooser },
+      createElement("summary", { className: CSS_CLASS.addSummary }, t("account.addAccount")),
+      createElement("small", { className: CSS_CLASS.note }, t("account.addAccount.hint")),
+      createElement(
+        "div",
+        { "data-account-add-actions": "true", className: CSS_CLASS.actions },
+        ...vendors.flatMap((group) => [
+          createElement(
+            "button",
+            {
+              key: `${group.entry.providerId}-add`,
+              type: "button",
+              "data-action": group.entry.providerId === "commandcode" ? "add" : `add-${group.entry.providerId}`,
+              className: CSS_CLASS.buttonSecondary,
+              onClick: () => props.onOpenAction(group.entry.providerId, { kind: "add" }),
+            },
+            t("account.addFor").replace("{vendor}", t(group.entry.labelKey)),
+          ),
+          createElement(
+            "button",
+            {
+              key: `${group.entry.providerId}-login`,
+              type: "button",
+              "data-action": group.entry.providerId === "commandcode" ? "login" : `login-${group.entry.providerId}`,
+              className: CSS_CLASS.buttonGhost,
+              onClick: () => props.onLoginBegin(group.entry.providerId),
+            },
+            t("account.loginFor").replace("{vendor}", t(group.entry.labelKey)),
+          ),
+        ]),
+      ),
     ),
     ...waitingLogins(props),
     // 某一家读不到状态时把原因放在它自己的小标题下，不要和「没有账号」混在一起。

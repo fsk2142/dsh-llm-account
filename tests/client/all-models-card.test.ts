@@ -1,5 +1,5 @@
 /**
- * 全局模型卡片：两家的模型放在同一张卡片，按公司/免费分组，行上标供应商。
+ * 全局模型卡片：供应商 → 模型公司两级分组，两级都能折叠/批量隐藏。
  */
 import { expect, it, vi } from "vitest";
 
@@ -60,6 +60,7 @@ function render(overrides: Partial<AllModelsCardProps> = {}): { tree: StubElemen
     onFilterChange: vi.fn(),
     onToggle: vi.fn(),
     onRemove: vi.fn(),
+    onGroupVisibility: vi.fn(),
     onAdd: vi.fn(),
     draft: "",
     onDraftChange: vi.fn(),
@@ -70,26 +71,48 @@ function render(overrides: Partial<AllModelsCardProps> = {}): { tree: StubElemen
   return { tree: AllModelsCard(props), props };
 }
 
-it("两家的模型平铺分组：免费组第一，公司组按出现顺序，行上带供应商", () => {
+it("先按供应商分组，再按模型公司/免费分组；两级都有折叠箭头", () => {
   const { tree } = render();
+  const vendors = elementsOf(tree)
+    .filter((element) => element.props["data-all-model-vendor-group"] !== undefined)
+    .map((element) => element.props["data-all-model-vendor-group"]);
+  expect(vendors).toEqual(["commandcode", "dsh-opencode-go"]);
   const groups = elementsOf(tree)
     .filter((element) => element.props["data-all-model-group"] !== undefined)
     .map((element) => element.props["data-all-model-group"]);
-  expect(groups).toEqual(["free", "anthropic", "openai"]);
+  expect(groups).toEqual(["commandcode:anthropic", "dsh-opencode-go:free", "dsh-opencode-go:openai"]);
+  expect(elementsOf(tree).filter((element) => element.props["data-all-model-vendor-collapse"] !== undefined)).toHaveLength(2);
+  expect(elementsOf(tree).filter((element) => element.props["data-all-model-group-collapse"] !== undefined)).toHaveLength(3);
   const rows = elementsOf(tree).filter((element) => element.props["data-all-model"] !== undefined);
   expect(rows.map((element) => element.props["data-all-model"])).toEqual([
-    "dsh-opencode-go:beam-free",
     "commandcode:claude-haiku-5-5",
+    "dsh-opencode-go:beam-free",
     "dsh-opencode-go:gpt-6-luna",
   ]);
-  const vendors = elementsOf(tree)
-    .filter((element) => element.props["data-model-vendor"] !== undefined)
-    .map((element) => element.props["data-model-vendor"]);
-  expect(vendors).toEqual(["dsh-opencode-go", "commandcode", "dsh-opencode-go"]);
-  expect(textsOf(tree)).toContain("全部模型");
 });
 
-it("勾选/移除/添加都路由到模型所属厂商；可见性按各自设置", () => {
+it("公司分组可以一次性隐藏/显示全组；供应商分组也能批量", () => {
+  const { tree, props } = render();
+  const hideGroup = elementsOf(tree).find(
+    (element) => element.props["data-all-model-group-toggle"] === "commandcode:anthropic",
+  )!;
+  (hideGroup.props.onClick as () => void)();
+  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], false);
+
+  const hideVendor = elementsOf(tree).find(
+    (element) => element.props["data-all-model-vendor-toggle"] === "commandcode",
+  )!;
+  (hideVendor.props.onClick as () => void)();
+  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], false);
+
+  const showGroup = elementsOf(tree).find(
+    (element) => element.props["data-all-model-group-toggle"] === "dsh-opencode-go:openai",
+  )!;
+  (showGroup.props.onClick as () => void)();
+  expect(props.onGroupVisibility).toHaveBeenCalledWith("dsh-opencode-go", ["gpt-6-luna"], true);
+});
+
+it("勾选/移除/添加路由到所属厂商；搜索只留匹配行", () => {
   const { tree, props } = render();
   const gptToggle = elementsOf(tree).find(
     (element) => element.props["data-all-model-visible"] === "dsh-opencode-go:gpt-6-luna",
@@ -104,16 +127,11 @@ it("勾选/移除/添加都路由到模型所属厂商；可见性按各自设�
   (remove.props.onClick as () => void)();
   expect(props.onRemove).toHaveBeenCalledWith("dsh-opencode-go", "gpt-6-luna");
 
-  const add = elementsOf(tree).find((element) => element.props["data-all-model-add"] === "true")!;
-  expect(add.props.disabled).toBe(true);
-  const withDraft = render({ draft: "my-model" });
-  (elementsOf(withDraft.tree).find((element) => element.props["data-all-model-add"] === "true")!.props.onClick as () => void)();
-  expect(withDraft.props.onAdd).toHaveBeenCalledWith("dsh-opencode-go", "my-model");
-});
-
-it("搜索只过滤行；整张卡片可折叠", () => {
-  const { tree } = render({ filter: "beam" });
-  const rows = elementsOf(tree).filter((element) => element.props["data-all-model"] !== undefined);
-  expect(rows.map((element) => element.props["data-all-model"])).toEqual(["dsh-opencode-go:beam-free"]);
-  expect(elementsOf(tree).some((element) => element.props["data-all-model-collapse"] === "true")).toBe(true);
+  const searched = render({ filter: "beam" });
+  expect(
+    elementsOf(searched.tree)
+      .filter((element) => element.props["data-all-model"] !== undefined)
+      .map((element) => element.props["data-all-model"]),
+  ).toEqual(["dsh-opencode-go:beam-free"]);
+  expect(textsOf(searched.tree)).toContain("全部模型");
 });

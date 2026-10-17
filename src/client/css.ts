@@ -89,11 +89,17 @@ export const PAGE_CSS = `
 .dsl-card > summary > svg { flex: none; color: var(--dsw-alias-label-tertiary); }
 .dsl-card[open] > summary > svg { transform: rotate(180deg); }
 .dsl-model-summary-title { font-size: 15px; font-weight: 600; line-height: 24px; }
-.dsl-model-group { display: flex; flex-direction: column; gap: 2px; padding-top: 6px;
+.dsl-model-vendor-group { display: flex; flex-direction: column; gap: 4px; padding-top: 8px;
   border-top: .5px solid var(--dsw-alias-border-l1); }
-.dsl-model-group:first-of-type { border-top: none; padding-top: 0; }
-.dsl-model-group > h3 { margin: 4px 0 2px; font-size: 12px; line-height: 18px; font-weight: 600;
-  color: var(--dsw-alias-label-secondary); }
+.dsl-model-vendor-group:first-of-type { border-top: none; padding-top: 0; }
+.dsl-model-group { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 2px 10px; }
+.dsl-model-group-summary { display: flex; flex-direction: row; align-items: center; gap: 6px;
+  padding: 2px 0; list-style: none; cursor: pointer; color: var(--dsw-alias-label-secondary); }
+.dsl-model-group-summary::-webkit-details-marker { display: none; }
+.dsl-model-group-summary > svg { flex: none; transition: transform 150ms ease; }
+.dsl-model-group[open] > .dsl-model-group-summary > svg,
+.dsl-model-vendor-group[open] > .dsl-model-group-summary > svg { transform: rotate(180deg); }
+.dsl-model-group-title { font-size: 12px; line-height: 18px; font-weight: 600; }
 .dsl-card > summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 4px; border-radius: var(--dsw-radius-xs); }
 /* 卡片底部的常驻开关（如 OpenCode 的自动切换）：一条分隔线把它们与账号列表分开。 */
@@ -303,6 +309,12 @@ export const PAGE_CSS = `
 .dsl-account-actions > .dsl-actions { gap: 2px; flex-wrap: nowrap; }
 .dsl-vendor-badge { flex: none; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l2);
   border-radius: 999px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; }
+.dsl-add-chooser { display: flex; flex-direction: column; gap: 6px; }
+.dsl-add-summary { display: inline-flex; flex-direction: row; align-items: center; align-self: flex-start;
+  gap: 4px; list-style: none; cursor: pointer; color: var(--dsw-alias-state-business-primary);
+  font-size: 13px; line-height: 20px; }
+.dsl-add-summary::-webkit-details-marker { display: none; }
+.dsl-add-chooser > .dsl-actions { flex-wrap: wrap; }
 .dsl-dot { flex: none; box-sizing: border-box; width: 7px; height: 7px; border-radius: 50%;
   background: var(--dsw-alias-border-l3); transition: background 150ms ease; }
 .dsl-account[data-effective="true"] .dsl-dot,
@@ -450,9 +462,14 @@ export const CSS_CLASS = {
   account: "dsl-account",
   accountGroup: "dsl-account-group",
   vendorBadge: "dsl-vendor-badge",
+  addChooser: "dsl-add-chooser",
+  addSummary: "dsl-add-summary",
   modelSummary: "dsl-model-summary",
   modelSummaryTitle: "dsl-model-summary-title",
   modelGroup: "dsl-model-group",
+  modelVendorGroup: "dsl-model-vendor-group",
+  modelGroupSummary: "dsl-model-group-summary",
+  modelGroupTitle: "dsl-model-group-title",
   duration: "dsl-duration",
   durationPart: "dsl-duration-part",
   mark: "dsl-mark",
