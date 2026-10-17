@@ -424,6 +424,33 @@ it("账号操作先写意图再提交，提交成功后意图被清除（与 Tas
   expect(settings.namespaces.every((ns) => ns === COMMAND_CODE_SETTINGS_NS)).toBe(true);
 });
 
+it("setAutoSwitch 写自动切换开关：意图先落库、提交后清除，字段写进设置文档（§4.2 的 C）", async () => {
+  const store = memoryStore();
+  const seenAtSubmit: AccountIntent[][] = [];
+  const settings = fakeSettings({ accounts: [], activeAccount: ACTIVE_ACCOUNT_AUTO, modelAccountRules: [] }, () => {
+    seenAtSubmit.push(store.snapshot());
+    return undefined;
+  });
+  const port = createCommandCodeAccounts({
+    settings,
+    credentials: fakeCredentials(),
+    intents: new IntentLog(store.store),
+  });
+
+  await port.setAutoSwitch!(false);
+
+  // 提交动作发起时，意图已经在日志里（append 先于 mutate）。
+  expect(seenAtSubmit).toHaveLength(1);
+  expect(seenAtSubmit[0]).toEqual([expect.objectContaining({ kind: "auto-switch", value: false })]);
+  // 提交成功后意图被清除（append + settle 各落盘一次）。
+  expect(store.snapshot()).toEqual([]);
+  expect(store.writeCount()).toBe(2);
+  expect(settings.doc().autoSwitch).toBe(false);
+  expect(settings.namespaces.every((ns) => ns === COMMAND_CODE_SETTINGS_NS)).toBe(true);
+  // 能力矩阵的另半边保持原样：`move` 仍然不实现（`reorder: false`），可选成员缺席、控件隐藏。
+  expect(port.move).toBeUndefined();
+});
+
 it("remove 清掉该账号的模型规则并清理凭据", async () => {
   const store = memoryStore();
   const settings = fakeSettings({

@@ -102,6 +102,12 @@ const ACTIVE_FIELD = "activeAccount";
 /** 待清理凭据引用数组字段。 */
 const CLEANUP_FIELD = "credentialCleanupRefs";
 
+/**
+ * 自动切换开关字段（设计 §6.4.5：`autoSwitch` 落库是两家共用的可靠性机制）。与 opencode
+ * 同名字段；轮换引擎的门在入口的 `accountStateOf`（对同一份文档给出同一个答案）。
+ */
+const AUTO_SWITCH_FIELD = "autoSwitch";
+
 /** ref 撞名时的后缀尝试上限（旧插件开通过程第 9108 行的同一条 128 次上限）。 */
 const MAX_REF_ATTEMPTS = 128;
 
@@ -278,6 +284,12 @@ class CommandCodeAccounts implements AccountPort {
    * `apiKeyEnv` 那个账号是轮换顺序的首项、也是 `activeAccount: "default"` 指的对象，但它不在
    * `accounts[]` 里 —— 只列 `accounts[]` 会让「正在服务请求的那个账号」既看不见、也固定不了。
    * 只有当真账号条目已经占用了这个 ref 时才不合成（same ref 的重复行不该出现）。
+   *
+   * **顺序不随固定账号重排**（刻意不同于 opencode 的 `moveFirst`）：Command Code 的轮换顺序
+   * 首项是顶层默认账号，固定账号只是「先试它」而不是顺序的队首 —— 把它提到第一行会让列表
+   * 顺序与真实轮换顺序脱钩（`usage-remote.accounts()` 的顺序同时是页面顺序与轮换顺序）。
+   * 当前固定账号由 `active` 标记指认；顺序保持旧插件 `slots()` 的同一形状，与本家
+   * `reorder: false` 的能力声明一致（测试锁死这一形状）。
    */
   async list(): Promise<AccountView[]> {
     const snapshot = await this.#deps.settings.describe(COMMAND_CODE_SETTINGS_NS);
@@ -443,21 +455,38 @@ class CommandCodeAccounts implements AccountPort {
   }
 
   // 刻意不实现 `move`：Command Code 不支持排序（设计 §7.3 `reorder: false`），能力声明
-  // 关掉它，UI 因此隐藏排序控件（`AccountPort.move` 是可选成员）。
-  // `setAutoSwitch` 同样不实现：Command Code 的文档里没有这个开关，自动切换是轮换引擎的
-  // 行为而不是账号库的字段（第 2 期若需要开关再补）。
+  // 关掉它，UI 因此隐藏排序控件（`AccountPort.move` 是可选成员）；`list()` 因此也**不**做
+  // opencode 那样的「当前账号提位」。
+
+  /**
+   * 写自动切换开关（设计 §6.4.5：`autoSwitch` 落库是两家共用的可靠性机制；2026-10-17 按
+   * 交接文件 §4.2 的 C 项从 opencode 对齐过来，此前只有 opencode 实现）。
+   *
+   * 关闭后轮换只试当前账号 —— 固定账号；未固定时是轮换顺序的首项（顶层默认账号）—— 不再
+   * 回落到其它账号；门在入口的 `accountStateOf`（对同一份文档给出同一个答案）。默认 `true`
+   * 保持旧插件「额度耗尽总是回落」的行为（见入口 Config 的同名字段）。
+   * @param value - 开关值。
+   */
+  async setAutoSwitch(value: boolean): Promise<void> {
+    await this.#transaction("auto-switch", { value }, () =>
+      this.#mutate(() => ({
+        ops: [{ op: "set", path: [AUTO_SWITCH_FIELD], value }],
+        result: undefined,
+      })),
+    );
+  }
 
   /**
    * 一次完整事务：先 `append` 意图，再交给 `submit`（通常是设置变更），全部成功后才
    * `settle`。顺序不能颠倒：崩溃时留下的未决意图正是重放的依据。
    * @param kind - 意图类型。
-   * @param fields - 意图携带的 ref/label。
+   * @param fields - 意图携带的 ref/label/value。
    * @param submit - 真正的提交动作。
    * @returns `submit` 的结果。
    */
   async #transaction<T>(
     kind: AccountIntentKind,
-    fields: { ref?: string; label?: string },
+    fields: { ref?: string; label?: string; value?: boolean },
     submit: (intent: AccountIntent) => Promise<T>,
   ): Promise<T> {
     const intent = this.#intent(kind, fields);
@@ -501,13 +530,14 @@ class CommandCodeAccounts implements AccountPort {
   }
 
   /** 造一条带唯一 id 的意图（`createdAt` 仅供展示，不参与排序）。 */
-  #intent(kind: AccountIntentKind, fields: { ref?: string; label?: string }): AccountIntent {
+  #intent(kind: AccountIntentKind, fields: { ref?: string; label?: string; value?: boolean }): AccountIntent {
     return {
       id: randomUUID(),
       kind,
       createdAt: Date.now(),
       ...(fields.ref === undefined ? {} : { ref: fields.ref }),
       ...(fields.label === undefined ? {} : { label: fields.label }),
+      ...(fields.value === undefined ? {} : { value: fields.value }),
     };
   }
 }
@@ -515,7 +545,7 @@ class CommandCodeAccounts implements AccountPort {
 /**
  * 造一个 Command Code 账号端口（真源在设置文档，密钥走凭据服务）。
  * @param deps - 设置、凭据与意图日志三个端口。
- * @returns 账号端口；`move` 不提供（能力声明关闭）。
+ * @returns 账号端口；`move` 不提供（`reorder: false` 的能力声明关闭它），其余命令全部实现。
  */
 export function createCommandCodeAccounts(deps: CommandCodeAccountDeps): AccountPort {
   return new CommandCodeAccounts(deps);

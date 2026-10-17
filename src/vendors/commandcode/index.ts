@@ -9,7 +9,7 @@
  *
  * 装配产物：
  * - 轮换引擎（顺序 = 顶层默认账号 + `accounts` 列表，固定 = `activeAccount`，规则 =
- *   `modelAccountRules`）—— 状态一变即重建，拒绝记忆随之搬迁；
+ *   `modelAccountRules`，自动切换 = `autoSwitch`）—— 状态一变即重建，拒绝记忆随之搬迁；
  * - 意图日志（存储 = 设置文档的隐藏字段 `accountIntents`，**每个命名空间唯一一个实例**）；
  * - 账号端口（Task 10）、额度端口（Task 10）、登录端口（Task 11，本期只构造并挂在返回的
  *   装配产物上，远程暴露留给计划 1b）；
@@ -120,6 +120,15 @@ export const Config: PluginConfigSchema = z.object(
         }),
       ),
       activeAccount: z.string(),
+      /**
+       * 自动切换开关（设计 §6.4.5：`autoSwitch` 落库是两家共用的可靠性机制；2026-10-17 按
+       * 交接文件 §4.2 的 C 项从 opencode 对齐过来）。关闭后轮换只试当前账号（固定账号；
+       * 未固定时是顶层默认账号），门见 `accountStateOf`。
+       *
+       * 默认 `true`（与 opencode 的 `false` 不同）：旧插件一直允许额度耗尽时回落到备用账号，
+       * 零迁移要求默认保持这个行为 —— 用户文档里没有这个字段时行为一字不变。
+       */
+      autoSwitch: z.boolean().default(true),
       modelAccountRules: z.array(z.object({ models: z.array(z.string()), account: z.string() })),
       credentialCleanupRefs: z.array(z.string().role("credential-ref")),
       // 意图日志的持久化字段：内容是恢复状态，对 schema 不透明（`z.any()` 只做「是数组」这一层
@@ -331,9 +340,22 @@ function booleanMap(value: unknown): Record<string, boolean> | undefined {
   return Object.keys(map).length === 0 ? undefined : map;
 }
 
-/** 账号库状态：顺序、按模型规则与固定账号（`core` 的 `RotationEngine` 输入）。 */
+/**
+ * 账号库状态：顺序、按模型规则与固定账号（`core` 的 `RotationEngine` 输入）。
+ *
+ * **`autoSwitch` 门**（设计 §6.4.5：落库的自动切换开关改为两家共用）：显式 `false` 时
+ * 候选顺序收窄成**只当前账号** —— 固定账号；未固定时是轮换顺序的首项（顶层默认账号）——
+ * 一次额度拒绝不会把请求打到用户没允许的第二个账号上（与 opencode 的门同义）。默认 `true`
+ * 保持旧插件「额度耗尽总是回落」的行为；只有**显式** `false` 才收窄：程序化构造的文档
+ * 没有这个字段时保持完整顺序（两侧都有测试锁死）。
+ */
 function accountStateOf(document: Record<string, unknown>): AccountState {
-  return { order: orderOf(document), rules: rulesOf(document), pinned: pinnedRefOf(document) };
+  const pinned = pinnedRefOf(document);
+  return {
+    order: document.autoSwitch === false ? [pinned ?? defaultRefOf(document)] : orderOf(document),
+    rules: rulesOf(document),
+    pinned,
+  };
 }
 
 /** 顶层默认账号的 ref：`apiKeyEnv`；缺省或非法时回落到内置默认名（与账号端口同一份读法）。 */

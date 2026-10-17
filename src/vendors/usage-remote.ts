@@ -308,8 +308,9 @@ export class LlmAccountUsageService extends TypertRemoteService {
   /**
    * 写自动切换开关。
    *
-   * 只有真的有这个开关的厂商才实现（本包只有 opencode；Command Code 的自动切换由轮换引擎
-   * 无条件执行，没有开关可写）。没实现时报明确错误。
+   * 两家都已实现（设计 §6.4.5 把 `autoSwitch` 落库定为共用的可靠性机制；Command Code 在
+   * 2026-10-17 按交接文件 §4.2 的 C 项补齐，此前只有 opencode）。端口上仍是可选方法：
+   * 没实现的厂商报明确错误，不是静默无操作。
    * @param vendor - 厂商 id。
    * @param value - 开关值。
    */

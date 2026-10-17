@@ -377,8 +377,10 @@ it("排序与 autoSwitch：支持的厂商转发到账号端口，参数原样",
   ]);
 });
 
-it("排序与 autoSwitch：不支持的厂商报明确错误（不是静默无操作）", async () => {
-  // commandcode 的账号端口不实现这两个：它的自动切换由轮换引擎无条件执行，文档里也没有开关。
+it("排序与 autoSwitch：端口缺方法的厂商报明确错误（不是静默无操作）", async () => {
+  // 这里的假端口刻意不实现这两个可选方法（真实的两家现在都实现了 `setAutoSwitch` —— 设计
+  // §6.4.5 共用，commandcode 于 2026-10-17 补齐；`move` 仍然只有 opencode 实现）。
+  // 「缺方法时报明确错误」这条路径本身对未来的厂商同样适用，用缺方法的端口锁死。
   const { service } = await mount([vendorDeps({ vendor: "commandcode" })]);
   await expect(service.moveAccount("commandcode", "a", 1)).rejects.toThrow(/reordering/);
   await expect(service.setAutoSwitch("commandcode", true)).rejects.toThrow(/auto-switch/);

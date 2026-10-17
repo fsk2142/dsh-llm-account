@@ -459,29 +459,40 @@ it("两个入口都关掉宿主自动生成的设置表单，并把 owner fiber 
 });
 
 it("两个入口装进同一个宿主：一份远程面同时回答两家，描述符只登记一次（Task 3 接线）", async () => {
-  const settings = fakeSettings([
-    { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE }, revision: 1 },
-    { ns: "opencode-go", value: { ...OPENCODE_SHAPE, enabled: true }, revision: 1 },
-  ]);
-  const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "k1", OPENCODE_API_KEY: "k2" });
-  const host = realHost({ settings: settings.service, credentials: credentials.service });
+  // `status()` 会经两家**真额度端口**读一次用量 —— 不打桩就会打真实网络（谁家端点慢就随超时），
+  // 本机对那两个 API 主机的连通性不稳定，这条测试因此会随机 5s 超时（2026-10-17 实测：
+  // 未打桩时约一半跑次超时，与代码无关）。给所有请求一个即答的 200 `{}`：只验证「接线」。
+  vi.stubGlobal(
+    "fetch",
+    (async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+  );
+  try {
+    const settings = fakeSettings([
+      { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE }, revision: 1 },
+      { ns: "opencode-go", value: { ...OPENCODE_SHAPE, enabled: true }, revision: 1 },
+    ]);
+    const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "k1", OPENCODE_API_KEY: "k2" });
+    const host = realHost({ settings: settings.service, credentials: credentials.service });
 
-  commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
-  opencode.apply(host.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true }));
-  // 远程面的注册发生在 `ctx.inject(["typert"], …)` 的回调里（异步）。
-  await new Promise((resolve) => setTimeout(resolve, 0));
+    commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+    opencode.apply(host.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true }));
+    // 远程面的注册发生在 `ctx.inject(["typert"], …)` 的回调里（异步）。
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const service = host.ctx.get("llmAccountUsage") as {
-    status(vendor: string): Promise<{ vendor: string; pinned: string | null }>;
-  };
-  expect(service).toBeDefined();
-  await expect(service.status("commandcode")).resolves.toMatchObject({ vendor: "commandcode" });
-  await expect(service.status("dsh-opencode-go")).resolves.toMatchObject({ vendor: "dsh-opencode-go" });
+    const service = host.ctx.get("llmAccountUsage") as {
+      status(vendor: string): Promise<{ vendor: string; pinned: string | null }>;
+    };
+    expect(service).toBeDefined();
+    await expect(service.status("commandcode")).resolves.toMatchObject({ vendor: "commandcode" });
+    await expect(service.status("dsh-opencode-go")).resolves.toMatchObject({ vendor: "dsh-opencode-go" });
 
-  // 描述符由创建服务的那一行登记一次，不是每行一次。
-  expect(host.typert.contributions).toHaveLength(1);
-  // 两个入口各自关掉了自己的自动表单。
-  expect(settings.presentations.map((record) => record.presentation)).toEqual([{ auto: false }, { auto: false }]);
+    // 描述符由创建服务的那一行登记一次，不是每行一次。
+    expect(host.typert.contributions).toHaveLength(1);
+    // 两个入口各自关掉了自己的自动表单。
+    expect(settings.presentations.map((record) => record.presentation)).toEqual([{ auto: false }, { auto: false }]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 it("请求成功后把服务完成请求的账号上报为生效账号；失败时不报（noteSettled 接线，规格 §8.1 第 1 条）", async () => {
@@ -794,6 +805,146 @@ it("autoSwitch 关着时备用账号服务成功也不提位（顺序是用户�
     const { error } = await drain(bundle.adapter.stream(streamRequest()));
     expect(error).toMatchObject({ code: "QUOTA" });
     expect(settings.mutations).toEqual([]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 2026-10-17 修复波：commandcode 的 3 处不对称（§4.2）。
+// C（确定性 bug）：`autoSwitch` 落库 + 门 —— 按设计 §6.4.5/§7.3 实现，而不是改声明。
+// A/B（设计取舍）：顺序不重排、备援晋升只属 opencode —— 用测试锁死形状。
+// ---------------------------------------------------------------------------
+
+/** 一条 provider 为 commandcode 的最小请求。 */
+function commandCodeStreamRequest(): GenerateOptions {
+  return {
+    provider: "commandcode",
+    model: "m1",
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  } as unknown as GenerateOptions;
+}
+
+/**
+ * 造一个 commandcode 的假网关：所有生成请求都回 429 额度拒绝（带窗口证据），按顺序记下
+ * `Authorization` 头里的密钥 —— 「第二个账号有没有被联系」就是看这个序列。
+ * @returns 假 fetch 与密钥序列。
+ */
+function commandCodeQuotaGateway(): { fetchImpl: typeof fetch; keys: string[] } {
+  const keys: string[] = [];
+  const fetchImpl = (async (_input: unknown, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(init?.headers);
+    const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
+    keys.push(key);
+    return new Response(
+      JSON.stringify({ error: { code: "RATE_LIMITED", rateLimit: { window: "fiveHour", reset: Math.floor(Date.now() / 1000) + 3600 } } }),
+      { status: 429, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  return { fetchImpl, keys };
+}
+
+it("commandcode 的 autoSwitch: false 只试当前账号：额度拒绝不会打到第二个账号（C）", async () => {
+  const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "key-default", COMMANDCODE_API_KEY_2: "key-second" });
+  const gateway = commandCodeQuotaGateway();
+  vi.stubGlobal("fetch", gateway.fetchImpl);
+  try {
+    const host = fakeHost({ credentials: credentials.service });
+    const bundle = commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, autoSwitch: false }));
+    const { error } = await drain(bundle.adapter.stream(commandCodeStreamRequest()));
+
+    // 唯一的候选（固定账号 = 顶层默认账号）被额度拒绝后没有下一个：抛出那次拒绝，
+    // 第二个账号**从未被联系**。
+    expect(error).toMatchObject({ code: "RATE_LIMIT" });
+    expect(gateway.keys).toEqual(["key-default"]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("commandcode 默认 autoSwitch: true 时同一个网关会轮到第二个账号（同一份文档只差这个开关）", async () => {
+  const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "key-default", COMMANDCODE_API_KEY_2: "key-second" });
+  const gateway = commandCodeQuotaGateway();
+  vi.stubGlobal("fetch", gateway.fetchImpl);
+  try {
+    const host = fakeHost({ credentials: credentials.service });
+    // 用户现有文档里没有这个字段：Config 的默认值 `true` 保持旧插件「额度耗尽总是回落」的行为。
+    const bundle = commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+    const { error } = await drain(bundle.adapter.stream(commandCodeStreamRequest()));
+
+    expect(error).toMatchObject({ code: "RATE_LIMIT" });
+    expect(gateway.keys).toEqual(["key-default", "key-second"]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("commandcode 的 list() 顺序不随固定账号重排：固定标记换行，顺序仍是轮换顺序（A）", async () => {
+  const settings = fakeSettings([
+    {
+      ns: "llm-commandcode",
+      value: { ...COMMAND_CODE_SHAPE, activeAccount: "COMMANDCODE_API_KEY_2" },
+      revision: 4,
+    },
+  ]);
+  const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "sk-default", COMMANDCODE_API_KEY_2: "sk-fsk" });
+  const host = fakeHost({ settings: settings.service, credentials: credentials.service });
+  const bundle = commandcode.apply(
+    host.ctx,
+    commandcode.Config({ ...COMMAND_CODE_SHAPE, activeAccount: "COMMANDCODE_API_KEY_2" }),
+  );
+
+  // 固定的其实是第二行（`active: true` 在它身上），但顺序仍与轮换顺序一致：顶层默认账号
+  // 在前 —— 刻意不抄 opencode 的 `moveFirst`（`reorder: false` 的设计选择，测试锁死）。
+  await expect(bundle.accounts.list()).resolves.toEqual([
+    { ref: "COMMANDCODE_API_KEY", label: "Default", configured: true, active: false },
+    { ref: "COMMANDCODE_API_KEY_2", label: "sample-user-2", configured: true, active: true },
+  ]);
+  // 固定账号仍被引擎优先（固定 ≠ 顺序）：固定它之后下一次选择就是它。
+  expect(bundle.rotation.current().pick({ model: "m1", tried: new Set() })).toBe("COMMANDCODE_API_KEY_2");
+});
+
+it("commandcode 的备用账号服务成功也不提位：固定账号保持不动（B：晋升只属 opencode）", async () => {
+  const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "key-default", COMMANDCODE_API_KEY_2: "key-second" });
+  const settings = fakeSettings([
+    { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE, activeAccount: "default" }, revision: 4 },
+  ]);
+  const keys: string[] = [];
+  vi.stubGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
+    keys.push(key);
+    if (key === "key-default") {
+      return new Response(
+        JSON.stringify({ error: { code: "RATE_LIMITED", rateLimit: { window: "fiveHour", reset: Math.floor(Date.now() / 1000) + 3600 } } }),
+        { status: 429, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      [
+        '{"choices":[{"delta":{"content":"hello"}}]}',
+        '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        "[DONE]",
+      ]
+        .map((event) => `data: ${event}\n\n`)
+        .join(""),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }) as typeof fetch);
+  try {
+    const host = fakeHost({ credentials: credentials.service, settings: settings.service });
+    const bundle = commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+    const { error } = await drain(bundle.adapter.stream(commandCodeStreamRequest()));
+
+    expect(error).toBeUndefined();
+    expect(keys).toEqual(["key-default", "key-second"]);
+    // 备用账号把请求服务完，但一次设置写入都没有：固定账号（`activeAccount`）保持不动。
+    // Command Code 的固定语义是「透支时允许回落、窗口重置后恢复固定」（设计 §6.4.4），
+    // 把服务过的账号提为固定账号会毁掉「恢复固定」；晋升是 opencode 上游
+    // （`GoAccountSelection.adopt`）的行为、且以它的 `autoSwitch` 为门 —— 不往这里搬。
+    // 「卡片跟随真实账号」由内核的「最近成功者」（`noteSettled`）经远程面发布，不靠改文档。
+    expect(settings.mutations).toEqual([]);
+    expect(settings.valueOf("llm-commandcode")?.activeAccount).toBe("default");
   } finally {
     vi.unstubAllGlobals();
   }

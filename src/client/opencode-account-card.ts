@@ -1,10 +1,11 @@
 /**
  * OpenCode 账户卡片（Task 6）：共享账户卡片 + 排序控件 + `autoSwitch` 开关。
  *
- * 为什么单独一张卡片而不是给共享卡片加开关：这两个都是 **OpenCode 独有**的语义 ——
- * `reorder` 与 `autoSwitch` 只在这一家的能力矩阵/设置文档里存在（Command Code 的自动切换由轮换
- * 引擎无条件执行，没有开关可写，见 `src/vendors/commandcode/accounts.ts` 的注释）。把它们留在
- * 这里，共享卡片就仍然是厂商无关的。
+ * 为什么单独一张卡片而不是给共享卡片加开关：`reorder` 只在这一家的能力矩阵里存在（Command
+ * Code 的账号顺序由配置决定，设计 §7.3）；`autoSwitch` 两家都已实现并落库（设计 §6.4.5，
+ * Command Code 的开关见 `src/vendors/commandcode/accounts.ts`），但 1b 只给 OpenCode
+ * 渲染这个开关控件（Command Code 的开关目前经远程面调）。把它们留在这里，共享卡片就仍然
+ * 是厂商无关的。
  *
  * **排序交互的实现取舍**（Ruling 31）：计划写的是「拖动排序」，但本期的测试环境没有 DOM
  * （Ruling 22：没有 jsdom，组件按「纯 props → 元素树」测），真正的拖动需要 pointer 事件与
