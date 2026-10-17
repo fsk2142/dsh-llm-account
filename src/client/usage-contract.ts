@@ -20,12 +20,19 @@
  * （与旧插件 `remote.commandcode` / `remote.session` 同一形状），真机判定在计划 1c。
  * @module dsh-llm-account/src/client/usage-contract
  */
-import type { AccountView, FailureKind, QuotaWindow, VendorCapabilities } from "../core/adapter";
+import type { AccountView, CatalogModelsResult, FailureKind, QuotaWindow, VendorCapabilities } from "../core/adapter";
 
 // 客户端其它模块（页面、接缝）需要这几个形状时也从这里取，不必各自去 import `src/core/**`：
 // 这个模块是客户端侧唯一允许提到 core 的地方，而且是**纯类型**导入（`verbatimModuleSyntax`
 // 会把整个 import 语句擦掉，浏览器产物里不会出现 core 的任何运行时代码）。
-export type { AccountView, FailureKind, QuotaWindow, VendorCapabilities } from "../core/adapter";
+export type {
+  AccountView,
+  CatalogModel,
+  CatalogModelsResult,
+  FailureKind,
+  QuotaWindow,
+  VendorCapabilities,
+} from "../core/adapter";
 
 /** 贡献所属的 npm 包（描述符 id 的前缀）。 */
 export const USAGE_PACKAGE = "dsh-llm-account";
@@ -42,6 +49,8 @@ export const USAGE_METHODS = [
   "status",
   "accounts",
   "switches",
+  // 设置页的模型勾选：未过滤的完整目录
+  "models",
   // 账号操作（Task 5：账户卡片的 `⋯` 菜单与「添加账户」）
   "addAccount",
   "renameAccount",
@@ -200,6 +209,26 @@ function parseLoginStatus(endpoint: string, value: unknown): LoginStatus {
   return value as unknown as LoginStatus;
 }
 
+/**
+ * 校验模型目录结果。
+ *
+ * 只查结构、逐项清洗：目录与失败原因都来自宿主，但页面不该因为一个坏行就整块崩掉；
+ * 读不出内容的行直接丢弃，失败项只保留字符串。
+ */
+function parseCatalogModels(endpoint: string, value: unknown): CatalogModelsResult {
+  if (!isRecord(value) || !Array.isArray(value.models)) {
+    throw boundaryError(endpoint, "expected a models result with a models array");
+  }
+  const models = value.models
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .filter((item) => typeof item.id === "string")
+    .map((item) => ({ id: item.id as string, ...(typeof item.name === "string" ? { name: item.name } : {}) }));
+  const failures = Array.isArray(value.failures)
+    ? value.failures.filter((item): item is string => typeof item === "string")
+    : [];
+  return { models, failures };
+}
+
 /** 校验一条账号行。 */
 function parseAccountView(endpoint: string, value: unknown): AccountView {
   if (!isRecord(value) || typeof value.ref !== "string") {
@@ -342,6 +371,7 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("status", "VendorUsageStatus", parseVendorUsageStatus, [VENDOR_PARAM]),
     makeDescriptor("accounts", "AccountViewList", parseAccountViews, [VENDOR_PARAM]),
     makeDescriptor("switches", "SwitchRecordList", parseSwitchRecords, [VENDOR_PARAM]),
+    makeDescriptor("models", "CatalogModels", parseCatalogModels, [VENDOR_PARAM]),
     makeDescriptor("addAccount", "AccountView", parseAccountView, [
       VENDOR_PARAM,
       { name: "input", typeSymbol: "AddAccountInput", parse: (_endpoint, value) => parseAddAccountInput(value) },
@@ -384,6 +414,7 @@ export interface UsageNamespace {
   status(vendor: string): Promise<VendorUsageStatus>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
+  models?(vendor: string): Promise<CatalogModelsResult>;
   addAccount(vendor: string, input: AddAccountInput): Promise<AccountView>;
   renameAccount(vendor: string, ref: string, label: string): Promise<void>;
   replaceKey(vendor: string, ref: string, key: string): Promise<void>;

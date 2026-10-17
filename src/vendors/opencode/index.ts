@@ -342,6 +342,8 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     pinnedRef: () => pinnedRefOf(document()),
     quotaRef: () => selectedRefOf(document()),
     capabilities,
+    // 设置页的模型勾选：未过滤的完整目录。
+    models: () => adapter.catalogModels(),
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。

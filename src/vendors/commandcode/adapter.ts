@@ -24,7 +24,7 @@ import type {
   TokenUsage,
 } from "@deepseek-ai/dsh-llm";
 
-import type { AccountPort, CatalogEntry, QuotaPort, Rejection } from "../../core/adapter";
+import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
@@ -198,7 +198,7 @@ interface AttemptFailure {
 }
 
 /** 命令码适配器：宿主 `LlmAdapter` 的一个真实子类。 */
-class CommandCodeAdapter extends LlmAdapter {
+class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #deps: CommandCodeAdapterDeps;
 
   /**
@@ -244,6 +244,18 @@ class CommandCodeAdapter extends LlmAdapter {
       name: entry.name,
       inputModalities: entry.inputModalities,
     }));
+  }
+
+  /**
+   * 全部目录条目（**不受** `visibleModels` / `modelVisibility` 过滤），供设置页勾选。
+   *
+   * 与 `listModels` 的分工：那个回答「宿主的模型选择器该看到什么」，这个回答「厂商现在
+   * 有哪些模型」—— 隐藏的模型也要出现在勾选列表里，否则用户没有入口把它重新打开。
+   * @returns 目录里的模型 id 与名称。
+   */
+  async catalogModels(): Promise<CatalogModel[]> {
+    const entries = await this.#catalog(resolveConfig(this.#deps.config()));
+    return entries.map((entry) => ({ id: entry.id, ...(entry.name === "" ? {} : { name: entry.name }) }));
   }
 
   /**
@@ -499,6 +511,6 @@ class CommandCodeAdapter extends LlmAdapter {
  * @param deps - 配置读取、轮换引擎、端口与 I/O 注入点。
  * @returns 宿主 `LlmAdapter` 子类实例。
  */
-export function createCommandCodeAdapter(deps: CommandCodeAdapterDeps): LlmAdapter {
+export function createCommandCodeAdapter(deps: CommandCodeAdapterDeps): LlmAdapter & CatalogModelsPort {
   return new CommandCodeAdapter(deps);
 }

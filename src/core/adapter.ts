@@ -158,6 +158,25 @@ export interface CatalogPort {
   list(): Promise<CatalogEntry[]>;
 }
 
+/** 目录里的一行（只用于设置页勾选，不需要完整元数据）。 */
+export interface CatalogModel {
+  /** 请求时使用的模型 id。 */
+  id: string;
+  /** 用户可见名称；端点没给时缺省。 */
+  name?: string;
+}
+
+/** `models()` 远程方法的结果：目录 + 读取失败项（失败不抛）。 */
+export interface CatalogModelsResult {
+  models: CatalogModel[];
+  failures: string[];
+}
+
+/** 能列出目录的适配器：设置页的模型勾选需要**未过滤**的完整目录。 */
+export interface CatalogModelsPort {
+  catalogModels(): Promise<CatalogModel[]>;
+}
+
 /** 一次登录尝试的状态。 */
 export interface LoginStatus {
   state: "idle" | "waiting" | "success" | "failed";

@@ -48,7 +48,7 @@ export function cls(...names: readonly string[]): string {
  */
 export const PAGE_CSS = `
 /* ═══ 页面骨架 ═══ */
-.dsl-root { display: flex; flex-direction: column; gap: 16px; max-width: 720px; padding-bottom: 56px;
+.dsl-root { display: flex; flex-direction: column; gap: 12px; max-width: 720px; padding-bottom: 56px;
   font-family: var(--dsw-font-family); font-size: 14px; line-height: 22px;
   color: var(--dsw-alias-label-primary); }
 .dsl-header { display: flex; flex-direction: column; gap: 4px; }
@@ -77,7 +77,7 @@ export const PAGE_CSS = `
   outline-offset: 2px; border-radius: var(--dsw-radius-xs); }
 
 /* ═══ 卡片：宿主设置卡片的原样形状（发丝描边 + radius-xl + 扁平） ═══ */
-.dsl-card { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; padding: 16px;
+.dsl-card { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; padding: 14px;
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xl);
   background: var(--dsw-alias-settings-card-fill); }
 .dsl-card > h2 { flex: none; }
@@ -95,7 +95,7 @@ export const PAGE_CSS = `
   padding-top: 12px; border-top: .5px solid var(--dsw-alias-border-l1); }
 
 /* ═══ 设置行：标签与说明在左、控件在右，行间一条发丝线 ═══ */
-.dsl-field { display: flex; flex-direction: row; align-items: center; gap: 16px; padding: 12px 0;
+.dsl-field { display: flex; flex-direction: row; align-items: center; gap: 16px; padding: 8px 0;
   border-bottom: .5px solid var(--dsw-alias-border-l1); font-size: 14px; line-height: 22px; }
 .dsl-field:last-child { border-bottom: none; }
 .dsl-field-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0;
@@ -279,7 +279,7 @@ export const PAGE_CSS = `
   outline-offset: 1px; }
 
 /* ═══ 账号行：身份行（名称 + 标记 + 动作）在上，额度表在其下 ═══ */
-.dsl-account { display: flex; flex-direction: column; gap: 10px; padding: 14px 0;
+.dsl-account { display: flex; flex-direction: column; gap: 8px; padding: 10px 0;
   border-bottom: .5px solid var(--dsw-alias-border-l2); }
 .dsl-account:last-of-type { border-bottom: none; padding-bottom: 0; }
 .dsl-account-head { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -323,7 +323,7 @@ export const PAGE_CSS = `
 
 /* ═══ 额度：每个窗口一小块（标签 + 读数 + 4px 进度条） ═══ */
 .dsl-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px 24px; }
+  gap: 10px 24px; }
 .dsl-sidebar .dsl-meters { display: flex; flex-direction: column; gap: 9px; }
 .dsl-quota-row { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .dsl-meter-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between;
@@ -368,7 +368,7 @@ export const PAGE_CSS = `
   .dsl-sidebar-shell .dsl-sidebar-compact { display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 4px; }
 }
-.dsl-sidebar { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; padding: 12px;
+.dsl-sidebar { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 10px;
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-secondary);
   font-size: 12px; line-height: 18px; }
@@ -392,8 +392,8 @@ export const PAGE_CSS = `
   color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
 
 /* ═══ 中栏仪表盘 ═══ */
-.dsl-dashboard { display: flex; flex-direction: column; gap: 14px; box-sizing: border-box;
-  max-width: 760px; padding: 20px 24px 40px; color: var(--dsw-alias-label-primary);
+.dsl-dashboard { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box;
+  max-width: 760px; padding: 16px 20px 32px; color: var(--dsw-alias-label-primary);
   font-size: 14px; line-height: 22px; }
 .dsl-dashboard > header { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .dsl-dashboard > header > h2 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 16px;
@@ -407,8 +407,8 @@ export const PAGE_CSS = `
   font-size: 12px; line-height: 18px; }
 .dsl-dashboard small { display: block; font-size: 12px; line-height: 18px;
   color: var(--dsw-alias-label-tertiary); }
-.dsl-dashboard section { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box;
-  padding: 14px 16px; border: .5px solid var(--dsw-alias-border-l2);
+.dsl-dashboard section { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box;
+  padding: 12px 14px; border: .5px solid var(--dsw-alias-border-l2);
   border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-settings-card-fill); }
 .dsl-dashboard section[data-dashboard-effective="true"] {
   border-color: var(--dsw-alias-state-business-primary); }

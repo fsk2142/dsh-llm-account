@@ -22,7 +22,7 @@
 import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, TokenUsage } from "@deepseek-ai/dsh-llm";
 
-import type { AccountPort, CatalogEntry, QuotaPort, Rejection } from "../../core/adapter";
+import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
@@ -177,7 +177,7 @@ interface AttemptFailure {
 }
 
 /** opencode 适配器：宿主 `LlmAdapter` 的一个真实子类。 */
-class OpencodeAdapter extends LlmAdapter {
+class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #deps: OpencodeAdapterDeps;
   /** 按基地址缓存的目录（同一基地址复用 TTL 缓存）。 */
   readonly #catalogs = new Map<string, OpencodeCatalog>();
@@ -227,6 +227,18 @@ class OpencodeAdapter extends LlmAdapter {
       id: entry.id,
       name: entry.name,
       inputModalities: entry.inputModalities,
+    }));
+  }
+
+  /**
+   * 全部目录条目（不受可见性过滤），供设置页勾选。
+   * @returns 目录里的模型 id 与名称。
+   */
+  async catalogModels(): Promise<CatalogModel[]> {
+    const records = await this.#catalog(resolveConfig(this.#deps.config()), undefined);
+    return records.map((record) => ({
+      id: record.entry.id,
+      ...(record.entry.name === "" ? {} : { name: record.entry.name }),
     }));
   }
 
@@ -534,6 +546,6 @@ class OpencodeAdapter extends LlmAdapter {
  * @param deps - 配置读取、轮换引擎、端口与 I/O 注入点。
  * @returns 宿主 `LlmAdapter` 子类实例。
  */
-export function createOpencodeAdapter(deps: OpencodeAdapterDeps): LlmAdapter {
+export function createOpencodeAdapter(deps: OpencodeAdapterDeps): LlmAdapter & CatalogModelsPort {
   return new OpencodeAdapter(deps);
 }

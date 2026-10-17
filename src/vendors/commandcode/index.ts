@@ -268,6 +268,8 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     capabilities,
     // 网页登录端口（Task 5）：账户卡片的登录入口经远程调用它。
     login,
+    // 设置页的模型勾选：未过滤的完整目录（页面把目录 ∪ 已配置项一起渲染）。
+    models: () => adapter.catalogModels(),
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。

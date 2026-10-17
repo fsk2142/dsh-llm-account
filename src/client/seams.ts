@@ -48,7 +48,7 @@ import type { LoginView } from "./account-card";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import type { VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type SwitchRecord, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type CatalogModelsResult, type SwitchRecord, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
 
 /** 一个「设置命名空间」在客户端看到的面（`remote.settings`）。 */
 export interface RemoteSettings {
@@ -411,6 +411,26 @@ export async function readSwitches(namespace: UsageNamespace | undefined, vendor
   return remoteValue<SwitchRecord[]>(namespace.switches(vendor));
 }
 
+/**
+ * 读一个厂商的**未过滤**模型目录（设置页勾选列表）。
+ *
+ * 失败不抛：页面要显示可读原因与「重试」，而不是把「读不到」渲染成「没有模型」。
+ * @param namespace - 已挂载的远程命名空间。
+ * @param vendor - 厂商 id。
+ * @returns 目录与失败项。
+ */
+export async function readModels(namespace: UsageNamespace | undefined, vendor: string): Promise<CatalogModelsResult> {
+  if (namespace === undefined || typeof namespace.models !== "function") {
+    return { models: [], failures: [`the ${USAGE_NAMESPACE} remote namespace has no models()`] };
+  }
+  const detailed = await remoteValueDetailed<CatalogModelsResult>(namespace.models(vendor));
+  if (detailed.ok && detailed.value !== undefined) return detailed.value;
+  return {
+    models: [],
+    failures: [detailed.ok ? `${USAGE_NAMESPACE}/models returned no value` : detailed.problem],
+  };
+}
+
 /** 挂载远程面后的观察窗口。 */
 export interface UsageRemoteHandle {
   /** 当前可用的命名空间；`undefined` 表示还没挂上或已卸下。 */
@@ -607,10 +627,18 @@ export interface VendorCardsContext {
   setAutoSwitch: (value: boolean) => void;
   /** 这家要渲染哪些专属卡片（顺序即规格 §8 的卡片顺序）；规则在 `vendorCardKinds` 里。 */
   cardKinds: readonly ("accounts" | "models")[];
-  /** 要展示的模型 id（白名单 ∪ 显隐表里有记录的，已清洗）。 */
+  /** 要展示的模型 id（厂商目录 ∪ 白名单 ∪ 显隐表里有记录的，已去重）。 */
   models: string[];
+  /** 白名单；缺省或为空表示不按白名单限制。 */
+  visibleModels: readonly string[];
   /** 逐模型显隐（缺省视为可见）。 */
   modelVisibility: Record<string, boolean>;
+  /** 模型目录读取失败原因（宿主原文）；读取正常时缺省。 */
+  catalogFailure?: string;
+  /** 模型目录正在读取。 */
+  catalogLoading?: boolean;
+  /** 重新读取模型目录。 */
+  onRetryCatalog?: () => void;
   /** 「添加模型」输入框的当前草稿。 */
   modelDraft: string;
   /** 模型搜索框关键词（纯展示过滤，不改任何设置）。 */
@@ -677,6 +705,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({});
     /** 模型搜索关键词（按厂商分开；纯展示，不进设置草稿、不进保存条）。 */
     const [modelFilters, setModelFilters] = useState<Record<string, string>>({});
+    /** 每个厂商的未过滤目录（`models()` 的结果）；还没读到时缺省。 */
+    const [modelCatalogs, setModelCatalogs] = useState<Record<string, CatalogModelsResult | undefined>>({});
+    /** 目录读取中（按厂商）。 */
+    const [modelCatalogLoading, setModelCatalogLoading] = useState<Record<string, boolean | undefined>>({});
+    /** 「重试目录」的计数器：每次 +1 触发一次重读。 */
+    const [modelCatalogRevision, setModelCatalogRevision] = useState(0);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
 
@@ -761,6 +795,21 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
     const activeVendor = activeEntry?.providerId;
 
+    // 读当前厂商的**未过滤**模型目录：只在标签页需要时读一次，失败可重试；不参与后台轮询。
+    useEffect(() => {
+      if (usage === undefined || activeVendor === undefined) return;
+      let alive = true;
+      setModelCatalogLoading((current) => ({ ...current, [activeVendor]: true }));
+      void readModels(usage, activeVendor).then((result) => {
+        if (!alive) return;
+        setModelCatalogs((current) => ({ ...current, [activeVendor]: result }));
+        setModelCatalogLoading((current) => ({ ...current, [activeVendor]: false }));
+      });
+      return () => {
+        alive = false;
+      };
+    }, [usage, activeVendor, modelCatalogRevision]);
+
     return PageShell({
       state,
       entries,
@@ -829,6 +878,9 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                   setDraft: (value) => setModelDrafts((current) => ({ ...current, [activeEntry.ns]: value })),
                   filter: modelFilters[activeEntry.ns] ?? "",
                   setFilter: (value) => setModelFilters((current) => ({ ...current, [activeEntry.ns]: value })),
+                  catalog: modelCatalogs[activeVendor],
+                  catalogLoading: modelCatalogLoading[activeVendor] === true,
+                  onRetryCatalog: () => setModelCatalogRevision((current) => current + 1),
                   draftInto: (ns, fields) => setState((current) => fields.reduce((acc, field) => setField(acc, ns, field.key, field.value), current)),
                   writeNow: (ns, fields) => {
                     // 立刻写（`immediate` 能力）：同样写行名；失败不静默 —— 记进保存错误，
@@ -890,10 +942,17 @@ function modelCardContext(input: {
   setFilter: (value: string) => void;
   draftInto: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
   writeNow: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
+  /** 厂商目录（未过滤）；还没读到时为 `undefined`。 */
+  catalog: CatalogModelsResult | undefined;
+  /** 目录正在读取。 */
+  catalogLoading: boolean;
+  /** 重新读取目录。 */
+  onRetryCatalog: () => void;
 }): Pick<
   VendorCardsContext,
   | "cardKinds"
   | "models"
+  | "visibleModels"
   | "modelVisibility"
   | "modelDraft"
   | "modelMode"
@@ -901,6 +960,9 @@ function modelCardContext(input: {
   | "modelFilter"
   | "setModelFilter"
   | "editModel"
+  | "catalogFailure"
+  | "catalogLoading"
+  | "onRetryCatalog"
 > {
   const { entry, state, mode } = input;
   const spec = entry.models;
@@ -911,19 +973,29 @@ function modelCardContext(input: {
     typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
       ? { ...(rawVisibility as Record<string, boolean>) }
       : {};
-  // 列表 = 白名单 ∪ 显隐表里出现过的模型（后者让「显式隐藏了一个不在白名单里的模型」也看得见，
-  // 否则用户没有任何入口把它改回来）。
-  const models = [...new Set([...visible, ...Object.keys(modelVisibility)])];
+  // 列表 = 厂商目录 ∪ 白名单 ∪ 显隐表里出现过的模型：
+  // - 目录项让「还没配置过的模型」有勾选入口；
+  // - 白名单/显隐项让「目录里暂时没有、但用户手工加过」的模型继续可管理；
+  // - 显式隐藏了一个不在目录里的模型时，它也看得见（否则没有入口改回来）。
+  const catalogIds = (input.catalog?.models ?? []).map((model) => model.id);
+  const models = [...new Set([...catalogIds, ...visible, ...Object.keys(modelVisibility)])];
+  const catalogFailure = input.catalog === undefined || input.catalog.failures.length === 0
+    ? undefined
+    : input.catalog.failures.join("；");
 
   return {
     cardKinds: vendorCardKinds(entry),
     models,
+    visibleModels: visible,
     modelVisibility,
     modelDraft: input.draft,
     modelMode: mode,
     setModelDraft: input.setDraft,
     modelFilter: input.filter,
     setModelFilter: input.setFilter,
+    ...(catalogFailure === undefined ? {} : { catalogFailure }),
+    catalogLoading: input.catalogLoading,
+    onRetryCatalog: input.onRetryCatalog,
     editModel: (edit: ModelEdit) => {
       if (spec === undefined) return;
       const patch = applyModelEdit({ visible: settings[spec.visible], visibility: settings[spec.visibility] }, edit);

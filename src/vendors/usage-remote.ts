@@ -18,6 +18,8 @@ import { TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import type {
   AccountPort,
   AccountView,
+  CatalogModel,
+  CatalogModelsResult,
   LoginPort,
   LoginStatus,
   QuotaPort,
@@ -86,6 +88,13 @@ export interface UsageVendorDeps {
   readonly quotaRef: () => string | undefined;
   /** 网页登录端口：只有声明了 `browserLogin` 能力的厂商才有（本包只有 commandcode）。 */
   readonly login?: LoginPort;
+  /**
+   * 未过滤的模型目录（设置页勾选用）。
+   *
+   * 与宿主 `listModels` 的区别：那个已经按 `visibleModels`/`modelVisibility` 过滤，
+   * 隐藏的模型不在里面；这个返回厂商的全量目录，页面才能在「隐藏」之后重新勾上。
+   */
+  readonly models?: () => Promise<CatalogModel[]>;
 }
 
 /** 宿主 `ctx.typert` 的最小形状（只认本项目用到的 `register`）。 */
@@ -225,6 +234,26 @@ export class LlmAccountUsageService extends TypertRemoteService {
    */
   async accounts(vendor: VendorId): Promise<AccountView[]> {
     return this.requireVendor(vendor).accounts.list();
+  }
+
+  /**
+   * 未过滤的模型目录（设置页的勾选列表）。
+   *
+   * 与宿主 `listModels` 的分工：那个已经按可见性过滤；这个回答「厂商现在有哪些模型」，
+   * 隐藏的模型也要在这里出现，用户才有入口重新勾上。读取失败不抛（页面要显示原因与重试）。
+   * @param vendor - 厂商 id。
+   * @returns 目录与失败项。
+   */
+  async models(vendor: VendorId): Promise<CatalogModelsResult> {
+    const deps = this.requireVendor(vendor);
+    if (deps.models === undefined) {
+      return { models: [], failures: [`models: ${vendor} does not expose a model catalog`] };
+    }
+    try {
+      return { models: await deps.models(), failures: [] };
+    } catch (error) {
+      return { models: [], failures: [`models: ${vendor} catalog read failed (${messageOf(error)})`] };
+    }
   }
 
   /**

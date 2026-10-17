@@ -85,6 +85,9 @@ export type CopyKey =
   | "models.searchPlaceholder"
   | "models.filtered"
   | "models.noMatch"
+  | "models.loading"
+  | "models.summary"
+  | "models.retry"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -204,6 +207,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.searchPlaceholder": "搜索模型…",
     "models.filtered": "显示 {n} / {total} 个模型",
     "models.noMatch": "没有匹配这个关键词的模型。",
+    "models.loading": "正在读取模型目录…",
+    "models.summary": "已显示 {n} / 共 {total} 个模型",
+    "models.retry": "重试",
     "sidebar.pinned": "固定",
     "sidebar.effective": "当前",
     "sidebar.open": "打开用量面板",
@@ -318,6 +324,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.searchPlaceholder": "Search models…",
     "models.filtered": "Showing {n} of {total} models",
     "models.noMatch": "No model matches this keyword.",
+    "models.loading": "Loading the model catalog…",
+    "models.summary": "{n} of {total} models shown",
+    "models.retry": "Retry",
     "sidebar.pinned": "Pinned",
     "sidebar.effective": "Current",
     "sidebar.open": "Open the usage panel",

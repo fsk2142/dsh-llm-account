@@ -21,7 +21,7 @@ import type { CatalogEntry } from "./adapter";
  */
 export interface Visibility {
   /** 白名单；缺省或空数组表示「不按白名单限制」，即全部可见。 */
-  visibleModels?: string[];
+  visibleModels?: readonly string[];
   /** 逐模型显式开关；只要该模型有布尔值就优先于白名单。 */
   modelVisibility?: Record<string, boolean>;
 }
@@ -68,22 +68,35 @@ export function normalizeVisibility(raw: unknown): Visibility {
 }
 
 /**
- * 判定单个模型条目是否可见。三条规则按优先级顺序短路，顺序即语义。
+ * 判定单个模型 id 是否可见。三条规则按优先级顺序短路，顺序即语义。
+ *
+ * 与 {@link isModelVisible} 是同一份实现的两个入口：设置页只有 id（目录里的模型再加上
+ * 手工项），没有完整条目；两处各写一份规则迟早会分叉。
+ * @param id - 模型 id。
+ * @param visibility - 可见性设置（应已归一化）。
+ * @returns 该 id 是否应出现在模型选择器里。
+ */
+export function isModelIdVisible(id: string, visibility: Visibility): boolean {
+  // 规则 1：显式布尔覆盖优先于白名单——`false` 也必须生效，故判 `undefined` 而非真值。
+  const override = visibility.modelVisibility?.[id];
+  if (override !== undefined) return override;
+
+  // 规则 2：白名单非空时，只有名单内的模型可见。
+  const allow = visibility.visibleModels;
+  if (allow !== undefined && allow.length > 0) return allow.includes(id);
+
+  // 规则 3：白名单缺省或为空——全部可见。
+  return true;
+}
+
+/**
+ * 判定单个模型条目是否可见。
  * @param entry - 目录条目；按 `entry.id` 匹配。
  * @param visibility - 可见性设置（应已归一化）。
  * @returns 该条目是否应出现在目录里。
  */
 export function isModelVisible(entry: CatalogEntry, visibility: Visibility): boolean {
-  // 规则 1：显式布尔覆盖优先于白名单——`false` 也必须生效，故判 `undefined` 而非真值。
-  const override = visibility.modelVisibility?.[entry.id];
-  if (override !== undefined) return override;
-
-  // 规则 2：白名单非空时，只有名单内的模型可见。
-  const allow = visibility.visibleModels;
-  if (allow !== undefined && allow.length > 0) return allow.includes(entry.id);
-
-  // 规则 3：白名单缺省或为空——全部可见。
-  return true;
+  return isModelIdVisible(entry.id, visibility);
 }
 
 /**

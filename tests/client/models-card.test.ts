@@ -189,3 +189,34 @@ it("厂商不支持的卡片不渲染：没声明 models 的厂商只出账户�
   expect(vendorCardKinds(withModels)).toEqual(["accounts", "models"]);
   expect(vendorCardKinds(withoutModels)).toEqual(["accounts"]);
 });
+
+it("目录里的模型也出现在列表里，勾选状态按可见性规则算（白名单外 = 未勾选）", () => {
+  const { tree, props } = renderCard({ mode: "onSave", models: ["m1", "m2"], visibleModels: ["m1"] });
+  const toggles = elementsOf(tree).filter((element) => element.props["data-model-visible"] !== undefined);
+  expect(toggles.map((element) => [element.props["data-model-visible"], element.props.checked])).toEqual([
+    ["m1", true],
+    ["m2", false],
+  ]);
+  // m1 出现在设置里 → 有移除；m2 只是目录项 → 没有可删的记录。
+  expect(
+    elementsOf(tree)
+      .filter((element) => element.props["data-model-remove"] !== undefined)
+      .map((element) => element.props["data-model-remove"]),
+  ).toEqual(["m1"]);
+  fire(toggles[1]!, "onChange", { target: { checked: true } });
+  expect(props.onToggleModel).toHaveBeenCalledWith("m2", true);
+});
+
+it("目录读取中/失败时不谎报空态：显示加载或原因 + 重试", () => {
+  const loading = renderCard({ mode: "onSave", models: [], catalogLoading: true });
+  expect(elementsOf(loading.tree).some((element) => element.props["data-models-loading"] === "true")).toBe(true);
+  expect(textsOf(loading.tree)).not.toContain(dictionaryOf("zh")("models.empty"));
+
+  const onRetry = vi.fn();
+  const failed = renderCard({ mode: "onSave", models: [], catalogFailure: "models: boom", onRetryCatalog: onRetry });
+  expect(textsOf(failed.tree).join(" ")).toContain("boom");
+  expect(textsOf(failed.tree)).not.toContain(dictionaryOf("zh")("models.empty"));
+  const retry = elementsOf(failed.tree).find((element) => element.props["data-model-catalog-retry"] !== undefined)!;
+  fire(retry, "onClick");
+  expect(onRetry).toHaveBeenCalledTimes(1);
+});
