@@ -60,8 +60,20 @@ export { applyCount } from "./shell";
  * Both spellings are therefore valid host contracts. This package uses the
  * **nested** one: `src/client/shell.ts` arms `["remote.credentials"]` inside
  * `applyShell`. Do not declare a service here that `apply` does not need.
+ *
+ * **`remote.settings` IS required here** (measured 2026-10-17 on desktop
+ * 0.2.1-rc.2). The settings page discovers its vendors through
+ * `remote.settings.describe()`; without this entry the service is not bound to
+ * the context and the page renders the empty notice — 「没有可显示的厂商」 — with
+ * no error anywhere. Cordis throws `cannot get property "remote.settings"
+ * without inject` when code touches an un-injected service, but our accessor
+ * (`seams.ts` `remoteOf`) deliberately *degrades* instead of throwing, which is
+ * right for a missing optional seam and wrong here: it turned a missing inject
+ * entry into a silently empty page. Every official bundle that reads settings
+ * lists it (`app.asar`: ui-settings, agent-preset, permission presets all carry
+ * `"remote.settings"` in `inject`).
  */
-export const inject = ["slots", "locale", "remote"];
+export const inject = ["slots", "locale", "remote", "remote.settings"];
 
 /**
  * The one client-plugin body. Runs once per mounted profile row, and both rows

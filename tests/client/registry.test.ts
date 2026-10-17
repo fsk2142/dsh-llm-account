@@ -147,6 +147,22 @@ describe("client plugin skeleton", () => {
     expect(applyCount()).toBe(beforeFirst + 2);
   });
 
+  it("导出的 inject 覆盖页面读取的每个远程服务", () => {
+    // Measured 2026-10-17 on desktop 0.2.1-rc.2: `settings` is a SEPARATE cordis
+    // service (`remote.settings`), not a property that appears on `remote` once
+    // `remote` alone is injected. Omitting it left the page rendering
+    // 「没有可显示的厂商」 with no error anywhere, because our accessor
+    // deliberately degrades instead of throwing.
+    //
+    // Every official bundle that reads settings lists it (ui-settings,
+    // agent-preset, permission presets all carry `"remote.settings"`).
+    expect(inject).toContain("remote");
+    expect(inject).toContain("remote.settings");
+    // `remote.credentials` is armed by a nested injection in shell.ts instead,
+    // so it must NOT be duplicated here (declared-but-unused is a contract bug).
+    expect(inject).not.toContain("remote.credentials");
+  });
+
   it("页面文案按语言字典注册：locale 契约是 { zh, en } 而非扁平键表", () => {
     const harness = createClientContext();
     apply(harness.context);
@@ -167,10 +183,12 @@ describe("client plugin skeleton", () => {
     }
   });
 
-  it("客户端插件导出 { apply, inject }，inject 含 slots/locale/remote", () => {
+  it("客户端插件导出 { apply, inject }，inject 含 slots/locale/remote/remote.settings", () => {
     expect(apply).toBeTypeOf("function");
     // Cordis service names, not npm module ids (see `src/client/index.ts`).
-    expect(inject).toEqual(["slots", "locale", "remote"]);
+    // `remote.settings` joined the list on 2026-10-17: the settings page finds its
+    // vendors through that service, and without it the section renders empty.
+    expect(inject).toEqual(["slots", "locale", "remote", "remote.settings"]);
     expect(new Set(inject).size).toBe(inject.length);
   });
 

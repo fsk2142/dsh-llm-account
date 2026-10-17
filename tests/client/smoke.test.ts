@@ -140,7 +140,9 @@ function resetAll(): void {
 
 it("客户端入口导出 { apply, inject }，inject 是 cordis 服务名", () => {
   expect(typeof apply).toBe("function");
-  expect(inject).toEqual(["slots", "locale", "remote"]);
+  // `remote.settings` is a separate cordis service, not a property that shows up
+  // on `remote` once `remote` alone is injected; the page needs it bound.
+  expect(inject).toEqual(["slots", "locale", "remote", "remote.settings"]);
 });
 
 it("两个 profile 行各调一次 apply：页面与两块插槽都只注册一次", () => {
