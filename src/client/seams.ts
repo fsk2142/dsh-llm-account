@@ -88,19 +88,41 @@ export function remoteOf(ctx: ClientSeamContext): RemoteService | undefined {
  * 读已注册厂商的设置快照（页面「发现厂商」的依据，Ruling 2）。
  *
  * 只保留注册表里声明过的命名空间：宿主上可能还有别的插件命名空间，页面不该把它们当厂商。
+ *
+ * **返回形状（2026-10-17 在桌面端 0.2.1-rc.2 实测）**：`remote.settings.describe()` 返回的是
+ * **一个对象**，命名空间数组包在 `namespaces` 里——不是裸数组：
+ *
+ * ```js
+ * // 宿主 SettingsController.describe()（app.asar @21028751）
+ * describe() {
+ *   return {
+ *     writable: settings.writable,
+ *     hasDocument: true,
+ *     namespaces: settings.describe({ redactSecrets: true }).map(namespaceView),
+ *   };
+ * }
+ * // namespaceView()（app.asar @21024548）：身份是 ns，不是 id
+ * { ns, autoGenerate, schema, value, base?, user?, applies, secrets, revision }
+ * ```
+ *
+ * 之前把返回值当数组遍历，于是永远遍历不到元素 → 页面显示「没有可显示的厂商」。
+ * 这里两种形状都认（对象包 `namespaces` / 裸数组），不认识则按「读不到」降级。
+ *
  * @param ctx - 客户端上下文。
  * @param entries - 注册表里的厂商声明。
- * @returns 快照；远程不可用或读取失败时返回空数组（页面显示「没有可显示的厂商」，而不是崩掉）。
+ * @returns 快照；远程不可用、形状不认识或读取失败时返回空数组（页面显示「没有可显示的厂商」，而不是崩掉）。
  */
 export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: readonly VendorEntry[]): Promise<VendorSnapshot[]> {
   const settings = remoteOf(ctx)?.settings;
   if (settings === undefined || typeof settings.describe !== "function") return [];
-  let rows: { ns?: string; id?: string; value?: unknown; revision?: number }[];
+  let described: unknown;
   try {
-    rows = await settings.describe();
+    described = await settings.describe();
   } catch {
     return [];
   }
+  const rows = namespaceRowsOf(described);
+  if (rows === undefined) return [];
   // 宿主按 profile 行 id 建索引，旧宿主用命名空间，而 opencode 的**行 id 与核心命名空间不同**
   // （`opencode-go` vs `llm-opencode-go`）—— 所以按注册表声明的候选行名匹配，命中后一律用 `ns`
   // 作为页面身份（标签页与草稿都以 `ns` 为键），同时把**命中的行名**带进快照：写路径必须用
@@ -120,6 +142,22 @@ export async function describeVendorSnapshots(ctx: ClientSeamContext, entries: r
     snapshots.push({ ns: entry.ns, row: rowName, value, revision: typeof row.revision === "number" ? row.revision : 0 });
   }
   return snapshots;
+}
+
+/** One namespace view as the host reports it: `ns` is the identity, `id` is the legacy field name. */
+type NamespaceRow = { ns?: string; id?: string; value?: unknown; revision?: number };
+
+/**
+ * Pull the namespace list out of whatever `describe()` returned.
+ *
+ * @param described - the raw remote return value.
+ * @returns the rows, or `undefined` when the shape is not recognised.
+ */
+function namespaceRowsOf(described: unknown): NamespaceRow[] | undefined {
+  if (Array.isArray(described)) return described as NamespaceRow[];
+  if (typeof described !== "object" || described === null) return undefined;
+  const namespaces = (described as { namespaces?: unknown }).namespaces;
+  return Array.isArray(namespaces) ? (namespaces as NamespaceRow[]) : undefined;
 }
 
 /**

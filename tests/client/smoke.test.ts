@@ -90,7 +90,7 @@ function fakeClientContext(options: { describe?: () => Promise<unknown>; remote?
     },
     remote: {
       settings: {
-        describe: options.describe ?? (async () => []),
+        describe: options.describe ?? (async () => ({ writable: true, hasDocument: true, namespaces: [] })),
         mutate: async () => undefined,
       },
       $on: (event: string, listener: () => void) => {
@@ -110,12 +110,21 @@ function fakeClientContext(options: { describe?: () => Promise<unknown>; remote?
   return { ctx, registered, locale, panels, listeners, mounts };
 }
 
-/** 宿主设置行：把某个厂商的开关设成给定值（opencode 用**行 id** 回来，与命名空间不同）。 */
-function rowsWith(toggle: boolean): { ns?: string; id?: string; value: Record<string, unknown>; revision: number }[] {
-  return [
-    { ns: "llm-commandcode", value: { showSidebarQuota: toggle }, revision: 1 },
-    { id: "opencode-go", value: { showSidebarQuota: toggle }, revision: 1 },
-  ];
+/**
+ * 宿主设置行：把某个厂商的开关设成给定值（opencode 用**行 id** 回来，与命名空间不同）。
+ *
+ * 按真机形状包一层 `namespaces`：宿主 `SettingsController.describe()` 返回的是对象
+ * （app.asar @21028751），不是裸数组。测试替身必须与真机一致，否则形状回归测不出来。
+ */
+function rowsWith(toggle: boolean): { writable: boolean; hasDocument: boolean; namespaces: { ns?: string; id?: string; value: Record<string, unknown>; revision: number }[] } {
+  return {
+    writable: true,
+    hasDocument: true,
+    namespaces: [
+      { ns: "llm-commandcode", value: { showSidebarQuota: toggle }, revision: 1 },
+      { id: "opencode-go", value: { showSidebarQuota: toggle }, revision: 1 },
+    ],
+  };
 }
 
 /** 触发一次宿主推送（凭据/设置失效信号）。 */
