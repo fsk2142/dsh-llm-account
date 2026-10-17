@@ -35,10 +35,34 @@ export interface PageShellProps {
 
 /**
  * 统一设置页的外壳：标题 / 简介 / 厂商标签页 / 当前厂商的卡片与保存条。
+ *
+ * 整个渲染包在一层错误边界里：React 会丢弃**整棵**已渲染的树，所以渲染期抛错在页面上
+ * 表现为「这一段完全空白」——连标题都没有，与「没有可显示的厂商」那种有明确文案的空态
+ * 完全不同，排查时极易误判成「没注册上」。这里把异常原样显示出来。
  * @param props - 见 {@link PageShellProps}。
  * @returns 元素树。
  */
 export function PageShell(props: PageShellProps): ReactElement {
+  try {
+    return pageBody(props);
+  } catch (error) {
+    return renderErrorPanel(error);
+  }
+}
+
+/** 渲染失败时的兜底：**不调用 `t()`**（取词本身可能就是抛错的原因）。 */
+function renderErrorPanel(error: unknown): ReactElement {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  return createElement(
+    "div",
+    { "data-page": "llm-account", className: CSS_CLASS.root },
+    createElement("h1", null, "LLM 账号"),
+    createElement("pre", { "data-render-error": "true", className: CSS_CLASS.diagnostic }, `render failed: ${detail}`),
+  );
+}
+
+/** 外壳本体（假定不抛；抛了由 {@link PageShell} 接住）。 */
+function pageBody(props: PageShellProps): ReactElement {
   const { state, entries, t } = props;
   const active = entries.find((entry) => entry.ns === state.activeNs);
 

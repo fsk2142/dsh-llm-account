@@ -289,6 +289,26 @@ it("页面外壳渲染标题、简介与每个厂商一个标签页", () => {
   expect(texts).toContain(COPY.en["vendor.commandcode"]);
 });
 
+it("渲染期抛错时显示错误面板，而不是整页空白", () => {
+  // React 丢弃整棵已渲染的树，所以抛错的表象是「这一段什么都没有」——连标题都没有，
+  // 与「没有可显示的厂商」那种有明确文案的空态完全不同，排查时极易误判成没注册上。
+  const state = createPageState(VENDORS, SNAPSHOTS);
+  const tree = PageShell({
+    state,
+    entries: VENDORS,
+    // 取词就是抛错的那一环，因此错误面板不得再调用它。
+    t: () => {
+      throw new Error("t() exploded");
+    },
+    onSelectTab: () => undefined,
+    onSetField: () => undefined,
+    onSave: () => undefined,
+  });
+  const all = elementsOf(tree);
+  expect(all.some((element) => element.props["data-render-error"] !== undefined)).toBe(true);
+  expect(textOf(tree).join("\n")).toContain("t() exploded");
+});
+
 it("未声明的卡片组不渲染元素；声明了的组带着字段渲染", () => {
   const tree = render(createPageState(VENDORS, SNAPSHOTS));
   const all = elementsOf(tree);
