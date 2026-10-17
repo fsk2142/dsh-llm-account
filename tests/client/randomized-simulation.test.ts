@@ -153,9 +153,10 @@ describe("随机操作序列仿真", () => {
         () => tryFire(page.tree(), "data-field-input", "onChange", pick(["apiBase", "baseURL"]), { target: { value: `https://edited-${seed}.example` } }),
         () => tryFire(page.tree(), "data-field-input", "onChange", "showSidebarQuota", { target: { checked: random() < 0.5 } }),
         () => tryFire(page.tree(), "data-save", "onClick", pick(TABS)),
+        () => tryFire(page.tree(), "data-action", "onClick", "add"),
         () => tryFire(page.tree(), "data-add-label", "onChange", undefined, { target: { value: ` acct-${seed} ` } }),
         () => tryFire(page.tree(), "data-add-key", "onChange", undefined, { target: { value: ` sk-${seed}\n` } }),
-        () => tryFire(page.tree(), "data-action", "onClick", "add"),
+        () => tryFire(page.tree(), "data-action", "onClick", "confirmAdd"),
         () => tryFire(page.tree(), "data-action", "onClick", "cancel"),
         () => tryFire(card.tree(), "data-sidebar-open", "onClick"),
         () => tryFire(panel.tree(), "data-dashboard-refresh", "onClick"),
@@ -249,13 +250,17 @@ describe("随机操作序列仿真", () => {
           }
         }
 
-        // ⑧ 「打开 add 操作」这条接线必须成立：用户输入过名称或密钥之后，cancel 按钮一定在
-        //    （表单确实开着）。曾经这两个输入框的 onChange 走的是恒等变换，永远不打开 ——
-        //    这条判据就是钉住那个漏口的。
-        const labelTyped = String(findSim(page.tree(), "data-add-label")?.props["value"] ?? "");
-        const keyTyped = String(findSim(page.tree(), "data-add-key")?.props["value"] ?? "");
-        if ((labelTyped !== "" || keyTyped !== "") && findSim(page.tree(), "data-action", "cancel") === undefined) {
-          throw new Error(`${where}: inputs hold "${labelTyped}"/"${keyTyped}" but no add operation is open`);
+        // ⑧ 添加表单的接线必须自洽：两个输入框同时在或同时不在，且只在表单打开时存在。
+        //    曾经输入框一直摊在卡片底部（所以看起来「怎么点都没反应」），而它们的 onChange
+        //    走的是恒等变换，永远打不开任何东西。
+        const labelField = findSim(page.tree(), "data-add-label");
+        const keyField = findSim(page.tree(), "data-add-key");
+        const formOpen = findSim(page.tree(), "data-action", "cancel") !== undefined;
+        if ((labelField === undefined) !== (keyField === undefined)) {
+          throw new Error(`${where}: the add form renders only one of its two inputs`);
+        }
+        if ((labelField !== undefined) !== formOpen) {
+          throw new Error(`${where}: add inputs ${labelField !== undefined ? "render" : "do not render"} while the form is ${formOpen ? "open" : "closed"}`);
         }
 
         // ⑨ 开关存储与宿主文档一致：卡片渲染与否只由**已存储**的开关决定。

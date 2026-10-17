@@ -160,6 +160,8 @@ function modelsCard(cards: VendorCardsContext): ReactNode {
     models: cards.models,
     visibility: cards.modelVisibility,
     draft: cards.modelDraft,
+  filter: cards.modelFilter,
+  onFilterChange: cards.setModelFilter,
     mode: cards.modelMode,
     onToggleModel: (model: string, visible: boolean) => cards.editModel({ kind: "toggle", model, visible }),
     onRemoveModel: (model: string) => cards.editModel({ kind: "remove", model }),

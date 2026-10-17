@@ -34,142 +34,172 @@ export const PAGE_CSS_ID = "@dsh-llm-account/page.css";
  * 颜色一律走宿主变量：不写死颜色是为了深色主题不坏（`tests/client/css.test.ts` 有护栏）。
  */
 export const PAGE_CSS = `
-.dsl-root { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 72px; color: var(--dsw-alias-label-primary); }
+/* —— 页面骨架：与宿主设置面板同宽（ModelsSection 的 max-width: 720px） —— */
+.dsl-root { display: flex; flex-direction: column; gap: 12px; max-width: 720px; padding-bottom: 72px;
+  font-family: var(--dsw-font-family); color: var(--dsw-alias-label-primary); }
 
-/* —— 标题层级 —— */
-.dsl-root h1 { font-size: var(--dsw-font-s-strong-14); font-weight: 600; margin: 0; letter-spacing: 0.01em; }
-.dsl-root h2 { font-size: var(--dsw-font-xxs-strong-12); font-weight: 600; margin: 0;
-  color: var(--dsw-alias-label-primary); }
-.dsl-root h3, .dsl-root h4 { font-size: var(--dsw-font-xxs-strong-12); font-weight: 600;
-  margin: 0; color: var(--dsw-alias-label-secondary); }
-.dsl-root small { display: block; font-size: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-tertiary); line-height: 1.5; }
-.dsl-intro { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: var(--dsw-font-xxs-12); line-height: 1.6; }
+.dsl-root h1 { margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; letter-spacing: normal; }
+.dsl-root h2 { margin: 0; font-size: 14px; font-weight: 500; line-height: 22px; letter-spacing: normal; }
+.dsl-root h3, .dsl-root h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 22px;
+  letter-spacing: normal; color: var(--dsw-alias-label-secondary); }
+.dsl-intro { margin: 0; font-size: 14px; line-height: 22px; letter-spacing: normal;
+  color: var(--dsw-alias-label-tertiary); }
+.dsl-root small { display: block; font-size: 12px; line-height: 18px; letter-spacing: normal;
+  color: var(--dsw-alias-label-tertiary); }
+/* 等宽片段（模型 id、诊断原文）：宿主代码块同样走等宽 + 极小的字距 */
+.dsl-mono { font-family: var(--dsw-font-mono); letter-spacing: 0.01em; }
 
-/* —— 标签页：分段控件，不是下划线 —— */
-.dsl-tabs { display: inline-flex; flex-direction: row; gap: 2px; padding: 2px; align-self: flex-start;
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md);
-  background: var(--dsw-alias-bg-layer-1); }
-.dsl-tabs button { background: none; border: none; border-radius: var(--dsw-radius-sm); padding: 5px 14px;
-  cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: var(--dsw-font-xxs-12);
-  font-weight: 500; transition: background 120ms ease, color 120ms ease; }
-.dsl-tabs button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
-.dsl-tabs button[aria-selected="true"] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary);
-  font-weight: 600; box-shadow: var(--dsw-shadow-lv1); }
-.dsl-tabs button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color); outline-offset: 1px; }
+/* —— 标签页：与插件市场同款的下划线标签 —— */
+.dsl-tabs { display: flex; flex-direction: row; gap: 24px; border-bottom: .5px solid var(--dsw-alias-border-l2); }
+.dsl-tabs button { background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -.5px;
+  padding: 8px 0; cursor: pointer; color: var(--dsw-alias-label-secondary); font: inherit;
+  font-size: 14px; line-height: 22px; transition: color 120ms ease, border-color 120ms ease; }
+.dsl-tabs button:hover { color: var(--dsw-alias-label-primary); }
+.dsl-tabs button[aria-selected="true"] { color: var(--dsw-alias-label-primary);
+  border-bottom-color: var(--dsw-alias-brand-primary); }
+.dsl-tabs button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color);
+  outline-offset: -2px; border-radius: var(--dsw-radius-xs); }
 
-/* —— 卡片 —— */
-.dsl-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
-  border: 1px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-settings-card-fill); box-shadow: var(--dsw-shadow-lv1); }
-.dsl-card > summary { cursor: pointer; color: var(--dsw-alias-label-secondary);
-  font-size: var(--dsw-font-xxs-strong-12); font-weight: 600; list-style: none; }
+/* —— 卡片：宿主设置卡片的原样形状（.5px 描边 + radius-xl + 扁平，无阴影） —— */
+.dsl-card { display: flex; flex-direction: column; gap: 12px; padding: 16px;
+  border: .5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-settings-card-fill); }
+.dsl-card > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px;
+  color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 500; line-height: 22px; }
 .dsl-card > summary::-webkit-details-marker { display: none; }
-.dsl-card > summary::before { content: "▸"; display: inline-block; margin-right: 6px;
-  font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); transition: transform 120ms ease; }
+.dsl-card > summary::before { content: "\u203A"; display: inline-block; font-size: 14px;
+  color: var(--dsw-alias-label-tertiary); transition: transform 120ms ease; }
 .dsl-card[open] > summary::before { transform: rotate(90deg); }
-.dsl-card[data-card-hint] { margin: -4px 0 0; }
+.dsl-card > summary:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color);
+  outline-offset: 2px; border-radius: var(--dsw-radius-xs); }
+/* 卡片内的分组标题右侧留白给动作（宿主 rowHead + rowActions margin-left:auto 的同一做法） */
+.dsl-card > h2 + small { margin-top: -6px; }
 
-/* —— 字段：标签在上、控件在下，整行可点 —— */
-.dsl-field { display: flex; flex-direction: column; gap: 5px; color: var(--dsw-alias-label-secondary);
-  font-size: var(--dsw-font-xxs-12); }
-.dsl-field > span:first-child { color: var(--dsw-alias-label-primary); font-size: var(--dsw-font-xxs-12); }
-.dsl-field small { margin-top: 1px; }
+/* —— 设置行：标签在左、控件在右，行间一条发丝线（PreferenceRow 的原样形状） —— */
+.dsl-field { display: flex; flex-direction: row; align-items: center; gap: 16px; padding: 14px 0;
+  border-bottom: .5px solid var(--dsw-alias-border-l2); font-size: 14px; line-height: 22px; }
+.dsl-field:last-child { border-bottom: none; }
+.dsl-field > span:first-child { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;
+  color: var(--dsw-alias-label-primary); font-weight: 400; }
+.dsl-field small { font-weight: 400; }
 
+/* —— 控件 —— */
 .dsl-field input[type="text"], .dsl-field input[type="number"], .dsl-field input[type="password"],
-.dsl-field select, .dsl-inline input[type="text"], .dsl-inline input[type="password"] {
-  background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm);
-  padding: 6px 10px; font-size: var(--dsw-font-xxs-12); font-family: inherit; width: 100%;
-  transition: border-color 120ms ease, box-shadow 120ms ease; }
+.dsl-field select, .dsl-inline input[type="text"], .dsl-inline input[type="password"], .dsl-search input {
+  box-sizing: border-box; height: 32px; width: 100%; font: inherit; font-size: 14px; line-height: 22px;
+  padding: 0 10px; color: var(--dsw-alias-label-primary); caret-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-bg-layer-1); border: .5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md); transition: border-color 120ms ease; }
 .dsl-field input:hover, .dsl-field select:hover { border-color: var(--dsw-alias-border-l3); }
-.dsl-field input:focus, .dsl-field select:focus { outline: none; border-color: var(--dsw-alias-brand-primary);
-  box-shadow: 0 0 0 var(--dsw-focus-ring-width) var(--dsw-focus-ring-color); }
-.dsl-field input::placeholder { color: var(--dsw-alias-label-quaternary); }
+.dsl-field input:focus, .dsl-field select:focus, .dsl-inline input:focus, .dsl-search input:focus {
+  outline: none; border-color: var(--dsw-alias-state-business-primary); }
+.dsl-field input::placeholder, .dsl-inline input::placeholder, .dsl-search input::placeholder {
+  color: var(--dsw-alias-label-dimmed); }
+.dsl-field input:disabled, .dsl-field select:disabled { color: var(--dsw-alias-label-dimmed);
+  cursor: not-allowed; background: var(--dsw-alias-bg-layer-2); }
+.dsl-field input[type="number"] { font-variant-numeric: tabular-nums; }
+/* 文本类控件占右半栏；复选框与下拉按内容宽度 */
+.dsl-field > input[type="text"], .dsl-field > input[type="number"], .dsl-field > input[type="password"],
+.dsl-field > select { flex: 1 1 auto; max-width: 260px; min-width: 0; }
+.dsl-field > input[type="checkbox"] { box-sizing: border-box; flex: none; width: 16px; height: 16px;
+  margin: 0; accent-color: var(--dsw-alias-brand-primary); cursor: pointer; }
+.dsl-field > input[type="checkbox"]:focus-visible { outline: var(--dsw-focus-ring-width) solid
+  var(--dsw-focus-ring-color); outline-offset: 2px; }
 
-/* 复选框与它的标签同行：控件不再独占一行，也不撑满 */
-.dsl-field input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--dsw-alias-brand-primary);
-  cursor: pointer; }
-.dsl-field:has(> input[type="checkbox"]) { flex-direction: row; align-items: center; gap: 8px; }
-.dsl-field:has(> input[type="checkbox"]) > span:first-child { order: 2; flex: 1; }
+/* —— 搜索框：与插件市场的搜索框同形（发丝边 + 圆角 + 左侧留白给图标） —— */
+.dsl-search { position: relative; display: flex; align-items: center; }
+.dsl-search input { padding-left: 34px; }
+/* 放大镜是两个伪元素画出来的（一个圈 + 一根柄）：不引图标字体、不引外部资源 */
+.dsl-search::before { content: ""; position: absolute; left: 13px; top: 50%; margin-top: -6px;
+  box-sizing: border-box; width: 10px; height: 10px; border: 1.5px solid var(--dsw-alias-label-tertiary);
+  border-radius: 50%; pointer-events: none; }
+.dsl-search::after { content: ""; position: absolute; left: 23px; top: 50%; margin-top: 3px;
+  width: 6px; height: 1.5px; background: var(--dsw-alias-label-tertiary); transform: rotate(45deg);
+  pointer-events: none; }
+.dsl-search-count { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 
-/* —— 按钮 —— */
+/* —— 按钮：宿主按钮的原样尺寸（32px 高、radius-md、14px 字） —— */
+.dsl-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  box-sizing: border-box; height: 32px; padding: 0 14px; border: none; border-radius: var(--dsw-radius-md);
+  font: inherit; font-size: 14px; line-height: 22px; color: var(--dsw-alias-label-primary);
+  cursor: pointer; text-wrap: nowrap; transition: background 120ms ease, border-color 120ms ease; }
+.dsl-button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color); outline-offset: 2px; }
+.dsl-button:disabled { cursor: not-allowed; color: var(--dsw-alias-label-dimmed); }
+.dsl-button-primary { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
+.dsl-button-primary:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
+.dsl-button-secondary { background: none; border: .5px solid var(--dsw-alias-border-l3); }
+.dsl-button-secondary:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.dsl-button-ghost { background: none; color: var(--dsw-alias-label-secondary); }
+.dsl-button-ghost:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary); }
+.dsl-button-danger { background: none; color: var(--dsw-alias-state-error-primary); }
+.dsl-button-danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .dsl-actions { display: flex; flex-direction: row; gap: 8px; align-items: center; flex-wrap: wrap; }
-.dsl-actions button, .dsl-inline button, .dsl-card button {
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm);
-  padding: 5px 12px; cursor: pointer; font-size: var(--dsw-font-xxxs-11); font-family: inherit;
-  text-wrap: nowrap; transition: background 120ms ease, border-color 120ms ease; }
-.dsl-actions button:hover, .dsl-inline button:hover, .dsl-card button:hover {
-  background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l3); }
-.dsl-actions button:active, .dsl-inline button:active, .dsl-card button:active {
-  background: var(--dsw-alias-interactive-bg-active); }
-.dsl-actions button:focus-visible, .dsl-inline button:focus-visible, .dsl-card button:focus-visible {
-  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color); outline-offset: 1px; }
-.dsl-actions button:disabled { color: var(--dsw-alias-label-dimmed); cursor: not-allowed;
-  background: var(--dsw-alias-bg-layer-1); border-color: var(--dsw-alias-border-l1); }
-.dsl-inline { display: flex; flex-direction: row; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dsl-inline { display: flex; flex-direction: row; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 10px 0; }
 
-/* 「移除」这类次要动作不抢视觉重量 */
-.dsl-card button[data-model-remove] { color: var(--dsw-alias-label-tertiary); border-color: transparent;
-  background: none; padding: 2px 8px; }
-.dsl-card button[data-model-remove]:hover { color: var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-interactive-bg-hover); border-color: transparent; }
+/* —— 添加账户：收起时是一个按钮，展开时是一张表单 —— */
+.dsl-add { display: flex; flex-direction: column; gap: 12px; }
+.dsl-add > .dsl-field { border-bottom: none; padding: 0; }
 
-/* —— 模型行：名称 + 开关 + 移除挤在一行 —— */
-.dsl-field[data-model] { flex-direction: row; align-items: center; gap: 10px; padding: 6px 10px;
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-sm);
-  background: var(--dsw-alias-bg-layer-1); }
-.dsl-field[data-model] > span:first-child { flex: 1; font-family: var(--dsw-font-mono);
-  font-size: var(--dsw-font-xxxs-11); word-break: break-all; }
+/* —— 账号行：宿主身份行的形状（32px 圆点 + 14px/500 名称 + 12px 副文案） —— */
+.dsl-account { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 12px 0; border-bottom: .5px solid var(--dsw-alias-border-l2); }
+.dsl-account:last-of-type { border-bottom: none; }
+.dsl-dot { box-sizing: border-box; flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--dsw-alias-border-l2); }
+.dsl-account[data-dashboard-effective="true"] .dsl-dot,
+.dsl-account[data-effective="true"] .dsl-dot { background: var(--dsw-alias-state-success-primary); }
+.dsl-account[data-rejection-kind] .dsl-dot { background: var(--dsw-alias-state-warn-primary); }
+.dsl-identity { display: flex; flex-direction: row; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.dsl-identity-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dsl-identity-text > strong { font-size: 14px; font-weight: 500; line-height: 22px; overflow-wrap: anywhere; }
+.dsl-identity-text > small { font-size: 12px; line-height: 18px; }
 
-/* —— 账号行 —— */
-.dsl-account { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 10px;
-  padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md);
-  background: var(--dsw-alias-bg-layer-1); }
-.dsl-account[data-dashboard-effective="true"] { border-color: var(--dsw-alias-brand-primary);
-  box-shadow: var(--dsw-shadow-lv1); }
-.dsl-account[data-rejection-kind] { border-color: var(--dsw-alias-state-warn-primary); }
-.dsl-mark { font-size: var(--dsw-font-xxxs-strong-11); font-weight: 600; padding: 2px 8px;
-  border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary);
-  text-wrap: nowrap; }
+/* —— 标签（宿主 rowTag 的形状） —— */
+.dsl-mark { flex: none; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-xs); color: var(--dsw-alias-label-secondary);
+  font-size: 11px; line-height: 16px; text-wrap: nowrap; }
 .dsl-mark[data-state="success"], .dsl-mark[data-configured="true"] {
   color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-primary); }
 .dsl-mark[data-state="warn"] { color: var(--dsw-alias-state-warn-primary);
   border-color: var(--dsw-alias-state-warn-primary); }
 
-/* —— 额度 —— */
-.dsl-quota { display: flex; flex-direction: column; gap: 3px; min-width: 160px; flex: 1; }
-.dsl-quota-row { display: flex; flex-direction: row; justify-content: space-between; gap: 10px;
-  font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-secondary); }
-.dsl-quota-row > span:last-child { color: var(--dsw-alias-label-primary); font-weight: 500;
-  font-family: var(--dsw-font-mono); }
-.dsl-quota-missing { color: var(--dsw-alias-label-tertiary); font-size: var(--dsw-font-xxxs-11); }
-.dsl-failure { color: var(--dsw-alias-state-warn-primary); font-size: var(--dsw-font-xxxs-11); }
-.dsl-diagnostic { margin: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-state-error-primary);
-  border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-secondary); font-family: var(--dsw-font-mono);
-  font-size: var(--dsw-font-xxxs-11); line-height: 1.6; word-break: break-word; }
+/* —— 额度：标签在左、数值在右，条是 3px 的细线 —— */
+.dsl-quota { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
+.dsl-quota-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between;
+  gap: 16px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.dsl-quota-row > span:last-child { color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+.dsl-quota-track { overflow: hidden; height: 3px; border-radius: 999px; background: var(--dsw-alias-border-l1); }
+.dsl-quota-fill { height: 3px; border-radius: 999px; background: var(--dsw-alias-state-success-primary); }
+.dsl-quota-fill[data-level="warn"] { background: var(--dsw-alias-state-warn-primary); }
+.dsl-quota-fill[data-level="error"] { background: var(--dsw-alias-state-error-primary); }
+.dsl-quota-missing { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
+.dsl-failure { font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-primary); }
+.dsl-diagnostic { overflow-wrap: anywhere; margin: 0; padding: 10px 12px;
+  border: .5px solid var(--dsw-alias-state-error-primary); border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary);
+  font-family: var(--dsw-font-mono); font-size: 12px; line-height: 18px; }
 
 /* —— 保存条 —— */
 .dsl-save { position: sticky; bottom: 0; z-index: 1; display: flex; flex-direction: row; gap: 12px;
-  align-items: center; margin-top: 4px; padding: 10px 14px; border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1);
-  box-shadow: var(--dsw-shadow-lv2); }
-.dsl-save button { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground);
-  border: none; border-radius: var(--dsw-radius-sm); padding: 6px 16px; cursor: pointer;
-  font-size: var(--dsw-font-xxxs-strong-11); font-weight: 600; font-family: inherit; }
-.dsl-save button:hover { background: var(--dsw-alias-interactive-bg-hover-accent); }
+  align-items: center; margin-top: 4px; padding: 12px 16px; background: var(--dsw-alias-bg-layer-1);
+  border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xl); }
 
-/* —— 侧边栏额度卡：与设置页同一套形状，只是更紧凑 —— */
-.dsl-sidebar { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
-  font-size: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-secondary); }
+/* —— 侧边栏额度卡：同一套形状，紧凑一档 —— */
+.dsl-sidebar { display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border: .5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-settings-card-fill); font-size: 13px; line-height: 20px;
+  color: var(--dsw-alias-label-secondary); }
 .dsl-switch { display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap; align-items: center;
-  color: var(--dsw-alias-state-warn-label); font-size: var(--dsw-font-xxxs-11); }
-.dsl-dashboard { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
-.dsl-dashboard section { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-settings-card-fill); box-shadow: var(--dsw-shadow-lv1); }
+  font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-label); }
+.dsl-dashboard { display: flex; flex-direction: column; gap: 12px; max-width: 720px;
+  color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 22px; }
+.dsl-dashboard header { display: flex; align-items: center; gap: 8px; }
+.dsl-dashboard header > :last-child { margin-left: auto; }
+.dsl-dashboard section { display: flex; flex-direction: column; gap: 12px; padding: 16px;
+  border: .5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-settings-card-fill); }
 .dsl-dashboard section[data-dashboard-effective="true"] { border-color: var(--dsw-alias-brand-primary); }
 `;
 
@@ -189,6 +219,20 @@ export const CSS_CLASS = {
   field: "dsl-field",
   inline: "dsl-inline",
   actions: "dsl-actions",
+  add: "dsl-add",
+  search: "dsl-search",
+  searchCount: "dsl-search-count",
+  button: "dsl-button",
+  buttonPrimary: "dsl-button-primary",
+  buttonSecondary: "dsl-button-secondary",
+  buttonGhost: "dsl-button-ghost",
+  buttonDanger: "dsl-button-danger",
+  identity: "dsl-identity",
+  identityText: "dsl-identity-text",
+  mono: "dsl-mono",
+  dot: "dsl-dot",
+  quotaTrack: "dsl-quota-track",
+  quotaFill: "dsl-quota-fill",
   save: "dsl-save",
   sidebar: "dsl-sidebar",
   switchNotice: "dsl-switch",

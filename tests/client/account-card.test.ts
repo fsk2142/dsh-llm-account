@@ -216,7 +216,19 @@ it("展开报告按钮切换展开状态", () => {
   expect(textsOf(report).join(" ")).toContain("timeout");
 });
 
-it("底部「添加账户」是受控输入：值来自状态，变化与提交各自报出去", () => {
+it("「添加账户」是收起的入口：点它只打开表单，不提交", () => {
+  // 回归：先前入口与提交是同一个按钮。空字段点下去派发按规矩不发调用，于是**这一次点击
+  // 没有任何可见反应** —— 用户看到的是「按钮坏了」。
+  const { tree, props } = renderCard({ status: statusOf({ accounts: [row({ ref: "a" })] }) });
+  const trigger = elementsOf(tree).find((element) => element.props["data-action"] === "add")!;
+  // 收起状态下没有输入框：表单是点开才有的。
+  expect(elementsOf(tree).find((element) => element.props["data-add-label"] !== undefined)).toBeUndefined();
+  fire(trigger, "onClick");
+  expect(props.onOpenAction).toHaveBeenCalledWith({ kind: "add" });
+  expect(props.onConfirmAction).not.toHaveBeenCalled();
+});
+
+it("表单打开后是受控输入：值来自状态，变化与提交各自报出去", () => {
   const { tree, props } = renderCard({
     status: statusOf({ accounts: [row({ ref: "a" })] }),
     action: { kind: "add", label: "work", key: "sk-1" },
@@ -230,7 +242,8 @@ it("底部「添加账户」是受控输入：值来自状态，变化与提交�
   fire(elements.find((element) => element.props["data-add-label"] !== undefined)!, "onChange", { target: { value: "work-2" } });
   expect(props.onActionField).toHaveBeenCalledWith("label", "work-2");
 
-  fire(elements.find((element) => element.props["data-action"] === "add")!, "onClick");
+  // 提交是表单里那个独立的按钮，不再是那个入口。
+  fire(elements.find((element) => element.props["data-action"] === "confirmAdd")!, "onClick");
   expect(props.onConfirmAction).toHaveBeenCalledTimes(1);
 });
 

@@ -64,6 +64,8 @@ export type CopyKey =
   | "account.effectiveBy"
   | "account.quotaMissing"
   | "account.newLabel"
+  | "account.newLabel.placeholder"
+  | "account.newKey.placeholder"
   | "account.newKey"
   | "account.confirm"
   | "account.cancel"
@@ -80,6 +82,9 @@ export type CopyKey =
   | "models.add"
   | "models.remove"
   | "models.placeholder"
+  | "models.searchPlaceholder"
+  | "models.filtered"
+  | "models.noMatch"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -174,6 +179,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.effectiveBy": "当前",
     "account.quotaMissing": "暂无额度数据",
     "account.newLabel": "账户名称",
+    "account.newLabel.placeholder": "例如：工作账号",
+    "account.newKey.placeholder": "粘贴 API Key",
     "account.newKey": "密钥",
     "account.confirm": "确定",
     "account.cancel": "取消",
@@ -190,6 +197,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.add": "添加模型",
     "models.remove": "移除",
     "models.placeholder": "模型 id，例如 deepseek/deepseek-v4.1-flash",
+    "models.searchPlaceholder": "搜索模型…",
+    "models.filtered": "显示 {n} / {total} 个模型",
+    "models.noMatch": "没有匹配这个关键词的模型。",
     "sidebar.pinned": "固定",
     "sidebar.effective": "当前",
     "sidebar.open": "打开用量面板",
@@ -279,6 +289,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.effectiveBy": "Current",
     "account.quotaMissing": "No quota data",
     "account.newLabel": "Account name",
+    "account.newLabel.placeholder": "e.g. work",
+    "account.newKey.placeholder": "Paste the API key",
     "account.newKey": "API key",
     "account.confirm": "Confirm",
     "account.cancel": "Cancel",
@@ -295,6 +307,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.add": "Add model",
     "models.remove": "Remove",
     "models.placeholder": "model id, for example deepseek/deepseek-v4.1-flash",
+    "models.searchPlaceholder": "Search models…",
+    "models.filtered": "Showing {n} of {total} models",
+    "models.noMatch": "No model matches this keyword.",
     "sidebar.pinned": "Pinned",
     "sidebar.effective": "Current",
     "sidebar.open": "Open the usage panel",

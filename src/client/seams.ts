@@ -612,6 +612,9 @@ export interface VendorCardsContext {
   modelVisibility: Record<string, boolean>;
   /** 「添加模型」输入框的当前草稿。 */
   modelDraft: string;
+  /** 模型搜索框关键词（纯展示过滤，不改任何设置）。 */
+  modelFilter: string;
+  setModelFilter: (value: string) => void;
   /** 该厂商模型改动的生效时机。 */
   modelMode: ModelsWriteMode;
   setModelDraft: (value: string) => void;
@@ -671,6 +674,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
     /** 「添加模型」的输入草稿（按厂商分开）。 */
     const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({});
+    /** 模型搜索关键词（按厂商分开；纯展示，不进设置草稿、不进保存条）。 */
+    const [modelFilters, setModelFilters] = useState<Record<string, string>>({});
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
 
@@ -821,6 +826,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                   mode: modelWriteModeOf(statuses[activeVendor]),
                   draft: modelDrafts[activeEntry.ns] ?? "",
                   setDraft: (value) => setModelDrafts((current) => ({ ...current, [activeEntry.ns]: value })),
+                  filter: modelFilters[activeEntry.ns] ?? "",
+                  setFilter: (value) => setModelFilters((current) => ({ ...current, [activeEntry.ns]: value })),
                   draftInto: (ns, fields) => setState((current) => fields.reduce((acc, field) => setField(acc, ns, field.key, field.value), current)),
                   writeNow: (ns, fields) => {
                     // 立刻写（`immediate` 能力）：同样写行名；失败不静默 —— 记进保存错误，
@@ -877,11 +884,22 @@ function modelCardContext(input: {
   mode: ModelsWriteMode;
   draft: string;
   setDraft: (value: string) => void;
+  /** 搜索关键词（纯展示）。 */
+  filter: string;
+  setFilter: (value: string) => void;
   draftInto: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
   writeNow: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
 }): Pick<
   VendorCardsContext,
-  "cardKinds" | "models" | "modelVisibility" | "modelDraft" | "modelMode" | "setModelDraft" | "editModel"
+  | "cardKinds"
+  | "models"
+  | "modelVisibility"
+  | "modelDraft"
+  | "modelMode"
+  | "setModelDraft"
+  | "modelFilter"
+  | "setModelFilter"
+  | "editModel"
 > {
   const { entry, state, mode } = input;
   const spec = entry.models;
@@ -903,6 +921,8 @@ function modelCardContext(input: {
     modelDraft: input.draft,
     modelMode: mode,
     setModelDraft: input.setDraft,
+    modelFilter: input.filter,
+    setModelFilter: input.setFilter,
     editModel: (edit: ModelEdit) => {
       if (spec === undefined) return;
       const patch = applyModelEdit({ visible: settings[spec.visible], visibility: settings[spec.visibility] }, edit);

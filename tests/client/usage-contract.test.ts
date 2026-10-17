@@ -97,6 +97,56 @@ describe("远程面描述符契约", () => {
   });
 });
 
+/**
+ * **参数**校验器：真值必须过得去。
+ *
+ * 这一组是为了钉住一个真实故障：`VENDOR_PARAM` 曾把单参的 `parseVendorId` 直接挂到
+ * `(endpoint, value)` 的契约上（少写一个形参在 TypeScript 里是合法的），于是
+ * `parameterOf` 把**端点名**当成 vendor 值去比对白名单 —— 每次调用都在网关边界上被拒：
+ * `wire field "vendor" failed boundary validation`。表现是「账号数据暂不可用」与「点了
+ * 添加账户没反应」，而描述符形状测试、结果解析器测试全都通过（它们都没走这条路径）。
+ *
+ * 所以这里**必须**走宿主真正走的那条路：`parameter.codec.create().parse(value)`。
+ */
+describe("参数校验器接受真值", () => {
+  /** 每个参数名一个代表值（语义取自 `usage-contract.ts` 里各解析器的契约）。 */
+  const GOOD: Record<string, unknown> = {
+    vendor: "commandcode",
+    ref: "COMMANDCODE_API_KEY",
+    input: { label: "work", key: "sk-1" },
+    label: "work",
+    key: "sk-1",
+    toIndex: 0,
+    value: true,
+  };
+
+  const seen = new Set<string>();
+
+  for (const descriptor of usageDescriptors()) {
+    for (const raw of descriptor.parameters as readonly Record<string, unknown>[]) {
+      const name = String(raw["name"]);
+      const codec = raw["codec"] as { create: () => { parse: (value: unknown) => unknown } };
+      const parse = codec.create().parse;
+      seen.add(name);
+      const value = GOOD[name];
+      expect(value, `no sample value for parameter "${name}"`).not.toBeUndefined();
+      it(`${descriptor.method}(${name}) 接受 ${JSON.stringify(value)}`, () => {
+        expect(parse(value)).toEqual(value);
+      });
+    }
+  }
+
+  it("每个参数名都有代表值（新加参数时这条会先失败，逼你补样本）", () => {
+    for (const name of seen) expect(Object.hasOwn(GOOD, name), name).toBe(true);
+  });
+
+  it("厂商 id 仍然只认白名单里的两个（真值能过 ≠ 白名单放开）", () => {
+    expect(parseVendorId("commandcode")).toBe("commandcode");
+    expect(parseVendorId("dsh-opencode-go")).toBe("dsh-opencode-go");
+    expect(() => parseVendorId("nope")).toThrow();
+  });
+});
+
 // —— 2. 边界校验器的性质 ————————————————————————————
 
 /** 一批敌意值（解析器必须抛**边界错误**，而不是 TypeError/静默接受）。 */

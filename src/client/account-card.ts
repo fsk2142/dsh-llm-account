@@ -147,11 +147,25 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
       ...(rejectionOf === undefined ? {} : { "data-rejection-kind": rejectionOf.kind }),
       ...(rejectionOf?.until === undefined ? {} : { "data-rejection-until": rejectionOf.until }),
     },
-    createElement("span", { "data-account-label": account.ref }, account.label),
-    createElement("span", { "data-account-status": account.configured ? "configured" : "missing" }, account.configured ? t("account.configured") : t("account.missing")),
+    // 身份块：圆点 + 名称 + 配置状态（宿主身份行是「头像 + 名称 + 副文案」的同一形状）
+    createElement(
+      "span",
+      { className: CSS_CLASS.identity },
+      createElement("span", { className: CSS_CLASS.dot }),
+      createElement(
+        "span",
+        { className: CSS_CLASS.identityText },
+        createElement("strong", { "data-account-label": account.ref }, account.label),
+        createElement(
+          "small",
+          { "data-account-status": account.configured ? "configured" : "missing" },
+          account.configured ? t("account.configured") : t("account.missing"),
+        ),
+      ),
+    ),
     ...marks,
     rejection,
-    ...(quotaOf === undefined ? [createElement("small", { key: "quota-none" }, t("account.quotaMissing"))] : []),
+    ...(quotaOf === undefined ? [createElement("small", { key: "quota-none", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))] : []),
     ...quotaBars(props, quotaOf),
     ...(props.status === undefined ? [] : [planLine(props, quotaOf)]),
     createElement(
@@ -160,6 +174,7 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
         type: "button",
         "data-action": "expand",
         "aria-expanded": props.expandedRef === account.ref,
+        className: CSS_CLASS.buttonGhost,
         onClick: () => props.onToggleExpand(account.ref),
       },
       props.expandedRef === account.ref ? t("account.collapse") : t("account.expand"),
@@ -211,7 +226,26 @@ function quotaBars(props: AccountCardProps, quota: QuotaSummary | undefined): Re
 
 /** 一个额度窗口。 */
 function quotaBar(props: AccountCardProps, window: QuotaWindow): ReactNode {
-  return createElement("div", { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.quotaRow }, createElement("span", null, window.key), quotaText(props, window));
+  // 有百分比才画条：没有百分比就只给读数，绝不补一个 0%（那会把「不知道」画成「没额度」）。
+  const percent = window.percent;
+  const level = percent === undefined ? undefined : percent <= 0.2 ? "error" : percent <= 0.5 ? "warn" : "ok";
+  return createElement(
+    "div",
+    { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.quotaRow },
+    createElement("span", null, window.key),
+    quotaText(props, window),
+    percent === undefined || level === undefined
+      ? null
+      : createElement(
+          "span",
+          { key: "bar", "data-quota-percent": percent, className: CSS_CLASS.quotaTrack },
+          createElement("span", {
+            "data-quota-level": level,
+            className: CSS_CLASS.quotaFill,
+            style: { width: `${Math.round(percent * 100)}%` },
+          }),
+        ),
+  );
 }
 
 /** 一个窗口的读数文案：缺失与真的 0 必须区分开（规则在 `quota.ts`，三张卡片共用一份）。 */
@@ -251,16 +285,16 @@ function menuButtons(props: AccountCardProps, account: AccountUsageStatus): Reac
   const { t } = props;
   const capabilities = capabilitiesOf(props);
   const buttons: ReactNode[] = [
-    createElement("button", { key: "rename", type: "button", "data-action": "rename", onClick: () => props.onOpenAction({ kind: "rename", ref: account.ref }) }, t("account.rename")),
-    createElement("button", { key: "key", type: "button", "data-action": "replaceKey", onClick: () => props.onOpenAction({ kind: "key", ref: account.ref }) }, t("account.replaceKey")),
+    createElement("button", { key: "rename", type: "button", "data-action": "rename", className: CSS_CLASS.buttonGhost, onClick: () => props.onOpenAction({ kind: "rename", ref: account.ref }) }, t("account.rename")),
+    createElement("button", { key: "key", type: "button", "data-action": "replaceKey", className: CSS_CLASS.buttonGhost, onClick: () => props.onOpenAction({ kind: "key", ref: account.ref }) }, t("account.replaceKey")),
   ];
   // 只有支持固定的厂商才给「固定使用此账户」；opencode 用 select 切换（T6 处理）。
   if (capabilities.pin) {
     buttons.push(
-      createElement("button", { key: "pin", type: "button", "data-action": "pin", onClick: () => props.onSelect(account.ref) }, t("account.pin")),
+      createElement("button", { key: "pin", type: "button", "data-action": "pin", className: CSS_CLASS.buttonGhost, onClick: () => props.onSelect(account.ref) }, t("account.pin")),
     );
   }
-  buttons.push(createElement("button", { key: "remove", type: "button", "data-action": "remove", onClick: () => props.onRemove(account.ref) }, t("account.remove")));
+  buttons.push(createElement("button", { key: "remove", type: "button", "data-action": "remove", className: CSS_CLASS.buttonDanger, onClick: () => props.onRemove(account.ref) }, t("account.remove")));
   return buttons;
 }
 
@@ -277,8 +311,8 @@ function renameEditor(props: AccountCardProps, account: AccountUsageStatus): Rea
       placeholder: props.t("account.newLabel"),
       onChange: (event: { target?: { value?: string } }) => props.onActionField("label", event.target?.value ?? ""),
     }),
-    createElement("button", { type: "button", "data-action": "confirmRename", onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
-    createElement("button", { type: "button", "data-action": "cancel", onClick: () => props.onCancelAction() }, props.t("account.cancel")),
+    createElement("button", { type: "button", "data-action": "confirmRename", className: CSS_CLASS.buttonPrimary, onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
+    createElement("button", { type: "button", "data-action": "cancel", className: CSS_CLASS.buttonGhost, onClick: () => props.onCancelAction() }, props.t("account.cancel")),
   );
 }
 
@@ -299,8 +333,8 @@ function keyEditor(props: AccountCardProps, account: AccountUsageStatus): ReactN
       placeholder: props.t("account.newKey"),
       onChange: (event: { target?: { value?: string } }) => props.onActionField("key", event.target?.value ?? ""),
     }),
-    createElement("button", { type: "button", "data-action": "confirmKey", onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
-    createElement("button", { type: "button", "data-action": "cancel", onClick: () => props.onCancelAction() }, props.t("account.cancel")),
+    createElement("button", { type: "button", "data-action": "confirmKey", className: CSS_CLASS.buttonPrimary, onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
+    createElement("button", { type: "button", "data-action": "cancel", className: CSS_CLASS.buttonGhost, onClick: () => props.onCancelAction() }, props.t("account.cancel")),
   );
 }
 
@@ -316,7 +350,7 @@ function loginSection(props: AccountCardProps): ReactNode[] {
   const { t, login } = props;
   if (!capabilitiesOf(props).browserLogin) return [];
   const nodes: ReactNode[] = [
-    createElement("button", { key: "login", type: "button", "data-action": "login", onClick: () => props.onLoginBegin() }, t("account.login")),
+    createElement("button", { key: "login", type: "button", "data-action": "login", className: CSS_CLASS.buttonSecondary, onClick: () => props.onLoginBegin() }, t("account.login")),
   ];
   if (login?.state === "waiting") {
     nodes.push(createElement("p", { key: "waiting" }, t("account.loginWaiting")));
@@ -339,54 +373,66 @@ function reasonText(t: (key: string) => string, reason: string | undefined): str
 }
 
 /**
- * 底部「添加账户」（受控输入）。
+ * 底部「添加账户」：**收起的入口 → 展开的表单**。
  *
- * **第一次输入就会打开 `add` 操作**（`openAction` + `setActionField` 一起调）：页面状态机里
- * `setActionField` 在没有进行中操作时是恒等变换（`page-state.ts`），而这张卡片里**没有任何
- * 按钮去打开 `add`** —— 只写 `onActionField` 的话，两个输入框永远是空的、「添加」按钮点了
- * 什么也不会发生（`confirmAction` 拿到 `action === undefined` 直接返回）。这是接线层的漏口，
- * 由容器渲染仿真（`tests/client/container-simulation.test.ts`）抓出来。
+ * 为什么必须是收起的：先前两个输入框一直摊在卡片底部，按钮直接叫「添加账户」。用户点它时
+ * 字段是空的，`dispatchAccountAction` 按规矩不发调用（空名称/空密钥不提交），于是**这一次
+ * 点击没有任何可见反应**——按钮像是坏的。空提交不发调用这条是对的（那能防住误写一个空账号），
+ * 错的是让「入口」和「提交」共用一个按钮：点击没有反应，用户无从判断是坏了还是自己没填。
+ *
+ * 现在点入口必然展开表单（可见的变化），提交是表单里那个独立的「添加」。表单内仍保留
+ * 「第一次输入即打开 add」的幂等接线（`openAction` 对同一 kind 返回原对象），这样即便宿主
+ * 或未来调用方绕过入口直接改字段，操作状态也已经是打开的。
  */
 function addSection(props: AccountCardProps): ReactNode {
   const { t, action } = props;
   const adding = action?.kind === "add";
-  /** 打开 add 操作（幂等：`openAction` 对同一 kind/ref 返回原对象）后再写字段。 */
-  const edit = (field: "label" | "key", value: string): void => {
-    if (!adding) props.onOpenAction({ kind: "add" });
-    props.onActionField(field, value);
-  };
-  const nodes: ReactNode[] = [
-    createElement("input", {
-      key: "label",
-      "data-add-label": "true",
-      type: "text",
-      value: adding ? action.label : "",
-      placeholder: t("account.newLabel"),
-      onChange: (event: { target?: { value?: string } }) => edit("label", event.target?.value ?? ""),
-    }),
-    createElement("input", {
-      key: "key",
-      "data-add-key": "true",
-      type: "password",
-      value: adding ? action.key : "",
-      placeholder: t("account.newKey"),
-      onChange: (event: { target?: { value?: string } }) => edit("key", event.target?.value ?? ""),
-    }),
-    createElement("button", {
-      key: "add",
-      type: "button",
-      "data-action": "add",
-      // 表单还没打开时（用户直接点按钮）先打开它：`confirmAction` 在 `action === undefined`
-      // 时什么都不做，那一次点击就会静默丢失。字段为空时派发仍然不发调用（见
-      // `dispatchAccountAction`），输入框会留着用户能看见。
-      onClick: () => {
-        if (!adding) props.onOpenAction({ kind: "add" });
-        props.onConfirmAction();
-      },
-    }, t("account.add")),
-  ];
-  if (adding) {
-    nodes.push(createElement("button", { key: "cancel", type: "button", "data-action": "cancel", onClick: () => props.onCancelAction() }, t("account.cancel")));
+
+  if (!adding) {
+    return createElement(
+      "div",
+      { "data-card": "add-account", className: CSS_CLASS.add },
+      createElement(
+        "button",
+        { key: "add", type: "button", "data-action": "add", className: CSS_CLASS.buttonGhost, onClick: () => props.onOpenAction({ kind: "add" }) },
+        t("account.add"),
+      ),
+    );
   }
-  return createElement("div", { "data-card": "add-account", className: CSS_CLASS.actions }, ...nodes);
+
+  const edit = (field: "label" | "key", value: string): void => props.onActionField(field, value);
+  return createElement(
+    "div",
+    { "data-card": "add-account", className: CSS_CLASS.add },
+    createElement(
+      "label",
+      { className: CSS_CLASS.field },
+      createElement("span", null, t("account.newLabel")),
+      createElement("input", {
+        "data-add-label": "true",
+        type: "text",
+        value: action?.label ?? "",
+        placeholder: t("account.newLabel.placeholder"),
+        onChange: (event: { target?: { value?: string } }) => edit("label", event.target?.value ?? ""),
+      }),
+    ),
+    createElement(
+      "label",
+      { className: CSS_CLASS.field },
+      createElement("span", null, t("account.newKey")),
+      createElement("input", {
+        "data-add-key": "true",
+        type: "password",
+        value: action?.key ?? "",
+        placeholder: t("account.newKey.placeholder"),
+        onChange: (event: { target?: { value?: string } }) => edit("key", event.target?.value ?? ""),
+      }),
+    ),
+    createElement(
+      "div",
+      { className: CSS_CLASS.actions },
+      createElement("button", { key: "ok", type: "button", "data-action": "confirmAdd", className: CSS_CLASS.buttonPrimary, onClick: () => props.onConfirmAction() }, t("account.confirm")),
+      createElement("button", { key: "cancel", type: "button", "data-action": "cancel", onClick: () => props.onCancelAction() }, t("account.cancel")),
+    ),
+  );
 }

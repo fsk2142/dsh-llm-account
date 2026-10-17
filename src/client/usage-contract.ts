@@ -253,7 +253,13 @@ function strictCodec(typeSymbol: string, parse: (value: unknown) => unknown): Us
   return { mode: "strict", typeSymbol: `${USAGE_PACKAGE}#${typeSymbol}`, create: () => ({ parse }) };
 }
 
-/** 一个业务参数：名字、边界校验与类型符号。 */
+/**
+ * 一个业务参数：名字、边界校验与类型符号。
+ *
+ * `parse` **必须**是 `(endpoint, value)` 双参：调用方 {@link parameterOf} 会把端点名传进去，
+ * 让错误消息能指名是哪条调用的哪个字段。TypeScript **不会**拦住「少写一个形参」的函数
+ * （少参是合法的可赋值形态），所以这里除了约定，还有 {@link parameterOf} 里的运行期护栏。
+ */
 interface ParamSpec {
   name: string;
   typeSymbol: string;
@@ -263,17 +269,35 @@ interface ParamSpec {
   optional?: boolean;
 }
 
-/** 三个只读方法共用的参数：厂商 id。 */
-const VENDOR_PARAM: ParamSpec = { name: "vendor", typeSymbol: "VendorId", parse: parseVendorId };
+/**
+ * 三个只读方法共用的参数：厂商 id。
+ *
+ * `parseVendorId` 只收一个值（它自己的语义），而描述符契约要双参 —— 所以这里**适配**，
+ * 不能直接把单参函数挂上去。挂错了的后果是运行时才暴露的：`parameterOf` 会把端点名
+ * （`"llm-account/status#vendor"`）当成 vendor 值去比对白名单，于是**每一次**带 vendor 的
+ * 调用都在网关边界上被拒（真机报错：`wire field "vendor" failed boundary validation`），
+ * 状态 / 账号 / 开关 / 增删改全线失效，而页面只会显示「账号数据暂不可用」。
+ */
+const VENDOR_PARAM: ParamSpec = { name: "vendor", typeSymbol: "VendorId", parse: (_endpoint, value) => parseVendorId(value) };
 /** 账号 ref 参数。 */
 const REF_PARAM: ParamSpec = { name: "ref", typeSymbol: "AccountRef", parse: parseString };
 
 /**
  * 造一个参数描述符。
+ *
+ * 护栏：`parse` 的形参数必须 ≥ 2。这是唯一能机械拦住上面那类 arity 错误的检查 ——
+ * 类型系统放行，形状测试也放行，只有把真值喂进 `codec.create().parse()` 才会炸。
  * @param spec - 参数规格。
  * @param method - 所属方法名（拼端点用）。
  */
 function parameterOf(spec: ParamSpec, method: string): unknown {
+  if (spec.parse.length < 2) {
+    // 抛在这里而不是让网关抛：这条消息指名是哪个参数的 arity 写错了，而网关那边只会说
+    // 「wire field X failed boundary validation」—— 看不出是自己的校验函数挂错了参数顺序。
+    throw new Error(
+      `${USAGE_PACKAGE}: parameter "${spec.name}" of ${USAGE_NAMESPACE}/${method} needs a (endpoint, value) parser, got one with ${spec.parse.length} argument(s)`,
+    );
+  }
   const parameterEndpoint = `${USAGE_NAMESPACE}/${method}#${spec.name}`;
   return {
     name: spec.name,
@@ -320,7 +344,7 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("switches", "SwitchRecordList", parseSwitchRecords, [VENDOR_PARAM]),
     makeDescriptor("addAccount", "AccountView", parseAccountView, [
       VENDOR_PARAM,
-      { name: "input", typeSymbol: "AddAccountInput", parse: parseAddAccountInput },
+      { name: "input", typeSymbol: "AddAccountInput", parse: (_endpoint, value) => parseAddAccountInput(value) },
     ]),
     makeDescriptor("renameAccount", "Void", parseVoid, [
       VENDOR_PARAM,

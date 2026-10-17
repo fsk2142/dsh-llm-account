@@ -25,6 +25,9 @@ export interface ModelsCardProps {
   visibility: Record<string, boolean>;
   /** 「添加模型」输入框的当前草稿（受控）。 */
   draft: string;
+  /** 搜索框里的关键词（受控，空串 = 不过滤）。 */
+  filter: string;
+  onFilterChange: (value: string) => void;
   /** 该厂商的写入时机。 */
   mode: ModelsWriteMode;
   onToggleModel: (model: string, visible: boolean) => void;
@@ -40,14 +43,35 @@ export interface ModelsCardProps {
  */
 export function ModelsCard(props: ModelsCardProps): ReactElement {
   const { t } = props;
+  // 过滤是**纯展示**的：搜索框只缩小要渲染的行，一个模型都不会因此从设置里消失。
+  // 关键词为空时列表与过滤前逐字相同（没有任何「默认排序」偷偷生效）。
+  const needle = props.filter.trim().toLowerCase();
+  const shown = needle === "" ? props.models : props.models.filter((model) => model.toLowerCase().includes(needle));
+  const filtered = needle !== "" && shown.length !== props.models.length;
   return createElement(
     "section",
     { "data-card": "models", className: CSS_CLASS.card },
     createElement("h2", null, t("models.title")),
     // 提示必须与真实行为一致：立即生效时不该再出现「保存后生效」。
     createElement("small", { "data-models-mode": props.mode }, props.mode === "immediate" ? t("models.immediate") : t("models.onSave")),
-    ...(props.models.length === 0 ? [createElement("p", { key: "empty" }, t("models.empty"))] : []),
-    ...props.models.map((model) => modelRow(props, model)),
+    props.models.length === 0
+      ? createElement("p", { key: "empty" }, t("models.empty"))
+      : createElement(
+          "div",
+          { key: "search", className: CSS_CLASS.search },
+          createElement("input", {
+            "data-model-filter": "true",
+            type: "text",
+            value: props.filter,
+            placeholder: t("models.searchPlaceholder"),
+            onChange: (event: { target?: { value?: string } }) => props.onFilterChange(event.target?.value ?? ""),
+          }),
+        ),
+    ...(filtered
+      ? [createElement("small", { key: "count", "data-model-count": `${shown.length}/${props.models.length}` }, t("models.filtered").replace("{n}", String(shown.length)).replace("{total}", String(props.models.length)))]
+      : []),
+    ...(needle !== "" && shown.length === 0 ? [createElement("p", { key: "no-match" }, t("models.noMatch"))] : []),
+    ...shown.map((model) => modelRow(props, model)),
     addRow(props),
   );
 }
@@ -60,14 +84,14 @@ function modelRow(props: ModelsCardProps, model: string): ReactNode {
   return createElement(
     "div",
     { key: model, "data-model": model, className: CSS_CLASS.field },
-    createElement("span", { "data-model-label": model }, model),
+    createElement("span", { "data-model-label": model, className: CSS_CLASS.mono }, model),
     createElement("input", {
       "data-model-visible": model,
       type: "checkbox",
       checked: visible,
       onChange: (event: { target?: { checked?: boolean } }) => props.onToggleModel(model, event.target?.checked === true),
     }),
-    createElement("button", { type: "button", "data-model-remove": model, onClick: () => props.onRemoveModel(model) }, t("models.remove")),
+    createElement("button", { type: "button", "data-model-remove": model, className: CSS_CLASS.buttonDanger, onClick: () => props.onRemoveModel(model) }, t("models.remove")),
   );
 }
 
@@ -90,6 +114,7 @@ function addRow(props: ModelsCardProps): ReactNode {
       {
         type: "button",
         "data-model-add": "true",
+        className: CSS_CLASS.buttonPrimary,
         // 空白草稿不提交：它注定会被 `normalizeModels` 丢掉。
         disabled: props.draft.trim() === "",
         onClick: submit,

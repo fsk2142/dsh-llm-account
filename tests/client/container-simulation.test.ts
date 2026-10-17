@@ -245,11 +245,13 @@ describe("设置页容器仿真", () => {
     );
     await settleSim(mini);
 
-    // 底部「添加账户」：名称 + 密钥（受控输入），点添加。
+    // 底部「添加账户」：点入口展开表单 → 填名称 + 密钥 → 点提交。
+    click(page.tree(), "data-action", "add");
+    await settleSim(mini);
     fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: " work " } });
     fireSim(find(page.tree(), "data-add-key"), "onChange", { target: { value: " sk-new\n" } });
     await settleSim(mini);
-    click(page.tree(), "data-action", "add");
+    click(page.tree(), "data-action", "confirmAdd");
     await settleSim(mini);
 
     // 走到远程命名空间；名称/密钥在派发边界上 trim 过（派发本身由 seams.test.ts 覆盖）。
@@ -257,7 +259,7 @@ describe("设置页容器仿真", () => {
     expect(seen).toEqual([{ label: "work", key: "sk-new" }]);
   });
 
-  it("账户表单能在没有预设操作的情况下打开（回归：曾经完全失灵）", async () => {
+  it("点「添加账户」会展开表单（回归：入口与提交曾是同一个按钮，空提交毫无反应）", async () => {
     const mini = await runtime();
     const { AccountCard } = await import("../../src/client/account-card");
     const { createElement } = await import("react");
@@ -287,13 +289,18 @@ describe("设置页容器仿真", () => {
     );
     await settleSim(mini);
 
-    // 只输入名称（没有先点任何按钮）：受控输入必须真的留下内容，而不是被恒等变换吃掉。
+    // 收起时只有入口，没有输入框：点它才展开。
+    expect(findSim(page.tree(), "data-add-label")).toBeUndefined();
+    click(page.tree(), "data-action", "add");
+    await settleSim(mini);
+    // 表单已打开 → 输入框出现，且受控（值来自状态，容器不留本地状态）。
+    expect(findSim(page.tree(), "data-add-label")).toBeDefined();
     fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "typed only" } });
     await settleSim(mini);
-    // 输入框先打开了 add 操作（这一步曾经完全缺失，表单永远是空的）。
     expect(find(page.tree(), "data-add-label").props["value"]).toBe("typed only");
-    // 表单已打开 → 出现取消按钮。
+    // 表单已打开 → 出现取消与提交按钮。
     expect(findSim(page.tree(), "data-action", "cancel")).toBeDefined();
+    expect(findSim(page.tree(), "data-action", "confirmAdd")).toBeDefined();
   });
 });
 
