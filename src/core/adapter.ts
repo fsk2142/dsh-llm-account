@@ -188,6 +188,10 @@ export interface LoginStatus {
   state: "idle" | "waiting" | "success" | "failed";
   /** 等待授权时可供用户打开的网址。 */
   authUrl?: string;
+  /** 设备码流程要在浏览器里输入的代码（没有该流程时缺省）。 */
+  userCode?: string;
+  /** 这次等待的过期时刻（epoch 毫秒）。 */
+  expiresAt?: number;
   /** 失败原因（稳定文案键，例如 `"timeout"`）。 */
   reason?: string;
 }

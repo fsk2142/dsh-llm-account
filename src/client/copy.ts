@@ -83,6 +83,7 @@ export type CopyKey =
   | "account.cancel"
   | "account.login"
   | "account.loginWaiting"
+  | "account.loginCode"
   | "account.moveUp"
   | "account.moveDown"
   | "account.autoSwitch"
@@ -218,6 +219,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.cancel": "取消",
     "account.login": "网页登录",
     "account.loginWaiting": "在浏览器里完成授权，然后回到这里。",
+    "account.loginCode": "在浏览器里输入代码：{code}",
     "account.moveUp": "上移",
     "account.moveDown": "下移",
     "account.autoSwitch": "额度耗尽时自动切换账号",
@@ -348,6 +350,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.cancel": "Cancel",
     "account.login": "Sign in with browser",
     "account.loginWaiting": "Finish signing in in your browser, then come back here.",
+    "account.loginCode": "Enter this code in the browser: {code}",
     "account.moveUp": "Move up",
     "account.moveDown": "Move down",
     "account.autoSwitch": "Switch accounts automatically when quota runs out",

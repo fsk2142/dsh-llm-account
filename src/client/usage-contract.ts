@@ -73,6 +73,10 @@ export type UsageMethod = (typeof USAGE_METHODS)[number];
 export interface LoginStatus {
   state: "idle" | "waiting" | "success" | "failed";
   authUrl?: string;
+  /** 设备码流程要在浏览器里输入的代码。 */
+  userCode?: string;
+  /** 等待的过期时刻（epoch 毫秒）。 */
+  expiresAt?: number;
   reason?: string;
 }
 

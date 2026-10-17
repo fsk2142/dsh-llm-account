@@ -358,11 +358,13 @@ it("拒绝原因对全部分类都有可读文案：不把原始枚举或文案�
 it("登录等待中显示授权网址；失败时把原因翻译成可读文案（含撞名）", () => {
   const waiting = renderCard({
     status: statusOf({ accounts: [row({ ref: "a" })] }),
-    login: { state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?state=x" },
+    login: { state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?state=x", userCode: "ABCD-EFGH" },
   }).tree;
   const link = elementsOf(waiting).find((element) => element.props["data-login-url"] !== undefined)!;
   expect(link.props.href).toBe("https://commandcode.ai/studio/auth/cli?state=x");
   expect(textsOf(waiting)).toContain(dictionaryOf("zh")("account.loginWaiting"));
+  // 设备码流程：user code 必须显示出来，用户才知道在浏览器里输入什么。
+  expect(textsOf(waiting).join(" ")).toContain("ABCD-EFGH");
 
   const failed = renderCard({
     status: statusOf({ accounts: [row({ ref: "a" })] }),

@@ -782,9 +782,11 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       if (usage === undefined || waitingVendors.length === 0) return;
       const timer = setInterval(() => {
         for (const vendor of waitingVendors) {
-          void remoteValue<LoginView>(usage.loginStatus(vendor)).then((status) =>
-            setLogins((current) => ({ ...current, [vendor]: status ?? LOGIN_UNKNOWN })),
-          );
+          void remoteValue<LoginView>(usage.loginStatus(vendor)).then((status) => {
+            setLogins((current) => ({ ...current, [vendor]: status ?? LOGIN_UNKNOWN }));
+            // 登录成功后账号表多了一条/换了密钥：重读一次，别让面板停在旧列表上。
+            if (status?.state === "success") setAccountRevision((current) => current + 1);
+          });
         }
       }, LOGIN_POLL_MS);
       return () => clearInterval(timer);

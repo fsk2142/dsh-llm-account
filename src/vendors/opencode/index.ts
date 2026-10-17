@@ -80,6 +80,7 @@ import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { SwitchingController } from "../switching";
+import { createOpencodeLogin } from "./login";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opencode-go`）。 */
 export const name = "llm-opencode-go";
@@ -233,7 +234,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     reorder: true,
     // OpenCode 的「当前账号」由 `select` 改写顶层 `apiKeyEnv`，没有独立的「固定」概念。
     pin: false,
-    browserLogin: false,
+    browserLogin: true,
     modelAccountRules: false,
     quotaShape: "percent",
     modelVisibilityWrite: "immediate",
@@ -262,6 +263,27 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     pinnedRef: () => pinnedRefOf(document()),
     warn,
   });
+
+  // 实验性网页登录：拿到 ocoauth1 blob 后写进账号表（同标签换密钥，否则新增账号）。
+  const login = createOpencodeLogin({
+    fetchImpl: fetch,
+    storeKey: async (ref, key, userName) => {
+      const views = await accounts.list();
+      const existing = views.find((view) => view.ref === ref) ?? views.find((view) => view.label === userName);
+      if (existing !== undefined) {
+        await credentials.set(existing.ref, key);
+        return;
+      }
+      await accounts.add({ label: userName, key });
+    },
+  });
+  ctx.effect(
+    () => () => {
+      // 等待授权时卸载插件：后台轮询必须停掉，迟到的成功不能再写凭据。
+      void login.cancel();
+    },
+    "dsh-llm-account: opencode login port",
+  );
 
   /**
    * 备用账号把请求服务完了：把它提成当前账号（旧插件 `GoAccountSelection.adopt` 的同一后果 ——
@@ -310,6 +332,8 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     fetchImpl: fetch,
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
+    // 网页登录刷新后的 blob 回写原凭据槽；普通 API key 不受影响。
+    persistStored: (ref, value) => credentials.set(ref, value),
     promoteServed: promoteServedAccount,
     beforeRequest: (input) => switching.beforeRequest(input),
   };
@@ -369,6 +393,8 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     capabilities,
     // 设置页的模型勾选：未过滤的完整目录。
     models: () => adapter.catalogModels(),
+    // 实验性设备码网页登录。
+    login,
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。

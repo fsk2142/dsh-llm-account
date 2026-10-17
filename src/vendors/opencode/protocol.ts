@@ -672,6 +672,8 @@ export interface OpencodeStreamInput {
   context: PiContext;
   /** 本账号的密钥。 */
   apiKey: string;
+  /** 额外的请求头（网页登录的 `x-opencode-org-id`；普通 API key 时缺省）。 */
+  headers?: Record<string, string>;
   /** 交给 SDK 的 `fetch`（适配器的录证据包装）。 */
   fetchImpl: typeof fetch;
   /** 调用方信号。 */
@@ -715,8 +717,9 @@ export function streamOpencode(input: OpencodeStreamInput): AsyncIterable<Stream
     apiKey: input.apiKey,
     fetch: input.fetchImpl,
     // 宿主契约：每个 provider 请求都要带 attribution 头；pi-ai 的客户端最后合并
-    // `headers`（旧插件第 7687-7691 行）。
-    headers: { ...attributionHeaders() },
+    // `headers`（旧插件第 7687-7691 行）。网页登录的 org 头必须晚于 attribution 合并，
+    // 否则会被覆盖；两者键不冲突，顺序只为可读。
+    headers: { ...attributionHeaders(), ...(input.headers ?? {}) },
     maxRetries: SDK_MAX_RETRIES,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.temperature === undefined ? {} : { temperature: input.temperature }),

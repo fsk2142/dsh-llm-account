@@ -31,6 +31,10 @@ import type { AccountUsageStatus, QuotaSummary, QuotaWindow, VendorCapabilities,
 export interface LoginView {
   state: string;
   authUrl?: string;
+  /** 设备码流程要在浏览器里输入的代码。 */
+  userCode?: string;
+  /** 等待的过期时刻（epoch 毫秒）。 */
+  expiresAt?: number;
   reason?: string;
 }
 
@@ -509,6 +513,15 @@ function loginSection(props: AccountCardProps): ReactNode[] {
   const detail: ReactNode[] = [];
   if (login?.state === "waiting") {
     detail.push(createElement("p", { key: "waiting" }, t("account.loginWaiting")));
+    if (login.userCode !== undefined) {
+      detail.push(
+        createElement(
+          "p",
+          { key: "code", "data-login-code": login.userCode, className: CSS_CLASS.mono },
+          t("account.loginCode").replace("{code}", login.userCode),
+        ),
+      );
+    }
     if (login.authUrl !== undefined) {
       detail.push(createElement("a", { key: "url", "data-login-url": "true", className: CSS_CLASS.link, href: login.authUrl, target: "_blank", rel: "noreferrer" }, login.authUrl));
     }

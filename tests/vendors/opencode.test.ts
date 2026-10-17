@@ -16,6 +16,7 @@ import { createOpencodeAdapter } from "../../src/vendors/opencode/adapter";
 import { parseModels } from "../../src/vendors/opencode/catalog";
 import { classifyGatewayFailure } from "../../src/vendors/opencode/failures";
 import { BODY_READ_TIMEOUT_MS, recordGatewayFetch } from "../../src/vendors/opencode/protocol";
+import { serializeOAuthCredential } from "../../src/vendors/opencode/oauth";
 
 const BASE_URL = "https://opencode.ai/zen/go/v1";
 const MODELS_URL = `${BASE_URL}/models`;
@@ -256,13 +257,16 @@ function harness(
   modelVisibility?: Record<string, boolean>,
   order: readonly string[] = ["a", "b"],
   promoteServed?: (ref: string) => void,
+  keys: Readonly<Record<string, string>> = KEYS,
 ) {
   const calls: string[] = [];
+  const headersSeen: Headers[] = [];
   const fetchImpl = (async (input: unknown, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : String((input as { url: string }).url);
     if (url === MODELS_URL) return jsonResponse(200, LISTING);
     if (url === METADATA_URL) return jsonResponse(503, { error: { message: "metadata unavailable" } });
     const headers = new Headers(init?.headers);
+    headersSeen.push(headers);
     const key = (headers.get("x-api-key") ?? headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
     calls.push(key);
     return generate(key);
@@ -277,10 +281,10 @@ function harness(
     quota: stubQuota(),
     accounts: stubAccounts(),
     fetchImpl,
-    resolveStored: async (ref) => KEYS[ref] ?? `key-${ref}`,
+    resolveStored: async (ref) => keys[ref] ?? `key-${ref}`,
     ...(promoteServed === undefined ? {} : { promoteServed }),
   });
-  return { adapter, rotation, gate, calls };
+  return { adapter, rotation, gate, calls, headersSeen };
 }
 
 it("creditserror / userlimiterror / insufficientquota 映射为 quota", () => {
@@ -357,6 +361,73 @@ it("listModels 应用 modelVisibility（能力声明为 immediate 的逐模型�
   const { adapter } = harness(() => sseResponse(TEXT_FRAMES), { m2: false });
   const models = await adapter.listModels("dsh-opencode-go");
   expect(models.map((model) => model.id)).toEqual(["m1"]);
+});
+
+it("网页登录的 ocoauth1 blob：用 access token 发请求，并带 x-opencode-org-id", async () => {
+  const blob = serializeOAuthCredential({
+    v: 1,
+    access: "access-1",
+    refresh: "refresh-1",
+    expiresAt: Date.now() + 3_600_000,
+    orgId: "org-1",
+    orgName: "Default",
+    userName: "Default",
+  });
+  const withOauth = harness(() => sseResponse(TEXT_FRAMES), undefined, ["a"], undefined, { a: blob });
+
+  const chunks = await collect(withOauth.adapter.stream(request()));
+
+  expect(textOf(chunks)).toBe("hello");
+  expect(withOauth.calls).toEqual(["access-1"]);
+  expect(withOauth.headersSeen.at(-1)?.get("x-opencode-org-id")).toBe("org-1");
+  // 普通 key 的请求**没有**这个头：org 头只属于网页登录的凭据。
+  const plain = harness(() => sseResponse(TEXT_FRAMES), undefined, ["a"]);
+  await collect(plain.adapter.stream(request()));
+  expect(plain.headersSeen.at(-1)?.get("x-opencode-org-id")).toBeNull();
+});
+
+it("网页登录 blob 过期且刷新成功：请求用新 token，并回写凭据槽", async () => {
+  const blob = serializeOAuthCredential({
+    v: 1,
+    access: "old-access",
+    refresh: "refresh-1",
+    expiresAt: 0,
+    orgId: "org-1",
+    orgName: "Default",
+  });
+  const writes: { ref: string; value: string }[] = [];
+  const calls: string[] = [];
+  const fetchImpl = (async (input: unknown, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    if (url.endsWith("/console/auth/device/token")) {
+      return jsonResponse(200, { access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 });
+    }
+    if (url === MODELS_URL) return jsonResponse(200, LISTING);
+    if (url === METADATA_URL) return jsonResponse(503, { error: { message: "metadata unavailable" } });
+    const headers = new Headers(init?.headers);
+    calls.push((headers.get("x-api-key") ?? headers.get("authorization") ?? "").replace(/^Bearer\s+/, ""));
+    return sseResponse(TEXT_FRAMES);
+  }) as typeof fetch;
+  const rotation = new RotationEngine({ order: ["a"], rules: [], pinned: null });
+  const adapter = createOpencodeAdapter({
+    config: () => ({ apiBase: BASE_URL }),
+    rotation,
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl,
+    resolveStored: async () => blob,
+    persistStored: async (ref, value) => {
+      writes.push({ ref, value });
+    },
+  });
+
+  await collect(adapter.stream(request()));
+
+  expect(calls).toEqual(["new-access"]);
+  expect(writes).toHaveLength(1);
+  expect(writes[0]?.ref).toBe("a");
+  expect(writes[0]?.value).toContain("new-access");
+  expect(writes[0]?.value).toContain("new-refresh");
 });
 
 it("空响应这类终态错误交给宿主，不被账号轮换吞掉", async () => {

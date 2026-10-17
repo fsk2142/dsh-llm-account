@@ -28,6 +28,7 @@ import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
+import { OAUTH_PREFIX, resolveOAuthCredential } from "./oauth";
 import type { OpencodeCatalog, OpencodeCatalogRecord } from "./catalog";
 import { classifyGatewayFailure, gatewayLlmError } from "./failures";
 import {
@@ -151,6 +152,12 @@ export interface OpencodeAdapterDeps {
   resolveStored?: (ref: string) => Promise<string | undefined>;
   /** `environment` 来源：启动环境读取（宿主 `launchEnvironmentOf(ctx).get(name)` 的注入点）。 */
   resolveEnvironment?: (name: string) => string | undefined;
+  /** 刷新后的 OAuth blob 回写凭据槽（只在原值是 blob、且确实刷新过时调用）。 */
+  persistStored?: (ref: string, value: string) => Promise<void>;
+  /** Console 基地址（设备码/刷新端点）；缺省 `https://opencode.ai`。 */
+  authBase?: string;
+  /** 时钟（测试注入）。 */
+  now?: () => number;
 }
 
 /** 填默认值；`0`/负数/NaN 一律回落到默认值，避免把坏配置变成「立即超时」。 */
@@ -318,8 +325,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       // 本轮第一个被选中的账号 = 这次的「首选」；后面成功的都是备用账号（晋升判定用）。
       if (firstPick === undefined) firstPick = ref;
 
-      const key = await this.#resolveKey(ref);
-      if (key === undefined) {
+      const auth = await this.#resolveAuth(ref);
+      if (auth === undefined) {
         // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
         // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
         const rejection: Rejection = {
@@ -347,7 +354,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       const gateway = recordGatewayFetch(this.#deps.fetchImpl, options.signal);
       // 逐次索取上游：**只有** `iterator.next()` 的失败算本次尝试的失败；
       // 消费方在 `yield` 处的中断/抛错原样冒泡，不会被当成厂商失败而重放。
-      const iterator = this.#attempt(raw, options, key, gateway)[Symbol.asyncIterator]();
+      const iterator = this.#attempt(raw, options, auth, gateway)[Symbol.asyncIterator]();
       let failure: unknown;
       let exhausted = false;
       try {
@@ -422,7 +429,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   async *#attempt(
     raw: OpencodeConfig,
     options: GenerateOptions,
-    key: string,
+    auth: { key: string; headers?: Record<string, string> },
     gateway: GatewayRecorder,
   ): AsyncGenerator<StreamChunk> {
     const config = resolveConfig(raw);
@@ -450,7 +457,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       streamOpencode({
         model,
         context: toPiContext(options),
-        apiKey: key,
+        apiKey: auth.key,
+        ...(auth.headers === undefined ? {} : { headers: auth.headers }),
         fetchImpl: gateway.fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
@@ -475,18 +483,38 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   }
 
   /**
-   * 收集两个凭据来源并按优先级挑选（`stored → environment`）。
+   * 收集两个凭据来源并按优先级挑选（`stored → environment`），再把 `ocoauth1:` blob
+   * 解析成一次可用的 access token + org 头；过期就在请求前刷新并回写凭据槽。
    *
    * **没有字面量来源**：opencode 的密钥只能来自凭据服务或启动环境（旧插件的 Config 里根本没有
    * 「配置写死 key」的字段，额度路径的 `resolveAccountKey` 也是同一套来源）。
+   * @param ref - 账号 ref。
+   * @returns 请求凭据；没有可用密钥或刷新失败时为 `undefined`。
    */
-  async #resolveKey(ref: string): Promise<string | undefined> {
+  async #resolveAuth(ref: string): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
     const stored = await this.#deps.resolveStored?.(ref);
     const environment = this.#deps.resolveEnvironment?.(ref);
-    return pickApiKey({
+    const raw = pickApiKey({
       ...(stored === undefined ? {} : { stored }),
       ...(environment === undefined ? {} : { environment }),
     }).key;
+    if (raw === undefined) return undefined;
+    if (!raw.startsWith(OAUTH_PREFIX)) return { key: raw };
+    const resolved = await resolveOAuthCredential(raw, {
+      fetchImpl: this.#deps.fetchImpl,
+      ...(this.#deps.authBase === undefined ? {} : { authBase: this.#deps.authBase }),
+      ...(this.#deps.now === undefined ? {} : { now: this.#deps.now }),
+    });
+    if (resolved === undefined) return undefined;
+    // 只回写“从凭据槽读出来的那一份”：环境变量里的 blob 没有可写回的持久位置。
+    if (resolved.updated !== undefined && stored === raw) {
+      try {
+        await this.#deps.persistStored?.(ref, resolved.updated);
+      } catch {
+        // 回写失败不影响本次请求：新 token 已经在内存里，下一次会再刷新一次。
+      }
+    }
+    return { key: resolved.key, ...(resolved.headers === undefined ? {} : { headers: resolved.headers }) };
   }
 
   /** 拿（或建）该基地址的目录缓存。 */
