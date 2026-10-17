@@ -4,11 +4,23 @@
 # 按 id 覆盖（`config:` 那些字段）继续生效，账号与白名单零迁移。同一行 id 只能由一个层插入，
 # 因此本包与两个旧插件互斥：切换必须是「卸旧装新」（设计 §5.3）。
 #
-# `name` 是包内子路径导出说明符（`exports` 里有 `./commandcode` 与 `./opencode`）；正因为
-# 不是裸包名，安装后必须用**子路径**指向各自的入口，宿主加载器按 Node 的 `exports` 解析。
-# 值统一加引号：YAML 里以 `@` 或特殊字符开头的标量会被当成指示符而解析失败。
+# `name` 分两类，受宿主 `client-modules` 的启动图扫描规则约束（2026-10-17 实测，证据见
+# `docs/superpowers/notes/2026-10-17-client-boot-graph.md`）：
+#
+# - **子路径说明符**（`dsh-llm-account/commandcode`）：宿主加载器能挂载（走 Node 的
+#   `exports`），但扫描的 `exactPackageSpecifier` 对子路径返回 undefined，这一行**不产生
+#   客户端 source**——不报错，`./client` bundle 也永远不进浏览器启动图。
+# - **路径说明符**（`./node_modules/...`，相对 profile 根）：扫描按 `pathLike` 分支解析后
+#   向上找最近的 `package.json`，命中本包（声明了 `dsh.client`），成为**唯一客户端
+#   source**。入口与 `./opencode` 导出指向同一产物（`lib/opencode.js`），只是换成扫描
+#   认得的写法。
+#
+# 一个声明 `dsh.client` 的包**只能有一个** source：两行同时可见会让组合阶段抛
+# `ClientPackageCompositionError`（整个客户端启动失败）。因此这里**恰好一行用路径名**。
+#
+# 值统一加引号：YAML 里以 `@`、`.` 或特殊字符开头的标量会被当成指示符而解析失败。
 - insert:
     - id: llm-commandcode
       name: "dsh-llm-account/commandcode"
     - id: opencode-go
-      name: "dsh-llm-account/opencode"
+      name: "./node_modules/dsh-llm-account/lib/opencode.js"

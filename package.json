@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness LLM provider plugin hosting the commandcode and dsh-opencode-go routes behind a shared account core",
+  "icon": "./icon.svg",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
