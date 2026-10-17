@@ -4,12 +4,13 @@
  * 这里测的是「猜出来的宿主形状」被调用时**我们这一侧**的行为：调用参数对不对、成功/失败分别
  * 怎么降级、卸载时有没有把东西收干净。宿主那一侧到底接不接受这些形状，本机无法验证（计划 1c）。
  */
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   describeVendorSnapshots,
   dispatchAccountAction,
   ensureUsageRemote,
+  modelWriteModeOf,
   mountUsageRemote,
   noteSidebarSnapshots,
   onUsageReady,
@@ -47,6 +48,67 @@ const CAPABILITIES: VendorCapabilities = {
   modelVisibilityWrite: "onSave",
   automaticSwitch: true,
 };
+
+it("模型卡片写模式：缺状态、缺 capabilities、缺字段都退回 onSave，且都不抛错", () => {
+  // 实测踩过（桌面端 0.2.1-rc.2）：`statuses[v]?.capabilities.modelVisibilityWrite` 里的
+  // `?.` 只挡住第一层；能力声明由 host 侧经 typert 登记的描述符发布，登记没发生时
+  // `capabilities` 整个是 undefined，于是页面在渲染期抛
+  // `Cannot read properties of undefined (reading 'modelVisibilityWrite')`，
+  // React 丢弃整棵树 → 整段设置页变空白（连标题都没有），像「插件没注册上」。
+  expect(modelWriteModeOf(undefined)).toBe("onSave");
+  expect(modelWriteModeOf({})).toBe("onSave");
+  expect(modelWriteModeOf({ capabilities: {} })).toBe("onSave");
+  expect(modelWriteModeOf({ capabilities: { modelVisibilityWrite: "immediate" } })).toBe("immediate");
+  expect(modelWriteModeOf({ capabilities: CAPABILITIES })).toBe("onSave");
+});
+
+/**
+ * usage 远程面上的每一个读口都必须拆信封。
+ *
+ * 宿主契约：所有一元远程调用 resolve 成 `RemoteResult<T>`（`{ ok: true, value }` 或
+ * `{ ok: false, error }`），宿主侧失败**不 reject**。这不是 settings 一处的问题——
+ * status / accounts / switches 同样返回信封。实测（桌面端 0.2.1-rc.2）把信封当载荷的
+ * 两个后果：页面渲染期抛错整段变空白；侧边栏额度在 `failures.length` 上抛错、
+ * 停在初始空态谎报「还没有请求经过这个账号」。
+ */
+describe("usage 远程面拆信封", () => {
+  const status = {
+    vendor: "commandcode",
+    capabilities: CAPABILITIES,
+    pinned: null,
+    accounts: [{ ref: "COMMANDCODE_API_KEY_2", label: "sample-user-2", configured: true }],
+    failures: [],
+  };
+
+  function usageOf(result: unknown): UsageNamespace {
+    return {
+      status: async () => result,
+      accounts: async () => result,
+      switches: async () => result,
+    } as unknown as UsageNamespace;
+  }
+
+  it("读口拆出载荷，而不是把信封交给调用方", async () => {
+    const wrapped = { ok: true, value: status };
+    expect(await readStatus(usageOf(wrapped), "commandcode")).toEqual(status);
+    expect(await readAccounts(usageOf(wrapped), "commandcode")).toEqual(status);
+    expect(await readSwitches(usageOf(wrapped), "commandcode")).toEqual(status);
+  });
+
+  it("ok:false 与裸载荷都按「读不到」降级，不把信封漏给渲染层", async () => {
+    const refused = { ok: false, error: { code: "gateway/internal", message: "usage service absent" } };
+    expect(await readStatus(usageOf(refused), "commandcode")).toBeUndefined();
+    // 裸载荷（本地替身 / 其它宿主形状）仍然可用。
+    expect(await readStatus(usageOf(status), "commandcode")).toEqual(status);
+  });
+
+  it("状态读数带得出 capabilities 与 failures（侧边栏与卡片都依赖这两个字段）", async () => {
+    const next = await readStatus(usageOf({ ok: true, value: status }), "commandcode");
+    // 这两行正是此前崩在渲染期 / 谎报空态的地方。
+    expect(next?.capabilities).toEqual(CAPABILITIES);
+    expect(next?.failures.length).toBe(0);
+  });
+});
 
 /** 一个假 `remote.settings`：记录 mutate 调用。 */
 function fakeSettings(rows: readonly { ns?: string; id?: string; value?: unknown; revision?: number }[] = []): {

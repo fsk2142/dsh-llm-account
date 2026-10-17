@@ -319,25 +319,52 @@ export function selectPanel(ctx: ClientSeamContext, panel: string | null): boole
 }
 
 /**
+ * 远程读口统一拆信封。
+ *
+ * 宿主契约：每一次一元远程调用都 resolve 成 `RemoteResult<T>`（`{ ok: true, value }` 或
+ * `{ ok: false, error }`），**宿主侧失败不 reject**（app.asar @17916049）。
+ *
+ * 这不是 `settings.describe()` 一处的问题——usage 远程面上的每一个读口（status /
+ * accounts / switches / login / 额度）同样返回信封。实测（桌面端 0.2.1-rc.2）：
+ * `namespace.status(vendor)` 给出的是信封，于是
+ *   - `status.capabilities` 为 undefined → 页面渲染期抛错 → 整段设置页变空白；
+ *   - `status.failures` 为 undefined → 侧边栏额度读口在 `.length` 上抛错 →
+ *     状态从未更新，界面停在初始空态，显示「还没有请求经过这个账号」——**谎报**。
+ * 两个症状都源于同一个「把信封当载荷」。
+ * @param result - 远程调用的原始返回值（通常是一个 Promise）。
+ * @returns 载荷；调用失败或形状不认识时为 `undefined`（调用方一律按「远程不可用」降级）。
+ */
+async function remoteValue<T>(result: Promise<unknown> | unknown): Promise<T | undefined> {
+  let raw: unknown;
+  try {
+    raw = await result;
+  } catch {
+    return undefined;
+  }
+  const unwrapped = unwrapRemote(raw);
+  return unwrapped.ok ? (unwrapped.value as T | undefined) : undefined;
+}
+
+/**
  * 读一个厂商的状态（生效账号、逐账号额度与拒绝）。
  * @param namespace - 已挂载的远程命名空间。
  * @param vendor - 厂商 id。
- * @returns 状态；命名空间缺席时为 `undefined`。
+ * @returns 状态；命名空间缺席、调用失败或形状不认识时为 `undefined`。
  */
 export async function readStatus(namespace: UsageNamespace | undefined, vendor: string): Promise<VendorUsageStatus | undefined> {
   if (namespace === undefined || typeof namespace.status !== "function") return undefined;
-  return namespace.status(vendor);
+  return remoteValue<VendorUsageStatus>(namespace.status(vendor));
 }
 
 /**
  * 读一个厂商的账号行。
  * @param namespace - 已挂载的远程命名空间。
  * @param vendor - 厂商 id。
- * @returns 账号行；命名空间缺席时为 `undefined`。
+ * @returns 账号行；命名空间缺席或读取失败时为 `undefined`。
  */
 export async function readAccounts(namespace: UsageNamespace | undefined, vendor: string): Promise<AccountView[] | undefined> {
   if (namespace === undefined || typeof namespace.accounts !== "function") return undefined;
-  return namespace.accounts(vendor);
+  return remoteValue<AccountView[]>(namespace.accounts(vendor));
 }
 
 /**
@@ -348,7 +375,7 @@ export async function readAccounts(namespace: UsageNamespace | undefined, vendor
  */
 export async function readSwitches(namespace: UsageNamespace | undefined, vendor: string): Promise<SwitchRecord[] | undefined> {
   if (namespace === undefined || typeof namespace.switches !== "function") return undefined;
-  return namespace.switches(vendor);
+  return remoteValue<SwitchRecord[]>(namespace.switches(vendor));
 }
 
 /** 挂载远程面后的观察窗口。 */
@@ -569,6 +596,14 @@ export function shouldPollLogin(login: LoginView | undefined): boolean {
   return login?.state === "waiting";
 }
 
+/**
+ * 登录状态读不出来时的落点。
+ *
+ * 必须是**非 waiting** 状态：读失败却写成 `waiting` 会让轮询永不停（每 1s 一次
+ * 注定失败的远程调用）。`idle` 让卡片回到「未开始」，与「没登录过」一致。
+ */
+const LOGIN_UNKNOWN: LoginView = { state: "idle" };
+
 /** 造**容器组件**：持有页面状态、订阅宿主推送与共享远程面、把回调接上，然后渲染 `PageShell`。
  *
  * 这是本层唯一使用 Hook 的地方，刻意做得极薄：所有判定都在 `page-state.ts` / `dispatchAccountAction`
@@ -657,7 +692,9 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       if (usage === undefined || waitingVendors.length === 0) return;
       const timer = setInterval(() => {
         for (const vendor of waitingVendors) {
-          void usage.loginStatus(vendor).then((status) => setLogins((current) => ({ ...current, [vendor]: status })));
+          void remoteValue<LoginView>(usage.loginStatus(vendor)).then((status) =>
+            setLogins((current) => ({ ...current, [vendor]: status ?? LOGIN_UNKNOWN })),
+          );
         }
       }, LOGIN_POLL_MS);
       return () => clearInterval(timer);
@@ -730,7 +767,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                 ...modelCardContext({
                   entry: activeEntry,
                   state,
-                  mode: statuses[activeVendor]?.capabilities.modelVisibilityWrite ?? "onSave",
+                  mode: modelWriteModeOf(statuses[activeVendor]),
                   draft: modelDrafts[activeEntry.ns] ?? "",
                   setDraft: (value) => setModelDrafts((current) => ({ ...current, [activeEntry.ns]: value })),
                   draftInto: (ns, fields) => setState((current) => fields.reduce((acc, field) => setField(acc, ns, field.key, field.value), current)),
@@ -740,14 +777,15 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                     const target = state.snapshots[ns];
                     void saveSettings(ctx, target?.row ?? ns, fields, target?.revision ?? 0).then((error) => {
                       setState((current) => noteSaveResult(current, ns, error));
-          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
                       if (error === undefined) setAccountRevision((current) => current + 1);
+                      // 重读：基线以宿主为准，已落盘的草稿随之清掉。
+                      void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
                     });
                   },
                 }),
                 loginBegin: () => {
-                  void usage?.loginBegin(activeVendor).then((status) => {
-                    setLogins((current) => ({ ...current, [activeVendor]: status }));
+                  void remoteValue<LoginView>(usage?.loginBegin(activeVendor)).then((status) => {
+                    if (status !== undefined) setLogins((current) => ({ ...current, [activeVendor]: status }));
                   });
                 },
               }),
@@ -765,6 +803,23 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
  * @param input - 当前厂商、页面状态、生效时机与两个写入方式。
  * @returns 模型卡片那部分上下文。
  */
+/**
+ * 模型卡片的写模式：来自宿主发布的能力声明 `capabilities.modelVisibilityWrite`。
+ *
+ * **两级都要判空**（实测 2026-10-17，桌面端 0.2.1-rc.2）：能力声明由本包 host 侧经
+ * typert 登记的描述符发布，登记没发生时 `status.capabilities` 整个是 `undefined`。
+ * 写成 `statuses[v]?.capabilities.modelVisibilityWrite` 时 `?.` 只挡住了 `statuses[v]`
+ * 本身，挡不住它的属性——页面在渲染期抛 `Cannot read properties of undefined`，
+ * React 丢弃整棵树，于是**整段设置页变空白**（连标题都没有），极易误判成没注册上。
+ *
+ * 缺能力时退回最保守的一档：跟保存条走，绝不假装支持立即写。
+ * @param status - 宿主发布的厂商状态，可能整体缺席或缺 `capabilities`。
+ * @returns 写模式。
+ */
+export function modelWriteModeOf(status: { capabilities?: { modelVisibilityWrite?: ModelsWriteMode } } | undefined): ModelsWriteMode {
+  return status?.capabilities?.modelVisibilityWrite ?? "onSave";
+}
+
 function modelCardContext(input: {
   entry: VendorEntry;
   state: PageState;
