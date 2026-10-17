@@ -8,7 +8,7 @@
 
 ## 0. 一句话
 
-给两家厂商增加**可配置的账号切换策略**（手动顺序 / 额度优先）、**只在任务轮次结束后应用切换**、两家都能**手动排序**；把模型卡片从「只显示已配置的模型」改为「厂商目录 ∪ 已配置」的勾选式可见性；并把设置页间距整体收紧一档。所有新行为都有默认值，默认值与现状一致（零迁移、零行为突变）。
+给两家厂商增加**可配置的账号切换策略**（手动顺序 / 额度优先）、**只在任务轮次结束后应用切换**、两家都能**手动排序**；把两家账号**合并到设置页顶部的一张常驻账户卡片**（仍各管各的凭据与顺序）；把模型卡片从「只显示已配置的模型」改为「厂商目录 ∪ 已配置」的勾选式可见性；并把设置页间距整体收紧一档。所有新行为都有默认值，默认值与现状一致（零迁移、零行为突变）。
 
 ## 1. 现状与证据
 
@@ -71,7 +71,7 @@
 3. 任务结束后再切换（boolean）
 4. 失败时自动切换（boolean，即 `autoSwitch`）
 
-组的渲染顺序：厂商专属卡片（账户、模型）→ 切换规则 → 集成与显示 → 高级设置。`GROUP_ORDER` 增加 `"switch"` 并排在 `"integrations"` 之前。
+标签页内的渲染顺序：厂商专属卡片（模型）→ 切换规则 → 集成与显示 → 高级设置。`GROUP_ORDER` 增加 `"switch"` 并排在 `"integrations"` 之前。账户卡片移出标签页，常驻在标签页上方（见 §8.1）。
 
 文案（`copy.ts` 的 `CopyKey` 与 zh/en 两份字典都要加）：
 
@@ -194,21 +194,36 @@ orderWithOverride(derived: string[], override: unknown): string[]
 
 ## 8. 页面
 
-### 8.1 账户卡片
+### 8.1 页面结构（账户合并、其余仍按厂商）
 
-- 「当前使用」标记：用 `status.current`（成功色小标）。**移除**「固定」标记与「固定使用此账户」文案。
-- 菜单项：`切换到此账户`（调用 `selectAccount`，立即生效并持久化）；`上移` / `下移`（两家都出现，按 `capabilities.reorder`）。
-- 行顺序 = `list()` 顺序（不再把当前账号提前）。
-- 切换成功后：重读 `status` 与设置快照（已有 `accountRevision` 机制）。
+- 顺序：标题/简介 → **统一账户卡片（常驻，不属于任何标签页）** → 厂商标签页 → 当前标签页内容。
+- 统一账户卡片：一个 `dsl-card`、标题「账户」，内部按厂商分组：
+  - 组头：厂商名（`vendor.commandcode` / `vendor.opencodeGo`）+ 右侧小号「添加账户」按钮；
+  - 组内：该厂商的账号行（顺序 = 该厂商的 `list()` 顺序）；
+  - 组尾：该厂商的「添加账户」展开表单（点组头按钮后在该组内展开）；
+  - 已发现但读不到状态的厂商：整组显示「账号数据暂不可用」+ 原因（不显示假的空列表）。
+- 标签页只承载模型、切换规则、集成与显示、高级设置；**账户不再出现在标签页里**。
+- 两家的状态数据容器已经一次性读取（`seams.ts` 的状态 effect 遍历全部 entries），合并账户不需要新增请求。
+- 两家账号仍是两套凭据/两条 provider 路由，**不共用账号**：合并只发生在展示与管理层；每个厂商的「当前使用」、顺序、额度各自独立。
+- 账户操作的状态需要带厂商：`AccountAction` 增加 `vendor` 字段（`openAction` 时写入），派发时用 `action.vendor`（不再用 `activeVendor`）。展开报告的状态按 `vendor::ref` 记录，避免两家同 ref 串台（ref 事实上按厂商派生，但状态键显式带上更稳）。
+- 组件拆分：从现有 `AccountCard` 抽出「只有行、没有卡片外壳」的 `AccountRows`；`AccountCard` 保持原 API（单厂商外壳）以便既有测试/调用，新面板用 `AccountRows` 在每个厂商组里渲染，避免卡片套卡片。
 
-### 8.2 切换规则卡片（两家共用）
+### 8.2 账户行（两家共用一份渲染）
 
-- 标题「切换规则」，四行字段（§4）。`switchStrategy = order` 时间隔输入禁用并显示提示；`best-quota` 时可用。
+- 「当前使用」标记：用该厂商 `status.current`（成功色小标）。**移除**「固定」标记与「固定使用此账户」文案。
+- 菜单项：`切换到此账户`（对该厂商调用 `selectAccount`，立即生效并持久化）；`上移` / `下移`（两家都出现，按 `capabilities.reorder`）。
+- 行顺序 = 该厂商 `list()` 顺序（不再把当前账号提前）。
+- 切换成功后：重读该厂商 `status` 与设置快照（已有 `accountRevision` 机制）。
+- 网页登录入口只出现在 Command Code 组（能力声明决定）。
+
+### 8.3 切换规则卡片（两家共用形状，各自一份）
+
+- 在**该厂商的标签页内**渲染，标题「切换规则」，四行字段（§4）。`switchStrategy = order` 时间隔输入禁用并显示提示；`best-quota` 时可用。
 - 卡片底部/提示里说明：策略切换只在轮次边界生效；`autoSwitch` 管的是失败回退，两者独立。
 
-### 8.3 模型卡片
+### 8.4 模型卡片
 
-- 数据：`目录 ∪ visibleModels ∪ keys(modelVisibility)`，目录顺序在前，新增/手工项在后，去重。
+- 在各自厂商的标签页内；数据：`目录 ∪ visibleModels ∪ keys(modelVisibility)`，目录顺序在前，新增/手工项在后，去重。
 - 每行：模型 id（目录给名字且不同时显示名字）、勾选框、移除按钮。
   - 勾选状态用 `isModelVisible(id, { visibleModels, modelVisibility })`（直接复用 `core/catalog` 的纯函数，保证与宿主过滤同一份规则）。
   - 勾选/取消：`modelVisibility[id] = boolean`（走现有 `applyModelEdit` 的 toggle）。
@@ -218,12 +233,12 @@ orderWithOverride(derived: string[], override: unknown): string[]
 - 目录读取失败：列表仍显示已配置项，附一行可读原因与「重试」按钮；不显示「还没有配置模型」。
 - 目录只在该厂商标签页第一次渲染时拉一次；不参与后台轮询。
 
-### 8.4 侧边栏 / 仪表盘
+### 8.5 侧边栏 / 仪表盘
 
 - 「当前」标记改用 `current`；与 `effective` 不同时仍给切换提示（文案从「固定」改为「当前使用」）。
 - 切换记录新增 `balance` 原因文案。
 
-### 8.5 间距（紧凑化）
+### 8.6 间距（紧凑化）
 
 字号不变，只动间距：
 
@@ -247,7 +262,9 @@ orderWithOverride(derived: string[], override: unknown): string[]
 - `tests/vendors/usage-remote.test.ts`：`current` 字段、`models` 方法成功/失败、描述符与 arity。
 - `tests/client/page-state.test.ts`：模型可见性判定与 toggle；策略字段的默认值/清洗。
 - `tests/client/models-card.test.ts`：目录 ∪ 设置、勾选状态、手工添加、目录失败态、重试。
-- `tests/client/account-card.test.ts`：「当前使用」、菜单文案、两家排序项。
+- `tests/client/accounts-panel.test.ts`（新）：两家账号在一张卡里按厂商分组；两家的「当前使用」互不影响；组内添加表单落在正确的厂商组；操作携带 vendor；同 ref 的展开状态不串台；一个厂商读不到状态时只影响该组。
+- `tests/client/account-card.test.ts`：「当前使用」、菜单文案、两家排序项；`AccountRows` 与 `AccountCard` 的拆分不改变既有结构断言。
+- `tests/client/seams.test.ts`：账户操作按 `action.vendor` 派发；登录、排序、添加、移除都走到对应厂商。
 - `tests/client/style-contract.test.ts` / `css.test.ts`：新类名/按钮类、无硬编码颜色、间距契约（可选：钉住关键 padding）。
 - 现有 518 条测试全部更新并保持绿色；`pnpm typecheck` / `pnpm build`。
 
@@ -269,6 +286,8 @@ orderWithOverride(derived: string[], override: unknown): string[]
 - 不迁移、不改写现有 `visibleModels` / `modelVisibility` / `autoSwitch` / 账号数组。
 - 移除 OpenCode 专属的 autoSwitch footer 只是 UI 变化，字段与写入路径不变（现在从通用卡片保存）。
 - 「固定」相关文案删除；`VendorUsageStatus.pinned` 字段暂时保留（兼容），页面不再显示它。
+- 账户合并是**页面结构变化**，不影响两套账号文档/凭据/远程方法；账户操作状态多带一个 `vendor` 字段（内部状态，不持久化）。
+- 标签页仍按厂商存在；账户卡片移出标签页后，任何标签页下都能看到与操作两家账号。
 
 ## 12. 非目标
 
@@ -286,5 +305,6 @@ orderWithOverride(derived: string[], override: unknown): string[]
 4. 关闭「任务结束后再切换」时才允许在请求前立即应用。
 5. 两家都能手动排序并持久化；没有 `accountOrder` 的存量配置顺序不变；删除账号后顺序自动清理。
 6. 模型卡片显示厂商目录；取消勾选后宿主模型选择器不再出现该模型，重新勾选恢复；目录读取失败有可读原因与重试；手工添加仍可用。
-7. 设置页间距明显收紧，不出现竖排标签或挤压；暗色主题不坏。
-8. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿。
+7. 设置页顶部一张常驻账户卡片同时显示两家账号：分组、各自的「当前使用」、各自的排序与操作都正确；切换标签页不影响账户卡片；一个厂商读不到状态只影响它那一组。
+8. 设置页间距明显收紧，不出现竖排标签或挤压；暗色主题不坏。
+9. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿。
