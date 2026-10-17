@@ -1,5 +1,5 @@
 /**
- * 侧边栏额度卡片（Task 8）—— 用户的第一诉求（规格 §8.1）。
+ * 侧边栏额度卡片 —— 用户的第一诉求（规格 §8.1）。
  *
  * 要修掉的旧缺陷：旧卡片显示「配置里固定的那个账号」，而多账号轮换是每次请求临时决定的，
  * 用量打满被自动切走后卡片数字不变。所以本卡片显示的是**生效账号**（`status().effective`），
@@ -8,13 +8,18 @@
  *
  * 纪律与其它卡片相同（Ruling 22/29）：**纯 props → 元素树**，没有 Hook、没有内部状态，也不会在
  * 这里发起任何请求 —— 轮询由 `seams.ts` 的控制器按挂载/开关状态起停。
+ *
+ * 视觉（2026-10-17 重做）：标题 + 右上角刷新图标一行；切换提示是一条琥珀色小条；
+ * 额度是「标签 …… 读数 / 4px 进度条」的紧凑列表；底部一个通栏按钮打开中栏面板。
  * @module dsh-llm-account/src/client/sidebar-card
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
-import { CSS_CLASS } from "./css";
-import { quotaShape, quotaWindowText } from "./quota";
-import type { AccountUsageStatus, SwitchNotice, VendorUsageStatus } from "./usage-contract";
+import { CSS_CLASS, cls } from "./css";
+import { RefreshIcon, UsageIcon } from "./icons";
+import { quotaMeter, quotaShape, quotaWindowText } from "./quota";
+import { relativeTime } from "./time";
+import type { AccountUsageStatus, QuotaWindow, SwitchNotice, VendorUsageStatus } from "./usage-contract";
 
 /** 卡片属性。 */
 export interface SidebarCardProps {
@@ -55,37 +60,80 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   const hasData = status !== undefined && effective !== undefined;
 
   return createElement(
+    // 外壳只负责「有多宽」：宿主侧边栏收起时这个槽位只有 ~35px，整张卡片放不下（会向左溢出
+    // 到窗口外）。外壳用容器查询把宽度告诉内部，窄的时候只渲染一个图标按钮；宽的时候渲染
+    // 完整卡片。两套都在树里，切换由样式表的 container query 做 —— 组件仍然是纯 props 的。
     "div",
-    { "data-card": "sidebar-quota", className: CSS_CLASS.sidebar },
-    ...(hasData
-      ? [
-          // `switch` 与 `effective` 同一条纪律：可选字段，线上可能是 `null`。
-          switchNotice(t, effective, pinned, status.switch ?? undefined),
-          createElement("h3", { key: "title", "data-sidebar-title": "true" }, titleOf(props, effectiveRow)),
-          ...effectiveQuota(props, effectiveRow),
-        ]
-      : [
-          // 没有可显示的数据：失败时说失败（附上一次数据标记），什么都没发生过时才说
-          // 「还没有请求」—— 前者是故障，后者是空态，混为一谈就是谎报。
-          props.failure === undefined
-            ? createElement("p", { key: "empty", "data-sidebar-empty": "true" }, t("sidebar.noRequest"))
-            : failureNote(props),
-        ]),
-    ...(hasData && props.failure !== undefined ? [failureNote(props)] : []),
-    ...(props.onRefresh === undefined
-      ? []
-      : [
-          createElement(
-            "button",
-            { key: "refresh", type: "button", "data-sidebar-refresh": "true", onClick: () => props.onRefresh?.() },
-            t("usage.refresh"),
-          ),
-        ]),
+    { className: CSS_CLASS.sidebarShell },
     createElement(
-      "button",
-      { key: "open", type: "button", "data-sidebar-open": "true", onClick: () => props.onOpen() },
-      t("sidebar.open"),
+      "div",
+      { "data-card": "sidebar-quota", className: CSS_CLASS.sidebar },
+      createElement(
+        "div",
+        { className: CSS_CLASS.sidebarHead },
+        createElement("h3", { "data-sidebar-title": "true", title: titleOf(props, effectiveRow) }, titleOf(props, effectiveRow)),
+        ...(props.onRefresh === undefined ? [] : [refreshButton(props)]),
+      ),
+      ...(hasData
+        ? [
+            // `switch` 与 `effective` 同一条纪律：可选字段，线上可能是 `null`。
+            switchNotice(t, effective, pinned, status.switch ?? undefined),
+            ...effectiveQuota(props, effectiveRow),
+          ]
+        : [
+            // 没有可显示的数据：失败时说失败（附上一次数据标记），什么都没发生过时才说
+            // 「还没有请求」—— 前者是故障，后者是空态，混为一谈就是谎报。
+            props.failure === undefined
+              ? createElement("p", { key: "empty", "data-sidebar-empty": "true", className: CSS_CLASS.empty }, t("sidebar.noRequest"))
+              : failureNote(props),
+          ]),
+      ...(hasData && props.failure !== undefined ? [failureNote(props)] : []),
+      createElement(
+        "div",
+        { className: CSS_CLASS.sidebarFoot },
+        createElement(
+          "button",
+          { type: "button", "data-sidebar-open": "true", className: cls(CSS_CLASS.buttonSecondary, CSS_CLASS.buttonSm), onClick: () => props.onOpen() },
+          t("sidebar.open"),
+        ),
+      ),
     ),
+    // 收起态：只有这一个图标按钮（同一个动作，同一个 `data-sidebar-open`）。
+    createElement(
+      "div",
+      { className: CSS_CLASS.sidebarCompact },
+      createElement(
+        "button",
+        {
+          type: "button",
+          "data-sidebar-open": "true",
+          "data-sidebar-compact": "true",
+          "aria-label": t("sidebar.open"),
+          title: t("sidebar.open"),
+          className: CSS_CLASS.icon,
+          onClick: () => props.onOpen(),
+        },
+        createElement(UsageIcon, null),
+      ),
+    ),
+  );
+}
+
+/** 右上角的刷新图标按钮（失败时要能立刻再问一次）。 */
+function refreshButton(props: SidebarCardProps): ReactElement {
+  const label = props.t("usage.refresh");
+  return createElement(
+    "button",
+    {
+      key: "refresh",
+      type: "button",
+      "data-sidebar-refresh": "true",
+      "aria-label": label,
+      title: label,
+      className: CSS_CLASS.icon,
+      onClick: () => props.onRefresh?.(),
+    },
+    createElement(RefreshIcon, null),
   );
 }
 
@@ -103,6 +151,7 @@ function failureNote(props: SidebarCardProps): ReactElement {
     {
       key: "failure",
       "data-sidebar-failure": "true",
+      className: CSS_CLASS.failure,
       ...(detail === "" ? {} : { "data-sidebar-failure-detail": detail }),
     },
     t("usage.failed"),
@@ -111,11 +160,11 @@ function failureNote(props: SidebarCardProps): ReactElement {
   );
 }
 
-/** 卡片标题：有套餐名就带套餐，否则用生效账号的名字。 */
+/** 卡片标题：有套餐名就带套餐，否则用生效账号的名字；什么都没有时用页面名兜底。 */
 function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): string {
   const plan = row?.quota?.plan;
   const account = row === undefined ? (props.status?.effective?.ref ?? "") : row.label;
-  if (plan === undefined) return account;
+  if (plan === undefined) return account === "" ? props.t("nav") : account;
   return `${account} · ${plan}`;
 }
 
@@ -137,15 +186,15 @@ function switchNotice(
   const marks: ReactNode[] = [];
 
   if (pinned !== null && (differs || effective === undefined)) {
-    marks.push(createElement("span", { key: "pinned", "data-sidebar-pinned": pinned }, `${t("sidebar.pinned")}: ${pinned}`));
+    marks.push(createElement("span", { key: "pinned", "data-sidebar-pinned": pinned, className: CSS_CLASS.mark }, `${t("sidebar.pinned")}: ${pinned}`));
   }
   if (effective !== undefined) {
-    marks.push(createElement("span", { key: "effective", "data-sidebar-effective": effective.ref }, `${t("sidebar.effective")}: ${effective.ref}`));
+    marks.push(createElement("span", { key: "effective", "data-sidebar-effective": effective.ref, className: CSS_CLASS.mark }, `${t("sidebar.effective")}: ${effective.ref}`));
   }
 
   const notice = switchRecord;
   if (!differs || notice === undefined) {
-    return createElement("div", { key: "marks", "data-sidebar-marks": "true" }, ...marks);
+    return createElement("div", { key: "marks", "data-sidebar-marks": "true", className: CSS_CLASS.marks }, ...marks);
   }
 
   return createElement(
@@ -163,25 +212,56 @@ function switchNotice(
     createElement(
       "time",
       { "data-switch-at": notice.at, dateTime: new Date(notice.at).toISOString() },
-      new Date(notice.at).toISOString(),
+      relativeTime(t, notice.at),
     ),
     ...marks,
   );
 }
 
-/** 生效账号的额度条：每个窗口一行，缺失的窗口按「暂无数据」处理。 */
+/** 生效账号的额度：每个窗口一行（标签 + 读数 + 进度条），缺失的窗口按「暂无数据」处理。 */
 function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode[] {
   const { t } = props;
   const quota = row?.quota;
   if (quota === undefined) {
     return [createElement("p", { key: "noquota", "data-sidebar-quota-missing": "true", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))];
   }
-  return quota.windows.map((window) =>
+  return [
     createElement(
       "div",
-      { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window), className: CSS_CLASS.quotaRow },
-      createElement("span", null, window.key),
-      createElement("span", { "data-sidebar-window-value": window.key }, quotaWindowText(t, window)),
+      { key: "meters", className: CSS_CLASS.meters },
+      ...(quota.windows ?? []).map((window) => meterRow(t, window)),
     ),
+  ];
+}
+
+/** 一个窗口的紧凑读数（与账户卡片同一套形状，列数由侧边栏样式压成一列）。 */
+function meterRow(t: (key: string) => string, window: QuotaWindow): ReactElement {
+  const shape = quotaShape(window);
+  const meter = quotaMeter(window);
+  return createElement(
+    "div",
+    {
+      key: window.key,
+      "data-sidebar-window": window.key,
+      "data-sidebar-window-shape": shape,
+      className: CSS_CLASS.quotaRow,
+    },
+    createElement(
+      "div",
+      { className: CSS_CLASS.meterHead },
+      createElement("span", { className: CSS_CLASS.meterLabel }, window.key),
+      createElement(
+        "span",
+        { "data-sidebar-window-value": window.key, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },
+        quotaWindowText(t, window),
+      ),
+    ),
+    meter === undefined
+      ? null
+      : createElement(
+          "span",
+          { key: "bar", "data-quota-percent": meter.percent, className: CSS_CLASS.quotaTrack },
+          createElement("span", { "data-quota-level": meter.level, className: CSS_CLASS.quotaFill, style: { width: `${meter.percent}%` } }),
+        ),
   );
 }

@@ -4,14 +4,20 @@
  * 规格 §8.1 第 5 条：「点开中栏仪表盘：逐账号列出额度、状态、拒绝/冷却与切换记录；生效账号高亮」。
  *
  * 纪律与其它卡片相同（Ruling 22/29）：**纯 props → 元素树**，没有 Hook、没有内部状态、不发起请求。
+ *
+ * 视觉（2026-10-17 重做）：标题行带刷新/关闭两个图标按钮；每个账号是一张卡片
+ * （生效账号的描边用强调色），卡片内是「身份行 + 标记 + 额度表」；切换记录是一行一条的
+ * 时间线，时间在右端、用相对时间显示（ISO 仍在 `dateTime` 上）。
  * @module dsh-llm-account/src/client/dashboard
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
 import { rejectionText } from "./copy";
-import { quotaShape, quotaWindowText } from "./quota";
-import type { AccountUsageStatus, SwitchRecord, VendorUsageStatus } from "./usage-contract";
+import { CloseIcon, RefreshIcon } from "./icons";
+import { quotaMeter, quotaShape, quotaWindowText } from "./quota";
+import { relativeTime } from "./time";
+import type { AccountUsageStatus, QuotaWindow, SwitchRecord, VendorUsageStatus } from "./usage-contract";
 
 /** 仪表盘属性。 */
 export interface DashboardProps {
@@ -48,10 +54,41 @@ export function Dashboard(props: DashboardProps): ReactElement {
       "header",
       null,
       createElement("h2", null, t("dashboard.title")),
-      ...(props.onRefresh === undefined
-        ? []
-        : [createElement("button", { key: "refresh", type: "button", "data-dashboard-refresh": "true", onClick: () => props.onRefresh?.() }, t("dashboard.refresh"))]),
-      createElement("button", { key: "close", type: "button", "data-dashboard-close": "true", onClick: () => props.onClose() }, t("dashboard.close")),
+      // 动作成组右对齐（`header > :last-child` 的 `margin-left:auto` 落在这一组上）。
+      createElement(
+        "div",
+        { className: CSS_CLASS.actions },
+        ...(props.onRefresh === undefined
+          ? []
+          : [
+              createElement(
+                "button",
+                {
+                  key: "refresh",
+                  type: "button",
+                  "data-dashboard-refresh": "true",
+                  "aria-label": t("dashboard.refresh"),
+                  title: t("dashboard.refresh"),
+                  className: CSS_CLASS.icon,
+                  onClick: () => props.onRefresh?.(),
+                },
+                createElement(RefreshIcon, null),
+              ),
+            ]),
+        createElement(
+          "button",
+          {
+            key: "close",
+            type: "button",
+            "data-dashboard-close": "true",
+            "aria-label": t("dashboard.close"),
+            title: t("dashboard.close"),
+            className: CSS_CLASS.icon,
+            onClick: () => props.onClose(),
+          },
+          createElement(CloseIcon, null),
+        ),
+      ),
     ),
     // 失败提示置顶（参考实现的用量胶囊同一条：失败时先说失败，再决定显示什么数据）。
     ...(failure === undefined
@@ -62,6 +99,7 @@ export function Dashboard(props: DashboardProps): ReactElement {
             {
               key: "failure",
               "data-dashboard-failure": "true",
+              className: CSS_CLASS.failure,
               ...(failure === "" ? {} : { "data-dashboard-failure-detail": failure }),
             },
             t("usage.failed"),
@@ -73,8 +111,8 @@ export function Dashboard(props: DashboardProps): ReactElement {
       ? [
           // 没有数据时：失败说失败，什么都不曾说才说「暂无数据」。
           failure === undefined
-            ? createElement("p", { key: "nodata", "data-dashboard-empty": "true" }, t("dashboard.noData"))
-            : createElement("p", { key: "nodata-failed", "data-dashboard-empty": "true" }, t("usage.failed")),
+            ? createElement("p", { key: "nodata", "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("dashboard.noData"))
+            : createElement("p", { key: "nodata-failed", "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("usage.failed")),
         ]
       : [
           createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
@@ -85,13 +123,14 @@ export function Dashboard(props: DashboardProps): ReactElement {
             .map((account) => accountBlock(props, account)),
           ...((status.failures ?? []).length === 0
             ? []
-            : [createElement("ul", { key: "failures", "data-dashboard-failures": "true" }, ...(status.failures ?? []).map((failure, index) => createElement("li", { key: index }, failure)))]),
+            : [createElement("ul", { key: "failures", "data-dashboard-failures": "true" }, ...(status.failures ?? []).map((item, index) => createElement("li", { key: index }, item)))]),
         ]),
     switchHistory(props),
   );
 }
 
-/** 一个账号的区块：名称、状态、固定/生效标注、拒绝、逐窗口额度。 */function accountBlock(props: DashboardProps, account: AccountUsageStatus): ReactNode {
+/** 一个账号的区块：名称、状态、固定/生效标注、拒绝、逐窗口额度。 */
+function accountBlock(props: DashboardProps, account: AccountUsageStatus): ReactNode {
   const { t } = props;
   const effective = account.effective;
   const pinned = props.status?.pinned === account.ref;
@@ -105,42 +144,80 @@ export function Dashboard(props: DashboardProps): ReactElement {
     {
       key: account.ref,
       "data-dashboard-account": account.ref,
-      className: CSS_CLASS.account,
       // 生效账号高亮（规格 §8.1 第 5 条）。
       "data-dashboard-effective": effective,
       "data-dashboard-configured": account.configured,
       ...(rejectionOf === undefined ? {} : { "data-dashboard-rejection-kind": rejectionOf.kind }),
       ...(rejectionOf?.until === undefined ? {} : { "data-dashboard-rejection-until": rejectionOf.until }),
     },
-    createElement("h4", null, account.label),
-    ...(effective ? [createElement("span", { key: "effective", "data-dashboard-mark": "effective" }, t("sidebar.effective"))] : []),
-    ...(pinned ? [createElement("span", { key: "pinned", "data-dashboard-pinned": account.ref }, t("sidebar.pinned"))] : []),
-    createElement("small", { key: "configured" }, account.configured ? t("account.configured") : t("account.missing")),
+    // 身份行：名称 + 标记 + 配置状态（与账户卡片同一形状：左边是身份，右边才是动作）。
+    createElement(
+      "div",
+      { className: CSS_CLASS.accountHead },
+      createElement(
+        "span",
+        { className: CSS_CLASS.identity },
+        createElement("span", { className: CSS_CLASS.dot }),
+        createElement(
+          "span",
+          { className: CSS_CLASS.identityText },
+          createElement(
+            "span",
+            { className: CSS_CLASS.nameRow },
+            createElement("h4", null, account.label),
+            ...(effective ? [createElement("span", { key: "effective", "data-dashboard-mark": "effective", className: CSS_CLASS.mark }, t("sidebar.effective"))] : []),
+            ...(pinned ? [createElement("span", { key: "pinned", "data-dashboard-pinned": account.ref, className: CSS_CLASS.mark }, t("sidebar.pinned"))] : []),
+            ...(quotaOf?.plan === undefined
+              ? []
+              : [createElement("span", { key: "plan", "data-dashboard-plan": quotaOf.plan, "data-mark": "plan", className: CSS_CLASS.mark }, quotaOf.plan)]),
+          ),
+          createElement("small", { key: "configured" }, account.configured ? t("account.configured") : t("account.missing")),
+        ),
+      ),
+    ),
     ...(rejectionOf === undefined
+      ? []
+      : [createElement("p", { key: "rejection", "data-dashboard-rejection-label": rejectionOf.kind, className: CSS_CLASS.rejection }, rejectionText(t, rejectionOf.kind))]),
+    // 该账号额度读取里的**部分失败**照样列出来：不列就等于把一次不完整的读数呈现成完整的。
+    ...(quotaOf?.failures ?? []).map((item, index) =>
+      createElement("small", { key: `qf-${index}`, "data-dashboard-account-failure": `${account.ref}:${index}`, className: CSS_CLASS.failure }, item),
+    ),
+    ...(quotaOf === undefined
       ? []
       : [
           createElement(
-            "small",
-            { key: "rejection", "data-dashboard-rejection-label": rejectionOf.kind },
-            rejectionText(t, rejectionOf.kind),
+            "div",
+            { key: "meters", className: CSS_CLASS.meters },
+            ...(quotaOf.windows ?? []).map((window) => windowBlock(t, window)),
           ),
         ]),
-    ...(quotaOf?.plan === undefined ? [] : [createElement("small", { key: "plan", "data-dashboard-plan": quotaOf.plan }, quotaOf.plan)]),
-    // 该账号额度读取里的**部分失败**照样列出来：不列就等于把一次不完整的读数呈现成完整的。
-    ...(quotaOf?.failures ?? []).map((failure, index) =>
-      createElement("small", { key: `qf-${index}`, "data-dashboard-account-failure": `${account.ref}:${index}` }, failure),
-    ),
-    ...(quotaOf === undefined ? [] : (quotaOf.windows ?? []).map((window) => windowBlock(t, window))),
   );
 }
 
 /** 一个额度窗口。 */
-function windowBlock(t: (key: string) => string, window: { key: string; used?: number; cap?: number; percent?: number; resetAt?: number; exceeded?: boolean }): ReactNode {
+function windowBlock(t: (key: string) => string, window: QuotaWindow): ReactNode {
+  const shape = quotaShape(window);
+  const meter = quotaMeter(window);
   return createElement(
     "div",
-    { key: window.key, "data-dashboard-window": window.key, "data-dashboard-window-shape": quotaShape(window) },
-    createElement("span", null, window.key === "" ? t("dashboard.unknown") : window.key),
-    createElement("span", { "data-dashboard-window-value": window.key }, quotaWindowText(t, window)),
+    { key: window.key, "data-dashboard-window": window.key, "data-dashboard-window-shape": shape, className: CSS_CLASS.quotaRow },
+    createElement(
+      "div",
+      { className: CSS_CLASS.meterHead },
+      createElement("span", { className: CSS_CLASS.meterLabel }, window.key === "" ? t("dashboard.unknown") : window.key),
+      createElement(
+        "span",
+        { "data-dashboard-window-value": window.key, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },
+        quotaWindowText(t, window),
+      ),
+    ),
+    meter === undefined
+      ? null
+      : createElement(
+          "span",
+          { key: "bar", "data-quota-percent": meter.percent, className: CSS_CLASS.quotaTrack },
+          createElement("span", { "data-quota-level": meter.level, className: CSS_CLASS.quotaFill, style: { width: `${meter.percent}%` } }),
+        ),
   );
 }
 
@@ -165,7 +242,7 @@ function switchHistory(props: DashboardProps): ReactNode {
             },
             createElement("span", null, `${record.fromRef} → ${record.toRef}`),
             createElement("span", { "data-switch-reason-label": record.reason }, t(`switch.reason.${record.reason}`)),
-            createElement("time", { dateTime: new Date(record.at).toISOString() }, new Date(record.at).toISOString()),
+            createElement("time", { dateTime: new Date(record.at).toISOString() }, relativeTime(t, record.at)),
           ),
         )),
   );

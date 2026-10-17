@@ -93,6 +93,10 @@ export type CopyKey =
   | "usage.remoteUnavailable"
   | "usage.stale"
   | "usage.refresh"
+  | "time.now"
+  | "time.minutes"
+  | "time.hours"
+  | "time.days"
   | "rejection.unavailable"
   | "rejection.server"
   | "rejection.network"
@@ -208,6 +212,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.remoteUnavailable": "用量远程面还没挂上",
     "usage.stale": "上次数据",
     "usage.refresh": "刷新",
+    "time.now": "刚刚",
+    "time.minutes": "{n} 分钟前",
+    "time.hours": "{n} 小时前",
+    "time.days": "{n} 天前",
     "rejection.unavailable": "服务暂不可用",
     "rejection.server": "服务端错误",
     "rejection.network": "网络错误",
@@ -318,6 +326,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.remoteUnavailable": "Usage remote is not mounted",
     "usage.stale": "Last data",
     "usage.refresh": "Refresh",
+    "time.now": "just now",
+    "time.minutes": "{n} min ago",
+    "time.hours": "{n} h ago",
+    "time.days": "{n} d ago",
     "rejection.unavailable": "Service unavailable",
     "rejection.server": "Server error",
     "rejection.network": "Network error",

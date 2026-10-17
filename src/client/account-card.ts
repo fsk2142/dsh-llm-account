@@ -1,5 +1,5 @@
 /**
- * Command Code 账户卡片（Task 5）：账号行、额度条、`⋯` 菜单、添加账户与网页登录入口。
+ * 账户卡片：账号行、额度表、操作菜单、添加账户与网页登录入口。
  *
  * 与 `page.ts` 同样的纪律（Ruling 22）：**纯 props → 元素树**，没有 Hook、没有内部状态。
  * 用户输入到一半的名称/密钥住在 `page-state.ts` 的 `action` 草稿里（可完整单测），
@@ -9,14 +9,22 @@
  * 1. **额度缺失不得渲染成 0**：窗口里没有的字段就是没有，宁可显示「暂无额度数据」。
  * 2. **密钥只走账户操作**：密钥输入不带设置字段标记（`data-field`），因此进不了设置草稿与保存条。
  * 3. **按能力降级**：菜单项与登录入口都由宿主发布的能力声明决定（规格 §7.3），不是写死的。
+ *
+ * 视觉结构（2026-10-17 的界面重做）：
+ * - 一行账号 = **身份行**（状态点 + 名称 + 标记 + 行尾动作）+ **额度表**（每个窗口一小块，
+ *   标签与读数一行、进度条一条）两段；两段之间不再让名称与额度抢同一行的宽度；
+ * - 行内动作只留两个图标按钮（展开报告、更多操作），重命名/换密钥/固定/移除/上移/下移
+ *   全部收进 `⋯` 菜单 —— 一行五个带边框的文字按钮是「像调试输出」的主要来源；
+ * - 展开报告、编辑器、登录等待都是内嵌面板（`dsl-inset`），不是散落在行间的裸文本。
  * @module dsh-llm-account/src/client/account-card
  */
-import { createElement, type ReactElement, type ReactNode } from "react";
+import { createElement, Fragment, type ReactElement, type ReactNode } from "react";
 
-import { CSS_CLASS } from "./css";
+import { CSS_CLASS, cls } from "./css";
 import { rejectionText } from "./copy";
+import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
-import { quotaShape, quotaWindowDetail, quotaWindowText } from "./quota";
+import { quotaMeter, quotaShape, quotaWindowDetail, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
@@ -53,7 +61,7 @@ export interface AccountCardProps {
   onToggleExpand: (ref: string) => void;
   onLoginBegin: () => void;
   /**
-   * 追加到每一行末尾的厂商专属控件（T6 的排序控件由 `opencode-account-card.ts` 注入）。
+   * 追加到每一行 `⋯` 菜单末尾的厂商专属控件（T6 的排序控件由 `opencode-account-card.ts` 注入）。
    *
    * 扩展点：行本身的渲染只有一份实现（额度条、状态标记、菜单都在这里），厂商差异通过这个
    * render prop 挂上去，而不是复制一整行。
@@ -61,6 +69,13 @@ export interface AccountCardProps {
    * @param index - 它在轮换顺序里的下标（排序控件要用）。
    */
   rowExtras?: (account: AccountUsageStatus, index: number) => ReactNode;
+  /**
+   * 卡片底部的常驻内容（OpenCode 的 `autoSwitch` 开关）。
+   *
+   * 放在这里而不是让厂商卡片在外面另起一个 `<section>`：那个开关属于这张卡片，
+   * 单独漂在卡片上方（重做前的样子）既没有归属也看不出它在管什么。
+   */
+  cardFooter?: ReactNode;
 }
 
 /**
@@ -79,12 +94,11 @@ export function AccountCard(props: AccountCardProps): ReactElement {
     "section",
     { "data-card": "accounts", className: CSS_CLASS.card },
     createElement("h2", null, t("group.accounts")),
-    ...accounts.map((account, index) => accountRow(props, account, index)),
     // 空态分三种原因，文案不许混用：「远程面还没挂上」是数据不可用；「挂上了但一家账号都
     // 没有」是提示用户去添加 —— 都写成「暂无额度数据」会把没账号显示成额度故障。
     ...(status === undefined
       ? [
-          createElement("p", { key: "unavailable", "data-accounts-empty": "true" }, t("account.unavailable")),
+          createElement("p", { key: "unavailable", "data-accounts-empty": "true", className: CSS_CLASS.note }, t("account.unavailable")),
           // 原因必须显示：上面那句话对「远程面没挂上」「读口没装配」「调用报错」「形状不认识」
           // 四种病因都成立，不显示就只能靠猜（本机实测里已经猜错过好几轮）。
           ...(props.problem === undefined
@@ -98,45 +112,58 @@ export function AccountCard(props: AccountCardProps): ReactElement {
               ]),
         ]
       : accounts.length === 0
-        ? [createElement("p", { key: "empty", "data-accounts-empty": "true" }, t("account.empty"))]
+        ? [createElement("p", { key: "empty", "data-accounts-empty": "true", className: CSS_CLASS.note }, t("account.empty"))]
         : []),
+    ...accounts.map((account, index) => accountRow(props, account, index)),
     ...failureNotes(props),
     ...loginSection(props),
     addSection(props),
+    props.cardFooter === undefined ? null : props.cardFooter,
   );
 }
 
-/** 一行账号：名称、套餐、状态标记、额度条、展开报告、`⋯` 菜单。 */
+/** 一行账号：身份行（名称 + 标记 + 动作）在上，额度表在下。 */
 function accountRow(props: AccountCardProps, account: AccountUsageStatus, index: number): ReactNode {
-  const { t, action } = props;
+  const { t } = props;
   const pinned = props.status?.pinned === account.ref;
   const effective = account.effective;
   // 两者相同只标一次（避免同一件事写两遍）。
   const marks: ReactNode[] = [];
-  if (pinned && !effective) marks.push(createElement("span", { key: "pinned", "data-mark": "pinned", className: CSS_CLASS.mark }, t("account.pinnedBy")));
-  if (effective) marks.push(createElement("span", { key: "effective", "data-mark": "effective", className: CSS_CLASS.mark }, t("account.effectiveBy")));
+  if (effective) {
+    marks.push(createElement("span", { key: "effective", "data-mark": "effective", className: CSS_CLASS.mark }, t("account.effectiveBy")));
+  }
+  if (pinned && !effective) {
+    marks.push(createElement("span", { key: "pinned", "data-mark": "pinned", className: CSS_CLASS.mark }, t("account.pinnedBy")));
+  }
 
-  let rejection: ReactNode = null;
   // `?? undefined`：契约里 `rejection` 是可选字段，而线上可能把它序列化成 `null`
   // （JSON 没有 undefined）。只写 `!== undefined` 会让 `null` 走进来，接着读
   // `.kind` 抛错 —— 渲染路径一抛，整张卡片变空白。
   const rejectionOf = account.rejection ?? undefined;
-  if (rejectionOf !== undefined) {
-    rejection = createElement(
-      "span",
-      {
-        "data-rejection-kind": rejectionOf.kind,
-        ...(rejectionOf.until === undefined ? {} : { "data-rejection-until": rejectionOf.until }),
-      },
-      // 可读文案，不是原始枚举（`quota`/`server`/…）；机器可读的值在 data 属性上。
-      rejectionText(t, rejectionOf.kind),
-    );
-  }
+  const rejection =
+    rejectionOf === undefined
+      ? null
+      : createElement(
+          "p",
+          {
+            key: "rejection",
+            "data-rejection-kind": rejectionOf.kind,
+            className: CSS_CLASS.rejection,
+            ...(rejectionOf.until === undefined ? {} : { "data-rejection-until": rejectionOf.until }),
+          },
+          // 可读文案，不是原始枚举（`quota`/`server`/…）；机器可读的值在 data 属性上。
+          rejectionText(t, rejectionOf.kind),
+        );
 
-  const editingKey = action?.kind === "key" && action.ref === account.ref;
-  const editingRename = action?.kind === "rename" && action.ref === account.ref;
+  const editingKey = actionOf(props, "key", account.ref);
+  const editingRename = actionOf(props, "rename", account.ref);
   // `quota` 同上：可选字段，线上可能是 `null`（当作「没有摘要」，不是「有摘要但为空」）。
   const quotaOf = account.quota ?? undefined;
+  const expanded = props.expandedRef === account.ref;
+
+  // 副文案：名称与 ref 不同时显示 ref（排查时真正有用的那个键），否则显示配置状态。
+  const showRef = account.configured && account.label !== account.ref;
+  const statusText = account.configured ? (showRef ? account.ref : t("account.configured")) : t("account.missing");
 
   return createElement(
     "div",
@@ -144,49 +171,54 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
       key: account.ref,
       "data-account": account.ref,
       className: CSS_CLASS.account,
+      "data-effective": effective,
       ...(rejectionOf === undefined ? {} : { "data-rejection-kind": rejectionOf.kind }),
       ...(rejectionOf?.until === undefined ? {} : { "data-rejection-until": rejectionOf.until }),
     },
-    // 身份块：圆点 + 名称 + 配置状态（宿主身份行是「头像 + 名称 + 副文案」的同一形状）
     createElement(
-      "span",
-      { className: CSS_CLASS.identity },
-      createElement("span", { className: CSS_CLASS.dot }),
+      "div",
+      { className: CSS_CLASS.accountHead },
       createElement(
         "span",
-        { className: CSS_CLASS.identityText },
-        createElement("strong", { "data-account-label": account.ref }, account.label),
+        { className: CSS_CLASS.identity },
+        createElement("span", { className: CSS_CLASS.dot }),
         createElement(
-          "small",
-          { "data-account-status": account.configured ? "configured" : "missing" },
-          account.configured ? t("account.configured") : t("account.missing"),
+          "span",
+          { className: CSS_CLASS.identityText },
+          createElement(
+            "span",
+            { className: CSS_CLASS.nameRow },
+            createElement("strong", { "data-account-label": account.ref }, account.label),
+            ...marks,
+            ...(quotaOf?.plan === undefined
+              ? []
+              : [createElement("span", { key: "plan", "data-mark": "plan", "data-plan": quotaOf.plan, className: CSS_CLASS.mark }, quotaOf.plan)]),
+          ),
+          createElement(
+            "small",
+            { "data-account-status": account.configured ? "configured" : "missing", ...(showRef ? { className: CSS_CLASS.mono } : {}) },
+            statusText,
+          ),
         ),
       ),
+      createElement(
+        "div",
+        { className: CSS_CLASS.accountActions },
+        expandButton(props, account, expanded),
+        accountMenu(props, account, index),
+        // 只有支持排序的厂商才有拖拽手柄；不支持的**整块不渲染**（不是藏起来）。
+        ...(capabilitiesOf(props).reorder
+          ? [createElement("span", { key: "drag", "data-drag-handle": account.ref, className: CSS_CLASS.drag, title: t("account.moveUp") })]
+          : []),
+      ),
     ),
-    ...marks,
     rejection,
-    ...(quotaOf === undefined ? [createElement("small", { key: "quota-none", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))] : []),
-    ...quotaBars(props, quotaOf),
-    ...(props.status === undefined ? [] : [planLine(props, quotaOf)]),
-    createElement(
-      "button",
-      {
-        type: "button",
-        "data-action": "expand",
-        "aria-expanded": props.expandedRef === account.ref,
-        className: CSS_CLASS.buttonGhost,
-        onClick: () => props.onToggleExpand(account.ref),
-      },
-      props.expandedRef === account.ref ? t("account.collapse") : t("account.expand"),
-    ),
-    props.expandedRef === account.ref ? reportBlock(props, account) : null,
-    // 只有支持排序的厂商才有拖拽手柄；不支持的**整块不渲染**（不是藏起来）。
-    capabilitiesOf(props).reorder ? createElement("span", { "data-drag-handle": account.ref }, "::") : null,
-    ...menuButtons(props, account),
+    ...(quotaOf === undefined
+      ? [createElement("small", { key: "quota-none", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))]
+      : [createElement("div", { key: "meters", className: CSS_CLASS.meters }, ...quotaBars(props, quotaOf))]),
+    expanded ? reportBlock(props, account) : null,
     editingRename ? renameEditor(props, account) : null,
     editingKey ? keyEditor(props, account) : null,
-    // 厂商专属控件（T6 的排序）挂在行尾：行渲染只有一份实现。
-    props.rowExtras === undefined ? null : props.rowExtras(account, index),
   );
 }
 
@@ -205,44 +237,149 @@ function capabilitiesOf(props: AccountCardProps): VendorCapabilities {
   );
 }
 
-/** 套餐行：只在有额度摘要且厂商给了套餐名时出现。 */
-function planLine(props: AccountCardProps, quota: QuotaSummary | undefined): ReactNode {
-  if (quota?.plan === undefined) return null;
-  return createElement("small", { key: "plan", "data-plan": quota.plan }, `${props.t("account.plan")}: ${quota.plan}`);
+/** 该行是否正在做某个账户操作。 */
+function actionOf(props: AccountCardProps, kind: AccountAction["kind"], ref: string): boolean {
+  return props.action?.kind === kind && props.action.ref === ref;
 }
 
 /**
- * 额度条：**每个存在的窗口一行**。
+ * 展开/收起报告的图标按钮。
+ *
+ * 图标本身不换：`.dsl-icon[aria-expanded="true"] svg` 把它转 180°，展开与否由 `aria-expanded`
+ * 同时承担语义与视觉（屏幕阅读器与样式表读的是同一个属性）。
+ */
+function expandButton(props: AccountCardProps, account: AccountUsageStatus, expanded: boolean): ReactNode {
+  const label = expanded ? props.t("account.collapse") : props.t("account.expand");
+  return createElement(
+    "button",
+    {
+      key: "expand",
+      type: "button",
+      "data-action": "expand",
+      "aria-expanded": expanded,
+      "aria-label": label,
+      title: label,
+      className: CSS_CLASS.icon,
+      onClick: () => props.onToggleExpand(account.ref),
+    },
+    createElement(ChevronIcon, null),
+  );
+}
+
+/**
+ * `⋯` 菜单：把行内动作收进一个原生 `<details>`。
+ *
+ * 为什么是 `<details>`：它自带开合、键盘可达与「点外部不自动关」之外的一切语义，不需要
+ * 状态（卡片是纯函数）。点菜单项后由面板的冒泡处理器关闭自己。
+ */
+function accountMenu(props: AccountCardProps, account: AccountUsageStatus, index: number): ReactNode {
+  const label = props.t("account.menu");
+  const extras = props.rowExtras?.(account, index);
+  return createElement(
+    "details",
+    { key: "menu", className: CSS_CLASS.menu, "data-account-menu": account.ref },
+    createElement(
+      "summary",
+      { className: CSS_CLASS.icon, "aria-label": label, title: label, role: "button" },
+      createElement(MoreIcon, null),
+    ),
+    createElement(
+      "div",
+      { className: CSS_CLASS.menuPanel, onClick: closeMenu },
+      ...menuButtons(props, account),
+      extras === undefined || extras === null ? null : extras,
+    ),
+  );
+}
+
+/** 点了菜单里的任何东西就把菜单收起来（原生 details 不会自己关）。 */
+function closeMenu(event: { currentTarget?: { closest?: (selector: string) => { open: boolean } | null } }): void {
+  const details = event.currentTarget?.closest?.("details");
+  if (details !== null && details !== undefined) details.open = false;
+}
+
+/**
+ * 菜单项：重命名 / 更换密钥 / 固定 / 移除 —— 全部按能力降级。
+ *
+ * 「移除」是红字（宿主的 dangerButton 同款），悬停才浮出危险底色 —— 破坏性动作平时安静、
+ * 指到时才醒目。
+ */
+function menuButtons(props: AccountCardProps, account: AccountUsageStatus): ReactNode[] {
+  const { t } = props;
+  const capabilities = capabilitiesOf(props);
+  const buttons: ReactNode[] = [
+    createElement(
+      "button",
+      { key: "rename", type: "button", "data-action": "rename", className: CSS_CLASS.item, onClick: () => props.onOpenAction({ kind: "rename", ref: account.ref }) },
+      t("account.rename"),
+    ),
+    createElement(
+      "button",
+      { key: "key", type: "button", "data-action": "replaceKey", className: CSS_CLASS.item, onClick: () => props.onOpenAction({ kind: "key", ref: account.ref }) },
+      t("account.replaceKey"),
+    ),
+  ];
+  // 只有支持固定的厂商才给「固定使用此账户」；opencode 用 select 切换（T6 处理）。
+  if (capabilities.pin) {
+    buttons.push(
+      createElement(
+        "button",
+        { key: "pin", type: "button", "data-action": "pin", className: CSS_CLASS.item, onClick: () => props.onSelect(account.ref) },
+        t("account.pin"),
+      ),
+    );
+  }
+  buttons.push(
+    createElement(
+      "button",
+      { key: "remove", type: "button", "data-action": "remove", className: cls(CSS_CLASS.item, CSS_CLASS.buttonDanger), onClick: () => props.onRemove(account.ref) },
+      t("account.remove"),
+    ),
+  );
+  return buttons;
+}
+
+/**
+ * 额度表：**每个存在的窗口一小块**（标签 + 读数 + 进度条）。
  *
  * 数字只在读数里真的有那个字段时才渲染 —— `used`/`cap` 缺任何一个都不拼 `x/y`，
  * `percent` 缺失也不补 0。全都缺就显示「暂无额度数据」。
  */
-function quotaBars(props: AccountCardProps, quota: QuotaSummary | undefined): ReactNode[] {
+function quotaBars(props: AccountCardProps, quota: QuotaSummary): ReactNode[] {
   // `windows` 在 QuotaSummary 里是必填字段，但线上同样可能缺或为 null：当「没有窗口」处理，
   // 而不是让 `.map` 抛在渲染路径上。
-  if (quota === undefined) return [];
   return (quota.windows ?? []).map((window) => quotaBar(props, window));
 }
 
-/** 一个额度窗口。 */
+/**
+ * 一个额度窗口。
+ *
+ * 条宽与颜色的依据是**已用百分比**（契约写明 `percent` 是「已用百分比」，厂商的
+ * `rate-limited` 也配着 `percent: 100`）。所以：用得越多越糟 —— 这不是审美选择，
+ * 是单位的方向。两处历史错误都修在这里：
+ * - 曾经按 0–1 处理（阈值永远判成健康、条宽乘 100 永远画满）；
+ * - 曾经把「少用」当危险（方向反了，等于把健康标成红、把耗尽标成绿）。
+ */
 function quotaBar(props: AccountCardProps, window: QuotaWindow): ReactNode {
-  // 有百分比才画条：没有百分比就只给读数，绝不补一个 0%（那会把「不知道」画成「没额度」）。
-  const percent = window.percent;
-  const level = percent === undefined ? undefined : percent <= 0.2 ? "error" : percent <= 0.5 ? "warn" : "ok";
+  const meter = quotaMeter(window);
   return createElement(
     "div",
     { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.quotaRow },
-    createElement("span", null, window.key),
-    quotaText(props, window),
-    percent === undefined || level === undefined
+    createElement(
+      "div",
+      { className: CSS_CLASS.meterHead },
+      createElement("span", { className: CSS_CLASS.meterLabel }, window.key),
+      quotaText(props, window),
+    ),
+    meter === undefined
       ? null
       : createElement(
           "span",
-          { key: "bar", "data-quota-percent": percent, className: CSS_CLASS.quotaTrack },
+          { key: "bar", "data-quota-percent": meter.percent, className: CSS_CLASS.quotaTrack },
           createElement("span", {
-            "data-quota-level": level,
+            "data-quota-level": meter.level,
             className: CSS_CLASS.quotaFill,
-            style: { width: `${Math.round(percent * 100)}%` },
+            style: { width: `${meter.percent}%` },
           }),
         ),
   );
@@ -253,18 +390,18 @@ function quotaText(props: AccountCardProps, window: QuotaWindow): ReactNode {
   const shape = quotaShape(window);
   return createElement(
     "span",
-    { "data-quota-value": shape, ...(shape === "missing" ? { className: CSS_CLASS.quotaMissing } : {}) },
+    { "data-quota-value": shape, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },
     quotaWindowText(props.t, window),
   );
 }
 
-/** 展开后的完整报告：窗口明细与失败项。 */
+/** 展开后的完整报告：窗口明细与失败项，一块内嵌面板（等宽、可断行）。 */
 function reportBlock(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
   const { t } = props;
-  const quota = account.quota;
+  const quota = account.quota ?? undefined;
   return createElement(
     "div",
-    { "data-report": account.ref },
+    { "data-report": account.ref, className: CSS_CLASS.inset },
     ...(quota === undefined
       ? [createElement("p", { key: "none" }, t("account.quotaMissing"))]
       : [
@@ -280,30 +417,12 @@ function reportBlock(props: AccountCardProps, account: AccountUsageStatus): Reac
   );
 }
 
-/** `⋯` 菜单：按能力渲染条目。 */
-function menuButtons(props: AccountCardProps, account: AccountUsageStatus): ReactNode[] {
-  const { t } = props;
-  const capabilities = capabilitiesOf(props);
-  const buttons: ReactNode[] = [
-    createElement("button", { key: "rename", type: "button", "data-action": "rename", className: CSS_CLASS.buttonGhost, onClick: () => props.onOpenAction({ kind: "rename", ref: account.ref }) }, t("account.rename")),
-    createElement("button", { key: "key", type: "button", "data-action": "replaceKey", className: CSS_CLASS.buttonGhost, onClick: () => props.onOpenAction({ kind: "key", ref: account.ref }) }, t("account.replaceKey")),
-  ];
-  // 只有支持固定的厂商才给「固定使用此账户」；opencode 用 select 切换（T6 处理）。
-  if (capabilities.pin) {
-    buttons.push(
-      createElement("button", { key: "pin", type: "button", "data-action": "pin", className: CSS_CLASS.buttonGhost, onClick: () => props.onSelect(account.ref) }, t("account.pin")),
-    );
-  }
-  buttons.push(createElement("button", { key: "remove", type: "button", "data-action": "remove", className: CSS_CLASS.buttonDanger, onClick: () => props.onRemove(account.ref) }, t("account.remove")));
-  return buttons;
-}
-
 /** 重命名编辑器（受控）。 */
 function renameEditor(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
   const label = props.action?.label ?? "";
   return createElement(
-    "span",
-    { "data-editor": "rename", "data-editor-ref": account.ref, className: CSS_CLASS.inline },
+    "div",
+    { "data-editor": "rename", "data-editor-ref": account.ref, className: cls(CSS_CLASS.inline, CSS_CLASS.inset) },
     createElement("input", {
       "data-rename-input": account.ref,
       type: "text",
@@ -311,8 +430,8 @@ function renameEditor(props: AccountCardProps, account: AccountUsageStatus): Rea
       placeholder: props.t("account.newLabel"),
       onChange: (event: { target?: { value?: string } }) => props.onActionField("label", event.target?.value ?? ""),
     }),
-    createElement("button", { type: "button", "data-action": "confirmRename", className: CSS_CLASS.buttonPrimary, onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
-    createElement("button", { type: "button", "data-action": "cancel", className: CSS_CLASS.buttonGhost, onClick: () => props.onCancelAction() }, props.t("account.cancel")),
+    createElement("button", { type: "button", "data-action": "confirmRename", className: cls(CSS_CLASS.buttonPrimary, CSS_CLASS.buttonSm), onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
+    createElement("button", { type: "button", "data-action": "cancel", className: cls(CSS_CLASS.buttonGhost, CSS_CLASS.buttonSm), onClick: () => props.onCancelAction() }, props.t("account.cancel")),
   );
 }
 
@@ -324,8 +443,8 @@ function renameEditor(props: AccountCardProps, account: AccountUsageStatus): Rea
  */
 function keyEditor(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
   return createElement(
-    "span",
-    { "data-editor": "key", "data-editor-ref": account.ref, className: CSS_CLASS.inline },
+    "div",
+    { "data-editor": "key", "data-editor-ref": account.ref, className: cls(CSS_CLASS.inline, CSS_CLASS.inset) },
     createElement("input", {
       "data-key-input": account.ref,
       type: "password",
@@ -333,8 +452,8 @@ function keyEditor(props: AccountCardProps, account: AccountUsageStatus): ReactN
       placeholder: props.t("account.newKey"),
       onChange: (event: { target?: { value?: string } }) => props.onActionField("key", event.target?.value ?? ""),
     }),
-    createElement("button", { type: "button", "data-action": "confirmKey", className: CSS_CLASS.buttonPrimary, onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
-    createElement("button", { type: "button", "data-action": "cancel", className: CSS_CLASS.buttonGhost, onClick: () => props.onCancelAction() }, props.t("account.cancel")),
+    createElement("button", { type: "button", "data-action": "confirmKey", className: cls(CSS_CLASS.buttonPrimary, CSS_CLASS.buttonSm), onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
+    createElement("button", { type: "button", "data-action": "cancel", className: cls(CSS_CLASS.buttonGhost, CSS_CLASS.buttonSm), onClick: () => props.onCancelAction() }, props.t("account.cancel")),
   );
 }
 
@@ -349,19 +468,30 @@ function failureNotes(props: AccountCardProps): ReactNode[] {
 function loginSection(props: AccountCardProps): ReactNode[] {
   const { t, login } = props;
   if (!capabilitiesOf(props).browserLogin) return [];
-  const nodes: ReactNode[] = [
-    createElement("button", { key: "login", type: "button", "data-action": "login", className: CSS_CLASS.buttonSecondary, onClick: () => props.onLoginBegin() }, t("account.login")),
-  ];
+  // 入口是行内动作（左对齐的普通按钮），不单独套一层通栏面板；等待中的说明才用内嵌面板，
+  // 因为那里有授权网址要占一整行。
+  const button = createElement(
+    "button",
+    { key: "login", type: "button", "data-action": "login", className: CSS_CLASS.buttonSecondary, onClick: () => props.onLoginBegin() },
+    createElement(ExternalIcon, null),
+    t("account.login"),
+  );
+  const detail: ReactNode[] = [];
   if (login?.state === "waiting") {
-    nodes.push(createElement("p", { key: "waiting" }, t("account.loginWaiting")));
+    detail.push(createElement("p", { key: "waiting" }, t("account.loginWaiting")));
     if (login.authUrl !== undefined) {
-      nodes.push(createElement("a", { key: "url", "data-login-url": "true", href: login.authUrl, target: "_blank", rel: "noreferrer" }, login.authUrl));
+      detail.push(createElement("a", { key: "url", "data-login-url": "true", className: CSS_CLASS.link, href: login.authUrl, target: "_blank", rel: "noreferrer" }, login.authUrl));
     }
   }
   if (login?.state === "failed") {
-    nodes.push(createElement("p", { key: "reason", "data-login-reason": login.reason ?? "error" }, reasonText(t, login.reason)));
+    detail.push(
+      createElement("p", { key: "reason", "data-login-reason": login.reason ?? "error", className: CSS_CLASS.failure }, reasonText(t, login.reason)),
+    );
   }
-  return nodes;
+  return [
+    createElement("div", { key: "login-row", "data-login-panel": login?.state ?? "idle", className: CSS_CLASS.actions }, button),
+    ...(detail.length === 0 ? [] : [createElement("div", { key: "login-detail", className: CSS_CLASS.inset }, ...detail)]),
+  ];
 }
 
 /** 失败原因文案：认识的原因用专门文案，不认识的回退到通用文案（**不打印原因键**）。 */
@@ -394,7 +524,7 @@ function addSection(props: AccountCardProps): ReactNode {
       { "data-card": "add-account", className: CSS_CLASS.add },
       createElement(
         "button",
-        { key: "add", type: "button", "data-action": "add", className: CSS_CLASS.buttonGhost, onClick: () => props.onOpenAction({ kind: "add" }) },
+        { key: "add", type: "button", "data-action": "add", className: CSS_CLASS.addTrigger, onClick: () => props.onOpenAction({ kind: "add" }) },
         t("account.add"),
       ),
     );
@@ -403,11 +533,11 @@ function addSection(props: AccountCardProps): ReactNode {
   const edit = (field: "label" | "key", value: string): void => props.onActionField(field, value);
   return createElement(
     "div",
-    { "data-card": "add-account", className: CSS_CLASS.add },
+    { "data-card": "add-account", className: cls(CSS_CLASS.add, CSS_CLASS.inset) },
     createElement(
       "label",
-      { className: CSS_CLASS.field },
-      createElement("span", null, t("account.newLabel")),
+      { className: CSS_CLASS.addField },
+      createElement("small", null, t("account.newLabel")),
       createElement("input", {
         "data-add-label": "true",
         type: "text",
@@ -418,8 +548,8 @@ function addSection(props: AccountCardProps): ReactNode {
     ),
     createElement(
       "label",
-      { className: CSS_CLASS.field },
-      createElement("span", null, t("account.newKey")),
+      { className: CSS_CLASS.addField },
+      createElement("small", null, t("account.newKey")),
       createElement("input", {
         "data-add-key": "true",
         type: "password",
@@ -432,7 +562,46 @@ function addSection(props: AccountCardProps): ReactNode {
       "div",
       { className: CSS_CLASS.actions },
       createElement("button", { key: "ok", type: "button", "data-action": "confirmAdd", className: CSS_CLASS.buttonPrimary, onClick: () => props.onConfirmAction() }, t("account.confirm")),
-      createElement("button", { key: "cancel", type: "button", "data-action": "cancel", onClick: () => props.onCancelAction() }, t("account.cancel")),
+      createElement("button", { key: "cancel", type: "button", "data-action": "cancel", className: CSS_CLASS.buttonGhost, onClick: () => props.onCancelAction() }, t("account.cancel")),
     ),
   );
+}
+
+/**
+ * 排序控件（供 `opencode-account-card.ts` 通过 {@link AccountCardProps.rowExtras} 注入）。
+ *
+ * 导出在这里而不是让厂商卡片自己画：菜单项的类与形状只有一份（`dsl-item`），
+ * 由行渲染决定它们长什么样，厂商卡片只提供「上移/下移」两个语义。
+ * @param props - 渲染所需的文案与回调。
+ * @param account - 目标账号。
+ * @param index - 当前下标。
+ * @param count - 账号总数（判断越界）。
+ * @returns 两个菜单项；越界的一侧禁用。
+ */
+export function moveItems(
+  props: { t: (key: string) => string; onMove: (ref: string, toIndex: number) => void },
+  account: AccountUsageStatus,
+  index: number,
+  count: number,
+): ReactNode {
+  const move = (direction: "up" | "down"): ReactNode => {
+    const disabled = direction === "up" ? index === 0 : index === count - 1;
+    const label = direction === "up" ? props.t("account.moveUp") : props.t("account.moveDown");
+    return createElement(
+      "button",
+      {
+        key: direction,
+        type: "button",
+        "data-move": direction,
+        "data-move-ref": account.ref,
+        disabled,
+        "aria-label": label,
+        className: CSS_CLASS.item,
+        onClick: () => props.onMove(account.ref, direction === "up" ? index - 1 : index + 1),
+      },
+      createElement(MoveIcon, { direction }),
+      label,
+    );
+  };
+  return createElement(Fragment, null, move("up"), move("down"));
 }

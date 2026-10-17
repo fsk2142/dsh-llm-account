@@ -11,6 +11,7 @@
 import { createElement, Fragment, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
+import { ChevronIcon } from "./icons";
 import { cardGroupsOf, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
 import type { CardGroupSpec, VendorEntry } from "./registry";
 
@@ -69,14 +70,18 @@ function pageBody(props: PageShellProps): ReactElement {
   return createElement(
     "div",
     { "data-page": "llm-account", className: CSS_CLASS.root },
-    createElement("h1", null, t("title")),
-    createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
+    createElement(
+      "header",
+      { className: CSS_CLASS.header },
+      createElement("h1", null, t("title")),
+      createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
+    ),
     tabRow(props),
     active === undefined
       ? createElement(
-          "div",
-          { "data-empty": "vendor" },
-          createElement("p", null, t("empty.noVendor")),
+          Fragment,
+          null,
+          createElement("p", { "data-empty": "vendor", className: CSS_CLASS.empty }, t("empty.noVendor")),
           // 「发现不到厂商」有四种病因（远程面缺席 / describe 抛错 / 形状不认识 /
           // 命名空间对不上），而症状完全一样。把原因显示出来，否则只能靠猜。
           state.discovery === undefined
@@ -107,6 +112,7 @@ function tabRow(props: PageShellProps): ReactNode {
           "data-tab": tab.ns,
           role: "tab",
           "aria-selected": tab.ns === state.activeNs,
+          className: CSS_CLASS.tab,
           onClick: () => props.onSelectTab(tab.ns),
         },
         t(tab.labelKey),
@@ -139,7 +145,7 @@ function cardGroupElement(props: PageShellProps, entry: VendorEntry, group: Card
     return createElement(
       "details",
       { key: group.group, "data-card-group": group.group, className: CSS_CLASS.card },
-      createElement("summary", null, props.t("advanced")),
+      createElement("summary", null, createElement(ChevronIcon, null), props.t("advanced")),
       hint,
       ...body,
     );
@@ -154,7 +160,14 @@ function fieldElement(props: PageShellProps, entry: VendorEntry, field: DraftFie
   const control = fieldControl(props, entry, field);
   if (control === undefined) return null;
   const hint = spec.hintKey === undefined ? null : createElement("small", { "data-field-hint": spec.key }, t(spec.hintKey));
-  return createElement("label", { key: spec.key, "data-field": spec.key, className: CSS_CLASS.field }, createElement("span", null, t(spec.labelKey)), control, hint);
+  // 说明放在**标签下面**，与控件同一行的只有标签本身：否则一段长说明会和输入框一起
+  // 把标签列挤到只剩一两个字宽（真机截图里「用量刷新间隔（分钟）」就是竖排的）。
+  return createElement(
+    "label",
+    { key: spec.key, "data-field": spec.key, className: CSS_CLASS.field },
+    createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, t(spec.labelKey)), hint),
+    control,
+  );
 }
 
 /** 字段的控件。 */
@@ -166,6 +179,7 @@ function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftFie
     return createElement("input", {
       "data-field-input": spec.key,
       type: "checkbox",
+      className: CSS_CLASS.toggle,
       checked: value === true,
       onChange: (event: { target?: { checked?: boolean } }) => change(event.target?.checked === true),
     });
@@ -201,7 +215,7 @@ function saveBar(props: PageShellProps, entry: VendorEntry): ReactElement {
   return createElement(
     "div",
     { "data-save-bar": "true", className: CSS_CLASS.save },
-    createElement("button", { type: "button", "data-save": entry.ns, onClick: () => props.onSave(entry.ns) }, t("save")),
+    createElement("button", { type: "button", "data-save": entry.ns, className: CSS_CLASS.buttonPrimary, onClick: () => props.onSave(entry.ns) }, t("save")),
     createElement("small", null, t("saveHint")),
     ...(error === undefined
       ? []

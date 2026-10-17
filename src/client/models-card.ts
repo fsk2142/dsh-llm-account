@@ -12,6 +12,7 @@
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
+import { RemoveIcon } from "./icons";
 
 /** 模型卡片的写模式（来自宿主的 `capabilities.modelVisibilityWrite`）。 */
 export type ModelsWriteMode = "onSave" | "immediate";
@@ -55,7 +56,7 @@ export function ModelsCard(props: ModelsCardProps): ReactElement {
     // 提示必须与真实行为一致：立即生效时不该再出现「保存后生效」。
     createElement("small", { "data-models-mode": props.mode }, props.mode === "immediate" ? t("models.immediate") : t("models.onSave")),
     props.models.length === 0
-      ? createElement("p", { key: "empty" }, t("models.empty"))
+      ? createElement("p", { key: "empty", className: CSS_CLASS.empty }, t("models.empty"))
       : createElement(
           "div",
           { key: "search", className: CSS_CLASS.search },
@@ -68,9 +69,15 @@ export function ModelsCard(props: ModelsCardProps): ReactElement {
           }),
         ),
     ...(filtered
-      ? [createElement("small", { key: "count", "data-model-count": `${shown.length}/${props.models.length}` }, t("models.filtered").replace("{n}", String(shown.length)).replace("{total}", String(props.models.length)))]
+      ? [
+          createElement(
+            "small",
+            { key: "count", "data-model-count": `${shown.length}/${props.models.length}`, className: CSS_CLASS.searchCount },
+            t("models.filtered").replace("{n}", String(shown.length)).replace("{total}", String(props.models.length)),
+          ),
+        ]
       : []),
-    ...(needle !== "" && shown.length === 0 ? [createElement("p", { key: "no-match" }, t("models.noMatch"))] : []),
+    ...(needle !== "" && shown.length === 0 ? [createElement("p", { key: "no-match", className: CSS_CLASS.empty }, t("models.noMatch"))] : []),
     ...shown.map((model) => modelRow(props, model)),
     addRow(props),
   );
@@ -81,17 +88,34 @@ function modelRow(props: ModelsCardProps, model: string): ReactNode {
   const { t } = props;
   // 只有显式 `false` 才算不可见（与宿主侧 `modelVisibility` 的语义一致）。
   const visible = props.visibility[model] !== false;
+  const removeLabel = t("models.remove");
   return createElement(
     "div",
     { key: model, "data-model": model, className: CSS_CLASS.field },
-    createElement("span", { "data-model-label": model, className: CSS_CLASS.mono }, model),
+    createElement(
+      "span",
+      { className: CSS_CLASS.fieldText },
+      createElement("span", { "data-model-label": model, className: CSS_CLASS.mono }, model),
+    ),
     createElement("input", {
       "data-model-visible": model,
       type: "checkbox",
+      className: CSS_CLASS.toggle,
       checked: visible,
       onChange: (event: { target?: { checked?: boolean } }) => props.onToggleModel(model, event.target?.checked === true),
     }),
-    createElement("button", { type: "button", "data-model-remove": model, className: CSS_CLASS.buttonDanger, onClick: () => props.onRemoveModel(model) }, t("models.remove")),
+    createElement(
+      "button",
+      {
+        type: "button",
+        "data-model-remove": model,
+        title: removeLabel,
+        "aria-label": removeLabel,
+        className: CSS_CLASS.iconDanger,
+        onClick: () => props.onRemoveModel(model),
+      },
+      createElement(RemoveIcon, null),
+    ),
   );
 }
 

@@ -20,6 +20,7 @@
 import { createElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import { dictionaryOf } from "./copy";
+import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
 import { SidebarCard } from "./sidebar-card";
 import {
@@ -1419,7 +1420,7 @@ export function createDashboardView(options: {
     }, [vendor]);
 
     if (vendor === undefined) {
-      return createElement("p", { "data-dashboard-empty": "true" }, t("dashboard.noData")) as ReactElement;
+      return createElement("p", { "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("dashboard.noData")) as ReactElement;
     }
     return Dashboard({
       t,
