@@ -71,8 +71,9 @@ it("远程面把可省略字段序列化成 null 时也不崩（渲染路径抛�
   // `null !== undefined`，旧写法会走进 effective 分支再读 `.ref` —— TypeError。
   const nulled = statusOf({ effective: null as never, pinned: "a", accounts: [row("a")] });
   const tree = renderCard(nulled);
-  // 没有生效账号 → 走占位（不显示 0%），且不抛。
-  expect(elementsOf(tree).filter((element) => element.props["data-sidebar-empty"] === "true")).toHaveLength(1);
+  // 没有生效账号时回落到已配置账号，至少显示账号名和「暂无额度数据」，且不抛。
+  expect(textsOf(tree).join(" ")).toContain("a");
+  expect(elementsOf(tree).some((element) => element.props["data-sidebar-quota-missing"] !== undefined)).toBe(true);
   expect(textsOf(tree).join(" ")).not.toContain("undefined");
   expect(textsOf(tree).join(" ")).not.toContain("null");
 });
@@ -137,9 +138,10 @@ it("没有请求过时显示占位，而不是 0%", () => {
   expect(textsOf(unknown)).toContain(dictionaryOf("zh")("sidebar.noRequest"));
   expect(textsOf(unknown).join(" ")).not.toMatch(/\b0\b/);
 
-  // 读到了状态但还没有任何一次请求 → 没有生效账号。
+  // 读到了状态但还没有任何一次请求 → 显示已配置账号，额度用「暂无数据」而不是 0。
   const noRequest = renderCard(statusOf({ accounts: [row("a")] }));
-  expect(elementsOf(noRequest).some((element) => element.props["data-sidebar-empty"] !== undefined)).toBe(true);
+  expect(textsOf(noRequest).join(" ")).toContain("a");
+  expect(elementsOf(noRequest).some((element) => element.props["data-sidebar-quota-missing"] !== undefined)).toBe(true);
   expect(textsOf(noRequest).join(" ")).not.toMatch(/\b0\b/);
 });
 
