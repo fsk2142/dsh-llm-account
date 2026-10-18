@@ -1629,6 +1629,8 @@ export function createSidebarCardView(options: {
   const { ctx, entries, t } = options;
   return function ConnectedSidebarCard(): ReactElement {
     const [vendor, setVendor] = useState<string | undefined>(() => sidebarVendor());
+    /** 设置值变化时重建控制器，让新的刷新间隔立即生效（不必等旧 timer 到期）。 */
+    const [settingsRevision, setSettingsRevision] = useState(0);
     // 一份合并的视图状态：要显示的状态 + 最近一次读的失败 + 是否在显示旧数据。
     // 合成一个 state（而不是三个）是为了让「失败时保留上一份好数据」在一次 setState 里
     // 原子完成 —— 三个各自 set 的中间态会闪一下「有数据但没标过期」。
@@ -1686,6 +1688,13 @@ export function createSidebarCardView(options: {
 
     // 订阅开关存储：设置页里保存（或外部改动设置文档）时，这里随之开关。
     useEffect(() => subscribeSidebarVendor(setVendor), []);
+    useEffect(
+      () =>
+        subscribeSidebarSettings(() => {
+          setSettingsRevision((current) => current + 1);
+        }),
+      [],
+    );
 
     // 冷启动兜底：设置页从未打开过时存储是冷的，卡片自己读一次已存储的开关
     // （一次设置读取，不是用量查询；读不到就保持关闭，绝不轮询）。
@@ -1738,7 +1747,7 @@ export function createSidebarCardView(options: {
         if (typeof current?.removeEventListener === "function") current.removeEventListener("visibilitychange", onVisible);
         controller.dispose();
       };
-    }, [vendor]);
+    }, [vendor, settingsRevision]);
 
     if (vendor === undefined) return null as unknown as ReactElement;
     return SidebarCard({
@@ -2062,6 +2071,8 @@ let sidebarVendorSeededValue = false;
 
 /** 开关存储的监听者（侧边栏卡片与仪表盘容器）。 */
 const sidebarVendorListeners = new Set<(vendor: string | undefined) => void>();
+/** 设置值变化的监听者（刷新间隔等，即使厂商没变也要让轮询器重排）。 */
+const sidebarSettingsListeners = new Set<() => void>();
 
 /** 当前侧边栏卡片该显示的厂商；存储是冷的时为 `undefined`。 */
 export function sidebarVendor(): string | undefined {
@@ -2086,6 +2097,14 @@ export function subscribeSidebarVendor(listener: (vendor: string | undefined) =>
   };
 }
 
+/** 订阅设置值变化（刷新间隔等）。 */
+export function subscribeSidebarSettings(listener: () => void): () => void {
+  sidebarSettingsListeners.add(listener);
+  return () => {
+    sidebarSettingsListeners.delete(listener);
+  };
+}
+
 /**
  * 用一次设置快照读取更新开关存储（**唯一的写入口**）。
  *
@@ -2103,7 +2122,10 @@ export function noteSidebarSnapshots(entries: readonly VendorEntry[], snapshots:
   sidebarVendorSeededValue = true;
   // 始终用最新快照刷新设置值：厂商没变但轮询间隔等设置改了也要即时生效（不能因为
   // `vendor === sidebarVendorValue` 提前返回就漏掉这次更新）。
-  sidebarVendorSettingsValue = entry === undefined ? undefined : map[entry.ns]?.value;
+  const nextSettings = entry === undefined ? undefined : map[entry.ns]?.value;
+  const settingsChanged = nextSettings !== sidebarVendorSettingsValue;
+  sidebarVendorSettingsValue = nextSettings;
+  if (settingsChanged) for (const listener of [...sidebarSettingsListeners]) listener();
   if (vendor === sidebarVendorValue) return;
   sidebarVendorValue = vendor;
   for (const listener of [...sidebarVendorListeners]) listener(vendor);
@@ -2170,6 +2192,7 @@ export function resetSeams(): void {
   sidebarVendorSettingsValue = undefined;
   sidebarVendorSeededValue = false;
   sidebarVendorListeners.clear();
+  sidebarSettingsListeners.clear();
   sidebarMirrorStarted = false;
 }
 
