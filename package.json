@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "DeepSeek Harness LLM provider plugin hosting the commandcode and dsh-opencode-go routes behind a shared account core",
+  "description": "DeepSeek Harness LLM provider plugin hosting the commandcode, dsh-opencode-go and opendesign routes behind a shared account core",
   "icon": "./icon.svg",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -19,6 +19,14 @@
     "./opencode": {
       "types": "./lib/opencode.d.ts",
       "default": "./lib/opencode.js"
+    },
+    "./opendesign": {
+      "types": "./lib/opendesign.d.ts",
+      "default": "./lib/opendesign.js"
+    },
+    "./web-search": {
+      "types": "./lib/web-search.d.ts",
+      "default": "./lib/web-search.js"
     },
     "./client": {
       "default": "./lib/client.js"
@@ -53,6 +61,7 @@
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
     "@deepseek-ai/dsh-settings": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-web": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
     "@deepseek-ai/schemastery": "~3.18.4 || ~3.18.5"
   },
   "devDependencies": {

@@ -17,6 +17,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { isModelIdVisible } from "../core/catalog";
 import { companyLabelOf, groupModels } from "../core/model-groups";
 import { CSS_CLASS, cls } from "./css";
+import { failureListText } from "./failure-text";
 import { ChevronIcon, RemoveIcon } from "./icons";
 
 /** 模型卡片的写模式（来自宿主的 `capabilities.modelVisibilityWrite`）。 */
@@ -82,7 +83,11 @@ export function ModelsCard(props: ModelsCardProps): ReactElement {
   const catalogFailure =
     props.catalogFailure === undefined
       ? null
-      : createElement("p", { key: "catalog-failure", "data-model-catalog-failure": "true", className: CSS_CLASS.failure }, props.catalogFailure);
+      : createElement(
+          "p",
+          { key: "catalog-failure", "data-model-catalog-failure": "true", "data-failure-detail": props.catalogFailure, className: CSS_CLASS.failure },
+          failureListText(props.t, props.catalogFailure),
+        );
   const retry =
     props.catalogFailure === undefined || props.onRetryCatalog === undefined
       ? null

@@ -7,6 +7,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  canSelectPanel,
+  createSettingsPanelView,
   describeVendorSnapshots,
   dispatchAccountAction,
   ensureUsageRemote,
@@ -18,8 +20,8 @@ import {
   readAccounts,
   readStatus,
   readStatusDetail,
-  readSwitches,
   registerPanelCard,
+  registerSharedSurfaces,
   registerSidebarCard,
   resetSeams,
   saveSettings,
@@ -32,12 +34,15 @@ import {
   subscribeCredentials,
   subscribeSidebarVendor,
   usageNamespace,
+  DASHBOARD_PANEL_ID,
+  SETTINGS_PANEL_ID,
   type ClientSeamContext,
   type RemoteSettings,
 } from "../../src/client/seams";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type UsageNamespace } from "../../src/client/usage-contract";
 import type { VendorCapabilities } from "../../src/core/adapter";
 import { VENDORS } from "../../src/client/shell";
+import type { StubElement } from "../support/react-stub";
 
 /** Command Code 的能力矩阵（测试夹具：页面据此降级）。 */
 const CAPABILITIES: VendorCapabilities = {
@@ -68,7 +73,7 @@ it("模型卡片写模式：缺状态、缺 capabilities、缺字段都退回 on
  *
  * 宿主契约：所有一元远程调用 resolve 成 `RemoteResult<T>`（`{ ok: true, value }` 或
  * `{ ok: false, error }`），宿主侧失败**不 reject**。这不是 settings 一处的问题——
- * status / accounts / switches 同样返回信封。实测（桌面端 0.2.1-rc.2）把信封当载荷的
+ * status / accounts 同样返回信封。实测（桌面端 0.2.1-rc.2）把信封当载荷的
  * 两个后果：页面渲染期抛错整段变空白；侧边栏额度在 `failures.length` 上抛错、
  * 停在初始空态谎报「还没有请求经过这个账号」。
  */
@@ -93,7 +98,6 @@ describe("usage 远程面拆信封", () => {
     const wrapped = { ok: true, value: status };
     expect(await readStatus(usageOf(wrapped), "commandcode")).toEqual(status);
     expect(await readAccounts(usageOf(wrapped), "commandcode")).toEqual(status);
-    expect(await readSwitches(usageOf(wrapped), "commandcode")).toEqual(status);
   });
 
   it("ok:false 与裸载荷都按「读不到」降级，不把信封漏给渲染层", async () => {
@@ -344,7 +348,6 @@ it("挂载远程面：所在作用域清理后句柄报告已卸下（共享面�
 it("远程读取：命名空间缺席或方法不全时返回 undefined（页面据此显示「不可用」）", async () => {
   await expect(readStatus(undefined, "commandcode")).resolves.toBeUndefined();
   await expect(readAccounts({} as never, "commandcode")).resolves.toBeUndefined();
-  await expect(readSwitches(undefined, "commandcode")).resolves.toBeUndefined();
 });
 
 it("保存设置：写**命中的行名**（不是核心命名空间），按字段逐条 set，带上修订号", async () => {
@@ -390,6 +393,17 @@ it("中栏面板接缝：宿主没有 layout.selectPanel 时返回 false（供�
 
   const without = fakeContext({});
   expect(selectPanel(without.ctx, "llm-account")).toBe(false);
+});
+
+it("canSelectPanel：只探不发 —— 有接缝报 true、没有报 false，都不真的调用", () => {
+  // 「转到设置」按钮按它决定渲不渲染：探针本身不能有副作用（发一次 selectPanel(null)
+  // 会把用户已经打开的面板关掉）。
+  const select = vi.fn();
+  const withPanel = fakeContext({});
+  withPanel.ctx.layout = { selectPanel: select };
+  expect(canSelectPanel(withPanel.ctx)).toBe(true);
+  expect(select).not.toHaveBeenCalled();
+  expect(canSelectPanel(fakeContext({}).ctx)).toBe(false);
 });
 
 // —— Task 8：侧边栏卡片的注册接缝 ——
@@ -453,6 +467,67 @@ it("中栏面板注册用 key 而不是 id（旧插件的 main 插槽形状）",
   expect(registered[0]!.entry["order"]).toBeUndefined();
   expect(typeof registered[0]!.entry["inject"]).toBe("function");
   expect(registered[0]!.component).toBe("Panel");
+});
+
+// —— 「转到设置」：主栏设置页面板（2026-10-18 用户要求） ——
+
+/** 展平元素树（react 替身的形状：children 可能是单个、数组或没有）。 */
+function flatElements(node: unknown): StubElement[] {
+  if (node === null || node === undefined || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap((child) => flatElements(child));
+  const element = node as StubElement;
+  if (!("props" in element) || !("type" in element)) return [];
+  return [element, ...flatElements(element.props.children)];
+}
+
+it("createSettingsPanelView：返回栏 + 页面组件，返回按钮把意图报出去", () => {
+  // 页面组件用纯函数桩（本组件自身无 Hook，桩让它可被遍历）。
+  const page = (): StubElement => ({ type: "div", props: { "data-stub-page": "true" }, key: null });
+  const onBack = vi.fn();
+  const tree = createSettingsPanelView({ t: (key) => key, pageComponent: () => page, onBack })();
+
+  const elements = flatElements(tree);
+  // 页面组件被原样渲染进来（同一份工厂产物，不是另一套精简页）。
+  expect(elements.some((element) => element.type === page)).toBe(true);
+  // 外壳类名注册在案（样式契约逐棵树验类名）。
+  expect(elements[0]!.props["className"]).toContain("dsl-settings-panel");
+  // 返回栏：文案键是 dashboard.back，点击 → onBack（由注册方接 selectPanel）。
+  const back = elements.find((element) => element.props["data-settings-back"] === "true");
+  expect(back, "返回按钮").toBeDefined();
+  expect(back!.type).toBe("button");
+  expect(flatElements(back).some((element) => element.props.children === "dashboard.back")).toBe(true);
+  (back!.props["onClick"] as () => void)();
+  expect(onBack).toHaveBeenCalledTimes(1);
+});
+
+it("registerSharedSurfaces：给了页面工厂才注册「转到设置」面板（同样用 key 不用 id）", () => {
+  const registered: { slot: string; entry: Record<string, unknown>; component: unknown }[] = [];
+  const slots = {
+    inject: (_name: string, callback: () => unknown) => callback(),
+    register: (entry: Record<string, unknown>, component: unknown) => {
+      registered.push({ slot: String(entry["name"]), entry, component });
+      return undefined;
+    },
+  };
+  const ctx: ClientSeamContext = {
+    inject: (_names, callback) => callback({ slots }),
+    slots,
+  };
+  const base = { ctx, entries: VENDORS, t: (key: string) => key, localeNs: "settings.llm-account" };
+  /** 只看 main 插槽的条目（侧边栏走另一个插槽，这里不关心）。 */
+  const mainKeys = (): unknown[] => registered.filter((item) => item.slot === "main").map((item) => item.entry["key"]);
+
+  // 没有页面工厂（测试、或没有页面实现的调用方）：只注册仪表盘一条。
+  registerSharedSurfaces(base);
+  expect(mainKeys()).toEqual([DASHBOARD_PANEL_ID]);
+
+  // 给了页面工厂：多一条设置页面板，key 而不是 id。
+  registerSharedSurfaces({ ...base, pageComponent: () => "Page" });
+  expect(mainKeys()).toEqual([DASHBOARD_PANEL_ID, DASHBOARD_PANEL_ID, SETTINGS_PANEL_ID]);
+  const settings = registered.filter((item) => item.slot === "main").at(-1)!;
+  expect(settings.entry).toMatchObject({ name: "main", key: SETTINGS_PANEL_ID, locale: "settings.llm-account" });
+  expect(settings.entry["id"]).toBeUndefined();
+  expect(settings.entry["order"]).toBeUndefined();
 });
 
 it("侧边栏卡片注册失败不把客户端带走（与旧插件同样只留一行错误）", () => {

@@ -9,15 +9,18 @@
  * 纪律与其它卡片相同（Ruling 22/29）：**纯 props → 元素树**，没有 Hook、没有内部状态，也不会在
  * 这里发起任何请求 —— 轮询由 `seams.ts` 的控制器按挂载/开关状态起停。
  *
- * 视觉（2026-10-17 重做）：标题 + 右上角刷新图标一行；切换提示是一条琥珀色小条；
- * 额度是「标签 …… 读数 / 4px 进度条」的紧凑列表；底部一个通栏按钮打开中栏面板。
+ * 视觉（2026-10-17 重做；2026-10-18 再简）：标题 + 右上角刷新图标一行；额度只显示
+ * **小时级窗口一条**（5 小时 / 滚动小时）—— 每窗口一条 QuotaBar 排三条太占侧边栏的
+ * 地方，而最短窗口才是会被自动切换盯着的那个，全量窗口去中栏面板看；底部一个通栏按钮
+ * 打开中栏面板。
  * @module dsh-llm-account/src/client/sidebar-card
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS, cls } from "./css";
+import { failureText } from "./failure-text";
 import { RefreshIcon, UsageIcon } from "./icons";
-import { fallbackQuotaWindows, quotaShape } from "./quota";
+import { fallbackQuotaWindows, primaryQuotaWindow, quotaShape } from "./quota";
 import { QuotaBar } from "./quota-bar";
 import type { AccountUsageStatus, VendorUsageStatus } from "./usage-contract";
 
@@ -145,7 +148,8 @@ function refreshButton(props: SidebarCardProps): ReactElement {
  * 失败提示行：可读的原因文案 + 「上次数据」标记。
  *
  * 原因文本由容器从宿主读数里带出来（`status.failures`）；没有文本时只显示通用文案，
- * 不留一行光秃秃的「失败」。
+ * 不留一行光秃秃的「失败」。诊断原文（端点短名之类的英文）翻成人话再上屏，原文留在
+ * `data-sidebar-failure-detail` 上供排查；认不出的形状（宿主能力缺失之类的原文）原样显示。
  */
 function failureNote(props: SidebarCardProps): ReactElement {
   const { t } = props;
@@ -159,7 +163,7 @@ function failureNote(props: SidebarCardProps): ReactElement {
       ...(detail === "" ? {} : { "data-sidebar-failure-detail": detail }),
     },
     t("usage.failed"),
-    detail === "" ? "" : `：${detail}`,
+    detail === "" ? "" : `：${failureText(t, detail)}`,
     props.stale === true ? createElement("small", { key: "stale", "data-sidebar-stale": "true" }, `（${t("usage.stale")}）`) : null,
   );
 }
@@ -170,21 +174,22 @@ function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): 
   return account === "" ? props.t("nav") : account;
 }
 
-/** 生效账号的额度：每个窗口一条进度条；读数缺失时画空条，不改成纯文字。 */
+/** 生效账号的额度：**只画小时级窗口一条**（侧边栏窄，三条并排太占地方；全量窗口在中栏面板）。 */
 function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode[] {
   const { t } = props;
+  const vendor = props.status?.vendor ?? "";
   const quota = row?.quota;
-  const windows = quota?.windows?.length ? quota.windows : fallbackQuotaWindows(props.status?.vendor ?? "");
+  const windows = quota?.windows?.length ? quota.windows : fallbackQuotaWindows(vendor);
+  const window = primaryQuotaWindow(windows, vendor);
+  if (window === undefined) return [];
   return [
     createElement(
       "div",
       { key: "bars", className: CSS_CLASS.quotaBarList },
-      ...windows.map((window) =>
-        createElement(
-          "div",
-          { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window) },
-          QuotaBar({ t, window }),
-        ),
+      createElement(
+        "div",
+        { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window) },
+        QuotaBar({ t, window }),
       ),
     ),
   ];

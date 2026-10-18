@@ -1,4 +1,4 @@
-import { LlmError } from "@deepseek-ai/dsh-llm";
+import { LlmError, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
@@ -8,7 +8,7 @@ import { RotationEngine } from "../../src/core/rotation";
 import { createCommandCodeAdapter } from "../../src/vendors/commandcode/adapter";
 import { parseCatalog } from "../../src/vendors/commandcode/catalog";
 import { classifyCommandCodeFailure } from "../../src/vendors/commandcode/failures";
-import { decodeStream } from "../../src/vendors/commandcode/protocol";
+import { buildRequestBody, decodeStream } from "../../src/vendors/commandcode/protocol";
 
 /** 本文件里的假的账号端口：这些用例都不经账号写路径（Task 10 负责）。 */
 function stubAccounts(): AccountPort {
@@ -248,6 +248,98 @@ it("listModels 应用目录可见性规则", async () => {
 
   expect(models.map((model) => model.id)).toEqual(["m1"]);
   expect(models[0]).toMatchObject({ provider: "commandcode", name: "M1", inputModalities: ["text"] });
+});
+
+// ---------------------------------------------------------------------------
+// 推理档位（思考模式）：网关的 `/provider/v1/models` 只公布 `reasoning: true|false`、
+// **从不公布档位**（2026-10-18 线上实测：85 个模型的键只有 id / name / reasoning /
+// contextWindow / maxTokens）。宿主的思考档位选择器完全由 `resolveModel().reasoning.efforts`
+// 驱动 —— 不声明档位等于这家模型不能选档位（报障原话：「选择模型后仍然无法继续选择思考模式」）。
+// 档位来源 = 官方 CLI 的静态模型表（`efforts.ts`，与旧插件 `KNOWN_EFFORTS` 逐字一致）。
+// ---------------------------------------------------------------------------
+
+/** 一份只记 POST 请求体的假 `fetch`（目录读取是 GET，没有体，不会混进来）。 */
+function bodyCapturingFetch(): { fetchImpl: typeof fetch; bodies: Record<string, unknown>[] } {
+  const bodies: Record<string, unknown>[] = [];
+  const fetchImpl = (async (_input: unknown, init?: RequestInit): Promise<Response> => {
+    if (typeof init?.body === "string") bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+    return sseResponse([
+      '{"choices":[{"delta":{"content":"ok"}}]}',
+      '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+      "[DONE]",
+    ]);
+  }) as typeof fetch;
+  return { fetchImpl, bodies };
+}
+
+it("resolveModel 声明静态档位表里的档位；表外的模型不声明（2026-10-18 报障根因）", async () => {
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test" }),
+    rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    // 空目录（`{}`）：网关本来就不公布档位 —— 等目录等于永远等不到。
+    fetchImpl: (async () => new Response("{}")) as typeof fetch,
+  });
+
+  // 表内模型：档位与顺序都来自官方 CLI 的表。
+  const resolved = await adapter.resolveModel("commandcode", "deepseek/deepseek-v4.1-flash");
+  expect(resolved.reasoning?.efforts.map((effort) => effort.id)).toEqual(["off", "low", "high", "max"]);
+  expect(resolved.reasoning?.efforts.map((effort) => effort.name)).toEqual(["off", "low", "high", "max"]);
+  // 目录拿不到也不影响身份解析（档位来自静态表）。
+  expect(resolved).toMatchObject({ provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" });
+
+  // 表外模型：**不声明**档位（不猜；自动思考的模型本来就没有可选档位）。
+  const outside = await adapter.resolveModel("commandcode", "not-in-the-table");
+  expect(outside.reasoning).toBeUndefined();
+});
+
+it("请求路径按静态表收口：表内档位照发，表外的（含未声明的 off）一律不发字段", async () => {
+  const { fetchImpl, bodies } = bodyCapturingFetch();
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test" }),
+    rotation: new RotationEngine({ order: ["a"], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl,
+    resolveStored: async () => "key-a",
+  });
+
+  // 表内档位（openai 传输）：照发。
+  await collect(adapter.stream({ ...request("gpt-5.5"), reasoningEffort: ReasoningEffortId("high") }));
+  const declared = bodies.at(-1);
+  expect(declared).toBeDefined();
+  expect(declared).toMatchObject({ model: "gpt-5.5", reasoning_effort: "high" });
+
+  // 表外值：`off` 不在 gpt-5.5 的档位里 —— 不发字段，而不是发出去被厂商拒。
+  await collect(adapter.stream({ ...request("gpt-5.5"), reasoningEffort: ReasoningEffortId("off") }));
+  const offBody = bodies.at(-1);
+  expect(offBody).toBeDefined();
+  expect(offBody).toMatchObject({ model: "gpt-5.5" });
+  expect("reasoning_effort" in offBody!).toBe(false);
+
+  // 表外模型：同样不发（声明与请求路径同一条纪律）。
+  await collect(adapter.stream({ ...request("not-in-the-table"), reasoningEffort: ReasoningEffortId("high") }));
+  const unknownBody = bodies.at(-1);
+  expect(unknownBody).toBeDefined();
+  expect("reasoning_effort" in unknownBody!).toBe(false);
+});
+
+it("Messages 传输在有可选档位时打开自适应思考（旧插件第 6624 行：该端点只认 adaptive）", () => {
+  const body = buildRequestBody("messages", request("claude-sonnet-5"), {
+    maxTokens: 100,
+    systemText: "",
+    selectableEffort: true,
+    reasoningEffort: "high",
+  }) as Record<string, unknown>;
+  expect(body["thinking"]).toEqual({ type: "adaptive" });
+  expect(body["output_config"]).toEqual({ effort: "high" });
+
+  // 没有可选档位的模型不开这个开关（开了也没有档位可给，只会白白改变厂商的推理行为），
+  // 档位字段本身也不会出现。
+  const bare = buildRequestBody("messages", request("not-in-the-table"), { maxTokens: 100, systemText: "" }) as Record<string, unknown>;
+  expect("thinking" in bare).toBe(false);
+  expect("output_config" in bare).toBe(false);
 });
 
 it("providerRetryPolicy 把两个超时码列入 retryableCodes（裁决 12）", () => {

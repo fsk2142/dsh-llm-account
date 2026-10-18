@@ -34,6 +34,22 @@ const HOST_BUNDLES: ReadonlyArray<{ path: string; specifiers: readonly string[] 
     path: fileURLToPath(new URL("../../lib/opencode.js", import.meta.url)),
     specifiers: ["@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
   },
+  {
+    // 第三家：与另两家同一档依赖（LLM 适配器基类 + Config schema）。
+    path: fileURLToPath(new URL("../../lib/opendesign.js", import.meta.url)),
+    specifiers: ["@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
+  },
+  {
+    // 网页搜索：比适配器多两样宿主包 —— `dsh-web`（搜索/抓取抽象）与
+    // `dsh-credentials`（引用名校验，密钥只经凭据库）。
+    path: fileURLToPath(new URL("../../lib/web-search.js", import.meta.url)),
+    specifiers: [
+      "@deepseek-ai/dsh-credentials",
+      "@deepseek-ai/dsh-llm",
+      "@deepseek-ai/dsh-web",
+      "@deepseek-ai/schemastery",
+    ],
+  },
 ];
 
 /** Node builtins that must never reach the browser product (bare, un-prefixed form). */

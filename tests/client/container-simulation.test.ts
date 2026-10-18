@@ -21,7 +21,7 @@
  * 4. 账户操作（添加）经容器走到远程命名空间（表单能真的打开并提交）；
  * 5. 侧边栏卡片开关生命周期：关闭 → 渲染 null + 推进时间零新增请求；开启 → 立即读 + 60s 轮询；
  *    再关闭 → 定时器停掉（规格 §8.1 第 6 条 / 冒烟 C13 的进程内版）；
- * 6. 外部改动（`settings/document-updated`）时卡片跟随；两家同开时跟第一家；
+ * 6. 外部改动（`settings/document-updated`）时卡片跟随；多家同开时跟第一家；
  * 7. usage 远程面只 `$mount` 一次（两个 profile 行共享），页面卸载不 dispose；
  * 8. 插槽注册形状（`id`/`order` 与 `key`），卡片「打开面板」与面板「关闭」都走 `layout.selectPanel`。
  */
@@ -30,6 +30,7 @@ import type { ReactNode } from "react";
 
 import type { VendorCardsContext } from "../../src/client/seams";
 import {
+  elementsOfSim,
   findSim,
   fireSim,
   installMiniReact,
@@ -245,6 +246,204 @@ describe("设置页容器仿真", () => {
     expect(findSim(page.tree(), "data-action", "confirmAdd")).toBeDefined();
   });
 
+  it("空名称点「确定」不再毫无反应：表单里给出原因，且一条调用都不发（2026-10-18 操作逻辑）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini);
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+
+    click(page.tree(), "data-action", "add");
+    await settleSim(mini);
+    click(page.tree(), "data-action", "confirmAdd");
+    await settleSim(mini);
+
+    // 规矩不变：空名称不发调用（防住误写一个空账号）……
+    expect(host.usageCalls).toEqual([]);
+    // ……变的是这一次点击有可见结果：表单里写着为什么（以前是死按钮，用户无从判断）。
+    expect(textsOfSim(page.tree())).toContain("请先填写账户名称。");
+
+    // 一开始输入，原因就消失（不残留上一次的错）。
+    fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "work" } });
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-action-error")).toBeUndefined();
+
+    // 名称有了、密钥留空：仍然可以提交（「先建条目、稍后补密钥」是允许的路径），表单收起来。
+    click(page.tree(), "data-action", "confirmAdd");
+    await settleSim(mini);
+    expect(host.usageCalls).toEqual([{ method: "addAccount", vendor: "commandcode", input: { label: "work" } }]);
+    expect(findSim(page.tree(), "data-add-label")).toBeUndefined();
+  });
+
+  it("按账户刷新模型：点账号行的刷新只重读**那一家**的目录（2026-10-18 用户要求）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    // 两家各给一个账号（第三家无账号）：刷新按钮在每个账号行上（不再有面板头部的全局按钮）。
+    const host = fakeHost(mini, {
+      accounts: {
+        commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }],
+        "dsh-opencode-go": [{ ref: "oc-1", label: "Personal", configured: true, active: false, effective: false }],
+      },
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+
+    // 挂载即读一次三家目录（全局模型数据源只此一处）。
+    expect(host.modelCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+    // 每个账号行都有自己的刷新按钮；面板头部没有全局「重新获取模型」。
+    expect(findSim(page.tree(), "data-account-refresh-models", "cc-1"), "账号行要有刷新按钮").toBeDefined();
+    expect(findSim(page.tree(), "data-account-refresh-models", "oc-1")).toBeDefined();
+    expect(findSim(page.tree(), "data-refresh-models")).toBeUndefined();
+
+    // 点 commandcode 那个账号的：只重读 commandcode，不碰别家 ——「不是刷新所有的」。
+    click(page.tree(), "data-account-refresh-models", "cc-1");
+    await settleSim(mini);
+    expect(host.modelCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode"]);
+    // 读取完成后按钮恢复可用（不再转圈）。
+    expect(find(page.tree(), "data-account-refresh-models", "cc-1").props["disabled"]).not.toBe(true);
+  });
+
+  it("TTL 内再次打开设置不重取：账号行与模型目录直接复用上一次的读数（2026-10-18 用户提问）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    // 夹具是**完整**读数（每家已配置账号都带非空额度）：只有完整读数才够格进缓存。
+    const host = fakeHost(mini, {
+      accounts: {
+        commandcode: [
+          { ref: "cc-1", label: "Work", configured: true, active: true, effective: true, quota: { windows: [{ key: "fiveHour", used: 3, cap: 10, unit: "usd" }], failures: [] } },
+        ],
+        "dsh-opencode-go": [
+          { ref: "oc-1", label: "Personal", configured: true, active: false, effective: false, quota: { windows: [{ key: "rolling", percent: 35 }], failures: [] } },
+        ],
+      },
+    });
+    const first = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+
+    // 首次打开：三家各读一次状态与目录（没有可复用的读数）。
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+    expect(host.modelCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+
+    // 关掉设置（卸载）再打开（重新挂载）：TTL 还没过 —— 一次网络读取都不该发。
+    first.unmount();
+    await settleSim(mini);
+    const second = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+    expect(host.modelCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+
+    // 数据来自缓存而不是回到空态：账号行与模型勾选照旧在。
+    expect(findSim(second.tree(), "data-account", "cc-1")).toBeDefined();
+    expect(findSim(second.tree(), "data-account-models", "cc-1")).toBeDefined();
+    expect(findSim(second.tree(), "data-account-models", "oc-1")).toBeDefined();
+  });
+
+  it("读数不完整（额度带失败项/缺失）一律不进缓存：重开设置必须现读（2026-10-18 用户报障根因）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini, {
+      accounts: {
+        commandcode: [
+          {
+            ref: "cc-1", label: "Work", configured: true, active: true, effective: true,
+            // 瞬时故障的形状：月度一条读到了，`billing/credits` 失败 —— 这次读数**不完整**。
+            quota: { windows: [{ key: "monthlyCredits", used: 62.21, unit: "usd" }], failures: ["credits"] },
+          },
+        ],
+        // 已配置但没有额度读数（额度缺席）：同样不完整。
+        "dsh-opencode-go": [{ ref: "oc-1", label: "Personal", configured: true, active: false, effective: false }],
+      },
+    });
+    const first = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+    // 失败行给人话（端点短名不上屏），原文留在 data 属性上。
+    const note = findSim(first.tree(), "data-account-quota-failure", "cc-1");
+    expect(note).toBeDefined();
+    expect(note!.props["data-failure-detail"]).toBe("credits");
+
+    // 关掉再打开：TTL 还没过，但读数不完整 —— 必须重新现读。把一次瞬时故障缓存 60 秒，
+    // 就是用户看到的「重新点开设置后额度信息又不见了」。
+    // 第三家（opendesign）没有账号：它的读数**完整**，照常进缓存 —— 纪律是按厂商逐家判的，
+    // 不是「一家不完整就全家重读」。
+    first.unmount();
+    await settleSim(mini);
+    const second = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go"]);
+    expect(findSim(second.tree(), "data-account", "cc-1")).toBeDefined();
+  });
+
+  it("超过 TTL 后再打开会重新读取（缓存不是一次性的）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const host = fakeHost(mini, {
+      accounts: { commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }] },
+    });
+    const first = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+    first.unmount();
+    await settleSim(mini);
+
+    const { STATUS_READING_TTL_MS } = await import("../../src/client/seams");
+    vi.setSystemTime(STATUS_READING_TTL_MS + 1);
+    const second = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go", "opendesign"]);
+    second.unmount();
+    vi.useRealTimers();
+  });
+
+  it("账号操作后强制现读：缓存不会盖住刚发生的变更", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini, {
+      accounts: { commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }] },
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+
+    // 添加账号 → 成功后修订号 +1 → 三家状态重读（新账号的额度必须现问，不能吃缓存）。
+    click(page.tree(), "data-action", "add");
+    await settleSim(mini);
+    fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "work" } });
+    fireSim(find(page.tree(), "data-add-key"), "onChange", { target: { value: "sk-new" } });
+    await settleSim(mini);
+    click(page.tree(), "data-action", "confirmAdd");
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go", "opendesign"]);
+  });
+
+  it("凭据变更（含设置页关闭时完成的网页登录）让缓存失效：下次打开重读", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini, {
+      accounts: { commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }] },
+    });
+    // apply 期的常驻订阅（与 src/client/index.ts 同序）：它负责清缓存，而容器只负责 +1 修订号。
+    const { startSharedState } = await import("../../src/client/seams");
+    const { VENDORS } = await import("../../src/client/shell");
+    startSharedState(host.ctx as never, VENDORS);
+
+    const first = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
+    first.unmount();
+    await settleSim(mini);
+
+    // 设置页关着的时候凭据变了（网页登录完成）：缓存必须失效，重开要现读。
+    for (const listener of host.listeners.get("credentials/reference-updated") ?? []) listener();
+    await settleSim(mini);
+    const second = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go", "opendesign"]);
+    second.unmount();
+  });
+
   it("模型勾选在保存前就反映到草稿（回归：点了没反应）", async () => {
     const mini = await runtime();
     await freshSeams();
@@ -427,7 +626,7 @@ describe("侧边栏卡片容器仿真", () => {
     vi.useRealTimers();
   });
 
-  it("两家同开时跟第一家（commandcode）；第一家关掉后跟到 opencode", async () => {
+  it("多家同开时跟第一家（commandcode）；第一家关掉后跟到 opencode", async () => {
     const mini = await runtime();
     await freshSeams();
     vi.useFakeTimers();
@@ -485,17 +684,31 @@ describe("侧边栏卡片容器仿真", () => {
 // —— 仿真 3：中栏仪表盘 ————————
 
 describe("仪表盘容器仿真", () => {
-  it("即使侧边栏开关关闭，仪表盘也列出两家的账户统计", async () => {
+  it("即使侧边栏开关关闭，仪表盘也列出三家的账户统计", async () => {
     const mini = await runtime();
     await freshSeams();
-    const host = fakeHost(mini, { commandcodeToggle: false });
+    // 三家各给一个账号：平铺列表里供应商是账号名后的**徽标**（不是分组标题），
+    // 所以「三家都列出来」的断言落在徽标与账号行上。
+    const host = fakeHost(mini, {
+      commandcodeToggle: false,
+      accounts: {
+        commandcode: [{ ref: "cc-1", label: "CC 账号", configured: true, active: true, effective: true }],
+        "dsh-opencode-go": [{ ref: "oc-1", label: "OC 账号", configured: true, active: false, effective: false }],
+        opendesign: [{ ref: "od-1", label: "OD 账号", configured: true, active: false, effective: false }],
+      },
+    });
     const { panel } = await applyLikeHost(host);
     const view = mini.mount(panel);
     await settleSim(mini);
     const text = textsOfSim(view.tree()).join(" ");
-    expect(text).toContain("Command Code");
-    expect(text).toContain("OpenCode");
-    expect(host.statusCalls).toHaveLength(2);
+    expect(text).toContain("CC 账号");
+    expect(text).toContain("OC 账号");
+    expect(text).toContain("OD 账号");
+    // 供应商徽标：每行一个，顺序按厂商声明（commandcode → opencode → opendesign）。
+    const badges = elementsOfSim(view.tree()).filter((element) => element.props["data-account-vendor"] !== undefined);
+    expect(badges.map((element) => element.props["data-account-vendor"])).toEqual(["Command Code", "OpenCode", "Open Design"]);
+    // 三家的状态都读了（开关关着也读 —— 面板不跟随侧边栏开关）。
+    expect(host.statusCalls).toHaveLength(3);
   });
 
   it("打开面板时读一次状态，手动刷新再读一次；卡片「打开」与面板「关闭」都走 layout.selectPanel", async () => {
@@ -511,7 +724,8 @@ describe("仪表盘容器仿真", () => {
 
     click(view.tree(), "data-dashboard-refresh");
     await settleSim(mini);
-    expect(host.statusCalls.length).toBe(afterOpen + 2);
+    // 刷新重读**所有**厂商的状态（仪表盘不跟随侧边栏开关）：三家各一次。
+    expect(host.statusCalls.length).toBe(afterOpen + 3);
 
     // 卡片的「打开用量面板」按钮 → layout.selectPanel(面板 key)。
     click(cardView.tree(), "data-sidebar-open");
@@ -522,4 +736,352 @@ describe("仪表盘容器仿真", () => {
     click(view.tree(), "data-dashboard-close");
     expect(host.panels).toEqual([DASHBOARD_PANEL_ID, null]);
   });
+
+  it("「转到设置」经 selectPanel 打开设置页面板；面板的返回栏送回仪表盘", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini);
+    const { registerSharedSurfaces, startSharedState, DASHBOARD_PANEL_ID, SETTINGS_PANEL_ID } = await import("../../src/client/seams");
+    const { VENDORS, PAGE_LOCALE_NS } = await import("../../src/client/shell");
+    const { dictionaryOf } = await import("../../src/client/copy");
+    const { createElement } = await import("react");
+    startSharedState(host.ctx as never, VENDORS);
+    // 与 apply 同序同物，只把页面工厂换成纯函数桩：被测的是外壳与接线，不是设置页本身
+    // （设置页容器在本文件仿真 1 里另测）。
+    registerSharedSurfaces({
+      ctx: host.ctx as never,
+      entries: VENDORS,
+      t: dictionaryOf("zh"),
+      localeNs: PAGE_LOCALE_NS,
+      pageComponent: () => () => createElement("div", { "data-stub-settings-page": "true" }, "设置页"),
+    });
+    const dashboard = host.registered.find((entry) => entry.slot === "main" && entry.entry["key"] === DASHBOARD_PANEL_ID)!;
+    const settings = host.registered.find((entry) => entry.slot === "main" && entry.entry["key"] === SETTINGS_PANEL_ID)!;
+    const dashView = mini.mount(dashboard.component);
+    await settleSim(mini);
+
+    // 宿主有 layout.selectPanel → 按钮渲染出来；点它 → selectPanel(设置页面板 key)。
+    click(dashView.tree(), "data-dashboard-settings");
+    expect(host.panels).toEqual([SETTINGS_PANEL_ID]);
+
+    // 设置页面板挂起来：页面组件在里面，返回栏在它上面。
+    const settingsView = mini.mount(settings.component);
+    await settleSim(mini);
+    expect(find(settingsView.tree(), "data-stub-settings-page")).toBeDefined();
+    // 返回 → 送回仪表盘（不是 selectPanel(null)：用户是从仪表盘来的）。
+    click(settingsView.tree(), "data-settings-back");
+    expect(host.panels).toEqual([SETTINGS_PANEL_ID, DASHBOARD_PANEL_ID]);
+  });
+});
+// —— 仿真 4：网页登录（2026-10-18 报障：没自动弹出 / 链接不消失 / 另外两家没反应） ——
+
+describe("网页登录容器仿真", () => {
+  /**
+   * 装一个假浏览器窗口：`window.open` 必须**同步**被调用（弹窗拦截器只认用户手势），
+   * 所以断言落在「调用时机 → 导航网址 → 失败时关掉」这三件事上。
+   */
+  function stubBrowserWindow(): { handle: { closed: boolean; location: { href?: string }; close: () => void }; closedTimes: () => number; openCalls: () => number } {
+    let closedTimes = 0;
+    let openCalls = 0;
+    const handle = {
+      closed: false,
+      location: {} as { href?: string },
+      close: () => {
+        closedTimes += 1;
+        handle.closed = true;
+      },
+    };
+    vi.stubGlobal("window", {
+      open: () => {
+        openCalls += 1;
+        return handle;
+      },
+    });
+    return { handle, closedTimes: () => closedTimes, openCalls: () => openCalls };
+  }
+
+  it("点 opencode 的网页登录：远程收到**那一家**，占位窗口被导航到它的授权网址", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini);
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    const popup = stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login-dsh-opencode-go");
+    await settleSim(mini);
+
+    // 1) 路由到 opencode（以前三家都进同一个静默分支，看起来就是「没反应」）。
+    expect(host.loginCalls).toEqual([{ method: "loginBegin", vendor: "dsh-opencode-go" }]);
+    // 2) 占位窗口在点击时同步打开，拿到网址后导航过去（不再需要用户手点链接）。
+    expect(popup.openCalls()).toBe(1);
+    expect(popup.handle.location.href).toBe("https://opencode.ai/auth/device?code=ABCD");
+    // 3) 等待面板出现（带链接兜底，也带取消入口）。
+    expect(findSim(page.tree(), "data-login-panel", "dsh-opencode-go")).toBeDefined();
+    expect(findSim(page.tree(), "data-action", "login-cancel")).toBeDefined();
+    page.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("第三家（opendesign）同样能发起；登录失败时说明原因并关掉占位窗口", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini, {
+      // 本机没有 vela、也没有可导入的登录产物：这正是「点了没反应」的第二种真实成因。
+      login: { begin: () => ({ state: "failed", reason: "vela-missing" }) },
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    const popup = stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login-opendesign");
+    await settleSim(mini);
+
+    expect(host.loginCalls).toEqual([{ method: "loginBegin", vendor: "opendesign" }]);
+    const failure = find(page.tree(), "data-login-failure", "opendesign");
+    expect(failure.props["data-login-failure-detail"]).toBe("vela-missing");
+    expect(textsOfSim(page.tree()).join(" ")).toContain("vela");
+    // 失败不该留一个空白窗口给用户。
+    expect(popup.closedTimes()).toBe(1);
+    page.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("点「取消登录」：宿主停流程、等待面板立即消失、轮询不再发请求", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    const host = fakeHost(mini);
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login");
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
+
+    click(page.tree(), "data-action", "login-cancel");
+    await settleSim(mini);
+    expect(host.loginCalls).toContainEqual({ method: "loginCancel", vendor: "commandcode" });
+    expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
+
+    // 面板没了 → 不再轮询（等待授权期间那 1s 一拍是唯一的后台请求来源）。
+    const polls = host.loginCalls.filter((call) => call.method === "loginStatus").length;
+    vi.advanceTimersByTime(5_000);
+    await settleSim(mini);
+    expect(host.loginCalls.filter((call) => call.method === "loginStatus").length).toBe(polls);
+    page.unmount();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("轮询读到 success：等待面板自动消失，并触发一次账号重读", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    const host = fakeHost(mini, { login: { status: () => ({ state: "success" }) } });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login");
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
+    const readsBefore = host.statusCalls.length;
+
+    vi.advanceTimersByTime(1_500);
+    await settleSim(mini);
+
+    expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
+    expect(host.statusCalls.length).toBeGreaterThan(readsBefore);
+    page.unmount();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("状态读口连续失败：先保留面板（不误伤），连续 3 次后给出可读原因并停轮询", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    const host = fakeHost(mini, {
+      login: {
+        begin: () => ({ state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?state=x" }),
+        status: () => {
+          throw new Error("the llm-account remote went away");
+        },
+      },
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login");
+    await settleSim(mini);
+
+    vi.advanceTimersByTime(1_000);
+    await settleSim(mini);
+    // 单次失败不清面板（用户可能正在浏览器里操作）。
+    expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
+
+    vi.advanceTimersByTime(2_500);
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
+    const failure = find(page.tree(), "data-login-failure", "commandcode");
+    expect(failure.props["data-login-failure-detail"]).toBe("network");
+    page.unmount();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
+  function stubBrowserWindow(): { handle: { closed: boolean; location: { href?: string }; close: () => void } } {
+    const handle = {
+      closed: false,
+      location: {} as { href?: string },
+      close: () => {
+        handle.closed = true;
+      },
+    };
+    vi.stubGlobal("window", { open: () => handle });
+    return { handle };
+  }
+
+  it("宿主报了 expiresAt：到期后链接自动收起并说明超时（不需要手点取消）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const host = fakeHost(mini, {
+      login: {
+        begin: () => ({ state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?state=x", expiresAt: 2_000 }),
+        // 宿主一直说 waiting（流程没自己结算）：界面必须按期限自己收尾。
+        status: () => ({ state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?state=x", expiresAt: 2_000 }),
+      },
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login");
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
+
+    vi.advanceTimersByTime(2_500);
+    await settleSim(mini);
+
+    expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
+    const failure = find(page.tree(), "data-login-failure", "commandcode");
+    expect(failure.props["data-login-failure-detail"]).toBe("timeout");
+    page.unmount();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("宿主没报 expiresAt（旧宿主）：按默认 TTL 兜底，同样自动收起", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const { LOGIN_WAITING_TTL_MS } = await import("../../src/client/seams");
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const host = fakeHost(mini, {
+      login: {
+        begin: () => ({ state: "waiting", authUrl: "https://opencode.ai/auth/device" }),
+        status: () => ({ state: "waiting", authUrl: "https://opencode.ai/auth/device" }),
+      },
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login-dsh-opencode-go");
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel", "dsh-opencode-go")).toBeDefined();
+
+    vi.advanceTimersByTime(LOGIN_WAITING_TTL_MS + 3_000);
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
+    page.unmount();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("用户关掉授权窗口：面板立即收起（宿主流程不取消，轮询到终态）", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    const host = fakeHost(mini);
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    const popup = stubBrowserWindow();
+
+    click(page.tree(), "data-action", "login");
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
+
+    // 用户把弹出的授权页关了。
+    popup.handle.closed = true;
+    vi.advanceTimersByTime(1_500);
+    await settleSim(mini);
+
+    expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
+    // 没有取消宿主流程（万一他关闭前刚批准，取消会误杀成功）。
+    expect(host.loginCalls.some((call) => call.method === "loginCancel")).toBe(false);
+    page.unmount();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("再点一次「新增账户」：还开着的添加表单与等待中的登录一起收掉", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini);
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    stubBrowserWindow();
+
+    // 先摆出两个"未完成"：一个添加表单 + 一个等待中的登录。
+    click(page.tree(), "data-action", "add");
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-add-label")).toBeDefined();
+    click(page.tree(), "data-action", "login");
+    await settleSim(mini);
+    expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
+
+    // 收起「新增账户」区块（用户再点一次摘要）。
+    fireSim(find(page.tree(), "data-add-chooser"), "onToggle", { currentTarget: { open: false } });
+    await settleSim(mini);
+
+    expect(findSim(page.tree(), "data-add-label"), "添加表单应被收掉").toBeUndefined();
+    expect(findSim(page.tree(), "data-login-panel"), "等待中的登录应被取消").toBeUndefined();
+    expect(host.loginCalls).toContainEqual({ method: "loginCancel", vendor: "commandcode" });
+    page.unmount();
+    vi.unstubAllGlobals();
+  });
+});
+
+it("加完账号后模型目录自动重读：加之前读不到（401），加之后读到（目录要鉴权）", async () => {
+  const mini = await runtime();
+  await freshSeams();
+  const host = fakeHost(mini);
+  // 加账号之前：目录读不到（Open Design 的 /v1/models 不带密钥就是 401）。失败读数不进缓存。
+  host.modelFailures = ["models: opendesign read failed (401 missing_api_key)"];
+  const page = mini.mount(await pageContainer(host));
+  await settleSim(mini);
+  const before = host.modelCalls.length;
+  expect(before).toBeGreaterThanOrEqual(3);
+
+  // 账号加进来之后目录就能读了（同一把密钥）。
+  host.modelFailures = [];
+  click(page.tree(), "data-action", "add");
+  await settleSim(mini);
+  fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "work" } });
+  fireSim(find(page.tree(), "data-add-key"), "onChange", { target: { value: "sk-new" } });
+  await settleSim(mini);
+  click(page.tree(), "data-action", "confirmAdd");
+  await settleSim(mini);
+
+  // 账号修订号变化 → 目录重读（否则界面会一直停在挂载时那次空目录上）。
+  expect(host.modelCalls.length).toBeGreaterThan(before);
+  page.unmount();
 });

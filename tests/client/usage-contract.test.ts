@@ -338,7 +338,7 @@ describe("边界数据到渲染", () => {
         () => AccountCard({ status, t, action: undefined, expandedRef: undefined, login: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined, onLoginBegin: () => undefined }),
         () => OpenCodeAccountCard({ status, t, settings: {}, action: undefined, expandedRef: undefined, login: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined, onLoginBegin: () => undefined, onMove: () => undefined, onSetAutoSwitch: () => undefined }),
         () => SidebarCard({ t, status, onOpen: () => undefined }),
-        () => Dashboard({ t, status, switches: [], onClose: () => undefined }),
+        () => Dashboard({ t, status, onClose: () => undefined }),
       ]) {
         const texts = renderSafely(render);
         for (const token of ["undefined", "NaN", "[object Object]"]) {
@@ -365,7 +365,7 @@ describe("边界数据到渲染", () => {
       const status = suspiciousStatus({ accounts: [row] as unknown as AccountView[] });
       for (const render of [
         () => AccountCard({ status, t, action: undefined, expandedRef: undefined, login: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined, onLoginBegin: () => undefined }),
-        () => Dashboard({ t, status, switches: [], onClose: () => undefined }),
+        () => Dashboard({ t, status, onClose: () => undefined }),
       ]) {
         const texts = renderSafely(render);
         for (const token of ["undefined", "NaN", "[object Object]"]) {

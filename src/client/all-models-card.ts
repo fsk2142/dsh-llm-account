@@ -1,8 +1,9 @@
 /**
- * 全局模型卡片：两家厂商的模型**合并**成一张列表，按免费/模型公司分组，行上标供应商。
+ * 全局模型卡片：各厂商（commandcode / opencode / opendesign）的模型**合并**成一张列表，
+ * 按免费/模型公司分组，行上标供应商。
  *
- * 公司分组是跨供应商的：同一家 Anthropic 的模型无论来自 Command Code 还是 OpenCode 都
- * 在一组里，组上只有一个「全开本组/全关本组」按钮；点击时按行所属厂商分别写回。
+ * 公司分组是跨供应商的：同一家 Anthropic 的模型无论来自哪一家厂商都在一组里，组上只有一个
+ * 「全开本组/全关本组」按钮；点击时按行所属厂商分别写回。
  * 默认关闭（`isModelIdVisible` 白名单为空返回 false），需要勾选或按组开启。
  * @module dsh-llm-account/src/client/all-models-card
  */

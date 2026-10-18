@@ -24,10 +24,13 @@ export interface QuotaBarProps {
  */
 export function QuotaBar(props: QuotaBarProps): ReactElement {
   const { t, window } = props;
+  // 「不限」是端点给的读数，不是缺数据：不画条、不写重置时间 —— 空条会被读成「用光了」，
+  // 而「重置时间未提供」会把「不设上限」说成「缺数据」。一行「不限」就是它的全部内容。
+  const unlimited = window.unlimited === true;
   const meter = quotaMeter(window);
   const remaining = meter === undefined ? undefined : Math.max(0, Math.min(100, 100 - meter.percent));
   // 剩余额度用绿色；只有真正为 0 才转红。
-  const level = remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
+  const level = unlimited ? "unlimited" : remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
   const reset = quotaResetText(t, window) ?? t("quota.resetUnknown");
   return createElement(
     "div",
@@ -43,31 +46,38 @@ export function QuotaBar(props: QuotaBarProps): ReactElement {
       createElement("span", { className: CSS_CLASS.quotaBarLabel }, quotaWindowLabel(t, window.key)),
       createElement(
         "span",
-        { "data-quota-bar-percent": remaining === undefined ? "missing" : String(remaining), className: CSS_CLASS.quotaBarPercent },
-        remaining === undefined ? "—" : t("quota.remaining").replace("{percent}", String(remaining)),
+        {
+          "data-quota-bar-percent": unlimited ? "unlimited" : remaining === undefined ? "missing" : String(remaining),
+          className: CSS_CLASS.quotaBarPercent,
+        },
+        unlimited ? t("quota.unlimited") : remaining === undefined ? "—" : t("quota.remaining").replace("{percent}", String(remaining)),
       ),
     ),
-    createElement(
-      "span",
-      { className: CSS_CLASS.quotaBarTrack },
-      meter === undefined
-        ? null
-        : createElement("span", {
-            "data-quota-bar-fill": window.key,
-            "data-level": level,
-            className: CSS_CLASS.quotaBarFill,
-            style: { width: `${remaining}%` },
-          }),
-    ),
-    createElement(
-      "div",
-      { className: CSS_CLASS.quotaBarMeta },
-      createElement("span", { "data-quota-bar-value": window.key }, quotaWindowText(t, window)),
-      createElement(
-        "span",
-        { key: "reset", "data-quota-bar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.quotaBarReset },
-        reset,
-      ),
-    ),
+    unlimited
+      ? null
+      : createElement(
+          "span",
+          { className: CSS_CLASS.quotaBarTrack },
+          meter === undefined
+            ? null
+            : createElement("span", {
+                "data-quota-bar-fill": window.key,
+                "data-level": level,
+                className: CSS_CLASS.quotaBarFill,
+                style: { width: `${remaining}%` },
+              }),
+        ),
+    unlimited
+      ? null
+      : createElement(
+          "div",
+          { className: CSS_CLASS.quotaBarMeta },
+          createElement("span", { "data-quota-bar-value": window.key }, quotaWindowText(t, window)),
+          createElement(
+            "span",
+            { key: "reset", "data-quota-bar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.quotaBarReset },
+            reset,
+          ),
+        ),
   );
 }

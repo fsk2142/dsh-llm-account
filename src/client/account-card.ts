@@ -13,7 +13,7 @@
  * 视觉结构（2026-10-17 的界面重做）：
  * - 一行账号 = **身份行**（状态点 + 名称 + 标记 + 行尾动作）+ **额度表**（每个窗口一小块，
  *   标签与读数一行、进度条一条）两段；两段之间不再让名称与额度抢同一行的宽度；
- * - 行内动作只留两个图标按钮（展开报告、更多操作），重命名/换密钥/固定/移除/上移/下移
+ * - 行内动作只留三个图标按钮（刷新模型、展开报告、更多操作），重命名/换密钥/固定/移除/上移/下移
  *   全部收进 `⋯` 菜单 —— 一行五个带边框的文字按钮是「像调试输出」的主要来源；
  * - 展开报告、编辑器、登录等待都是内嵌面板（`dsl-inset`），不是散落在行间的裸文本。
  * @module dsh-llm-account/src/client/account-card
@@ -23,10 +23,12 @@ import { createElement, Fragment, type ReactElement, type ReactNode } from "reac
 import { CSS_CLASS, cls } from "./css";
 import { companyLabelOf, groupModels } from "../core/model-groups";
 import { rejectionText } from "./copy";
-import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
+import { failureListText } from "./failure-text";
+import { failureText } from "./failure-text";
+import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon, RefreshIcon } from "./icons";
 import type { AccountAction } from "./page-state";
 import { QuotaBar } from "./quota-bar";
-import { fallbackQuotaWindows } from "./quota";
+import { fallbackQuotaWindows, quotaPlanText } from "./quota";
 import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
@@ -55,6 +57,14 @@ export interface AccountCardProps {
   action?: AccountAction | undefined;
   /** 展开完整报告的账号。 */
   expandedRef?: string | undefined;
+  /**
+   * 上一次「确定」没提交出去的原因（人话）。
+   *
+   * 存在的理由（2026-10-18 用户报障「新增账号的操作逻辑」）：空名称/空密钥时
+   * `dispatchAccountAction` 按规矩**不发调用**，界面于是没有任何可见反应 —— 按钮看起来像坏的。
+   * 现在由容器把原因放进来，编辑器里显示这一行。
+   */
+  actionError?: string | undefined;
   /** 平铺账户列表里跟在账号名后的供应商标签；单卡模式不传。 */
   vendorLabel?: string | undefined;
   /** 网页登录的当前状态（没有登录入口的厂商为 `undefined`）。 */
@@ -81,6 +91,15 @@ export interface AccountCardProps {
   rowExtras?: (account: AccountUsageStatus, index: number) => ReactNode;
   /** 该厂商的模型目录（用于每个账号的可用模型）。 */
   catalog?: readonly CatalogModel[];
+  /** 模型目录正在读取（还没有结果）。 */
+  catalogLoading?: boolean;
+  /** 模型目录读取失败原因（宿主原文）；读取正常或缺省。 */
+  catalogFailure?: string;
+  /**
+   * 重新读取模型目录：账号行内的「刷新此账号的模型」按钮与模型区读失败时的「重试」
+   * 共用这一个动作（目录是厂商级资源，回调不带账号）。
+   */
+  onRetryCatalog?: () => void;
   /** 当前模型→账号规则。 */
   modelRules?: readonly ModelRule[];
   /** 覆盖某个账号的模型；同一模型可属于多个账号。 */
@@ -244,6 +263,20 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
             { "data-account-status": account.configured ? "configured" : "missing" },
             statusText,
           ),
+          // 订阅套餐：厂商报告了订阅才有这一行（未订阅不是错误，什么都不画）。
+          ...(() => {
+            const plan = quotaOf?.plan;
+            if (plan === undefined) return [];
+            const text = quotaPlanText(t, plan);
+            if (text === undefined) return [];
+            return [
+              createElement(
+                "small",
+                { key: "plan", "data-account-plan": plan.id, className: CSS_CLASS.note },
+                text,
+              ),
+            ];
+          })(),
         ),
       ),
       createElement(
@@ -261,10 +294,47 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
               },
               t("account.use"),
             ),
+        // 按账户刷新模型（2026-10-18 用户要求「每个账户缺少单独刷新的按钮」）：刷的是这个
+        // 账号所属厂商的目录。加载中禁用并转圈（`aria-busy` 挂给样式层）。
+        ...(props.onRetryCatalog === undefined
+          ? []
+          : [
+              createElement(
+                "button",
+                {
+                  key: "refresh-models",
+                  type: "button",
+                  "data-account-refresh-models": account.ref,
+                  "aria-label": t("models.refreshAccount"),
+                  title: t("models.refreshAccount"),
+                  className: CSS_CLASS.icon,
+                  disabled: props.catalogLoading === true,
+                  ...(props.catalogLoading === true ? { "aria-busy": "true" } : {}),
+                  onClick: () => props.onRetryCatalog?.(),
+                },
+                createElement(RefreshIcon, null),
+              ),
+            ]),
         accountMenu(props, account, index),
       ),
     ),
     rejection,
+    // 额度读取里的**部分失败**（端点级）照样列出来：与仪表盘同一条纪律 —— 不列就等于把
+    // 一次不完整的读数呈现成完整的（`billing/credits` 真读不到时只剩月度一条，看起来像
+    // 「5 小时/每周额度被吞了」）。文案翻成人话（`whoami` → 「账号信息读取失败」），宿主原文
+    // 留在 data 属性里供排查。
+    ...(quotaOf?.failures ?? []).map((failure, index) =>
+      createElement(
+        "small",
+        {
+          key: `quota-failure-${index}`,
+          "data-account-quota-failure": account.ref,
+          "data-failure-detail": failure,
+          className: CSS_CLASS.failure,
+        },
+        failureText(t, failure),
+      ),
+    ),
     ...(() => {
       const windows = quotaOf?.windows?.length ? quotaOf.windows : fallbackQuotaWindows(props.status?.vendor ?? "");
       return [createElement("div", { key: "meters", className: CSS_CLASS.meters }, ...quotaBars(props, windows))];
@@ -277,7 +347,47 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
 
 /** 每个账号下的模型选择；同一模型可以同时出现在多个账号里。 */
 function accountModelsSection(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
-  if (props.onSetAccountModels === undefined || props.catalog === undefined) return null;
+  if (props.onSetAccountModels === undefined) return null;
+  // 目录还没读出来时，这一节**不消失**：加载中说加载中，读失败时说失败并给重试。
+  // 旧行为是整体返回 null —— 用户看到的是「这个账号没有模型可选」，与「正在读」
+  // 「读失败」三种病因混为一谈，且没有任何入口补救（2026-10-18 用户要求补上）。
+  if (props.catalog === undefined) {
+    if (props.catalogLoading === true) {
+      return createElement(
+        "p",
+        { key: "models-loading", "data-account-models-loading": account.ref, className: CSS_CLASS.note },
+        props.t("models.loading"),
+      );
+    }
+    if (props.catalogFailure !== undefined) {
+      return createElement(
+        "div",
+        { key: "models-failure", "data-account-models-failure": account.ref, className: cls(CSS_CLASS.inline, CSS_CLASS.inset) },
+        createElement(
+          "p",
+          { "data-failure-detail": props.catalogFailure, className: CSS_CLASS.failure },
+          failureListText(props.t, props.catalogFailure),
+        ),
+        ...(props.onRetryCatalog === undefined
+          ? []
+          : [
+              createElement(
+                "button",
+                {
+                  key: "retry",
+                  type: "button",
+                  "data-account-models-retry": account.ref,
+                  className: cls(CSS_CLASS.buttonSecondary, CSS_CLASS.buttonSm),
+                  onClick: () => props.onRetryCatalog?.(),
+                },
+                createElement(RefreshIcon, null),
+                props.t("models.retry"),
+              ),
+            ]),
+      );
+    }
+    return null;
+  }
   const selected = new Set(props.modelRules?.find((rule) => rule.account === account.ref)?.models ?? []);
   const groups = groupModels(props.catalog.map((model) => ({ id: model.id, company: model.company, free: model.free })));
   const byId = new Map(props.catalog.map((model) => [model.id, model]));
@@ -291,6 +401,36 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
       { className: CSS_CLASS.orderSummary },
       `${props.t("account.models")} (${selected.size}/${props.catalog.length})`,
     ),
+    // 目录读到了一部分（部分失败）时也说失败：不列就等于把一次不完整的目录呈现成完整的。
+    ...(props.catalogFailure === undefined
+      ? []
+      : [
+          createElement(
+            "div",
+            { key: "catalog-failure", className: cls(CSS_CLASS.inline, CSS_CLASS.inset) },
+            createElement(
+              "p",
+              { "data-failure-detail": props.catalogFailure, className: CSS_CLASS.failure },
+              failureListText(props.t, props.catalogFailure),
+            ),
+            ...(props.onRetryCatalog === undefined
+              ? []
+              : [
+                  createElement(
+                    "button",
+                    {
+                      key: "retry",
+                      type: "button",
+                      "data-account-models-retry": account.ref,
+                      className: cls(CSS_CLASS.buttonSecondary, CSS_CLASS.buttonSm),
+                      onClick: () => props.onRetryCatalog?.(),
+                    },
+                    createElement(RefreshIcon, null),
+                    props.t("models.retry"),
+                  ),
+                ]),
+          ),
+        ]),
     ...groups.map((group) => {
       const all = group.models.every((id) => selected.has(id));
       return createElement(
@@ -470,10 +610,21 @@ function quotaBars(props: AccountCardProps, windows: readonly QuotaWindow[]): Re
   ];
 }
 
-/**
- * 一个额度窗口。
- * 圆环由 `quota-ring.ts` 统一渲染：中心是剩余百分比，绿色代表额度充足。
- */
+/** 一个输入框上的回车 = 点「确定」：账号操作是单行表单，回车提交是用户的默认预期。 */
+function enterConfirms(props: AccountCardProps): (event: { key?: string; preventDefault?: () => void }) => void {
+  return (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault?.();
+    props.onConfirmAction();
+  };
+}
+
+/** 编辑器/表单里的失败提示（容器给的人话）；没有就不画。 */
+function actionErrorLine(props: AccountCardProps): ReactNode[] {
+  const error = props.actionError;
+  if (error === undefined || error === "") return [];
+  return [createElement("small", { key: "action-error", "data-action-error": "true", className: CSS_CLASS.failure }, error)];
+}
 
 /** 重命名编辑器（受控）。 */
 function renameEditor(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
@@ -485,11 +636,14 @@ function renameEditor(props: AccountCardProps, account: AccountUsageStatus): Rea
       "data-rename-input": account.ref,
       type: "text",
       value: label,
+      autoFocus: true,
       placeholder: props.t("account.newLabel"),
       onChange: (event: { target?: { value?: string } }) => props.onActionField("label", event.target?.value ?? ""),
+      onKeyDown: enterConfirms(props),
     }),
     createElement("button", { type: "button", "data-action": "confirmRename", className: cls(CSS_CLASS.buttonPrimary, CSS_CLASS.buttonSm), onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
     createElement("button", { type: "button", "data-action": "cancel", className: cls(CSS_CLASS.buttonGhost, CSS_CLASS.buttonSm), onClick: () => props.onCancelAction() }, props.t("account.cancel")),
+    ...actionErrorLine(props),
   );
 }
 
@@ -507,21 +661,29 @@ function keyEditor(props: AccountCardProps, account: AccountUsageStatus): ReactN
       "data-key-input": account.ref,
       type: "password",
       value: props.action?.key ?? "",
+      autoFocus: true,
       placeholder: props.t("account.newKey"),
       onChange: (event: { target?: { value?: string } }) => props.onActionField("key", event.target?.value ?? ""),
+      onKeyDown: enterConfirms(props),
     }),
     createElement("button", { type: "button", "data-action": "confirmKey", className: cls(CSS_CLASS.buttonPrimary, CSS_CLASS.buttonSm), onClick: () => props.onConfirmAction() }, props.t("account.confirm")),
     createElement("button", { type: "button", "data-action": "cancel", className: cls(CSS_CLASS.buttonGhost, CSS_CLASS.buttonSm), onClick: () => props.onCancelAction() }, props.t("account.cancel")),
+    ...actionErrorLine(props),
   );
 }
 
-/** 服务端失败项提示；额度超时只给人话，原文留在 data 属性里。 */
+/**
+ * 服务端失败项提示。
+ *
+ * 诊断原文（端点短名 `whoami`、包装过的 `quota: … read failed (…)`）翻成人话再上屏，
+ * 原文一律留在 `data-failure-detail` 上供排查；认不出的形状（宿主能力错误）原样显示。
+ */
 function failureNotes(props: AccountCardProps): ReactNode[] {
   return (props.status?.failures ?? []).map((failure, index) =>
     createElement(
       "p",
       { key: `failure-${index}`, "data-failure": index, "data-failure-detail": failure, className: CSS_CLASS.failure },
-      /timeout/i.test(failure) ? props.t("usage.quotaTimeout") : failure,
+      failureText(props.t, failure),
     ),
   );
 }
@@ -565,8 +727,13 @@ function loginSection(props: AccountCardProps): ReactNode[] {
   ];
 }
 
-/** 失败原因文案：认识的原因用专门文案，不认识的回退到通用文案（**不打印原因键**）。 */
-function reasonText(t: (key: string) => string, reason: string | undefined): string {
+/**
+ * 失败原因文案：认识的原因用专门文案，不认识的回退到通用文案（**不打印原因键**）。
+ *
+ * 导出给合并面板复用：账号行与面板级的登录失败提示必须用同一套口径，否则同一句原因
+ * 在两个位置会显示成两种说法。
+ */
+export function reasonText(t: (key: string) => string, reason: string | undefined): string {
   const key = `account.reason.${reason ?? "error"}`;
   if (reason === undefined) return t("account.reason.error");
   const text = t(key);
@@ -584,6 +751,12 @@ function reasonText(t: (key: string) => string, reason: string | undefined): str
  * 现在点入口必然展开表单（可见的变化），提交是表单里那个独立的「添加」。表单内仍保留
  * 「第一次输入即打开 add」的幂等接线（`openAction` 对同一 kind 返回原对象），这样即便宿主
  * 或未来调用方绕过入口直接改字段，操作状态也已经是打开的。
+ *
+ * 2026-10-18 用户要求「新增账号那个地方优化一下操作逻辑」，这一版补了五件事：
+ * ① 表单顶上写明**在往哪家加账户**（面板底部只有一个表单位置，两家共用）；
+ * ② 名称框自动聚焦（点开就能打字）；③ 回车 = 确定（单行表单的默认预期）；
+ * ④ 空名称点确定会看到一行人话原因（`actionError`），不再是死按钮；
+ * ⑤ 密钥框下方写明它去哪（本机凭据库），并说明网页登录是另一条路。
  */
 function addSection(props: AccountCardProps): ReactNode {
   const { t, action } = props;
@@ -602,9 +775,19 @@ function addSection(props: AccountCardProps): ReactNode {
   }
 
   const edit = (field: "label" | "key", value: string): void => props.onActionField(field, value);
+  const vendor = props.vendorLabel;
   return createElement(
     "div",
     { "data-card": "add-account", className: cls(CSS_CLASS.add, CSS_CLASS.inset) },
+    ...(vendor === undefined
+      ? []
+      : [
+          createElement(
+            "p",
+            { key: "title", "data-add-title": vendor, className: CSS_CLASS.addTitle },
+            t("account.addTitle").replace("{vendor}", vendor),
+          ),
+        ]),
     createElement(
       "label",
       { className: CSS_CLASS.addField },
@@ -613,8 +796,10 @@ function addSection(props: AccountCardProps): ReactNode {
         "data-add-label": "true",
         type: "text",
         value: action?.label ?? "",
+        autoFocus: true,
         placeholder: t("account.newLabel.placeholder"),
         onChange: (event: { target?: { value?: string } }) => edit("label", event.target?.value ?? ""),
+        onKeyDown: enterConfirms(props),
       }),
     ),
     createElement(
@@ -627,8 +812,11 @@ function addSection(props: AccountCardProps): ReactNode {
         value: action?.key ?? "",
         placeholder: t("account.newKey.placeholder"),
         onChange: (event: { target?: { value?: string } }) => edit("key", event.target?.value ?? ""),
+        onKeyDown: enterConfirms(props),
       }),
     ),
+    createElement("small", { key: "key-hint", className: CSS_CLASS.note }, t("account.newKey.hint")),
+    ...actionErrorLine(props),
     createElement(
       "div",
       { className: CSS_CLASS.actions },

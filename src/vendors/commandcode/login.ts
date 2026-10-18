@@ -433,6 +433,9 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
         port,
         state: expectedState,
       }),
+      // **把期限告诉界面**：不登录时状态会一直停在 `waiting`，界面只有知道"什么时候算过期"
+      // 才能自己把授权链接收起来（客户端按这个时刻就地收尾，不必等下一次轮询读到终态）。
+      expiresAt: Date.now() + (this.#deps.timeoutMs ?? LOGIN_TIMEOUT_MS),
     };
     this.#timer = setTimeout(() => {
       // `settleTerminal` 先同步改状态再 await 关服务器，所以这里不必再判所有权。

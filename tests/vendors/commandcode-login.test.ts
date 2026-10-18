@@ -600,7 +600,9 @@ it("旧服务器上已被接受的投递在重新 begin 之后到达：不落库
   expect(staleResponse.status).toBe(403);
   expect(staleResponse.body).toEqual({ success: false, error: "Invalid state token" });
   expect(stored).toEqual([]); // 迟到的凭据一个字节都没落库
-  expect(await login.status()).toEqual({ state: "waiting", authUrl: secondStatus.authUrl });
+  // 等待状态现在**带期限**（界面据此自动收起授权链接，不必等用户手点取消）。
+  expect(await login.status()).toMatchObject({ state: "waiting", authUrl: secondStatus.authUrl });
+  expect((await login.status()).expiresAt).toBeGreaterThan(Date.now());
 
   // ⑤ 新尝试自己的浏览器投递照常成功：监听没被那条迟到请求关掉，也没有挂到总期限。
   expect(await post(callbackUrl(second.port), credentials(second.state, "k-2"))).toEqual({

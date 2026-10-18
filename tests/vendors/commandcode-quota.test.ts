@@ -202,13 +202,18 @@ function fullRoutes(): Record<string, () => Response> {
     "/alpha/usage/summary": () => jsonResponse({ totalCredits: 12, totalTokensIn: 10, totalTokensOut: 20 }),
     "/alpha/billing/credits": () =>
       jsonResponse({
-        credits: { monthlyCredits: 100, purchasedCredits: 5, freeCredits: 1, planId: "pro" },
+        credits: { monthlyCredits: 55, purchasedCredits: 5, freeCredits: 1, planId: "pro" },
         windowLimits: {
           fiveHour: { used: 3, cap: 10, exceeded: false, resetAt: "2026-10-13T20:00:00Z" },
           weekly: { used: 30, cap: 100, exceeded: true, resetAt: 1_792_000_000_000 },
         },
       }),
-    "/alpha/billing/subscriptions?orgId=org_1": () => jsonResponse({ data: { planId: "goat", status: "active" } }),
+    // 订阅形状按线上实测（2026-10-18）：`data` 里是 planId / status / 本期起止，没有套餐名与额度。
+    "/alpha/billing/subscriptions?orgId=org_1": () =>
+      jsonResponse({
+        success: true,
+        data: { planId: "individual-goat", status: "active", currentPeriodEnd: "2026-11-14T03:23:11.000Z" },
+      }),
   };
 }
 
@@ -239,6 +244,25 @@ it("窗口缺失时保持 undefined，不倒成 0（Review Focus 4）", () => {
   expect(snap.windows).toEqual([]);
 });
 
+it("端点明说不限时给出「不限」窗口，而不是丢窗口（2026-10-18 线报：limited:false + 窗口为 null）", () => {
+  const snap = toQuotaSnapshot({
+    credits: { windowLimits: { limited: false, exceeded: null, fiveHour: null, weekly: null } },
+    usage: { totalCredits: 62.21 },
+    failures: [],
+  });
+  expect(snap.windows).toEqual([
+    { key: "fiveHour", unlimited: true },
+    { key: "weekly", unlimited: true },
+    { key: "monthlyCredits", used: 62.21, unit: "usd" },
+  ]);
+  // 没有 `limited` 时窗口缺失照旧是「未知」——不猜成「不限」。
+  expect(toQuotaSnapshot({ credits: { windowLimits: { fiveHour: null } }, failures: [] }).windows).toEqual([]);
+  // 窗口给了对象时以对象为准（那是真的限额）；缺的那个才是不限。
+  expect(
+    toQuotaSnapshot({ credits: { windowLimits: { limited: false, fiveHour: { used: 3, cap: 10 } } }, failures: [] }).windows,
+  ).toEqual([{ key: "fiveHour", used: 3, cap: 10, unit: "usd" }, { key: "weekly", unlimited: true }]);
+});
+
 it("五小时/每周窗口映射为 used/cap/exceeded/resetAt", () => {
   const snap = toQuotaSnapshot({
     credits: { fiveHour: { used: 3, cap: 10, exceeded: false, resetAt: "2026-10-13T20:00:00Z" } },
@@ -256,9 +280,9 @@ it("单个端点失败不拖垮整体，失败项进入 failures", () => {
 
 it("窗口字段逐个独立：缺失就是 undefined，不倒成 0", () => {
   const snap = toQuotaSnapshot({ credits: { windowLimits: { fiveHour: { used: 7 } } }, failures: [] });
-  expect(snap.windows).toEqual([{ key: "fiveHour", used: 7 }]);
+  expect(snap.windows).toEqual([{ key: "fiveHour", used: 7, unit: "usd" }]);
   const weekly = toQuotaSnapshot({ credits: { windowLimits: { weekly: { cap: 100 } } }, failures: [] });
-  expect(weekly.windows).toEqual([{ key: "weekly", cap: 100 }]);
+  expect(weekly.windows).toEqual([{ key: "weekly", cap: 100, unit: "usd" }]);
 });
 
 it("resetAt 一律转成 epoch 毫秒；无法解析的字符串保持 undefined", () => {
@@ -282,28 +306,91 @@ it("percent 超出 0–100 视为端点未报告（契约是 0–100）", () => 
   expect(ok.windows[0].percent).toBe(50);
 });
 
-it("月度窗口只报消耗（monthlyCredits 是余额）：没有 cap、没有 percent，不造比例（Review Focus 4）", () => {
+it("没有套餐时月度窗口只报消耗：没有 cap、没有 percent，不造比例（Review Focus 4）", () => {
   const both = toQuotaSnapshot({
     usage: { totalCredits: 12 },
     credits: { credits: { monthlyCredits: 100 } },
     failures: [],
   });
-  expect(both.windows).toEqual([{ key: "monthlyCredits", used: 12 }]);
-  // 月度配给总数在第 1 期未知（套餐表是第 2 期），而 monthlyCredits 是余额：拿它当 cap
-  // 会把「快用完」画成百分之几百，所以这里 cap 与 percent 都必须是「未报告」。
+  expect(both.windows).toEqual([{ key: "monthlyCredits", used: 12, unit: "usd" }]);
+  // 余额是**余额**，不是上限：拿它当 cap 会把「快用完」画成百分之几百（Review Focus 4）。
   expect(both.windows[0]?.cap).toBeUndefined();
   expect(both.windows[0]?.percent).toBeUndefined();
   // 窗口只依赖 usage 的消耗：credits 没给余额（甚至整个端点失败）也照样产出。
   expect(toQuotaSnapshot({ usage: { totalCredits: 12 }, failures: [] }).windows).toEqual([
-    { key: "monthlyCredits", used: 12 },
+    { key: "monthlyCredits", used: 12, unit: "usd" },
   ]);
   // 只有余额、没有本期消耗：不造窗口（缺失不倒成 0）。
   expect(toQuotaSnapshot({ credits: { credits: { monthlyCredits: 100 } }, failures: [] }).windows).toEqual([]);
 });
 
-it("plan 取 subscriptions 的 planId，缺失时退回 credits 的 planId，都没有就缺省", () => {
-  expect(toQuotaSnapshot({ subscriptions: { data: { planId: "goat" } }, credits: { credits: { planId: "pro" } }, failures: [] }).plan).toBe("goat");
-  expect(toQuotaSnapshot({ subscriptions: { data: {} }, credits: { credits: { planId: "pro" } }, failures: [] }).plan).toBe("pro");
+it("有套餐时月度窗口按套餐配给：used = 额度 − 余额，cap 与重置时刻来自套餐（2026-10-18）", () => {
+  const periodEnd = Date.parse("2026-11-14T03:23:11.000Z");
+  const snap = toQuotaSnapshot({
+    subscriptions: {
+      data: { planId: "individual-goat", status: "active", currentPeriodEnd: "2026-11-14T03:23:11.000Z" },
+    },
+    usage: { totalCredits: 12 },
+    credits: { credits: { monthlyCredits: 55.7714050703 } },
+    failures: [],
+  });
+  expect(snap.plan).toEqual({
+    id: "individual-goat",
+    name: "GOAT",
+    status: "active",
+    monthlyCredits: 70,
+    periodEnd,
+  });
+  // 线上交叉验证过的等式：70 − 55.7714050703 = 14.2285949297（该账号 weekly.used 一字不差）。
+  // 这里用套餐口径而不是 usage.totalCredits（12）—— usage 只报消耗，套餐才给上限。
+  expect(snap.windows.at(-1)).toEqual({
+    key: "monthlyCredits",
+    used: 70 - 55.7714050703,
+    cap: 70,
+    resetAt: periodEnd,
+    unit: "usd",
+  });
+  // 余额超过配给额（额度中途变小 / 充值）时已用夹到 0，不写负数。
+  expect(
+    toQuotaSnapshot({
+      subscriptions: { data: { planId: "individual-goat" } },
+      credits: { credits: { monthlyCredits: 99 } },
+      failures: [],
+    }).windows,
+  ).toEqual([{ key: "monthlyCredits", used: 0, cap: 70, unit: "usd" }]);
+});
+
+it("套餐只有标识与状态时照排，但**不猜**名称与额度；data 为 null 就是没有订阅", () => {
+  const unknown = toQuotaSnapshot({ subscriptions: { data: { planId: "individual-new-tier", status: "active" } }, failures: [] });
+  expect(unknown.plan).toEqual({ id: "individual-new-tier", status: "active" });
+  expect(unknown.plan?.name).toBeUndefined();
+  expect(unknown.plan?.monthlyCredits).toBeUndefined();
+  // 没有标识、只有状态（取消中的订阅）时也给套餐行：状态本身就是用户要知道的事。
+  expect(toQuotaSnapshot({ subscriptions: { data: { status: "canceled" } }, failures: [] }).plan).toEqual({
+    id: "",
+    status: "canceled",
+  });
+  // `data: null` = 这个账号没有订阅（线上无订阅账号的形状），不是读失败。
+  const none = toQuotaSnapshot({ subscriptions: { success: true, data: null }, credits: { credits: {} }, failures: [] });
+  expect("plan" in none).toBe(false);
+});
+
+it("plan 取 subscriptions 的 planId 与状态，缺失标识时退回 credits 的 planId，都没有就缺省", () => {
+  expect(
+    toQuotaSnapshot({
+      subscriptions: { data: { planId: "individual-goat", status: "past_due" } },
+      credits: { credits: { planId: "individual-pro-v1" } },
+      failures: [],
+    }).plan,
+  ).toEqual({ id: "individual-goat", name: "GOAT", status: "past_due", monthlyCredits: 70 });
+  // 订阅端点只给了状态、没有标识：退回 credits 的 planId（CLI 也用它给遥测盖身份章）。
+  expect(
+    toQuotaSnapshot({
+      subscriptions: { data: { status: "canceled" } },
+      credits: { credits: { planId: "individual-pro-v1" } },
+      failures: [],
+    }).plan,
+  ).toEqual({ id: "individual-pro-v1", name: "Pro", status: "canceled", monthlyCredits: 80 });
   expect("plan" in toQuotaSnapshot({ failures: [] })).toBe(false);
 });
 
@@ -324,11 +411,17 @@ it("额度端口按旧插件的端点与请求头取数：whoami 先拿 orgId，
     expect(call.headers.get("x-cli-environment")).toBe("production");
   }
   expect(snap.failures).toEqual([]);
-  expect(snap.plan).toBe("goat");
+  expect(snap.plan).toEqual({
+    id: "individual-goat",
+    name: "GOAT",
+    status: "active",
+    monthlyCredits: 70,
+    periodEnd: Date.parse("2026-11-14T03:23:11.000Z"),
+  });
   expect(snap.windows).toEqual([
-    { key: "fiveHour", used: 3, cap: 10, exceeded: false, resetAt: 1_791_921_600_000 },
-    { key: "weekly", used: 30, cap: 100, exceeded: true, resetAt: 1_792_000_000_000 },
-    { key: "monthlyCredits", used: 12 },
+    { key: "fiveHour", used: 3, cap: 10, exceeded: false, resetAt: 1_791_921_600_000, unit: "usd" },
+    { key: "weekly", used: 30, cap: 100, exceeded: true, resetAt: 1_792_000_000_000, unit: "usd" },
+    { key: "monthlyCredits", used: 15, cap: 70, resetAt: Date.parse("2026-11-14T03:23:11.000Z"), unit: "usd" },
   ]);
 });
 
@@ -342,7 +435,7 @@ it("whoami 失败时只记名，窗口仍然返回，其余端点不带 orgId", 
   const snap = await port.snapshot();
 
   expect(snap.failures).toEqual(["whoami"]);
-  expect(snap.plan).toBe("goat");
+  expect(snap.plan).toEqual({ id: "goat" });
   expect(snap.windows).toHaveLength(3);
   expect(calls.map((call) => call.path)).toContain("/alpha/billing/subscriptions");
 });
@@ -357,7 +450,14 @@ it("四个端点各自失败只记自己的名，顺序固定、其余照常返�
 
   expect(snap.failures).toEqual(["usage", "credits"]);
   expect(snap.windows).toEqual([]);
-  expect(snap.plan).toBe("goat");
+  // 余额与消耗都没读到就不造月度窗口 —— 但套餐本身（标识/名称/额度/本期结束）照常给出。
+  expect(snap.plan).toEqual({
+    id: "individual-goat",
+    name: "GOAT",
+    status: "active",
+    monthlyCredits: 70,
+    periodEnd: Date.parse("2026-11-14T03:23:11.000Z"),
+  });
 });
 
 it("传输抛错也只记名，不让整次读取失败", async () => {
@@ -370,10 +470,12 @@ it("传输抛错也只记名，不让整次读取失败", async () => {
   const snap = await port.snapshot();
 
   expect(snap.failures).toEqual(["usage"]);
-  // 月度消耗窗口的 used 来自 usage，它失败就没有这个窗口；两个 token 窗口照常返回。
+  // 月度窗口的 used 现在来自套餐配给（额度 − 余额）：usage 失败**不影响**它；
+  // 没有套餐时才退化成用 usage.totalCredits 报消耗。
   expect(snap.windows).toEqual([
-    { key: "fiveHour", used: 3, cap: 10, exceeded: false, resetAt: 1_791_921_600_000 },
-    { key: "weekly", used: 30, cap: 100, exceeded: true, resetAt: 1_792_000_000_000 },
+    { key: "fiveHour", used: 3, cap: 10, exceeded: false, resetAt: 1_791_921_600_000, unit: "usd" },
+    { key: "weekly", used: 30, cap: 100, exceeded: true, resetAt: 1_792_000_000_000, unit: "usd" },
+    { key: "monthlyCredits", used: 15, cap: 70, resetAt: Date.parse("2026-11-14T03:23:11.000Z"), unit: "usd" },
   ]);
 });
 

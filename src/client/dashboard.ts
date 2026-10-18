@@ -1,24 +1,29 @@
 /**
- * 中栏仪表盘（Task 9）：逐账号列出额度与状态、生效账号高亮、切换记录。
+ * 中栏仪表盘（Task 9）：逐账号列出额度与状态、生效账号高亮。
  *
- * 规格 §8.1 第 5 条：「点开中栏仪表盘：逐账号列出额度、状态、拒绝/冷却与切换记录；生效账号高亮」。
+ * 规格 §8.1 第 5 条：「点开中栏仪表盘：逐账号列出额度、状态、拒绝/冷却与切换记录；生效账号
+ * 高亮」。**切换记录一栏已按用户要求移除**（2026-10-18）—— 记录只说明过去发生过什么，用户
+ * 要的是「现在哪张卡还有额度」；宿主侧的记录本身仍在（`switches()` 远程方法未动）。
  *
  * 纪律与其它卡片相同（Ruling 22/29）：**纯 props → 元素树**，没有 Hook、没有内部状态、不发起请求。
  *
- * 视觉（2026-10-17 重做）：标题行带刷新/关闭两个图标按钮；每个账号是一张卡片
- * （生效账号的描边用强调色），卡片内是「身份行 + 标记 + 额度表」；切换记录是一行一条的
- * 时间线，时间在右端、用相对时间显示（ISO 仍在 `dateTime` 上）。
+ * 视觉（2026-10-17 重做，2026-10-18 平铺）：标题行带刷新/关闭两个图标按钮；每个账号是一张卡片
+ * （生效账号的描边用强调色），卡片内是「身份行 + 标记 + 额度表」。
+ *
+ * **账号平铺不按厂商分组**（2026-10-18 用户要求）：用户要看的是「这台机器上有哪些账号、
+ * 各自多少额度」，按厂商分组会让同一个列表出现两个标题、两个区块；供应商是账号的一个属性，
+ * 所以它是账号名后面的一个徽标，不是一个分组标题。
  * @module dsh-llm-account/src/client/dashboard
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
 import { rejectionText } from "./copy";
-import { CloseIcon, RefreshIcon } from "./icons";
+import { failureText } from "./failure-text";
+import { CloseIcon, RefreshIcon, SettingsIcon } from "./icons";
 import { QuotaBar } from "./quota-bar";
-import { fallbackQuotaWindows } from "./quota";
-import { relativeTime } from "./time";
-import type { AccountUsageStatus, QuotaWindow, SwitchRecord, VendorUsageStatus } from "./usage-contract";
+import { fallbackQuotaWindows, quotaPlanText } from "./quota";
+import type { AccountUsageStatus, QuotaWindow, VendorUsageStatus } from "./usage-contract";
 
 /** 仪表盘属性。 */
 export interface DashboardProps {
@@ -27,12 +32,17 @@ export interface DashboardProps {
   status: VendorUsageStatus | undefined;
   /** 多供应商视图；缺省时按单 status 渲染（兼容既有调用）。 */
   vendors?: readonly { label: string; status?: VendorUsageStatus }[];
-  /** 切换记录（**最新在前**，顺序由宿主侧 `switchNotices()` 保证）。 */
-  switches: readonly SwitchRecord[] | undefined;
   /** 关闭面板。 */
   onClose: () => void;
   /** 手动刷新（可选）。 */
   onRefresh?: () => void;
+  /**
+   * 打开设置页（「转到设置」按钮）。
+   *
+   * **不传 = 不渲染这个按钮**：宿主没有 `layout.selectPanel` 接缝时渲染一个点了没反应的
+   * 按钮，比不渲染更糟（与 {@link DashboardProps.onRefresh} 同一条纪律）。
+   */
+  onOpenSettings?: () => void;
   /**
    * 最近一次读取的失败原因（宿主给出的可读文本）；读取正常时为 `undefined`。
    * 与 {@link SidebarCardProps.failure} 同一条纪律：读失败与没有数据是两件事。
@@ -78,6 +88,24 @@ export function Dashboard(props: DashboardProps): ReactElement {
                 createElement(RefreshIcon, null),
               ),
             ]),
+        // 「转到设置」：面板里看到哪个账号有问题，直接去设置里管它（换密钥/移除/改模型）。
+        ...(props.onOpenSettings === undefined
+          ? []
+          : [
+              createElement(
+                "button",
+                {
+                  key: "settings",
+                  type: "button",
+                  "data-dashboard-settings": "true",
+                  "aria-label": t("dashboard.openSettings"),
+                  title: t("dashboard.openSettings"),
+                  className: CSS_CLASS.icon,
+                  onClick: () => props.onOpenSettings?.(),
+                },
+                createElement(SettingsIcon, null),
+              ),
+            ]),
         createElement(
           "button",
           {
@@ -117,45 +145,95 @@ export function Dashboard(props: DashboardProps): ReactElement {
             ? createElement("p", { key: "nodata", "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("dashboard.noData"))
             : createElement("p", { key: "nodata-failed", "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("usage.failed")),
         ]
-      : props.vendors === undefined
-        ? [
-            createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
-            ...(status?.accounts ?? [])
-              .filter((account): account is AccountUsageStatus => typeof account === "object" && account !== null)
-              .map((account) => accountBlock(props, account)),
-            ...((status?.failures ?? []).length === 0
-              ? []
-              : [createElement("ul", { key: "failures", "data-dashboard-failures": "true" }, ...(status?.failures ?? []).map((item, index) => createElement("li", { key: index }, item)))]),
-          ]
-        : props.vendors.map((vendor) =>
-            createElement(
-              "section",
-              { key: vendor.label, "data-dashboard-vendor": vendor.label },
-              createElement("h3", null, vendor.label),
-              ...(vendor.status === undefined
-                ? [createElement("p", { key: "empty", className: CSS_CLASS.empty }, t("dashboard.noData"))]
-                : [
-                    ...(vendor.status.accounts ?? [])
-                      .filter((account): account is AccountUsageStatus => typeof account === "object" && account !== null)
-                      .map((account) => accountBlock(props, account)),
-                    ...((vendor.status.failures ?? []).length === 0
-                      ? []
-                      : [
-                          createElement("ul", { key: "failures", "data-dashboard-failures": "true" },
-                            ...(vendor.status.failures ?? []).map((item, index) => createElement("li", { key: index }, item))),
-                        ]),
-                  ]),
-            ),
-          )),
-    switchHistory(props),
+      : [
+          createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
+          // **平铺**：所有厂商的账号在一份列表里，供应商是账号名后的徽标而不是分组标题
+          // （2026-10-18 用户要求）。单 status 的旧调用路径同样走这里。
+          ...accountEntries(props).map((entry) => accountBlock(props, entry.account, entry.status, entry.label)),
+          ...vendorFailureNotes(props),
+        ]),
   );
 }
 
-/** 一个账号的区块：名称、状态、固定/生效标注、拒绝、逐窗口额度。 */
-function accountBlock(props: DashboardProps, account: AccountUsageStatus): ReactNode {
+/** 平铺列表的一条：账号 + 它所属厂商的状态与标签。 */
+interface AccountEntry {
+  account: AccountUsageStatus;
+  status: VendorUsageStatus | undefined;
+  label: string;
+}
+
+/**
+ * 把所有厂商的账号收成一份平铺列表（厂商声明顺序即展示顺序）。
+ *
+ * 与旧的「一家一个 section」的区别不只是少一个标题：固定标注与缺额度时的兜底窗口都按
+ * **账号自己所属厂商**的状态算，第二家的账号不会画错窗口形状（2026-10-18 修）。
+ */
+function accountEntries(props: DashboardProps): AccountEntry[] {
+  const entries: AccountEntry[] = [];
+  const collect = (label: string, vendorStatus: VendorUsageStatus | undefined): void => {
+    for (const account of vendorStatus?.accounts ?? []) {
+      // 线上 `accounts` 可能含渲染不了的行（null / 非对象）：结构校验只查「是不是数组」，
+      // 渲染路径必须自己挑出能画的行 —— 一行画不了不该让整块仪表盘崩。
+      if (typeof account !== "object" || account === null) continue;
+      entries.push({ account, status: vendorStatus, label });
+    }
+  };
+  if (props.vendors === undefined) collect("", props.status);
+  else for (const vendor of props.vendors) collect(vendor.label, vendor.status);
+  return entries;
+}
+
+/**
+ * 厂商级失败项（`status.failures`，如某账号额度读取超时）。
+ *
+ * 逐条翻成人话（`failureText`：端点短名、包装过的超时诊断），原文留在 `data-failure-detail`
+ * 上供排查 ——
+ * 把 `timeout after 30000ms` 这种原文直接印在界面上就是调试输出。非超时失败同样映射：
+ * 宿主侧现在用账号**名称**记失败（`quota: commandcode "工作账号" read failed (…)`），
+ * 可读，所以原样显示。
+ */
+function vendorFailureNotes(props: DashboardProps): ReactNode[] {
+  const { t } = props;
+  const failures = props.vendors === undefined ? (props.status?.failures ?? []) : props.vendors.flatMap((vendor) => vendor.status?.failures ?? []);
+  if (failures.length === 0) return [];
+  return [
+    createElement(
+      "div",
+      { key: "failures", "data-dashboard-failures": "true" },
+      ...failures.map((item, index) =>
+        createElement(
+          "p",
+          {
+            key: index,
+            "data-failure": index,
+            "data-failure-detail": item,
+            className: CSS_CLASS.failure,
+          },
+          failureText(t, item),
+        ),
+      ),
+    ),
+  ];
+}
+
+/** 一个账号的区块：名称、状态、固定/生效标注、拒绝、逐窗口额度。
+ *
+ * `status` 是**这个账号所属厂商**的状态（多厂商视图里各家不同）：固定标注与缺额度时的
+ * 兜底窗口都必须按它算。旧实现用 `props.status`（第一个厂商的），第二家的账号会画错
+ * 窗口形状、固定标注也可能张冠李戴（2026-10-18 修）。
+ *
+ * `label` 是供应商标签：平铺列表里它渲染成账号名后面的徽标（供应商是账号的属性，
+ * 不是一个分组标题 —— 2026-10-18 用户要求）。单厂商旧调用路径传空串，不渲染徽标。
+ */
+function accountBlock(
+  props: DashboardProps,
+  account: AccountUsageStatus,
+  status: VendorUsageStatus | undefined = props.status,
+  label = "",
+): ReactNode {
   const { t } = props;
   const effective = account.effective;
-  const pinned = props.status?.pinned === account.ref;
+  const pinned = status?.pinned === account.ref;
   // 契约里 `rejection` / `quota` 都是**可选**字段，而线上可能把它们序列化成 `null`
   // （JSON 没有 undefined）。只写 `=== undefined` 会让 `null` 走进来，接着读 `.kind` /
   // `.windows` 抛错 —— 渲染路径一抛，整块仪表盘变空白。与 `sidebar-card.ts` 同一条纪律。
@@ -169,6 +247,7 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
       // 生效账号高亮（规格 §8.1 第 5 条）。
       "data-dashboard-effective": effective,
       "data-dashboard-configured": account.configured,
+      ...(label === "" ? {} : { "data-dashboard-vendor": label }),
       ...(rejectionOf === undefined ? {} : { "data-dashboard-rejection-kind": rejectionOf.kind }),
       ...(rejectionOf?.until === undefined ? {} : { "data-dashboard-rejection-until": rejectionOf.until }),
     },
@@ -187,10 +266,22 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
             "span",
             { className: CSS_CLASS.nameRow },
             createElement("h4", null, account.label),
+            // 供应商徽标：与设置页账户行的 `data-account-vendor` 同一条语义、同一个类。
+            ...(label === ""
+              ? []
+              : [createElement("small", { key: "vendor", "data-account-vendor": label, className: CSS_CLASS.vendorBadge }, label)]),
             ...(effective ? [createElement("span", { key: "effective", "data-dashboard-mark": "effective", className: CSS_CLASS.mark }, t("sidebar.effective"))] : []),
             ...(pinned ? [createElement("span", { key: "pinned", "data-dashboard-pinned": account.ref, className: CSS_CLASS.mark }, t("sidebar.pinned"))] : []),
           ),
           createElement("small", { key: "configured" }, account.configured ? t("account.configured") : t("account.missing")),
+          // 订阅套餐：厂商报告了订阅才有这一行（与设置页账户卡片同一形状、同一份文案）。
+          ...(() => {
+            const plan = quotaOf?.plan;
+            if (plan === undefined) return [];
+            const text = quotaPlanText(t, plan);
+            if (text === undefined) return [];
+            return [createElement("small", { key: "plan", "data-dashboard-plan": plan.id, className: CSS_CLASS.note }, text)];
+          })(),
         ),
       ),
     ),
@@ -198,13 +289,18 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
       ? []
       : [createElement("p", { key: "rejection", "data-dashboard-rejection-label": rejectionOf.kind, className: CSS_CLASS.rejection }, rejectionText(t, rejectionOf.kind))]),
     // 该账号额度读取里的**部分失败**照样列出来：不列就等于把一次不完整的读数呈现成完整的。
+    // 文案翻成人话（端点短名不再直接上屏），原文留在 data 属性里，与厂商级失败项同一条纪律。
     ...(quotaOf?.failures ?? []).map((item, index) =>
-      createElement("small", { key: `qf-${index}`, "data-dashboard-account-failure": `${account.ref}:${index}`, className: CSS_CLASS.failure }, item),
+      createElement(
+        "small",
+        { key: `qf-${index}`, "data-dashboard-account-failure": `${account.ref}:${index}`, "data-failure-detail": item, className: CSS_CLASS.failure },
+        failureText(t, item),
+      ),
     ),
     createElement(
       "div",
       { key: "meters", className: CSS_CLASS.meters },
-      ...(quotaOf?.windows?.length ? quotaOf.windows : fallbackQuotaWindows(props.status?.vendor ?? "")).map((window) =>
+      ...(quotaOf?.windows?.length ? quotaOf.windows : fallbackQuotaWindows(status?.vendor ?? "")).map((window) =>
         windowBlock(t, window),
       ),
     ),
@@ -220,29 +316,3 @@ function windowBlock(t: (key: string) => string, window: QuotaWindow): ReactNode
   );
 }
 
-/** 切换记录（最新在前）。 */
-function switchHistory(props: DashboardProps): ReactNode {
-  const { t } = props;
-  const switches = props.switches ?? [];
-  return createElement(
-    "section",
-    { "data-dashboard-switches": "true" },
-    createElement("h3", null, t("dashboard.switches")),
-    ...(switches.length === 0
-      ? [createElement("p", { key: "none" }, t("dashboard.noSwitches"))]
-      : switches.map((record, index) =>
-          createElement(
-            "div",
-            {
-              key: `${record.at}-${index}`,
-              "data-switch-record": `${record.fromRef}→${record.toRef}`,
-              "data-switch-reason": record.reason,
-              "data-switch-at": record.at,
-            },
-            createElement("span", null, `${record.fromRef} → ${record.toRef}`),
-            createElement("span", { "data-switch-reason-label": record.reason }, t(`switch.reason.${record.reason}`)),
-            createElement("time", { dateTime: new Date(record.at).toISOString() }, relativeTime(t, record.at)),
-          ),
-        )),
-  );
-}

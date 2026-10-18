@@ -248,8 +248,13 @@ export interface BodyFacts {
   maxTokens: number;
   /** 已折叠的系统提示文本；空串表示没有。 */
   systemText: string;
-  /** 已选定的推理档位 id。 */
+  /** 已选定的推理档位 id（已按静态档位表收口）。 */
   reasoningEffort?: string;
+  /**
+   * 该模型有可选推理档位。Messages 传输据此打开自适应思考（`thinking.type.adaptive`，
+   * 旧插件第 6624 行）：那个端点只认这一种写法，且不开就没有 `output_config.effort` 可谈。
+   */
+  selectableEffort?: boolean;
   /** CLI 传输的 `config.workingDir`。 */
   workingDir?: string;
   /** 会话身份，用于 CLI 传输的 threadId。 */
@@ -400,6 +405,9 @@ export function buildRequestBody(protocol: CommandCodeProtocol, options: Generat
       model: options.model,
       max_tokens: facts.maxTokens,
       stream: true,
+      // 这个端点只认 `{ type: "adaptive" }`（`enabled` / `disabled` 都会被拒，旧插件第
+      // 6593-6597 行的线上实测），而档位（`output_config.effort`）只有开了它才起作用。
+      ...(facts.selectableEffort === true ? { thinking: { type: "adaptive" } } : {}),
       messages: anthropicMessages(options.messages),
       ...(facts.systemText === "" ? {} : { system: [{ type: "text", text: facts.systemText, cache_control: { type: "ephemeral" } }] }),
       ...(facts.reasoningEffort === undefined ? {} : { output_config: { effort: facts.reasoningEffort } }),

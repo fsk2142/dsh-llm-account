@@ -73,7 +73,8 @@ it("远程面把可省略字段序列化成 null 时也不崩（渲染路径抛�
   const tree = renderCard(nulled);
   // 没有生效账号时回落到已配置账号，至少显示账号名和空额度条，且不抛。
   expect(textsOf(tree).join(" ")).toContain("a");
-  expect(elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined)).toHaveLength(3);
+  // 侧边栏只画小时级窗口一条（占位大是用户 2026-10-18 的反馈）。
+  expect(elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined)).toHaveLength(1);
   expect(elementsOf(tree).some((element) => element.props["data-quota-bar-fill"] !== undefined)).toBe(false);
   expect(textsOf(tree).join(" ")).not.toContain("undefined");
   expect(textsOf(tree).join(" ")).not.toContain("null");
@@ -86,12 +87,13 @@ it("开启后显示**生效账号**的额度（不是固定账号的）", () => 
       effective: { ref: "serving", at: 1_700_000_000_000 },
       accounts: [
         row("fixed", { quota: { windows: [{ key: "5h", used: 1, cap: 10 }], failures: [] } }),
-        row("serving", { label: "Serving", effective: true, quota: { plan: "pro", windows: [{ key: "5h", used: 7, cap: 10 }, { key: "weekly", used: 30, cap: 100 }], failures: [] } }),
+        row("serving", { label: "Serving", effective: true, quota: { plan: { id: "individual-pro", name: "Pro" }, windows: [{ key: "5h", used: 7, cap: 10 }, { key: "weekly", used: 30, cap: 100 }], failures: [] } }),
       ],
     }),
   );
   const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
-  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly"]);
+  // 只保留小时级窗口：weekly 这些去中栏面板看（2026-10-18 用户要求侧边栏简略）。
+  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h"]);
   // 数字来自生效账号那一行（7/10），不是固定账号的（1/10）。
   expect(textsOf(windows[0]!)).toContain("已用 7 / 共 10");
   expect(textsOf(tree)).toContain("Serving");
@@ -119,10 +121,10 @@ it("没有请求过时显示占位，而不是 0%", () => {
   expect(textsOf(unknown)).toContain(dictionaryOf("zh")("sidebar.noRequest"));
   expect(textsOf(unknown).join(" ")).not.toMatch(/\b0\b/);
 
-  // 读到了状态但还没有任何一次请求 → 显示已配置账号和空额度条，而不是纯文字或 0。
+  // 读到了状态但还没有任何一次请求 → 显示已配置账号和一条空额度条，而不是纯文字或 0。
   const noRequest = renderCard(statusOf({ accounts: [row("a")] }));
   expect(textsOf(noRequest).join(" ")).toContain("a");
-  expect(elementsOf(noRequest).filter((element) => element.props["data-sidebar-window"] !== undefined)).toHaveLength(3);
+  expect(elementsOf(noRequest).filter((element) => element.props["data-sidebar-window"] !== undefined)).toHaveLength(1);
   expect(textsOf(noRequest).join(" ")).not.toMatch(/\b0\b/);
 });
 

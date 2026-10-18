@@ -48,7 +48,11 @@ export const PAGE_ORDER = 12;
  *   `apiBase` / `protocol` / `requestTimeoutMs` / `streamIdleTimeoutMs` /
  *   `defaultMaxTokens` (advanced);
  * - opencode declares `showSidebarQuota` (integrations) and `baseURL` /
- *   `requestTimeoutMs` / `streamIdleTimeoutMs` (advanced).
+ *   `requestTimeoutMs` / `streamIdleTimeoutMs` (advanced);
+ * - opendesign declares `showSidebarQuota` / `quotaRefreshMinutes` / `workspaceId`
+ *   (integrations) and `baseURL` / `walletBase` / `requestTimeoutMs` /
+ *   `streamIdleTimeoutMs` (advanced) — 2026-10-18 第三家，施工单
+ *   `docs/superpowers/notes/2026-10-18-opendesign-plan.md` §3.3。
  *
  * **No privacy group for either vendor** (Ruling 23): plan 1a deliberately left
  * `zdr` and `webSearch` out of the commandcode Config schema (see that entry's
@@ -167,6 +171,64 @@ export const VENDORS: readonly VendorEntry[] = [
         group: "advanced",
         fields: [
           { key: "baseURL", kind: "text", labelKey: "field.baseURL", hintKey: "field.baseURL.hint" },
+          {
+            key: "requestTimeoutMs",
+            kind: "number",
+            labelKey: "field.requestTimeoutMs",
+            hintKey: "field.requestTimeoutMs.hint",
+          },
+          {
+            key: "streamIdleTimeoutMs",
+            kind: "number",
+            labelKey: "field.streamIdleTimeoutMs",
+            hintKey: "field.streamIdleTimeoutMs.hint",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    ns: "llm-opendesign",
+    // 行 id 与命名空间**不同**（宿主侧 `SETTINGS_ROWS = ["opendesign", "llm-opendesign"]`）。
+    rowIds: ["opendesign", "llm-opendesign"],
+    providerId: "opendesign",
+    order: 30,
+    labelKey: "vendor.opendesign",
+    models: { visible: "visibleModels", visibility: "modelVisibility", removed: "removedModels" },
+    cards: [
+      {
+        group: "integrations",
+        fields: [
+          {
+            key: "showSidebarQuota",
+            kind: "boolean",
+            labelKey: "field.showSidebarQuota",
+            hintKey: "field.showSidebarQuota.hint",
+            fallback: false,
+          },
+          {
+            key: "quotaRefreshMinutes",
+            kind: "number",
+            labelKey: "field.quotaRefreshMinutes",
+            hintKey: "field.quotaRefreshMinutes.hint",
+            // 与 Config 的 `default(1)` 对齐（见 commandcode 条目同款注释）。
+            fallback: 1,
+          },
+          // 顶层工作区：账号条目没配 `workspaceId` 时的回退（vela 周期额度查询用）。
+          {
+            key: "workspaceId",
+            kind: "text",
+            labelKey: "field.workspaceId",
+            hintKey: "field.workspaceId.hint",
+          },
+        ],
+      },
+      {
+        group: "advanced",
+        fields: [
+          { key: "baseURL", kind: "text", labelKey: "field.baseURL", hintKey: "field.baseURL.hint" },
+          // 控制面（额度/账单）基地址；与推理基地址分开是因为它们是两个域名。
+          { key: "walletBase", kind: "text", labelKey: "field.walletBase", hintKey: "field.walletBase.hint" },
           {
             key: "requestTimeoutMs",
             kind: "number",
@@ -314,8 +376,17 @@ export interface ApplyShellOptions {
    * **无条件、每个 bundle 一次**（与页面同样只有第一个实例注册）：插槽服务不返回注销句柄，
    * 条件注册一旦开启就撤不下来，所以门控放在组件里按**已存储**的开关做（旧插件
    * `CommandCodeFooterEntry` 的同一条判定）。两行各调一次 `apply` 也只注册一份。
+   *
+   * 第三个参数是**页面组件工厂**（`options.pageComponent` 原样透传）：用量面板的「转到设置」
+   * 要把同一份设置页组件注册进 `main` 插槽（`seams.ts` `SETTINGS_PANEL_ID`）。工厂由本层
+   * 转发而不是让 `index.ts` 直接调 `registerSharedSurfaces`，是为了让「注册一次」的守卫与
+   * 文案绑定仍留在本层。
    */
-  sharedSurfaces?: (context: ClientShell, t: (key: string) => string) => void;
+  sharedSurfaces?: (
+    context: ClientShell,
+    t: (key: string) => string,
+    pageComponent?: (t: (key: string) => string) => unknown,
+  ) => void;
 }
 
 /**
@@ -372,7 +443,8 @@ function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOpt
   if (sharedSurfacesRegistered) return;
   sharedSurfacesRegistered = true;
   try {
-    options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS));
+    // 页面工厂原样透传：用量面板的「转到设置」要在主栏打开同一份设置页组件。
+    options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS), options.pageComponent);
   } catch (error) {
     // 与页面注册同样的处置：一次注册失败不该把整个客户端带走。
     console.error("[dsh-llm-account] could not register the sidebar card and the usage panel:", error);

@@ -42,6 +42,13 @@ export interface PageShellProps {
   renderVendorCards?: (ns: string) => ReactNode;
   /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
   mergeTabs?: boolean;
+  /**
+   * 跨厂商的「网页搜索」卡片（厂商主体之后）。
+   *
+   * 搜索来源不属于任何一家厂商（三选一跨全部厂商），所以与合并账户面板同形：由容器渲染，
+   * 页面外壳只负责放在厂商主体之后。
+   */
+  webSearch?: ReactNode;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */
   saving?: boolean;
 }
@@ -106,6 +113,8 @@ function pageBody(props: PageShellProps): ReactElement {
               ),
         )
       : vendorBody(props, active),
+    // 网页搜索卡片：跨厂商，放在厂商主体之后（不传 = 不渲染，与 accounts 同纪律）。
+    props.webSearch === undefined ? null : props.webSearch,
   );
 }
 

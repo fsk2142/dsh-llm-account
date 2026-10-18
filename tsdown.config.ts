@@ -26,6 +26,8 @@ const hostConfig: UserConfig = {
     index: "src/index.ts",
     commandcode: "src/vendors/commandcode/index.ts",
     opencode: "src/vendors/opencode/index.ts",
+    opendesign: "src/vendors/opendesign/index.ts",
+    "web-search": "src/web-search/index.ts",
   },
   outDir: "lib",
   format: "esm",

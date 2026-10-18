@@ -28,3 +28,7 @@
       name: "dsh-llm-account/commandcode"
     - id: opencode-go
       name: "./lib/opencode.js"
+    - id: opendesign
+      name: "dsh-llm-account/opendesign"
+    - id: llm-account-web-search
+      name: "dsh-llm-account/web-search"

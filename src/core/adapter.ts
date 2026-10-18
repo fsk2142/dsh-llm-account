@@ -6,8 +6,11 @@
  */
 import type { GenerateOptions, LlmAdapter, ModelModality, StreamChunk } from "@deepseek-ai/dsh-llm";
 
-/** 本包托管的两条 provider 路由 id（全局约束，不得更改）。 */
-export type VendorId = "commandcode" | "dsh-opencode-go";
+/**
+ * 本包托管的三条 provider 路由 id（`commandcode` 与 `dsh-opencode-go` 是全局约束、
+ * 不得更改；`opendesign` 是 2026-10-18 新增的第三家，见 `docs/superpowers/notes/2026-10-18-opendesign-plan.md`）。
+ */
+export type VendorId = "commandcode" | "dsh-opencode-go" | "opendesign";
 
 /** 统一失败分类；厂商原始错误到本分类的映射表放在各自适配器里。 */
 export type FailureKind =
@@ -110,6 +113,16 @@ export interface CredentialPort {
 }
 
 /**
+ * 额度数字的单位。
+ *
+ * 目前只有美元一种：Command Code 的额度就是美元口径（旧插件把 `totalCredits` 与两个窗口的
+ * `used`/`cap` 一律按 `$` 排版：`lib/client.js` 的 `formatMoney` 第 1516 行、窗口行 3647 行、
+ * `/usage` 面板 7742-7743 行）。要加第二种单位，先在这里加成员、再让厂商端口产出它 ——
+ * 界面只认这张表，`undefined` 表示厂商没给单位，就按裸数字显示。
+ */
+export type QuotaUnit = "usd";
+
+/**
  * 归一化后的额度窗口。除 `key` 外全部可选：字段不存在表示「未知」，
  * 绝不允许倒成 0。
  */
@@ -126,13 +139,47 @@ export interface QuotaWindow {
   resetAt?: number;
   /** 是否已超出。 */
   exceeded?: boolean;
+  /**
+   * 数字的单位（厂商口径）。缺失表示厂商没给单位，界面按裸数字排版 —— 不替它挑一个。
+   */
+  unit?: QuotaUnit;
+  /**
+   * 厂商**明确**声明该窗口不设上限（Command Code 的 `windowLimits.limited: false` + 窗口为
+   * `null`；线上实测就是这个形状）。
+   *
+   * 与「字段缺失」是两件事：缺失是「未知」（照旧什么都不画），这里是「没有上限」这个事实
+   * ——UI 上要写成「不限」，否则看起来像丢了两个窗口。
+   */
+  unlimited?: boolean;
+}
+
+/**
+ * 订阅套餐（厂商报告了订阅时才有）。字段除 `id` 外全部可选：不存在就是「未知」，
+ * 绝不替厂商补一个默认套餐。
+ *
+ * 为什么要带上额度与本期结束：套餐决定月度配给（Command Code 的套餐表：Go 10 / Pro 30
+ * 或 80 / Max 150 / Ultra 300 美元每月），`credits.credits.monthlyCredits` 是**余额** ——
+ * 两者相减才是本期的月度已用。旧插件与官方 CLI 的 `/usage` 都是这么算的
+ * （`lib/client.js` 的 `monthlyView` 第 5722-5750 行、CLI 的 `getCreditDepletionPct`）。
+ */
+export interface QuotaPlan {
+  /** 套餐标识原文（如 `individual-goat`）。 */
+  id: string;
+  /** 展示名（厂商套餐表给的；表里没有这个标识时缺省，界面退回标识）。 */
+  name?: string;
+  /** 订阅状态原文（如 `active` / `canceled`）。 */
+  status?: string;
+  /** 该套餐每月的额度（美元口径）。 */
+  monthlyCredits?: number;
+  /** 本期结束时刻（epoch 毫秒）。 */
+  periodEnd?: number;
 }
 
 /** 归一化后的额度读数；部分端点失败不拖垮整体，失败项列在 `failures` 里。 */
 export interface QuotaSnapshot {
   windows: QuotaWindow[];
-  /** 套餐标识，厂商未提供时缺省。 */
-  plan?: string;
+  /** 套餐；厂商未报告订阅时缺省。 */
+  plan?: QuotaPlan;
   /** 失败的端点或窗口名，供 UI 提示数据不完整。 */
   failures: string[];
 }

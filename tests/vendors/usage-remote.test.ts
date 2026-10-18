@@ -32,7 +32,7 @@ const VIEWS: AccountView[] = [
 
 /** 一份额度读数：刻意只给 `used`/`cap`，不给 `percent` —— 「缺失字段不得编造」的观测点。 */
 const SNAPSHOT: QuotaSnapshot = {
-  plan: "pro",
+  plan: { id: "individual-goat", name: "GOAT", status: "active", monthlyCredits: 70 },
   windows: [{ key: "5h", used: 10, cap: 100, resetAt: 1_700_000_000_000 }],
   failures: [],
 };
@@ -215,11 +215,13 @@ it("每个已配置账号都读一次额度，缺失字段不进摘要", async (
   const status = await service.status("commandcode");
   const [first, second] = status.accounts;
 
-  expect(first!.quota?.plan).toBe("pro");
+  expect(first!.quota?.plan).toEqual({ id: "individual-goat", name: "GOAT", status: "active", monthlyCredits: 70 });
   expect(first!.quota?.windows).toEqual([{ key: "5h", used: 10, cap: 100, resetAt: 1_700_000_000_000 }]);
   expect("percent" in (first!.quota!.windows[0] ?? {})).toBe(false);
   // 两个账号都各自读到额度，而不是只给当前账号。
-  expect(second!.quota?.plan).toBe("pro");
+  expect(second!.quota?.plan?.id).toBe("individual-goat");
+  // 摘要是**拷出去**的（不是宿主对象的引用）：改摘要不能改到端口的读数上。
+  expect(first!.quota?.plan).not.toBe(SNAPSHOT.plan);
 });
 
 it("额度读取失败只记在 failures 里，不产出任何摘要", async () => {
@@ -237,6 +239,65 @@ it("额度读取失败只记在 failures 里，不产出任何摘要", async () 
   expect(status.failures).toHaveLength(status.accounts.length);
   expect(status.failures[0]).toContain("commandcode");
   expect(status.failures[0]).toContain("quota");
+});
+
+it("额度失败项写账号名称，不写内部 ref（这一行直接显示在用量面板上）", async () => {
+  const { service } = await mount([
+    vendorDeps({
+      vendor: "commandcode",
+      snapshot: async () => {
+        throw new Error("quota endpoint down");
+      },
+    }),
+  ]);
+
+  const status = await service.status("commandcode");
+  expect(status.failures).toContain('quota: commandcode "Account A" read failed (quota endpoint down)');
+  expect(status.failures).toContain('quota: commandcode "Account B" read failed (quota endpoint down)');
+  // 内部 ref（"a" / "b"）不出现在消息里：旧写法把它印在界面上，像调试输出。
+  expect(status.failures.some((item) => /commandcode [ab] read/.test(item))).toBe(false);
+});
+
+it("额度读取超时后会重试一次；第二次成功就不记失败", async () => {
+  // 先挂载（mount 自己等一个定时器），再换假时钟：status 里的 30s 预算由假时钟推进。
+  let calls = 0;
+  const { service } = await mount([
+    vendorDeps({
+      vendor: "commandcode",
+      snapshot: async () => {
+        calls += 1;
+        // 第一次永远不 resolve（等超时）；第二次正常返回。
+        if (calls <= 2) return new Promise<QuotaSnapshot>(() => {});
+        return { ...SNAPSHOT, windows: [...SNAPSHOT.windows] };
+      },
+    }),
+  ]);
+
+  vi.useFakeTimers();
+  try {
+    const pending = service.status("commandcode");
+    await vi.advanceTimersByTimeAsync(30_000);
+    const status = await pending;
+    // 两个账号各读一次、各超时一次、各重试一次成功（共 4 次调用）。
+    expect(calls).toBe(4);
+    expect(status.failures).toEqual([]);
+    expect(status.accounts.every((row) => row.quota !== undefined)).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("端口明确失败（非超时）不重试：同样的错误再试一次必然同样失败", async () => {
+  const snapshot = vi.fn(async (): Promise<QuotaSnapshot> => {
+    throw new Error("no usable API key");
+  });
+  const { service } = await mount([vendorDeps({ vendor: "commandcode", snapshot })]);
+
+  const status = await service.status("commandcode");
+  // 两个账号各一次，没有重试（确定性失败重试无意义，只会让界面多等）。
+  expect(snapshot).toHaveBeenCalledTimes(2);
+  expect(status.failures).toHaveLength(2);
+  expect(status.failures[0]).toContain("no usable API key");
 });
 
 it("拒绝/冷却随账号行发布，并带上重置时刻", async () => {
@@ -292,8 +353,8 @@ it("额度按每个账号分别读取，不再只挂在当前账号上", async (
 
   const status = await service.status("commandcode");
   expect(status.effective?.ref).toBe("b");
-  expect(status.accounts[0]!.quota?.plan).toBe("pro");
-  expect(status.accounts[1]!.quota?.plan).toBe("pro");
+  expect(status.accounts[0]!.quota?.plan?.name).toBe("GOAT");
+  expect(status.accounts[1]!.quota?.plan?.name).toBe("GOAT");
 });
 
 it("没有在跑的账号库（引擎为空）时 status 仍可用，只是没有生效账号", async () => {

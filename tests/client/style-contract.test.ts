@@ -105,6 +105,8 @@ const callbacks = {
   onRemove: vi.fn(),
   onToggleExpand: vi.fn(),
   onLoginBegin: vi.fn(),
+  // 按账户刷新的入口也挂上：它的类名同样要被契约验到（2026-10-18）。
+  onRetryCatalog: vi.fn(),
 };
 
 /** 账户卡片属性。 */
@@ -204,7 +206,7 @@ it("模型卡片：搜索、逐模型移除、添加都有类", () => {
 it("侧边栏卡片与中栏仪表盘：按钮都有类", () => {
   const status = statusOf([account({ ref: "work", effective: true, quota: { windows: [{ key: "rolling", percent: 35 }], failures: [] } })], "work");
   const card = SidebarCard({ t, status, onOpen: vi.fn(), onRefresh: vi.fn() });
-  const panel = Dashboard({ t, status, switches: [], onClose: vi.fn(), onRefresh: vi.fn() });
+  const panel = Dashboard({ t, status, onClose: vi.fn(), onRefresh: vi.fn() });
   expect(assertStyled(card, "侧边栏卡片")).toBeGreaterThan(1);
   expect(assertStyled(panel, "中栏仪表盘")).toBeGreaterThan(1);
 });

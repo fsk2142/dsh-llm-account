@@ -214,7 +214,11 @@ it("目录读取中/失败时不谎报空态：显示加载或原因 + 重试", 
 
   const onRetry = vi.fn();
   const failed = renderCard({ mode: "onSave", models: [], catalogFailure: "models: boom", onRetryCatalog: onRetry });
-  expect(textsOf(failed.tree).join(" ")).toContain("boom");
+  // 诊断原文（`models: boom`）翻成人话再上屏，原文留在 data 属性上。
+  expect(textsOf(failed.tree).join(" ")).toContain(dictionaryOf("zh")("usage.failure.models"));
+  expect(textsOf(failed.tree).join(" ")).not.toContain("boom");
+  const failure = elementsOf(failed.tree).find((element) => element.props["data-model-catalog-failure"] !== undefined)!;
+  expect(failure.props["data-failure-detail"]).toBe("models: boom");
   expect(textsOf(failed.tree)).not.toContain(dictionaryOf("zh")("models.empty"));
   const retry = elementsOf(failed.tree).find((element) => element.props["data-model-catalog-retry"] !== undefined)!;
   fire(retry, "onClick");

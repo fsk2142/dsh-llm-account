@@ -23,7 +23,10 @@ import { AccountsPanel } from "./accounts-panel";
 import { dictionaryOf } from "./copy";
 import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
+import { BackIcon } from "./icons";
+import { closeLoginWindow, openLoginWindow, pointLoginWindowAt, type LoginWindowHandle } from "./login-window";
 import { SidebarCard } from "./sidebar-card";
+import { useWebSearchPanel } from "./web-search-panel";
 import {
   applyModelEdit,
   closeAction,
@@ -48,8 +51,9 @@ import {
 import type { LoginView } from "./account-card";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
+import { ReadingCache } from "./reading-cache";
 import type { VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type CatalogModelsResult, type SwitchRecord, type SwitchRuntimeState, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type CatalogModelsResult, type SwitchRuntimeState, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
 
 /** 一个「设置命名空间」在客户端看到的面（`remote.settings`）。 */
 export interface RemoteSettings {
@@ -321,6 +325,20 @@ export function selectPanel(ctx: ClientSeamContext, panel: string | null): boole
 }
 
 /**
+ * 宿主是否真的能选面板（{@link selectPanel} 的「只探不发」版本）。
+ *
+ * 界面据此决定**要不要渲染**依赖 `selectPanel` 的入口（如仪表盘的「转到设置」）：渲染一个
+ * 点了没反应的按钮，比不渲染更糟 —— 与「远程面没挂上就不渲染刷新按钮」同一条纪律。
+ * @param ctx - 客户端上下文。
+ * @returns 解析得出 `selectPanel` 存在时为 `true`。
+ */
+export function canSelectPanel(ctx: ClientSeamContext): boolean {
+  const fromService = typeof ctx.get === "function" ? ctx.get("layout") : undefined;
+  const layout = (fromService ?? ctx.layout) as { selectPanel?: (value: string | null) => unknown } | undefined;
+  return layout !== undefined && typeof layout.selectPanel === "function";
+}
+
+/**
  * 远程读口统一拆信封。
  *
  * 宿主契约：每一次一元远程调用都 resolve 成 `RemoteResult<T>`（`{ ok: true, value }` 或
@@ -336,6 +354,23 @@ export function selectPanel(ctx: ClientSeamContext, panel: string | null): boole
  * @param result - 远程调用的原始返回值（通常是一个 Promise）。
  * @returns 载荷；调用失败或形状不认识时为 `undefined`（调用方一律按「远程不可用」降级）。
  */
+/**
+ * 调一次远程读口，把**同步**抛错也折成被拒绝的 promise。
+ *
+ * 为什么需要：`remoteValueDetailed` 只等 promise，如果命名空间方法在返回 promise 之前就抛
+ * （宿主代理未装、方法被撤下），异常会从调用点直接冒出去 —— 在登录按钮的点击处理器里
+ * 就是「页面报错、界面毫无变化」，在 1s 的轮询定时器里就是未捕获异常。两条路都必须能落地。
+ * @param call - 真正的远程调用（可能返回 `undefined`：远程面还没挂上）。
+ * @returns 可供 {@link remoteValueDetailed} 消费的 promise；`undefined` 表示远程面缺席。
+ */
+function callRemote(call: () => Promise<unknown> | undefined): Promise<unknown> | undefined {
+  try {
+    return call();
+  } catch (error: unknown) {
+    return Promise.reject(error);
+  }
+}
+
 async function remoteValue<T>(result: Promise<unknown> | unknown): Promise<T | undefined> {
   const detailed = await remoteValueDetailed<T>(result);
   return detailed.ok ? detailed.value : undefined;
@@ -399,17 +434,6 @@ export async function readStatus(namespace: UsageNamespace | undefined, vendor: 
 export async function readAccounts(namespace: UsageNamespace | undefined, vendor: string): Promise<AccountView[] | undefined> {
   if (namespace === undefined || typeof namespace.accounts !== "function") return undefined;
   return remoteValue<AccountView[]>(namespace.accounts(vendor));
-}
-
-/**
- * 读一个厂商的切换记录。
- * @param namespace - 已挂载的远程命名空间。
- * @param vendor - 厂商 id。
- * @returns 记录；命名空间缺席时为 `undefined`。
- */
-export async function readSwitches(namespace: UsageNamespace | undefined, vendor: string): Promise<SwitchRecord[] | undefined> {
-  if (namespace === undefined || typeof namespace.switches !== "function") return undefined;
-  return remoteValue<SwitchRecord[]>(namespace.switches(vendor));
 }
 
 /**
@@ -665,6 +689,23 @@ export interface VendorCardsContext {
 export const LOGIN_POLL_MS = 1_000;
 
 /**
+ * 登录轮询连续失败多少次才判成「读不到」。
+ *
+ * 一次远程调用失败（宿主忙、页面刚挂载）不该把等待面板打掉 —— 那会让授权链接莫名消失，
+ * 而用户可能正在浏览器里操作。连续 3 次（约 3 秒）才认为这轮状态面真的读不到了。
+ */
+export const LOGIN_POLL_MAX_MISSES = 3;
+
+/**
+ * 等待授权的默认期限（毫秒），只在宿主**没有**报 `expiresAt` 时兜底。
+ *
+ * 为什么需要：不登录时宿主状态会一直停在 `waiting`，界面若只等「状态变终态」，
+ * 授权链接就会一直挂着（用户报障：必须手动点取消）。Command Code 的真实窗口是 120 秒
+ * （`LOGIN_TIMEOUT_MS`），这里用同一档兜底；宿主报了自己的期限时以宿主为准。
+ */
+export const LOGIN_WAITING_TTL_MS = 120_000;
+
+/**
  * 是否继续轮询登录状态：只有 `waiting` 才需要（其余状态是终态或还没开始）。
  *
  * 单独成函数是为了能被单测：容器里的定时器本身不参与单测（Ruling 22），但「什么时候该继续
@@ -709,6 +750,24 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     /** 逐厂商的状态读口失败原因（读口在、但调用失败）。 */
     const [statusProblems, setStatusProblems] = useState<Record<string, string | undefined>>({});
     const [logins, setLogins] = useState<Record<string, LoginView | undefined>>({});
+    /** 正在启动网页登录的厂商（远程调用还没回来）：按钮禁用 + 「正在启动…」。 */
+    const [loginStarting, setLoginStarting] = useState<Record<string, boolean | undefined>>({});
+    /**
+     * 网页登录**调用没能发出去**的原因（宿主原文），按厂商。
+     *
+     * 与 `logins[vendor].reason` 分工：那里是登录流程给的稳定原因键；这里是远程面没挂上、
+     * 宿主装配报错这类「流程根本没跑起来」的原文。以前这类失败被 `void … .then(…)`
+     * 静默吞掉 —— 点了「网页登录」什么都不发生（本机报障的第二种现象）。
+     */
+    const [loginErrors, setLoginErrors] = useState<Record<string, string | undefined>>({});
+    /**
+     * 已收起的等待面板（按厂商）。
+     *
+     * 两种进入方式：用户**关掉了弹出的授权窗口**（他已不打算继续），或期限到了。
+     * 收起只是不渲染，**不取消**宿主流程 —— 关闭那一刻他可能刚批准，取消会把成功误杀；
+     * 轮询继续到终态，成功后账号照常刷新。
+     */
+    const [loginDismissed, setLoginDismissed] = useState<Record<string, boolean | undefined>>({});
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
     /** 首次状态读取是否仍在进行（区分加载中/读失败）。 */
     const [statusLoading, setStatusLoading] = useState<Record<string, boolean>>(() =>
@@ -722,12 +781,37 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [modelCatalogs, setModelCatalogs] = useState<Record<string, CatalogModelsResult | undefined>>({});
     /** 目录读取中（按厂商）。 */
     const [modelCatalogLoading, setModelCatalogLoading] = useState<Record<string, boolean | undefined>>({});
-    /** 「重试目录」的计数器：每次 +1 触发一次重读。 */
-    const [modelCatalogRevision, setModelCatalogRevision] = useState(0);
     /** 正在保存的命名空间（保存按钮立即反馈）。 */
     const [savingNs, setSavingNs] = useState<string | undefined>(undefined);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
+    /**
+     * 上一次账户操作没提交出去的原因（人话）。
+     *
+     * 只在「容器知道为什么没发出去」时设置：空名称/空密钥（`dispatchAccountAction` 的规矩）、
+     * 远程面还没挂上、以及远程调用真的 reject（以前是**静默丢失**的 —— `void pending.then(…)`
+     * 没有失败分支）。用户一改字段或取消就清掉。
+     */
+    const [actionError, setActionError] = useState<string | undefined>(undefined);
+    /**
+     * 挂载后的**第一次**状态读取是否已经发生：只有那一次允许吃模块级缓存。
+     * 修订号变化（凭据 / 账号操作）意味着数据真的变了，必须现读（见 `STATUS_READING_TTL_MS`）。
+     */
+    const initialStatusRead = useRef(false);
+    /** 本轮登录为授权页开的占位窗口（用户手势里同步打开，见 `login-window.ts`）。 */
+    const loginPopup = useRef<LoginWindowHandle | undefined>(undefined);
+    /** 登录轮询连续失败次数（按厂商）：单次抖动不该把等待面板打掉，连续失败才判成读不到。 */
+    const loginPollMisses = useRef<Record<string, number>>({});
+    /** 每家的等待期限（epoch 毫秒）：宿主报了 `expiresAt` 就用它，否则按首次观察 + 默认 TTL。 */
+    const loginDeadlines = useRef<Record<string, number | undefined>>({});
+    /**
+     * 这一家的这次等待是否**已经收尾**（超时/取消/终态）。
+     *
+     * 为什么需要：定时器是每秒一拍，`advanceTimers` 或慢网络下会有**多拍同时在途**；
+     * 第一拍判定超时后，后面几拍迟到的 `waiting` 响应会把面板又装回去（实测：到期后面板
+     * 闪回来）。收尾之后一律不再采纳 `waiting`。
+     */
+    const loginClosed = useRef<Record<string, boolean | undefined>>({});
 
     /** 采纳一次发现结果：页面状态与侧边栏开关存储（同一来源、两个消费者）。 */
     const adopt = (discovery: VendorDiscovery): void => {
@@ -775,11 +859,27 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         if (alive) adopt(discovery);
       });
       if (usage !== undefined) {
+        // 「打开设置就重新获取一次」的对策（2026-10-18 用户提问：授权后每次打开都要重取吗？）：
+        // 挂载后的第一次读取先看模块级缓存 —— TTL 内直接采纳上一次的读数（含设置页面板版本
+        // 与侧边栏写回的那份），一次网络调用都不发。修订号变化时**绕过**缓存：那意味着
+        // 账号/凭据真的变了（缓存会随这次现读被覆盖）。
+        const useCache = !initialStatusRead.current;
+        initialStatusRead.current = true;
         for (const entry of entries) {
+          const cached = useCache ? statusReadings.get(entry.providerId) : undefined;
+          if (cached !== undefined) {
+            setStatuses((current) => ({ ...current, [entry.providerId]: cached }));
+            setStatusProblems((current) => ({ ...current, [entry.providerId]: undefined }));
+            setStatusLoading((current) => ({ ...current, [entry.providerId]: false }));
+            continue;
+          }
           // 用带原因的读口：状态读不出来时把宿主原文存起来，卡片据此自证，
           // 而不是只显示一句对任何病因都成立的「账号数据暂不可用」。
           void readStatusDetail(usage, entry.providerId).then(({ status, problem }) => {
             if (!alive) return;
+            // 只有**完整**的读数进缓存：部分失败（端点级失败、某个账号没读到额度）照旧每次
+            // 重读 —— 把一次瞬时故障缓存 60 秒，就是用户看到的「额度信息又不见了」。
+            if (status !== undefined && completeReading(status)) statusReadings.put(entry.providerId, status);
             if (status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
             setStatusProblems((current) => ({ ...current, [entry.providerId]: problem }));
             setStatusLoading((current) => ({ ...current, [entry.providerId]: false }));
@@ -797,16 +897,70 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       setStatusLoading(Object.fromEntries(entries.map((entry) => [entry.providerId, false])));
     }, [usageProblem]);
 
+    // 页面卸载时关掉还没导航的占位窗口：授权网址还没回来用户就走了，别留一个空白页。
+    useEffect(
+      () => () => {
+        closeLoginWindow(loginPopup.current);
+        loginPopup.current = undefined;
+      },
+      [],
+    );
+
     // 登录轮询：只在等待授权时跑（规格 §8.1 第 6 条的「关闭即静默」精神 —— 没有等待就不问）。
     const waitingVendors = entries.map((entry) => entry.providerId).filter((vendor) => shouldPollLogin(logins[vendor]));
     useEffect(() => {
       if (usage === undefined || waitingVendors.length === 0) return;
       const timer = setInterval(() => {
         for (const vendor of waitingVendors) {
-          void remoteValue<LoginView>(usage.loginStatus(vendor)).then((status) => {
-            setLogins((current) => ({ ...current, [vendor]: status ?? LOGIN_UNKNOWN }));
+          void remoteValueDetailed<LoginView>(callRemote(() => usage.loginStatus(vendor))).then((detail) => {
+            // 这一拍出发后局面已经收尾（超时/取消/终态）：迟到的响应一律丢掉，
+            // 否则它会把刚收起的等待面板又装回去。
+            if (loginClosed.current[vendor] === true) return;
+            if (!detail.ok || detail.value === undefined) {
+              // 单次失败不该把等待面板打掉（那会让授权链接莫名消失）；连续失败才判成读不到，
+              // 并把原因落到提示里 —— 否则面板会挂到过期，用户以为「链接永远在」。
+              const misses = (loginPollMisses.current[vendor] ?? 0) + 1;
+              loginPollMisses.current[vendor] = misses;
+              if (misses >= LOGIN_POLL_MAX_MISSES) {
+                setLogins((current) => ({ ...current, [vendor]: { state: "failed", reason: "network" } }));
+                setLoginErrors((current) => ({
+                  ...current,
+                  [vendor]: detail.ok ? t("account.loginFailed") : detail.problem,
+                }));
+              }
+              return;
+            }
+            loginPollMisses.current[vendor] = 0;
+            const status = detail.value;
+            if (status.state === "waiting") {
+              // 期限：宿主报了 `expiresAt` 就用它；没报（旧宿主/其它厂商）就按首次观察 + 默认 TTL。
+              // **不登录时状态会一直停在 `waiting`**，所以到期必须由界面自己收尾 ——
+              // 否则授权链接会一直挂着，只能手点取消（用户报障）。
+              const deadline = status.expiresAt ?? loginDeadlines.current[vendor] ?? Date.now() + LOGIN_WAITING_TTL_MS;
+              loginDeadlines.current[vendor] = deadline;
+              if (Date.now() >= deadline) {
+                loginClosed.current[vendor] = true;
+                setLogins((current) => ({ ...current, [vendor]: { state: "failed", reason: "timeout" } }));
+                setLoginErrors((current) => ({ ...current, [vendor]: undefined }));
+                setLoginDismissed((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: false }));
+                loginDeadlines.current[vendor] = undefined;
+                return;
+              }
+              // 用户把弹出的授权窗口关了 = 他不打算继续：收起面板（**不**取消宿主流程 ——
+              // 关闭那一刻他可能刚批准，取消会把成功误杀；流程自己会超时，轮询到终态即止）。
+              if (loginPopup.current?.closed === true) {
+                setLoginDismissed((current) => (current[vendor] === true ? current : { ...current, [vendor]: true }));
+              }
+              setLogins((current) => ({ ...current, [vendor]: status }));
+              return;
+            }
+            // 终态：清理期限与「已收起」，让失败原因/成功都能正常显示。
+            loginClosed.current[vendor] = true;
+            loginDeadlines.current[vendor] = undefined;
+            setLoginDismissed((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: false }));
+            setLogins((current) => ({ ...current, [vendor]: status }));
             // 登录成功后账号表多了一条/换了密钥：重读一次，别让面板停在旧列表上。
-            if (status?.state === "success") setAccountRevision((current) => current + 1);
+            if (status.state === "success") setAccountRevision((current) => current + 1);
           });
         }
       }, LOGIN_POLL_MS);
@@ -823,30 +977,148 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const modelVendorKey = availableEntries.map((entry) => entry.providerId).join(",");
 
     // 读**所有**可用厂商的未过滤模型目录：全局模型卡要把两家放在一起；只读当前标签页会让
-    // 另一家的模型在切换标签页前一直缺一块。
+    // 另一家的模型在切换标签页前一直缺一块。刷新走 {@link refreshVendorCatalog}（按账户
+    // 逐个读），不在这里靠计数器重跑 —— 见那里的说明。
     useEffect(() => {
       if (usage === undefined) return;
       const targets = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
       if (targets.length === 0) return;
       let alive = true;
-      setModelCatalogLoading((current) => {
-        const next = { ...current };
-        for (const entry of targets) next[entry.providerId] = true;
-        return next;
-      });
+      // 目录是厂商级资源：TTL 内跨挂载复用（换一个设置对象标签页也不该把两家的目录重问一遍）。
+      // 手动入口（账号行的刷新、失败重试）走 {@link refreshVendorCatalog}：它绕过缓存并覆盖它。
+      const toRead: VendorEntry[] = [];
       for (const entry of targets) {
-        void readModels(usage, entry.providerId).then((result) => {
-          if (!alive) return;
-          setModelCatalogs((current) => ({ ...current, [entry.providerId]: result }));
-          setModelCatalogLoading((current) => ({ ...current, [entry.providerId]: false }));
-        });
+        const cached = catalogReadings.get(entry.providerId);
+        if (cached === undefined) {
+          toRead.push(entry);
+          continue;
+        }
+        setModelCatalogs((current) => ({ ...current, [entry.providerId]: cached }));
+        setModelCatalogLoading((current) => ({ ...current, [entry.providerId]: false }));
       }
+      if (toRead.length > 0) {
+        setModelCatalogLoading((current) => {
+          const next = { ...current };
+          for (const entry of toRead) next[entry.providerId] = true;
+          return next;
+        });
+        for (const entry of toRead) {
+          void readModels(usage, entry.providerId).then((result) => {
+            if (!alive) return;
+            if (result.failures.length === 0) catalogReadings.put(entry.providerId, result);
+            setModelCatalogs((current) => ({ ...current, [entry.providerId]: result }));
+            setModelCatalogLoading((current) => ({ ...current, [entry.providerId]: false }));
+          });
+        }
+      }
+      // 依赖里的 `accountRevision`：**账号变了目录也会变** —— 目录要鉴权（Open Design 的
+      // `/v1/models` 不带密钥回 401），加完账号/换完密钥不重读的话，界面会一直停在挂载时
+      // 那次「读不到」的空目录上（用户报障：加了 API 却没模型）。失败读数不进缓存，
+      // 所以这里必定会真读一次。
       return () => {
         alive = false;
       };
-    }, [usage, modelVendorKey, modelCatalogRevision]);
+    }, [usage, modelVendorKey, accountRevision]);
 
     // 合并账户面板：两家放在同一张卡片里，动作按厂商路由（设计 §7.2）。
+    // 按账户刷新模型目录（2026-10-18 用户要求：「重新获取模型不是刷新所有的，应该是刷新
+    // 单个账户的」）：账号行上每个账号都有自己的刷新按钮，点的就是**这一家**的目录重读 ——
+    // 目录是厂商级资源（`models()` 按厂商寻址），一次读取惠及该厂商的所有账号，但不碰别家，
+    // 也不重跑挂载时那个「读全部」的 effect。远程面还没挂上时静默返回：那时任何点击都发不出去。
+    const refreshVendorCatalog = (vendor: string): void => {
+      const current = usageNamespace(ctx);
+      if (current === undefined) return;
+      setModelCatalogLoading((loading) => ({ ...loading, [vendor]: true }));
+      void readModels(current, vendor).then((result) => {
+        if (result.failures.length === 0) catalogReadings.put(vendor, result);
+        setModelCatalogs((catalogs) => ({ ...catalogs, [vendor]: result }));
+        setModelCatalogLoading((loading) => ({ ...loading, [vendor]: false }));
+      });
+    };
+    const catalogFailureOf = (vendor: string): string | undefined => {
+      const catalog = modelCatalogs[vendor];
+      if (catalog === undefined || catalog.failures.length === 0) return undefined;
+      // 保持**原文**：翻译在下游渲染处做（`failureListText`），这样 `data-*` 里留得下诊断原样。
+      return catalog.failures.join("；");
+    };
+
+    /**
+     * 发起一次网页登录。
+     *
+     * 三件以前没做的事，缺任何一件用户看到的就是「点了没反应」：
+     * 1. **同步开一个占位窗口**（弹窗拦截器只认用户手势；授权网址是异步回来的）；
+     * 2. 立刻进「正在启动」态（按钮禁用 + 文案），点击到出结果之间不再是空白；
+     * 3. **失败必须落地**：流程给了 `failed/reason` 就记进 `logins`，调用本身没发出去 /
+     *    抛错就记进 `loginErrors`（原文进 `data-*`，界面说人话）。
+     * @param vendor - 厂商 id。
+     */
+    const beginLogin = (vendor: string): void => {
+      // 连点两次不该堆出两个窗口：先关掉上一次的占位窗口。
+      closeLoginWindow(loginPopup.current);
+      // 新的一次尝试：解除"已收尾"（上一次的迟到响应不该再被采纳）。
+      loginClosed.current[vendor] = false;
+      const popup = openLoginWindow();
+      loginPopup.current = popup;
+      setLoginErrors((current) => ({ ...current, [vendor]: undefined }));
+      setLoginStarting((current) => ({ ...current, [vendor]: true }));
+      const remote = callRemote(() => usage?.loginBegin(vendor));
+      if (remote === undefined) {
+        // 远程面还没挂上：以前这里静默返回（点一下什么都不发生）。
+        closeLoginWindow(popup);
+        loginPopup.current = undefined;
+        setLoginStarting((current) => ({ ...current, [vendor]: false }));
+        setLoginErrors((current) => ({ ...current, [vendor]: t("account.serviceNotReady") }));
+        return;
+      }
+      void remoteValueDetailed<LoginView>(remote).then((detail) => {
+        setLoginStarting((current) => ({ ...current, [vendor]: false }));
+        if (!detail.ok || detail.value === undefined) {
+          // 调用失败（宿主侧装配故障 / 形状不认识）：关掉占位窗口，把原因记下来。
+          loginClosed.current[vendor] = true;
+          closeLoginWindow(loginPopup.current);
+          loginPopup.current = undefined;
+          setLoginErrors((current) => ({
+            ...current,
+            [vendor]: detail.ok ? t("account.loginFailed") : detail.problem,
+          }));
+          return;
+        }
+        const status = detail.value;
+        const opened = status.state === "waiting" && status.authUrl !== undefined
+          ? pointLoginWindowAt(popup, status.authUrl)
+          : false;
+        // 不需要浏览器的状态（failed/success/idle）或导航失败：别留一个空白页。
+        if (!opened) {
+          closeLoginWindow(popup);
+          loginPopup.current = undefined;
+        }
+        if (status.state === "waiting") {
+          // 记下这次等待的期限：宿主报了 `expiresAt` 就用它，否则按现在 + 默认 TTL 兜底。
+          // 不登录时状态会一直停在 `waiting`，没有期限界面就只能等用户手点取消（用户报障）。
+          loginDeadlines.current[vendor] = status.expiresAt ?? Date.now() + LOGIN_WAITING_TTL_MS;
+          setLoginDismissed((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: false }));
+        }
+        setLogins((current) => ({ ...current, [vendor]: status }));
+        if (status.state === "success") setAccountRevision((current) => current + 1);
+      });
+    };
+
+    /**
+     * 取消某一家等待中的登录：宿主侧停掉流程（释放本地端口/子进程），界面立即回到未开始。
+     * @param vendor - 厂商 id。
+     */
+    const cancelLogin = (vendor: string): void => {
+      closeLoginWindow(loginPopup.current);
+      loginPopup.current = undefined;
+      loginClosed.current[vendor] = true;
+      loginPollMisses.current[vendor] = 0;
+      loginDeadlines.current[vendor] = undefined;
+      setLogins((current) => ({ ...current, [vendor]: LOGIN_UNKNOWN }));
+      setLoginErrors((current) => ({ ...current, [vendor]: undefined }));
+      setLoginDismissed((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: false }));
+      void remoteValue(callRemote(() => usage?.loginCancel(vendor)));
+    };
+
     const accountsPanel = createElement(AccountsPanel, {
       t,
       vendors: availableEntries.map((entry) => ({
@@ -857,26 +1129,60 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         ...(state.expandedVendor === entry.providerId && state.expandedRef !== undefined
           ? { expandedRef: state.expandedRef }
           : {}),
-        ...(logins[entry.providerId] === undefined ? {} : { login: logins[entry.providerId] }),
+        // 已收起的等待面板（用户关掉了授权窗口）：不渲染，但轮询继续到终态。
+        ...(logins[entry.providerId] === undefined || loginDismissed[entry.providerId] === true
+          ? {}
+          : { login: logins[entry.providerId] }),
         ...(modelCatalogs[entry.providerId] === undefined
           ? {}
           : { catalog: modelCatalogs[entry.providerId]!.models }),
+        ...(catalogFailureOf(entry.providerId) === undefined
+          ? {}
+          : { catalogFailure: catalogFailureOf(entry.providerId) }),
+        ...(modelCatalogLoading[entry.providerId] === true ? { catalogLoading: true } : {}),
         ...(statuses[entry.providerId]?.modelRules === undefined
           ? {}
           : { modelRules: statuses[entry.providerId]!.modelRules! }),
         ...(statusLoading[entry.providerId] === true ? { loading: true } : {}),
       })),
-      onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string }) => setState((current) => openAction(current, action, vendor)),
-      onActionField: (field: "label" | "key", value: string) => setState((current) => setActionField(current, field, value)),
-      onConfirmAction: (vendor: string) => {
-        const pending = state.action === undefined ? undefined : dispatchAccountAction(usage, vendor, state.action);
-        if (pending === undefined) return;
-        void pending.then(() => {
-          setState((current) => closeAction(current));
-          setAccountRevision((current) => current + 1);
-        });
+      ...(actionError === undefined ? {} : { actionError }),
+      // 按账户刷新：每个账号行的刷新按钮 → 重读**该账号所属厂商**的目录（见 refreshVendorCatalog）。
+      onRefreshModels: (vendor: string) => refreshVendorCatalog(vendor),
+      onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string }) => {
+        setActionError(undefined);
+        setState((current) => openAction(current, action, vendor));
       },
-      onCancelAction: () => setState((current) => closeAction(current)),
+      onActionField: (field: "label" | "key", value: string) => {
+        setActionError(undefined);
+        setState((current) => setActionField(current, field, value));
+      },
+      onConfirmAction: (vendor: string) => {
+        const action = state.action;
+        if (action === undefined) return;
+        if (usage === undefined) {
+          setActionError(t("account.serviceNotReady"));
+          return;
+        }
+        const pending = dispatchAccountAction(usage, vendor, action);
+        if (pending === undefined) {
+          // 空名称/空密钥：不发调用是设计（防误写空账号），但**必须**告诉用户为什么。
+          setActionError(action.kind === "key" ? t("account.keyRequired") : t("account.labelRequired"));
+          return;
+        }
+        setActionError(undefined);
+        void pending.then(
+          () => {
+            setState((current) => closeAction(current));
+            setAccountRevision((current) => current + 1);
+          },
+          // 远程侧拒绝（宿主校验、凭据服务报错）：以前没有失败分支，错误直接被丢掉。
+          (error: unknown) => setActionError(error instanceof Error ? error.message : String(error)),
+        );
+      },
+      onCancelAction: () => {
+        setActionError(undefined);
+        setState((current) => closeAction(current));
+      },
       onSelect: (vendor: string, ref: string | null) => {
         void usage?.selectAccount(vendor, ref).then(() => setAccountRevision((current) => current + 1));
       },
@@ -890,12 +1196,26 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         void usage?.setAccountModels?.(vendor, ref, models).then(() => setAccountRevision((current) => current + 1));
       },
       onToggleExpand: (vendor: string, ref: string) => setState((current) => toggleExpanded(current, ref, vendor)),
-      onLoginBegin: (vendor: string) => {
-        void remoteValue<LoginView>(usage?.loginBegin(vendor)).then((status) => {
-          if (status !== undefined) setLogins((current) => ({ ...current, [vendor]: status }));        });
+      onLoginBegin: (vendor: string) => beginLogin(vendor),
+      // 等待面板的「取消登录」：宿主停流程、界面立刻回到未开始。
+      onLoginCancel: (vendor: string) => cancelLogin(vendor),
+      // 再点一次「新增账户」（收起区块）= 后退一步：开着的添加表单与等待中的登录都收掉。
+      onCollapseAddChooser: () => {
+        setActionError(undefined);
+        setState((current) => (current.action === undefined ? current : closeAction(current)));
+        for (const [vendor, value] of Object.entries(logins)) {
+          if (value?.state === "waiting") cancelLogin(vendor);
+        }
       },
+      loginStarting,
+      loginError: loginErrors,
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
+    // 网页搜索卡片：跨厂商，放在厂商主体之后。以自定义 Hook 调用（而不是子元素组件）——
+    // Hook 必须落在本容器这一个挂载根上（Ruling 22；子元素里的 Hook 过不了迷你夹具）。
+    // 无条件挂载：读取/凭据/写回的每种失败面板内部都有人话出口，缺席接缝不该让整块
+    // 设置页少一张卡（那看起来像功能没装）。
+    const webSearch = useWebSearchPanel(ctx, t);
 
     return PageShell({
       state,
@@ -958,7 +1278,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                 t,
                 action: state.action,
                 expandedRef: state.expandedRef,
-                login: logins[activeVendor],
+                login: loginDismissed[activeVendor] === true ? undefined : logins[activeVendor],
                 openAction: (action) => setState((current) => openAction(current, action)),
                 setActionField: (field, value) => setState((current) => setActionField(current, field, value)),
                 confirmAction: () => {
@@ -994,7 +1314,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                   setFilter: (value) => setModelFilters((current) => ({ ...current, [activeEntry.ns]: value })),
                   catalog: modelCatalogs[activeVendor],
                   catalogLoading: modelCatalogLoading[activeVendor] === true,
-                  onRetryCatalog: () => setModelCatalogRevision((current) => current + 1),
+                  // 单卡模式的重试同样是按厂商读（与合并面板的账号行刷新同一个动作）。
+                  onRetryCatalog: () => refreshVendorCatalog(activeVendor),
                   draftInto: (ns, fields) => setState((current) => fields.reduce((acc, field) => setField(acc, ns, field.key, field.value), current)),
                   writeNow: (ns, fields) => {
                     // 立刻写（`immediate` 能力）：同样写行名；失败不静默 —— 记进保存错误，
@@ -1015,13 +1336,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                   if (usage === undefined || typeof usage.switchNow !== "function") return;
                   void usage.switchNow(activeVendor).then(() => setAccountRevision((current) => current + 1));
                 },
-                loginBegin: () => {
-                  void remoteValue<LoginView>(usage?.loginBegin(activeVendor)).then((status) => {
-                    if (status !== undefined) setLogins((current) => ({ ...current, [activeVendor]: status }));
-                  });
-                },
+                // 账号行上的行内登录入口：与合并面板的「网页登录」走同一条路径
+                // （同一个占位窗口 / 同一个「正在启动」态 / 同一套失败落地）。
+                loginBegin: () => beginLogin(activeVendor),
               }),
           }),
+      webSearch,
     });
   };
 }
@@ -1354,6 +1674,18 @@ export function createSidebarCardController(deps: {
 /** 中栏仪表盘的面板 id（`layout.selectPanel` 用它打开/关闭）。 */
 export const DASHBOARD_PANEL_ID = "llm-account-dashboard";
 
+/**
+ * 设置页在主栏插槽里的 key（「转到设置」按钮的目标）。
+ *
+ * 为什么把设置页也注册进 `main`：宿主**没有**「打开设置对话框」的插件接缝 —— 设置对话框的
+ * 开关住在 ui-settings-general 的模块级 store 里（`ctx.slots.inject("sidebar.settings", …)`
+ * 里构造，未注册为 cordis 服务），`ctx.layout` 只有 `selectPanel` / `toggleSidebar` /
+ * `openRightbar` / `closeRightbar`（app.asar 实测，2026-10-18）。而 `main` 插槽的 keyed
+ * 面板是宿主**明文支持**的扩展点（`selectPanel(id)` 按 key 选面板；Plugins 页与任务管理器
+ * 都是这么做的）。所以「转到设置」= 在主栏打开同一份设置页组件，带一条返回栏。
+ */
+export const SETTINGS_PANEL_ID = "llm-account-settings";
+
 /** 侧边栏卡片在插槽里的注册参数。 */
 export const SIDEBAR_CARD_ID = "llm-account-quota";
 
@@ -1433,14 +1765,18 @@ export function createSidebarCardView(options: {
         }
         if (next.failures.length > 0) {
           failures.current += 1;
-          const raw = next.failures[0] ?? t("usage.failed");
-          const failure = next.failures.some((item) => /timeout/i.test(item)) ? t("usage.quotaTimeout") : raw;
+          // 原文直接交给卡片（`failureText` 在渲染处翻人话，原文留在 data 属性上）：
+          // 端点短名（`whoami`）与超时包装在这里不该被压成一句泛泛的「读取失败」。
+          const raw = next.failures[0] ?? "";
           // 单个账号的额度读取失败不应该把整张卡片的账号信息清空：状态仍然可用，
           // 失败只作为附加提示；否则侧边栏只剩一个「LLM 账号」标题。
-          setView({ status: next, failure, stale: false });
+          setView({ status: next, failure: raw, stale: false });
           return;
         }
         failures.current = 0;
+        // 写回设置页的读数缓存：同一份 `status()` 读数，让「侧边栏开着」时打开设置直接吃最新的那份。
+        // 与设置页同一条纪律：只有**完整**的读数进缓存（见 completeReading）。
+        if (vendor !== undefined && completeReading(next)) statusReadings.put(vendor, next);
         setView({ status: next, stale: false });
       });
     };
@@ -1598,7 +1934,6 @@ export function createDashboardView(options: {
   const { ctx, entries, t } = options;
   return function ConnectedDashboard(): ReactElement {
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
-    const [switches, setSwitches] = useState<SwitchRecord[] | undefined>(undefined);
     /** 读不到数据时的原因（远程面没挂上 / 读口报错）；`undefined` = 没失败。 */
     const [problem, setProblem] = useState<string | undefined>(undefined);
 
@@ -1610,26 +1945,21 @@ export function createDashboardView(options: {
         return;
       }
       void Promise.all(
-        entries.map(async (entry) => {
-          const [detail, vendorSwitches] = await Promise.all([
-            readStatusDetail(usage, entry.providerId),
-            readSwitches(usage, entry.providerId),
-          ]);
-          return { entry, detail, switches: vendorSwitches };
-        }),
+        entries.map(async (entry) => ({ entry, detail: await readStatusDetail(usage, entry.providerId) })),
       ).then((results) => {
         const nextStatuses: Record<string, VendorUsageStatus | undefined> = {};
         const problems: string[] = [];
-        const records: SwitchRecord[] = [];
         for (const result of results) {
           nextStatuses[result.entry.providerId] = result.detail.status;
+          // 成功读数写回设置页缓存：从仪表盘「转到设置」时看到的是同一份（面板刷新也顺带暖缓存）。
+          // 与设置页、侧边栏同一条纪律：**不完整**的读数不进缓存（见 completeReading）。
+          if (result.detail.status !== undefined && completeReading(result.detail.status)) {
+            statusReadings.put(result.entry.providerId, result.detail.status);
+          }
           if (result.detail.problem !== undefined) problems.push(result.detail.problem);
-          if (result.switches !== undefined) records.push(...result.switches);
         }
         setStatuses(nextStatuses);
         setProblem(problems[0]);
-        records.sort((left, right) => right.at - left.at);
-        setSwitches(records);
       });
     };
 
@@ -1648,16 +1978,75 @@ export function createDashboardView(options: {
       t,
       status: statuses[entries[0]!.providerId],
       vendors: entries.map((entry) => ({ label: t(entry.labelKey), status: statuses[entry.providerId] })),
-      switches,
       onClose: () => options.onClose(),
       onRefresh: () => load(),
+      // 「转到设置」：面板里看到哪个账号有问题，直接去设置里管它（换密钥/移除/改模型）。
+      // 宿主有 `layout.selectPanel` 才给这个按钮（探针只探不发）：渲染一个点了没反应的
+      // 按钮，比不渲染更糟。
+      ...(canSelectPanel(ctx)
+        ? {
+            onOpenSettings: () => {
+              selectPanel(ctx, SETTINGS_PANEL_ID);
+            },
+          }
+        : {}),
       failure: problem,
     });
   };
 }
 
 /**
- * 把侧边栏卡片与中栏面板注册进各自的插槽 —— **常驻、无条件**。
+ * 造**主栏设置页容器组件**：「转到设置」按钮打开的那块面板。
+ *
+ * 宿主没有「打开设置对话框」的插件接缝（考证见 {@link SETTINGS_PANEL_ID}），所以这条路径把
+ * **同一份设置页组件**注册进 `main` 插槽：用户在用量面板里看到哪个账号有问题，点「转到设置」
+ * 就地管它（换密钥 / 移除 / 改模型），顶上留一条返回栏回用量面板。
+ *
+ * 返回而不是关闭面板（`selectPanel(null)`）：用户是从仪表盘来的，送回仪表盘他才不用再点一次
+ * 侧边栏卡片；`null` 会把他留在空主栏上。
+ *
+ * 页面组件由调用方构造好再传进来（`index.ts` 用宿主绑定的 `t` 造）—— 与 `registerPage` 同一条
+ * 分工：本层不 import 页面层，页面工厂从外面进来。本组件自身是**纯 props → 元素树**（无 Hook），
+ * 单测里用一个纯函数桩当页面就能覆盖返回栏与返回动作。
+ * @param options - 取词函数、页面组件工厂与返回动作。
+ * @returns 一个 React 函数组件。
+ */
+export function createSettingsPanelView(options: {
+  t: (key: string) => string;
+  pageComponent: (t: (key: string) => string) => unknown;
+  onBack: () => void;
+}): () => ReactElement {
+  const { t, pageComponent, onBack } = options;
+  // 工厂只调一次：插槽里的条目是常驻的，元素类型跨渲染复用同一个。
+  const page = pageComponent(t);
+  return function ConnectedSettingsPanel(): ReactElement {
+    return createElement(
+      "div",
+      { "data-card": "settings-panel", className: CSS_CLASS.settingsPanel },
+      createElement(
+        "header",
+        { className: CSS_CLASS.settingsBack },
+        createElement(
+          "button",
+          {
+            type: "button",
+            "data-settings-back": "true",
+            "aria-label": t("dashboard.back"),
+            title: t("dashboard.back"),
+            className: CSS_CLASS.buttonGhost,
+            onClick: () => onBack(),
+          },
+          createElement(BackIcon, null),
+          createElement("span", null, t("dashboard.back")),
+        ),
+      ),
+      createElement(page),
+    );
+  };
+}
+
+/**
+ * 把侧边栏卡片、中栏面板与主栏设置页注册进各自的插槽 —— **常驻、无条件**。
  *
  * 形状逐字对齐旧插件（`lib/client.js:9321-9341`）：`main` 用 `ctx.slots` + `key`，
  * `sidebar.footer.action` 用 `ctx.inject(["layout"], …)` + `id`/`order`，两处都 try/catch
@@ -1670,7 +2059,8 @@ export function createDashboardView(options: {
  *
  * **幂等由调用方保证**：`applyShell` 的模块级守卫（与页面同一个）确保两个 profile 行各调
  * 一次 `apply` 也只注册一份；直接调用本函数（测试）每次都会注册。
- * @param options - 上下文、厂商声明、取词函数与文案命名空间。
+ * @param options - 上下文、厂商声明、取词函数、文案命名空间与可选的设置页组件工厂
+ *   （给了才注册「转到设置」面板，见 {@link createSettingsPanelView}）。
  * @returns 撤销函数（插槽注册不可撤，见上；保留形状供调用方在 effect 里登记）。
  */
 export function registerSharedSurfaces(options: {
@@ -1678,6 +2068,7 @@ export function registerSharedSurfaces(options: {
   entries: readonly VendorEntry[];
   t: (key: string) => string;
   localeNs: string;
+  pageComponent?: (t: (key: string) => string) => unknown;
 }): () => void {
   const { ctx, entries, t, localeNs } = options;
   const disposeSidebar = registerSidebarCard(ctx, {
@@ -1705,9 +2096,26 @@ export function registerSharedSurfaces(options: {
       },
     }),
   });
+  // 「转到设置」的目标面板：拿得到页面工厂才注册（测试与没有页面实现的调用方不传）。
+  const disposeSettings =
+    options.pageComponent === undefined
+      ? () => undefined
+      : registerPanelCard(ctx, {
+          key: SETTINGS_PANEL_ID,
+          locale: localeNs,
+          component: createSettingsPanelView({
+            t,
+            pageComponent: options.pageComponent,
+            onBack: () => {
+              // 送回仪表盘而不是关闭主栏：用户是从那里来的（见 createSettingsPanelView 的说明）。
+              selectPanel(ctx, DASHBOARD_PANEL_ID);
+            },
+          }),
+        });
   return () => {
     disposeSidebar();
     disposePanel();
+    disposeSettings();
   };
 }
 
@@ -1718,6 +2126,48 @@ export function registerSharedSurfaces(options: {
 // 1. usage 远程面：$mount 一次，不随设置页开闭起落（旧插件挂在 apply 期，本机产物可读）；
 // 2. 侧边栏开关存储：哪一家的卡片该显示；
 // 3. 设置镜像：`settings/document-updated` 订阅 + 首读，让 2 在设置页关闭时也保持新鲜。
+
+/**
+ * 设置页**成功读数**的模块级缓存（`reading-cache.ts` 说明来由）。
+ *
+ * TTL 内重新打开设置直接复用，不重打网络；两个设置页实例（设置节与主栏面板版本）以及侧边栏
+ * 写回的读数共享同一份。失效路径：TTL 到期、凭据变更（apply 期的常驻订阅，见
+ * {@link startSharedState}）、账号/凭据修订号变化（容器强制现读并覆盖）、手动刷新（绕过缓存
+ * 并覆盖）。
+ */
+export const STATUS_READING_TTL_MS = 60_000;
+export const CATALOG_READING_TTL_MS = 300_000;
+/** 状态读数：只存**成功**的（读失败照旧每次重试 —— 缓存一次瞬时故障会把它假装成事实）。 */
+const statusReadings = new ReadingCache<VendorUsageStatus>(STATUS_READING_TTL_MS);
+/** 模型目录：只存完整成功的（`failures` 为空）；部分失败与失败都留给下次重读。 */
+const catalogReadings = new ReadingCache<CatalogModelsResult>(CATALOG_READING_TTL_MS);
+
+/**
+ * 这份状态读数够格进缓存吗？—— **不完整就不缓存**。
+ *
+ * 2026-10-18 用户报障「重新点开设置后原来显示的额度信息又不见了」的根因：缓存本意是省一次
+ * 网络，但它把**部分失败**的读数也当成功存了下来 —— 一次瞬时故障（端点超时、某个端点坏了）
+ * 就此在 60 秒 TTL 里变成「事实」，重开设置吃缓存，额度数字看起来凭空消失。判据：
+ * 1. 厂商级没有任何失败项；
+ * 2. 每个**已配置**的账号都拿到了非空额度读数（额度缺席、额度自己报失败、一个窗口都没有，
+ *    三种都说明这次读得不完整）。
+ *
+ * 不完整照旧每次重读：下一次要么完整（进缓存），要么还是失败（界面显示那一行中文原因，下次
+ * 打开再试）。未配置的账号不参与判定 —— 它没有密钥，本来就没有额度可读。
+ * @param status - 一次厂商状态读数。
+ * @returns 够格进缓存时为 `true`。
+ */
+export function completeReading(status: VendorUsageStatus): boolean {
+  if (status.failures.length > 0) return false;
+  for (const account of status.accounts) {
+    // 与账户行同一条纪律：线上 `accounts` 可能混进渲染不了的行（null / 非对象）。
+    if (typeof account !== "object" || account === null) continue;
+    if (account.configured !== true) continue;
+    const quota = account.quota;
+    if (quota === undefined || quota.failures.length > 0 || quota.windows.length === 0) return false;
+  }
+  return true;
+}
 
 /** 共享的 usage 远程面（`$mount` 只发一次）。 */
 let sharedUsage: UsageRemoteHandle | undefined;
@@ -1916,13 +2366,34 @@ export function startSidebarMirror(ctx: ClientSeamContext, entries: readonly Ven
 }
 
 /**
- * 启动插件级共享状态：usage 远程面 + 设置镜像（幂等，两个 profile 行各调一次无副作用）。
+ * 启动插件级共享状态：usage 远程面 + 设置镜像 + 凭据失效订阅（幂等，两个 profile 行各调一次无副作用）。
  * @param ctx - 客户端上下文（apply 期的那个）。
  * @param entries - 注册表里的厂商声明。
  */
 export function startSharedState(ctx: ClientSeamContext, entries: readonly VendorEntry[]): void {
   ensureUsageRemote(ctx);
   startSidebarMirror(ctx, entries);
+  watchCredentialInvalidation(ctx);
+}
+
+/** 凭据失效订阅是否已建立（apply 期一次）。 */
+let credentialWatchStarted = false;
+
+/**
+ * 凭据变更时让状态缓存失效。
+ *
+ * 为什么需要（而不只是容器里的 `subscribeCredentials`）：网页登录可能在设置页**关闭**时完成 ——
+ * 那时容器订阅不在场，事件白白过去；重新打开设置若命中 TTL 缓存，就会拿着登录前的旧账号表
+ * 当新鲜数据（刚加的账号「消失」最多一分钟）。这个订阅挂在 apply 期（插件生命周期），保证
+ * 任何时刻的凭据变更都清掉缓存。
+ * @param ctx - 客户端上下文。
+ */
+function watchCredentialInvalidation(ctx: ClientSeamContext): void {
+  if (credentialWatchStarted) return;
+  credentialWatchStarted = true;
+  subscribeCredentials(ctx, () => {
+    statusReadings.clear();
+  });
 }
 
 /** 复位全部模块级共享状态（测试隔离钩子；生产代码只增不减地复用同一份）。 */
@@ -1936,6 +2407,9 @@ export function resetSeams(): void {
   sidebarVendorListeners.clear();
   sidebarSettingsListeners.clear();
   sidebarMirrorStarted = false;
+  credentialWatchStarted = false;
+  statusReadings.clear();
+  catalogReadings.clear();
 }
 
 /**

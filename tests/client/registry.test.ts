@@ -74,26 +74,29 @@ describe("client plugin skeleton", () => {
     resetShell();
   });
 
-  it("同一包两个实例注册进同一个注册表，且只注册一次设置页", () => {
+  it("同一包多个实例注册进同一个注册表，且只注册一次设置页", () => {
     const harness = createClientContext();
     const shared = harness.context;
 
-    // Simulate the two profile rows mounting the same client bundle.
+    // Simulate the profile rows mounting the same client bundle.
     const beforeApply = applyCount();
     apply(shared);
     apply(shared);
 
-    // Registry: the package knows both of its vendors, and two `apply` calls do
-    // not produce a third entry (metadata is static — instance identity cannot
+    // Registry: the package knows all three of its vendors, and two `apply` calls do
+    // not produce a fourth entry (metadata is static — instance identity cannot
     // be read, per the controller's vendor-discovery ruling).
-    expect(vendors().map((vendor) => vendor.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
+    expect(vendors().map((vendor) => vendor.ns)).toEqual(["llm-commandcode", "llm-opencode-go", "llm-opendesign"]);
 
     // Page: exactly ONE `settings.section`, even though both instances ran.
     // The centre-column panel is registered the same way (once): both slots are
     // resident for the bundle's lifetime, and the second instance reaches
     // neither — the guards sit BEFORE `slots.inject`.
-    expect(harness.register).toHaveBeenCalledTimes(2);
-    expect(harness.registrations).toHaveLength(2);
+    // Three registrations: the settings page, the usage dashboard, and the
+    // settings panel the dashboard's「转到设置」button opens (same page component,
+    // a second `main` entry keyed differently).
+    expect(harness.register).toHaveBeenCalledTimes(3);
+    expect(harness.registrations).toHaveLength(3);
     const registration = harness.registrations[0]!;
     expect(registration.name).toBe("settings.section");
     expect(registration.id).toBe("llm-account");
@@ -102,6 +105,9 @@ describe("client plugin skeleton", () => {
     const panel = harness.registrations[1]!;
     expect(panel.name).toBe("main");
     expect(panel.key).toBe("llm-account-dashboard");
+    const settingsPanel = harness.registrations[2]!;
+    expect(settingsPanel.name).toBe("main");
+    expect(settingsPanel.key).toBe("llm-account-settings");
     // Legacy call-site shape: `label` binds the locale namespace, `inject` is the
     // `hooks`-mapping factory the page reads its data through.
     expect(registration.label).toBeTypeOf("function");
@@ -111,7 +117,8 @@ describe("client plugin skeleton", () => {
 
     // Only the first instance reached the slots: the guards sit BEFORE
     // `slots.inject`, so the second instance never touches them at all.
-    expect(harness.inject).toHaveBeenCalledTimes(2);
+    // Three slot injections: `settings.section` + two `main` panels.
+    expect(harness.inject).toHaveBeenCalledTimes(3);
     expect(harness.inject).toHaveBeenCalledWith("settings.section", expect.any(Function));
     expect(harness.inject).toHaveBeenCalledWith("main", expect.any(Function));
 

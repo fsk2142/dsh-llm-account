@@ -9,10 +9,10 @@
  *   `x-command-code-version` + `x-cli-environment` + attribution；
  * - 窗口形状（`parseWindowLimit` 第 6384-6393 行）：`{ used, cap, exceeded, resetAt }`
  *   位于 `billing/credits` 的 `windowLimits.fiveHour` / `windowLimits.weekly`；
- * - 月度消耗（`parseUsageTotals` 第 6372 行）：usage 的 `totalCredits` 单独成为月度消耗
- *   窗口。`billing/credits` 的 `monthlyCredits` 是月度**余额**（旧插件第 7738 行把它与
- *   其它额度池相加成 `balanceTotal`），阶段 1 没有可信的月度**配给总数**（套餐表是第 2 期
- *   的项目），所以不拿它当上限、不算比例 —— 见 `monthlyCreditsWindowOf`；
+ * - 月度窗口（`parseUsageTotals` 第 6372 行的消耗 + 旧插件 `monthlyView` 第 5722-5750 行
+ *   的套餐配给）：有套餐时 `cap` = 套餐每月额度、`used` = 额度 − `billing/credits` 的
+ *   `monthlyCredits` **余额**、`resetAt` = 本期结束；没有套餐时退化成 usage 的
+ *   `totalCredits` 当期已消耗 —— 见 `monthlyCreditsWindowOf` / `planOf`；
  * - 预算：与聊天请求同一档（第 7204-7207 行的说明），不用目录的 10 秒探测预算。
  *
  * **纪律**（设计 §12 Review Focus 4）：字段缺失就是「未知」，绝不倒成 0；缺失的窗口
@@ -23,8 +23,9 @@
  */
 import { LlmError, attributionHeaders } from "@deepseek-ai/dsh-llm";
 
-import type { QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
+import type { QuotaPlan, QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
+import { subscriptionPlanInfo } from "./plans";
 import {
   COMMAND_CODE_CLI_VERSION,
   DEFAULT_API_BASE,
@@ -34,10 +35,14 @@ import {
 
 /**
  * 本适配器产出的 `QuotaWindow.key` 词表（`QuotaWindow.key` 是字符串，这里只做文档与
- * 调用方收窄用）。**key 自带单位含义**，因为不同 key 下 `used`/`cap` 的单位不同：
- * - `"fiveHour"` / `"weekly"`：端点公布的用量窗口，`used`/`cap` 是 **token 数**；
- * - `"monthlyCredits"`：月度消耗，`used` 是本期已消耗的**额度**；**没有** `cap`（月度配给
- *   总数在第 1 期未知，而 `monthlyCredits` 这个字段本身是余额，见 `monthlyCreditsWindowOf`）。
+ * 调用方收窄用）。**key 自带单位含义**，本适配器这三种 key 下 `used`/`cap` 一律是**美元
+ * 口径的额度**（旧插件把窗口行与总消耗一律按 `$` 排版：窗口行 `lib/client.js` 第 3647 行、
+ * `/usage` 面板第 7742 行、`formatMoney` 第 1516 行；线上实测 5 小时上限 14 = GOAT 月度
+ * 70 的 1/5）：
+ * - `"fiveHour"` / `"weekly"`：端点公布的限额窗口（`windowLimits.fiveHour` / `.weekly`）；
+ * - `"monthlyCredits"`：月度窗口。有套餐时是**配给表**（`cap` = 套餐每月额度，`used` =
+ *   额度 − 余额，`resetAt` = 本期结束）；没有套餐时退化成当期**已消耗**（只有 `used`，
+ *   见 {@link monthlyCreditsWindowOf}）。
  *
  * 本适配器对 `QuotaWindow` 其余字段的用法约定（`QuotaWindow` 在共享内核里，本任务的
  * 改动范围只允许给它之外的 `CredentialPort.describe`，所以契约写在这里）：
@@ -75,8 +80,8 @@ export type QuotaEndpoint = (typeof QUOTA_ENDPOINTS)[number];
  * 一次归一化的输入：四个端点的原始负载（`undefined` 表示该端点失败）与已记名的失败项。
  * `whoami` 的 `org.id` 只用来给订阅端点拼 query（旧插件第 7251 行）；`QuotaSnapshot`
  * 没有账号字段，所以它不贡献任何输出字段 —— 保留这个参数是为了四个端点共用同一份形状，
- * 且调用方不必为「whoami 失败」另写一条路径。窗口来自 `credits`；月度消耗窗口来自
- * `usage` 的 `totalCredits`。
+ * 且调用方不必为「whoami 失败」另写一条路径。窗口来自 `credits`；月度窗口来自
+ * `usage` 的 `totalCredits`（无套餐）或套餐表 + `credits` 的 `monthlyCredits` 余额（有套餐）。
  */
 export interface CommandCodeQuotaParts {
   /** `/alpha/whoami` 的负载；失败时缺省。 */
@@ -146,13 +151,17 @@ function epochMillis(value: unknown): number | undefined {
 /**
  * 归一化一个窗口块。字段逐个独立：端点没给的字段保持缺省（`undefined`），
  * 而不是倒成 0 —— 缺失与「真的是 0」在 UI 上必须是两种读数。
+ *
+ * `unit: "usd"` 是**口径**而不是从负载里读出来的值：`billing/credits` 的两个窗口本来就是
+ * 美元额度（旧插件把这批数字一律按 `$` 排版：655 行起的窗口行与 `formatMoney` 第 1516 行），
+ * 所以这里给的是那个已知的单位，不是猜的。
  * @param raw - 端点给的窗口块。
  * @param key - 窗口 key（自带单位含义）。
  * @returns 归一化窗口；端点没公布这个窗口时为 `undefined`。
  */
 function windowOf(raw: unknown, key: CommandCodeQuotaKey): QuotaWindow | undefined {
   if (!isRecord(raw)) return undefined;
-  const window: QuotaWindow = { key };
+  const window: QuotaWindow = { key, unit: "usd" };
   const used = numberValue(raw.used);
   if (used !== undefined) window.used = used;
   const cap = numberValue(raw.cap);
@@ -191,49 +200,93 @@ function creditsRecord(credits: unknown): Record<string, unknown> | undefined {
 function windowLimitsOf(credits: unknown): QuotaWindow[] {
   if (!isRecord(credits)) return [];
   const container = windowContainer(credits);
+  // `limited: false` 是端点**明确**说「这两个窗口不设上限」（线上实测：窗口值为 null 且
+  // limited 为 false）。这时仍然给出窗口本身 ——「不限」是一个读数，不给就等于界面看起来
+  // 像丢了两个窗口。窗口给了对象时照旧用对象（那是真的限额）；`limited` 缺失是「未知」，
+  // 不猜成不限。
+  const unlimited = container.limited === false;
   const windows: QuotaWindow[] = [];
   for (const key of WINDOW_KEYS) {
     const window = windowOf(container[key], key);
     if (window !== undefined) windows.push(window);
+    else if (unlimited) windows.push({ key, unlimited: true });
   }
   return windows;
 }
 
 /**
- * 月度消耗窗口：`used` 是 usage 的本期已消耗额度，**没有** `cap`、没有 `percent`。
+ * 月度窗口：有套餐时按**套餐表**算配给，没有套餐时退化成当期已消耗。
  *
- * task brief 把 `credits.credits.monthlyCredits` 定义成月度**余额**（旧插件也把它当余额
- * 与其它额度池相加：`balanceTotal = c.monthlyCredits + c.purchasedCredits` 第 7738 行），
- * 而月度**配给总数**来自第 2 期才搬的静态套餐表（旧插件第 941-995 行）。阶段 1 没有可信
- * 的上限来源，所以这里**只报消耗、不算 `used/cap` 比例**：把余额当上限会得到一个符号相反、
- * 在快用完的账号上能到百分之几百的伪造读数（Review Focus 4）。
+ * 两种口径，都被线上数据钉住：
+ * 1. **有套餐**（subscriptions 报了 `planId` 且套餐表认得它、credits 报了 `monthlyCredits`
+ *    余额）：`cap` = 套餐每月额度，`used` = `cap − 余额`，`resetAt` = 本期结束。这是官方
+ *    CLI 与旧插件同一份算法（旧插件 `monthlyView` 第 5722-5750 行把
+ *    `credits.credits.monthlyCredits` 当**余额**、`plan.monthlyCredits` 当上限；
+ *    CLI `getCreditDepletionPct` 同）。线上交叉验证：GOAT（70）余额 55.7714050703 →
+ *    已用 14.2285949297，与该账号的 `weekly.used` 一字不差。
+ * 2. **没有套餐**（未订阅 / 端点没报 `planId` / 套餐表不认识 / 余额缺失）：只报
+ *    `usage.totalCredits` 这个**已消耗**，没有 `cap`、没有 `percent`。把余额当上限会得到
+ *    一个符号相反、在快用完的账号上能到百分之几百的伪读数（Review Focus 4），所以
+ *    余额缺失时宁可不算比例。
  *
- * 只要 usage 公布了 `totalCredits` 就产出这个窗口 —— 它与 `credits` 的负载无关；没有消耗
- * 数据时不造窗口（缺失不倒成 0）。单位是**额度**而不是 token，所以 key 用 `monthlyCredits`
- * 与两个 token 窗口区分开。
+ * 三者缺一不可：`cap` 要来自套餐表（不是余额）、余额要端点真的报了（缺失 ≠ 0）、
+ * `used` 不夹到负数下限以外（`used = max(0, cap − 余额)`，余额超过配给额时显示 0 已用）。
  * @param usage - `usage/summary` 的负载。
- * @returns 月度消耗窗口；usage 没给 `totalCredits` 时为 `undefined`。
+ * @param credits - `billing/credits` 的负载。
+ * @param plan - 已归一化的套餐（见 {@link planOf}）；没有订阅时为 `undefined`。
+ * @returns 月度窗口；usage 与 plan 都没给可用数字时为 `undefined`。
  */
-function monthlyCreditsWindowOf(usage: unknown): QuotaWindow | undefined {
+function monthlyCreditsWindowOf(usage: unknown, credits: unknown, plan: QuotaPlan | undefined): QuotaWindow | undefined {
+  const allowance = plan?.monthlyCredits;
+  const record = creditsRecord(credits);
+  const remaining = record === undefined ? undefined : numberValue(record.monthlyCredits);
+  if (allowance !== undefined && allowance > 0 && remaining !== undefined) {
+    const window: QuotaWindow = {
+      key: "monthlyCredits",
+      used: Math.max(0, allowance - remaining),
+      cap: allowance,
+      unit: "usd",
+    };
+    if (plan?.periodEnd !== undefined) window.resetAt = plan.periodEnd;
+    return window;
+  }
   const used = isRecord(usage) ? numberValue(usage.totalCredits) : undefined;
   if (used === undefined) return undefined;
-  return { key: "monthlyCredits", used };
+  return { key: "monthlyCredits", used, unit: "usd" };
 }
 
 /**
- * 套餐标识：subscriptions 的 `data.planId` 优先，缺失时退回 credits 的 `planId`
- * （旧插件 `getUsage` 第 7259 行）。套餐**名称**来自旧插件的已知套餐表，第 1 期不搬，
- * 所以这里只给标识。
+ * 归一化订阅套餐。
+ *
+ * 来源与旧插件 `getUsage` 第 7257-7261 行同一顺序：subscriptions 的 `data` 优先（带状态、
+ * 本期结束），`planId` 缺失时退回 credits 的 `planId`（CLI 也用它给遥测盖身份章）。名称与
+ * 每月额度查 {@link subscriptionPlanInfo}；**表里没有就不给名称与额度**，`id` 与 `status`
+ * 仍是端点给的原文。
+ *
+ * 只认 `data` 是对象的情况：`data: null` 是「这个账号没有订阅」（线上无订阅账号的形状），
+ * 不是「读失败」—— 读失败走 `failures`，两条路径在界面上是两种显示。
  * @param subscriptions - `billing/subscriptions` 的负载。
  * @param credits - `billing/credits` 的负载。
- * @returns 套餐标识，两端都没给时为 `undefined`。
+ * @returns 套餐；两端都没给标识与状态时为 `undefined`。
  */
-function planIdOf(subscriptions: unknown, credits: unknown): string | undefined {
+function planOf(subscriptions: unknown, credits: unknown): QuotaPlan | undefined {
   const subscription = isRecord(subscriptions) && isRecord(subscriptions.data) ? subscriptions.data : undefined;
-  const fromSubscription = subscription === undefined ? undefined : stringValue(subscription.planId);
-  if (fromSubscription !== undefined) return fromSubscription;
   const record = creditsRecord(credits);
-  return record === undefined ? undefined : stringValue(record.planId);
+  const id =
+    (subscription === undefined ? undefined : stringValue(subscription.planId)) ??
+    (record === undefined ? undefined : stringValue(record.planId));
+  const status = subscription === undefined ? undefined : stringValue(subscription.status);
+  if (id === undefined && status === undefined) return undefined;
+  const plan: QuotaPlan = { id: id ?? "" };
+  if (status !== undefined) plan.status = status;
+  const info = id === undefined ? undefined : subscriptionPlanInfo(id);
+  if (info !== undefined) {
+    plan.name = info.name;
+    plan.monthlyCredits = info.monthlyCredits;
+  }
+  const periodEnd = subscription === undefined ? undefined : epochMillis(subscription.currentPeriodEnd);
+  if (periodEnd !== undefined) plan.periodEnd = periodEnd;
+  return plan;
 }
 
 /**
@@ -242,10 +295,10 @@ function planIdOf(subscriptions: unknown, credits: unknown): string | undefined 
  * @returns 归一化读数；窗口顺序固定为 `fiveHour`、`weekly`、`monthlyCredits`。
  */
 export function toQuotaSnapshot(parts: CommandCodeQuotaParts): QuotaSnapshot {
+  const plan = planOf(parts.subscriptions, parts.credits);
   const windows = [...windowLimitsOf(parts.credits)];
-  const monthly = monthlyCreditsWindowOf(parts.usage);
+  const monthly = monthlyCreditsWindowOf(parts.usage, parts.credits, plan);
   if (monthly !== undefined) windows.push(monthly);
-  const plan = planIdOf(parts.subscriptions, parts.credits);
   return {
     windows,
     ...(plan === undefined ? {} : { plan }),

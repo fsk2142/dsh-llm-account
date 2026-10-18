@@ -94,8 +94,12 @@ class OpencodeLoginFlow implements OpencodeLogin {
     let device: DeviceCode;
     try {
       device = await beginDeviceFlow(this.#deps);
-    } catch {
-      this.#status = { state: "failed", reason: "network" };
+    } catch (error: unknown) {
+      // 端点回了 HTTP 4xx/5xx（服务端拒绝、路由变了）**不是**网络错误：两种原因对用户
+      // 的含义完全不同（该等/该查网络 vs 该找厂商），界面上必须分开说。
+      const message = error instanceof Error ? error.message : String(error);
+      const httpRejected = /HTTP \d{3}/.test(message);
+      this.#status = { state: "failed", reason: httpRejected ? "unavailable" : "network" };
       return { ...this.#status };
     }
     if (abort.signal.aborted) {

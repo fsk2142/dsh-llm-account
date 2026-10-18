@@ -22,6 +22,7 @@ import {
   registerSharedSurfaces,
   resetSeams,
   selectPanel,
+  SETTINGS_PANEL_ID,
   sidebarVendor,
   sidebarVendorSeeded,
   startSharedState,
@@ -145,7 +146,7 @@ it("客户端入口导出 { apply, inject }，inject 是 cordis 服务名", () =
   expect(inject).toEqual(["slots", "locale", "remote", "remote.settings"]);
 });
 
-it("两个 profile 行各调一次 apply：页面与两块插槽都只注册一次", () => {
+it("两个 profile 行各调一次 apply：页面与各插槽条目都只注册一次", () => {
   resetAll();
   const host = fakeClientContext();
 
@@ -156,15 +157,18 @@ it("两个 profile 行各调一次 apply：页面与两块插槽都只注册一�
   expect(sections).toHaveLength(1);
   expect(sections[0]!.entry).toMatchObject({ id: "llm-account", order: 12, locale: "settings.llm-account" });
   // 侧边栏卡片与中栏面板是**常驻注册**的（旧插件同形：门控是渲染决策，不是注册决策），
-  // 两个行共享一份模块实例，所以各插槽恰好一次。
+  // 两个行共享一份模块实例，所以各插槽条目恰好一次。
   const sidebar = host.registered.filter((item) => item.slot === "sidebar.footer.action");
   const panels = host.registered.filter((item) => item.slot === "main");
   expect(sidebar).toHaveLength(1);
-  expect(panels).toHaveLength(1);
+  // 主栏两条：用量仪表盘 + 「转到设置」打开的设置页（同一份页面组件的另一个实例）。
+  expect(panels).toHaveLength(2);
   expect(sidebar[0]!.entry).toMatchObject({ id: "llm-account-quota", order: 1, locale: "settings.llm-account" });
   // `main` 用 key（不是 id）：抄错会让面板永远打不开。
   expect(panels[0]!.entry).toMatchObject({ key: DASHBOARD_PANEL_ID, locale: "settings.llm-account" });
   expect(panels[0]!.entry["id"]).toBeUndefined();
+  expect(panels[1]!.entry).toMatchObject({ key: SETTINGS_PANEL_ID, locale: "settings.llm-account" });
+  expect(panels[1]!.entry["id"]).toBeUndefined();
 });
 
 it("usage 远程面两个行只 $mount 一次（插件级共享，不随页面开闭起落）", () => {

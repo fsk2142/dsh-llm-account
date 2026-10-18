@@ -202,6 +202,9 @@ export class LlmAccountUsageService extends TypertRemoteService {
     const failures: string[] = [];
 
     // 每个已配置账号都读一次额度：账号卡片要显示各自的可用额度，不能只给当前账号。
+    // 失败项用**账号名称**（不是内部 ref）：这一行会直接显示在用量面板上，而
+    // `acct_commandcode_work_ab12cd` 这种内部标识对用户没有任何意义（账户行早在
+    // 2026-10-17 就不再显示 ref，这条路径漏掉了）。
     const quotas = new Map<string, QuotaSummary>();
     await Promise.all(
       views
@@ -210,7 +213,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
           try {
             quotas.set(view.ref, quotaSummaryOf(await quotaWithTimeout(deps.quota, view.ref)));
           } catch (error) {
-            failures.push(`quota: ${vendor} ${view.ref} read failed (${messageOf(error)})`);
+            failures.push(`quota: ${vendor} "${view.label}" read failed (${messageOf(error)})`);
           }
         }),
     );
@@ -471,33 +474,61 @@ export class LlmAccountUsageService extends TypertRemoteService {
   }
 }
 
-/** 单个账号额度读取的超时（毫秒）；一个账号卡住不能拖住整页状态。 */
-const QUOTA_READ_TIMEOUT_MS = 8_000;
+/**
+ * 单个账号额度读取的超时（毫秒）；一个账号卡住不能拖住整页状态。
+ *
+ * **2026-10-18 从 8s 提到 30s**（本机实测：用量面板「经常获取不到账户信息」的根因）。
+ * Command Code 的额度端口是 `whoami` → 另三个端点并行，即**两跳**；而端口自身的端点预算
+ * （`DEFAULT_REQUEST_TIMEOUT_MS`）是 300s。8s 比一次正常读取的两跳时间还短 —— 慢网下
+ * （每跳 4-5s）读取必然在 8s 被砍，于是界面显示「暂无额度数据 + read failed (timeout
+ * after 8000ms)」，而账号信息本身（名称、状态）其实读到了。30s 留足了两跳在慢网下的
+ * 余量，同时仍能砍掉真正卡住的端点（端口自己的 300s 预算对界面太长了）。
+ */
+const QUOTA_READ_TIMEOUT_MS = 30_000;
 
 /**
- * 带超时的额度读取。
+ * 额度读取的重试次数（超时后**再试一次**）。
+ *
+ * 瞬时抖动（DNS、TLS 重协商、上游限流）是「经常失败」的另一半原因：第一次超时后再试
+ * 一次通常就成功。重试给一份**全新**的预算，不与第一次分摊。
+ *
+ * **只重试超时**：端口自己的确定性失败（没有可用密钥 `MISSING_CREDENTIAL` 等）会立刻
+ *  reject，再试一次必然同样失败，只是让界面多等一会儿；那些失败该由 failures 原样呈现。
+ */
+const QUOTA_READ_RETRIES = 1;
+
+/**
+ * 带超时（超时后重试一次）的额度读取。
  * @param quota - 额度端口。
  * @param ref - 账号 ref。
- * @returns 读数；超时抛错（由调用方记入 failures）。
+ * @returns 读数；超时（含重试）或端口明确失败时抛错（由调用方记入 failures）。
  */
 async function quotaWithTimeout(quota: QuotaPort, ref: string): Promise<QuotaSnapshot> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      quota.snapshot(ref),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`timeout after ${QUOTA_READ_TIMEOUT_MS}ms`)), QUOTA_READ_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
+  let lastError: unknown;
+  for (let attempt = 0; ; attempt += 1) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        quota.snapshot(ref),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(`timeout after ${QUOTA_READ_TIMEOUT_MS}ms`)), QUOTA_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (error) {
+      lastError = error;
+      // 只有「超时」值得再试一次；端口自己的失败（如没有密钥）是确定性的，重试无意义。
+      if (attempt >= QUOTA_READ_RETRIES || !/timeout/i.test(messageOf(error))) throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
+  throw lastError;
 }
 
 /** 把额度读数转成摘要：字段原样搬运，缺失即缺失。 */
 function quotaSummaryOf(snapshot: QuotaSnapshot): QuotaSummary {
   return {
-    ...(snapshot.plan === undefined ? {} : { plan: snapshot.plan }),
+    ...(snapshot.plan === undefined ? {} : { plan: { ...snapshot.plan } }),
     windows: snapshot.windows.map((window) => ({ ...window })),
     failures: [...snapshot.failures],
   };

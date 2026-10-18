@@ -2,6 +2,7 @@
 import { expect, it } from "vitest";
 
 import { dictionaryOf } from "../../src/client/copy";
+import { CSS_CLASS } from "../../src/client/css";
 import { QuotaBar } from "../../src/client/quota-bar";
 import type { StubElement } from "../support/react-stub";
 
@@ -29,4 +30,19 @@ it("没有读数时显示暂无额度数据，不画填充", () => {
   const bar = elementsOf(tree).find((element) => element.props["data-quota-bar"] !== undefined)!;
   expect(bar.props["data-quota-bar-level"]).toBe("missing");
   expect(elementsOf(tree).some((element) => element.props["data-quota-bar-fill"] !== undefined)).toBe(false);
+});
+
+it("「不限」窗口：只写一行「不限」，不画空条、不写重置时间（空条会被读成用光了）", () => {
+  const tree = QuotaBar({ t: dictionaryOf("zh"), window: { key: "fiveHour", unlimited: true } });
+  const bar = elementsOf(tree).find((element) => element.props["data-quota-bar"] !== undefined)!;
+  expect(bar.props["data-quota-bar-level"]).toBe("unlimited");
+  expect(bar.props["data-quota-bar-remaining"]).toBeUndefined();
+  const percent = elementsOf(tree).find((element) => element.props["data-quota-bar-percent"] !== undefined)!;
+  expect(percent.props["data-quota-bar-percent"]).toBe("unlimited");
+  expect(percent.props.children).toBe(dictionaryOf("zh")("quota.unlimited"));
+  // 整条都省略：没有轨道、没有读数行、没有「重置时间未提供」。
+  expect(elementsOf(tree).some((element) => element.props.className === CSS_CLASS.quotaBarTrack)).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-quota-bar-fill"] !== undefined)).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-quota-bar-value"] !== undefined)).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-quota-bar-reset"] !== undefined)).toBe(false);
 });

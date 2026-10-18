@@ -32,6 +32,7 @@ export type {
   CatalogModelsResult,
   FailureKind,
   ModelRule,
+  QuotaUnit,
   QuotaWindow,
   VendorCapabilities,
 } from "../core/adapter";
@@ -99,12 +100,21 @@ export interface AddAccountInput {
   key?: string;
 }
 
-/** 本包托管的两条厂商路由（客户端只做参数校验，不认识厂商语义）。 */
-export const VENDOR_IDS = ["commandcode", "dsh-opencode-go"] as const;
+/** 本包托管的三条厂商路由（客户端只做参数校验，不认识厂商语义）。 */
+export const VENDOR_IDS = ["commandcode", "dsh-opencode-go", "opendesign"] as const;
+
+/** 订阅套餐（与宿主侧 `QuotaPlan` 同形；厂商没报订阅时整个字段缺省）。 */
+export interface QuotaPlanSummary {
+  id: string;
+  name?: string;
+  status?: string;
+  monthlyCredits?: number;
+  periodEnd?: number;
+}
 
 /** 一条额度摘要。字段一律**原样**搬运：读数里没有的字段不许补 0。 */
 export interface QuotaSummary {
-  plan?: string;
+  plan?: QuotaPlanSummary;
   windows: QuotaWindow[];
   failures: string[];
 }

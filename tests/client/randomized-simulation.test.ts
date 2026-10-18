@@ -60,17 +60,19 @@ function rng(seed: number): () => number {
   };
 }
 
-const TABS = ["llm-commandcode", "llm-opencode-go"] as const;
+const TABS = ["llm-commandcode", "llm-opencode-go", "llm-opendesign"] as const;
 
 /**
  * 按标签页顺序（宿主设置里的行顺序）取第一家**已存储**开关为真的厂商。
  *
  * 只看已存储值：草稿把开关拨开不算 —— 卡片门控读的就是这一份（`page-state.ts` 的
  * `sidebarQuotaEnabled`）。行 id 与厂商 id 的对应写在这里，因为随机仿真不关心注册表。
+ * 三家都要查：外部改动（patch 文件/别的工具）翻的是**任意一行**的开关，包括 opendesign。
  */
 function firstEnabledVendor(host: FakeHost): string | undefined {
   if (host.rows.get("llm-commandcode")?.value["showSidebarQuota"] === true) return "commandcode";
   if (host.rows.get("opencode-go")?.value["showSidebarQuota"] === true) return "dsh-opencode-go";
+  if (host.rows.get("opendesign")?.value["showSidebarQuota"] === true) return "opendesign";
   return undefined;
 }
 
@@ -150,7 +152,7 @@ describe("随机操作序列仿真", () => {
 
       const beats: Beat[] = [
         () => tryFire(page.tree(), "data-tab", "onClick", pick(TABS)),
-        () => tryFire(page.tree(), "data-field-input", "onChange", pick(["apiBase", "baseURL"]), { target: { value: `https://edited-${seed}.example` } }),
+        () => tryFire(page.tree(), "data-field-input", "onChange", pick(["apiBase", "baseURL", "workspaceId"]), { target: { value: `https://edited-${seed}.example` } }),
         () => tryFire(page.tree(), "data-field-input", "onChange", "showSidebarQuota", { target: { checked: random() < 0.5 } }),
         () => tryFire(page.tree(), "data-save", "onClick", pick(TABS)),
         () => tryFire(page.tree(), "data-action", "onClick", "add"),

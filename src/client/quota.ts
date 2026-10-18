@@ -5,10 +5,10 @@
  * 这里只有纯函数，没有 React、没有厂商知识。
  * @module dsh-llm-account/src/client/quota
  */
-import type { QuotaWindow } from "./usage-contract";
+import type { QuotaPlanSummary, QuotaUnit, QuotaWindow } from "./usage-contract";
 
 /** 一个窗口的读数形状：决定用哪种写法呈现。 */
-export type QuotaShape = "used-cap" | "percent" | "used" | "missing";
+export type QuotaShape = "used-cap" | "percent" | "used" | "unlimited" | "missing";
 
 /**
  * 读数里的数字：最多两位小数，整数的尾巴不留 0。
@@ -22,6 +22,20 @@ export type QuotaShape = "used-cap" | "percent" | "used" | "missing";
 export function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return String(value);
   return String(Math.round(value * 100) / 100);
+}
+
+/**
+ * 一个额度数字的上屏写法：厂商给了单位就按单位排版，没给就按裸数字。
+ *
+ * `usd` = `$` + 两位小数（旧插件 `formatMoney` 第 1516 行的同一口径：`$7.22`、
+ * `$0.12 / $3.00`）。这是**显示**口径，原始浮点仍在状态与 `data-*` 属性里。
+ * @param value - 原始数值。
+ * @param unit - 厂商给的单位；缺省表示没给。
+ * @returns 展示用文本。
+ */
+function quotaAmount(value: number, unit: QuotaUnit | undefined): string {
+  if (unit === "usd") return `$${value.toFixed(2)}`;
+  return formatNumber(value);
 }
 
 /**
@@ -41,6 +55,7 @@ export type QuotaReading =
   | { shape: "used-cap"; used: number; cap: number }
   | { shape: "percent"; percent: number }
   | { shape: "used"; used: number }
+  | { shape: "unlimited" }
   | { shape: "missing" };
 
 /**
@@ -52,6 +67,8 @@ export type QuotaReading =
  * @returns 判别联合。
  */
 export function quotaReading(window: QuotaWindow): QuotaReading {
+  // 「厂商明说不限」优先于任何数字：它是端点给出的事实（`limited: false`），不是从字段推出来的。
+  if (window.unlimited === true) return { shape: "unlimited" };
   const { used, cap, percent } = window;
   if (used !== undefined && cap !== undefined) return { shape: "used-cap", used, cap };
   if (percent !== undefined) return { shape: "percent", percent };
@@ -103,15 +120,40 @@ export function quotaWindowText(t: (key: string) => string, window: QuotaWindow)
   switch (reading.shape) {
     case "used-cap":
       return t("quota.usedOf")
-        .replace("{used}", formatNumber(reading.used))
-        .replace("{cap}", formatNumber(reading.cap));
+        .replace("{used}", quotaAmount(reading.used, window.unit))
+        .replace("{cap}", quotaAmount(reading.cap, window.unit));
     case "percent":
       return t("quota.usedPercent").replace("{percent}", formatNumber(reading.percent));
     case "used":
-      return t("quota.used").replace("{used}", formatNumber(reading.used));
+      return t("quota.used").replace("{used}", quotaAmount(reading.used, window.unit));
+    case "unlimited":
+      return t("quota.unlimited");
     case "missing":
       return t("account.quotaMissing");
   }
+}
+
+/**
+ * 侧边栏只显示**一个**窗口：小时级的那个（5 小时 / 滚动小时）。
+ *
+ * 存在的理由：侧边栏槽位窄，每窗口一条 QuotaBar（标签 + 百分比 + 条 + 读数 + 重置五行
+ * 结构）排三条就把整块侧边栏撑满，而用户真正盯的是最短的那个窗口（额度打满会被自动
+ * 切走）。厂商窗口键写得不一致（`5h` / `fiveHour` / opencode 的 `rolling` 都是小时级），
+ * 这里统一认这三样。
+ *
+ * 兜底顺序：小时级窗口 → 第一窗口 → 厂商空窗列表的第一项。一个都不给时返回
+ * `undefined`（调用方画空态，不补 0）。
+ *
+ * 「不限」窗口不参与挑选：它不是读数（侧边栏只有一行，显示「月度额度 · 已用 62.21」比
+ * 「5 小时 · 不限」有用 —— 后者每家都有、永远不变）。
+ * @param windows - 归一化后的额度窗口。
+ * @param vendor - 厂商 id（仅用于兜底空窗列表）。
+ * @returns 要在侧边栏显示的那一个窗口。
+ */
+export function primaryQuotaWindow(windows: readonly QuotaWindow[], vendor: string): QuotaWindow | undefined {
+  const readable = windows.filter((window) => window.unlimited !== true);
+  const hourly = readable.find((window) => window.key === "fiveHour" || window.key === "5h" || window.key === "rolling");
+  return hourly ?? readable[0] ?? windows[0] ?? fallbackQuotaWindows(vendor)[0];
 }
 
 /**
@@ -154,16 +196,60 @@ export function quotaResetText(t: (key: string) => string, window: QuotaWindow):
 }
 
 /**
+ * 套餐行的文案：`套餐 GOAT · 每月 $70.00 · 本期至 2026-11-14`。
+ *
+ * 三块独立存在、缺一就不出现：名称（表里没有时退回标识原文）、状态（`active` 是常态，
+ * 不重复写；其余状态原文照排 —— 状态是厂商开放词表，认不出的原样显示）、每月额度、
+ * 本期结束。**没有套餐时返回 `undefined`**：界面据此不画这一行（未订阅不是错误）。
+ * @param t - 取词函数。
+ * @param plan - 归一化的套餐。
+ * @returns 一行文案；`plan.id` 为空且没有状态时为 `undefined`。
+ */
+export function quotaPlanText(t: (key: string) => string, plan: QuotaPlanSummary): string | undefined {
+  const parts: string[] = [];
+  const name = plan.name ?? plan.id;
+  if (name !== "") parts.push(`${t("account.plan")} ${name}`);
+  if (plan.status !== undefined && plan.status !== "" && plan.status !== "active") {
+    parts.push(quotaPlanStatusText(t, plan.status));
+  }
+  if (plan.monthlyCredits !== undefined) {
+    parts.push(t("quota.planMonthly").replace("{amount}", quotaAmount(plan.monthlyCredits, "usd")));
+  }
+  if (plan.periodEnd !== undefined) {
+    const date = new Date(plan.periodEnd);
+    if (!Number.isNaN(date.getTime())) {
+      parts.push(
+        t("quota.planPeriodEnd").replace(
+          "{date}",
+          date.toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" }),
+        ),
+      );
+    }
+  }
+  return parts.length === 0 ? undefined : parts.join(" · ");
+}
+
+/** 套餐状态的本地化文案；词表外的状态原样返回（不给厂商的状态编翻译）。 */
+function quotaPlanStatusText(t: (key: string) => string, status: string): string {
+  const key = `quota.planStatus.${status}`;
+  const text = t(key);
+  return text === key ? status : text;
+}
+
+/**
  * 展开报告里的一行明细：把存在的字段都写出来，缺失的一律不出现。
  * @param t - 取词函数。
  * @param window - 额度窗口。
  * @returns 明细文案；一个字段都没有时为 `-`。
  */
 export function quotaWindowDetail(t: (key: string) => string, window: QuotaWindow): string {
+  if (window.unlimited === true) return t("quota.unlimited");
   const parts: string[] = [];
   if (window.used !== undefined && window.cap !== undefined) {
     parts.push(
-      t("quota.usedOf").replace("{used}", formatNumber(window.used)).replace("{cap}", formatNumber(window.cap)),
+      t("quota.usedOf")
+        .replace("{used}", quotaAmount(window.used, window.unit))
+        .replace("{cap}", quotaAmount(window.cap, window.unit)),
     );
   }
   if (window.percent !== undefined) {
@@ -193,6 +279,8 @@ export interface QuotaMeter {
  * @returns 条宽与档位；一个数都没有时为 `undefined`。
  */
 export function quotaMeter(window: QuotaWindow): QuotaMeter | undefined {
+  // 不限窗口没有百分比可画（就算端点顺带给了数字也不画：那是自相矛盾的读数，条会撒谎）。
+  if (window.unlimited === true) return undefined;
   const reported = window.percent;
   const derived =
     reported === undefined && window.used !== undefined && window.cap !== undefined && window.cap > 0

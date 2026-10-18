@@ -30,6 +30,7 @@ import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { parseCatalog } from "./catalog";
+import { knownEfforts } from "./efforts";
 import { classifyCommandCodeFailure, commandCodeLlmError } from "./failures";
 import {
   CommandCodeStreamFailure,
@@ -263,6 +264,10 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   /**
    * 解析一个模型：目录里有就带上下文、输出上限、推理档位与图片能力；目录不可用或
    * 没有该模型时退化成「只有 id 的目录外模型」（旧插件 `resolveModel` 第 6971-6992 行）。
+   *
+   * 档位的来源是 {@link knownEfforts} 的静态表（网关从不公布档位），负载自己哪天公布了就
+   * 以负载为准 —— 那是更新的真相。表里没有的模型**不声明**档位：宿主的选择器随之不出现，
+   * 与旧插件同一行为。
    */
   override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     const config = resolveConfig(this.#deps.config());
@@ -273,7 +278,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       // 目录是建议性的：拉不到也应该能解析模型身份，让请求走到 provider 再报错。
       entry = undefined;
     }
-    const efforts = entry?.efforts ?? [];
+    const efforts = entry?.efforts ?? knownEfforts(model) ?? [];
     return {
       provider,
       id: model,
@@ -393,10 +398,21 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   /** 一次尝试：选协议 → 发请求 → （必要时）回退 CLI 传输 → 解码并套上时间预算。 */
   async *#attempt(config: ResolvedConfig, options: GenerateOptions, key: string): AsyncGenerator<StreamChunk> {
     const cap = Math.min(config.defaultMaxTokens, DEFAULT_GENERATE_MAX_TOKENS);
+    // 档位在**这里**按静态表再收一次口（旧插件第 7416-7419 行同一套）：`resolveModel` 声明的
+    // 集合是宿主做前置校验用的，但光靠它不够 —— 宿主的「关闭思考」会送来 `off`，而表里只有
+    // 部分模型认 `off`；不在表里的值一律**不发字段**（发出去会被厂商拒）。
+    const supported = knownEfforts(options.model) ?? [];
+    const declared =
+      options.reasoningEffort !== undefined && supported.includes(options.reasoningEffort)
+        ? options.reasoningEffort
+        : undefined;
     const facts: BodyFacts = {
       maxTokens: options.maxTokens === undefined ? cap : Math.min(options.maxTokens, cap),
       systemText: systemTextOf(options),
-      ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+      ...(declared === undefined ? {} : { reasoningEffort: declared }),
+      // 有可选档位的模型走 Messages 传输时要打开自适应思考（旧插件第 6624 行）：
+      // 那个端点只接受 `thinking.type.adaptive`，此时 `output_config.effort` 才生效。
+      ...(supported.length === 0 ? {} : { selectableEffort: true }),
       ...(config.workingDir === undefined ? {} : { workingDir: config.workingDir }),
       ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
     };

@@ -103,3 +103,23 @@ it("轮询被拒绝 / 工作区读不到：失败并给出稳定原因", async (
   expect(await settle(noOrg)).toBe("failed");
   expect((await noOrg.status()).reason).toBe("unavailable");
 });
+
+it("设备码申请失败分两种原因：HTTP 拒绝 → unavailable，传输失败 → network", async () => {
+  // 服务端回了 4xx/5xx：不是「网络错误」，用户该找厂商/稍后再试，而不是查自己的网。
+  const httpRejected = createOpencodeLogin({
+    fetchImpl: (async () => new Response("upstream down", { status: 503 })) as unknown as typeof fetch,
+    sleep: async () => undefined,
+    storeKey: async () => undefined,
+  });
+  expect(await httpRejected.begin()).toMatchObject({ state: "failed", reason: "unavailable" });
+
+  // 连接层面失败（DNS/ECONNREFUSED）：这才是网络错误。
+  const transport = createOpencodeLogin({
+    fetchImpl: (async () => {
+      throw new Error("fetch failed: ECONNREFUSED");
+    }) as unknown as typeof fetch,
+    sleep: async () => undefined,
+    storeKey: async () => undefined,
+  });
+  expect(await transport.begin()).toMatchObject({ state: "failed", reason: "network" });
+});
