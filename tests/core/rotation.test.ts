@@ -26,6 +26,25 @@ it("同一模型分配给多个账号时按全局顺序选，第一个试过后�
   expect(e.pick({ model: "m1", tried: new Set(["a"]) })).toBe("b");
 });
 
+it("同一模型分配给多个账号时，当前账号优先；当前没选该模型则按顺序", () => {
+  const e = new RotationEngine({
+    order: ["a", "b"],
+    pinned: "b",
+    rules: [
+      { models: ["m1"], account: "a" },
+      { models: ["m1"], account: "b" },
+    ],
+  });
+  expect(e.pick({ model: "m1", tried: new Set() })).toBe("b");
+
+  const other = new RotationEngine({
+    order: ["a", "b"],
+    pinned: "b",
+    rules: [{ models: ["m2"], account: "a" }],
+  });
+  expect(other.pick({ model: "m2", tried: new Set() })).toBe("a");
+});
+
 it("固定账号优先，但被标记失效后回落到其它账号", () => {
   const e = new RotationEngine({ order: ["a", "b"], pinned: "b", rules: [] });
   expect(e.pick({ model: "m", tried: new Set() })).toBe("b");
