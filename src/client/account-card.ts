@@ -26,6 +26,7 @@ import { rejectionText } from "./copy";
 import { failureListText } from "./failure-text";
 import { failureText } from "./failure-text";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon, RefreshIcon } from "./icons";
+import { isHttpUrl } from "./login-window";
 import type { AccountAction } from "./page-state";
 import { QuotaBar } from "./quota-bar";
 import { fallbackQuotaWindows, quotaPlanText } from "./quota";
@@ -713,7 +714,22 @@ function loginSection(props: AccountCardProps): ReactNode[] {
       );
     }
     if (login.authUrl !== undefined) {
-      detail.push(createElement("a", { key: "url", "data-login-url": "true", className: CSS_CLASS.link, href: login.authUrl, target: "_blank", rel: "noreferrer" }, login.authUrl));
+      detail.push(
+        createElement(
+          "a",
+          {
+            key: "url",
+            "data-login-url": "true",
+            className: CSS_CLASS.link,
+            // 授权网址来自厂商：只放行 http(s)。`javascript:` / `data:` 在 Electron 里
+            // 等于执行任意脚本（与 accounts-panel 的同一条闸门）。
+            ...(isHttpUrl(login.authUrl) ? { href: login.authUrl } : {}),
+            target: "_blank",
+            rel: "noreferrer",
+          },
+          login.authUrl,
+        ),
+      );
     }
   }
   if (login?.state === "failed") {

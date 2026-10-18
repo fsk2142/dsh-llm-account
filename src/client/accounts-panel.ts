@@ -12,6 +12,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { accountAddSection, accountRows, reasonText, type AccountCardProps, type LoginView } from "./account-card";
 import { CSS_CLASS } from "./css";
+import { isHttpUrl } from "./login-window";
 import type { AccountAction } from "./page-state";
 import type { VendorEntry } from "./registry";
 import type { CatalogModel, ModelRule, VendorUsageStatus } from "./usage-contract";
@@ -263,7 +264,14 @@ function waitingLogins(props: AccountsPanelProps): ReactElement[] {
           : [
               createElement(
                 "a",
-                { key: "url", "data-login-url": true, href: login.authUrl, target: "_blank", rel: "noreferrer", className: CSS_CLASS.link },
+                {
+                  key: "url",
+                  "data-login-url": true,
+                  ...(isHttpUrl(login.authUrl) ? { href: login.authUrl } : {}),
+                  target: "_blank",
+                  rel: "noreferrer",
+                  className: CSS_CLASS.link,
+                },
                 login.authUrl,
               ),
             ]),

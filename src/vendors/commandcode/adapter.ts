@@ -56,6 +56,15 @@ const ABORTED_CODE = "ABORTED";
 /** 目录请求的预算（旧插件 `MODELS_TIMEOUT_MS` 第 5391 行）。 */
 const MODELS_TIMEOUT_MS = 10_000;
 
+/**
+ * 目录读数的缓存时长（毫秒）。
+ *
+ * 宿主的模型选择器与每个请求的身份解析（`resolveModel`）都会问一次目录，而目录是**厂商级**
+ * 资源、按分钟级变化。不缓存等于每个请求多打一次网络。60 秒足够让「刚在设置里勾了模型」
+ * 立刻生效，也足够省掉重复请求；失败不缓存。
+ */
+const CATALOG_TTL_MS = 60_000;
+
 /** 错误正文最多读多少字符（旧插件 `readGenerateErrorBody` 第 6661 行同样封顶 64 KiB）。 */
 const ERROR_BODY_LIMIT = 65_536;
 
@@ -203,6 +212,12 @@ interface AttemptFailure {
 /** 命令码适配器：宿主 `LlmAdapter` 的一个真实子类。 */
 class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #deps: CommandCodeAdapterDeps;
+
+  /** 目录缓存：同一基地址在 TTL 内复用；换配置（基地址变化）立即失效。 */
+  #catalogCache: { base: string; at: number; entries: CatalogEntry[] } | undefined;
+
+  /** 在途的目录请求（并发去重：模型选择器一次能并发问好几条）。 */
+  #catalogInFlight: Promise<CatalogEntry[]> | undefined;
 
   /**
    * @param deps - 配置读取、轮换引擎、端口与各 I/O 注入点。
@@ -472,8 +487,39 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
     }).key;
   }
 
-  /** 拉目录并解析（目录条目不缓存：Task 10/第 2 期负责 TTL 缓存）。 */
+  /**
+   * 拉目录并解析（TTL 缓存 + 并发去重）。
+   *
+   * 缓存键是**基地址**：换基地址立即失效（目录属于端点，不属于账号）。60 秒的量级用真实
+   * 时钟即可，不需要注入。
+   * @param config - 已填默认值的配置。
+   * @param signal - 宿主的取消信号（有缓存时不发请求，信号自然用不上）。
+   * @returns 目录条目。
+   */
   async #catalog(config: ResolvedConfig, signal?: AbortSignal): Promise<CatalogEntry[]> {
+    const cached = this.#catalogCache;
+    if (cached !== undefined && cached.base === config.apiBase && Date.now() - cached.at <= CATALOG_TTL_MS) {
+      return cached.entries;
+    }
+    if (this.#catalogInFlight !== undefined) return this.#catalogInFlight;
+    const pending = this.#fetchCatalog(config, signal);
+    this.#catalogInFlight = pending;
+    try {
+      const entries = await pending;
+      this.#catalogCache = { base: config.apiBase, at: Date.now(), entries };
+      return entries;
+    } finally {
+      this.#catalogInFlight = undefined;
+    }
+  }
+
+  /**
+   * 真正打一次目录端点。
+   * @param config - 已填默认值的配置。
+   * @param signal - 宿主的取消信号。
+   * @returns 目录条目。
+   */
+  async #fetchCatalog(config: ResolvedConfig, signal?: AbortSignal): Promise<CatalogEntry[]> {
     const { url, headers } = catalogRequest(config.apiBase);
     const response = await this.#deps.fetchImpl(url, {
       headers,

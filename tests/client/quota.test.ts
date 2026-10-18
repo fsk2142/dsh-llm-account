@@ -134,14 +134,15 @@ it("套餐行：名称 + 每月额度 + 本期结束三块各自独立，缺哪�
 });
 
 it("重置时间：有值才写，resetAt 为 0 不显示 1970", () => {
-  const now = new Date(2026, 9, 18, 12, 0, 0).getTime();
-  const reset = new Date(2026, 9, 18, 18, 0, 0).getTime();
-  expect(quotaResetText(t, { key: "w", resetAt: reset })).toContain("今天");
-  expect(quotaResetText(t, { key: "w", resetAt: reset })).toContain("重置");
+  // 相对当前时刻构造，避免跨天（本地午夜）时用例自己失效。
+  const base = new Date();
+  const today = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 30, 0).getTime();
+  expect(quotaResetText(t, { key: "w", resetAt: today })).toContain("今天");
+  expect(quotaResetText(t, { key: "w", resetAt: today })).toContain("重置");
   expect(quotaResetText(t, { key: "w", resetAt: 0 })).toBeUndefined();
   expect(quotaResetText(t, { key: "w" })).toBeUndefined();
   // 未来日期也显示，不因为不是今天而丢。
-  expect(quotaResetText(t, { key: "w", resetAt: now + 86400_000 * 3 })).toContain("重置");
+  expect(quotaResetText(t, { key: "w", resetAt: base.getTime() + 86400_000 * 3 })).toContain("重置");
 });
 
 it("进度条：单位是 0–100 的已用百分比，用得越多档位越糟，缺失与除零不画条", () => {

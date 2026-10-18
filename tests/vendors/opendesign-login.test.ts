@@ -13,6 +13,7 @@ import {
   parseVelaPrompt,
   profileLabel,
   createOpenDesignLogin,
+  createVelaPreflight,
   discoverWorkspaceId,
   type OpenDesignLoginDeps,
   type VelaChild,
@@ -273,4 +274,14 @@ it("discoverWorkspaceId：找不到 vela / 命令失败 / 输出不是 JSON / �
   expect(await discoverWith("boom", 1)).toBeUndefined();
   expect(await discoverWith("not json at all", 0)).toBeUndefined();
   expect(await discoverWith('{"workspaceId":"  "}', 0)).toBeUndefined();
+});
+
+it("vela preflight 拒绝形状不对的工作区 id（参数注入闸门）", async () => {
+  const spawn = vi.fn();
+  const preflight = createVelaPreflight({ spawn, resolveVela: async () => "vela" });
+  // `--format` / 空格 / 换行都不能进到参数列表里。
+  await expect(preflight("ws --format yaml")).rejects.toThrow(/工作区 id/);
+  await expect(preflight("--help")).rejects.toThrow(/工作区 id/);
+  await expect(preflight("ws\nrm -rf /")).rejects.toThrow(/工作区 id/);
+  expect(spawn).not.toHaveBeenCalled();
 });

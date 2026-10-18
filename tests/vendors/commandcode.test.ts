@@ -250,6 +250,55 @@ it("listModels 应用目录可见性规则", async () => {
   expect(models[0]).toMatchObject({ provider: "commandcode", name: "M1", inputModalities: ["text"] });
 });
 
+it("目录在 TTL 内复用：连续两次 listModels 只打一次目录端点", async () => {
+  let hits = 0;
+  const fetchImpl = (async (): Promise<Response> => {
+    hits += 1;
+    return new Response(JSON.stringify({ models: [{ id: "m1", name: "M1" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test" }),
+    rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl,
+  });
+
+  await adapter.listModels("commandcode");
+  await adapter.listModels("commandcode");
+  expect(hits).toBe(1);
+  // 并发也不再重复打：在途请求被复用。
+  await Promise.all([adapter.listModels("commandcode"), adapter.catalogModels()]);
+  expect(hits).toBe(1);
+});
+
+it("换基地址后目录缓存立即失效", async () => {
+  let hits = 0;
+  let base = "https://a.example.test";
+  const fetchImpl = (async (): Promise<Response> => {
+    hits += 1;
+    return new Response(JSON.stringify({ models: [{ id: "m1", name: "M1" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: base }),
+    rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl,
+  });
+
+  await adapter.listModels("commandcode");
+  base = "https://b.example.test";
+  await adapter.listModels("commandcode");
+  expect(hits).toBe(2);
+});
+
 // ---------------------------------------------------------------------------
 // 推理档位（思考模式）：网关的 `/provider/v1/models` 只公布 `reasoning: true|false`、
 // **从不公布档位**（2026-10-18 线上实测：85 个模型的键只有 id / name / reasoning /

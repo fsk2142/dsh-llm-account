@@ -439,6 +439,100 @@ it("侧边栏卡片注册：插槽名与形状逐字对齐旧插件", () => {
   expect(registered[0]!.component).toBe("Component");
 });
 
+it("侧边栏卡片重复回调时只保留一份（插件市场会反复重注册 section）", () => {
+  const registered: { entry: Record<string, unknown>; component: unknown }[] = [];
+  const disposers: boolean[] = [];
+  let rearm: (() => void) | undefined;
+  const slots = {
+    inject: (name: string, callback: () => unknown) => {
+      expect(name).toBe("sidebar.footer.action");
+      rearm = () => {
+        callback();
+      };
+      return callback();
+    },
+    register: (entry: Record<string, unknown>, component: unknown) => {
+      const index = registered.length;
+      registered.push({ entry, component });
+      const off = (): void => {
+        disposers[index] = true;
+      };
+      return off as unknown;
+    },
+  };
+  const ctx: ClientSeamContext = { inject: (_names, callback) => callback({ slots }), slots };
+
+  const dispose = registerSidebarCard(ctx, { id: "llm-account-quota", order: 1, locale: "settings.llm-account", component: "Component" });
+  expect(registered).toHaveLength(1);
+  expect(disposers).toEqual([]);
+
+  // 宿主重新声明槽位（市场开关 section gate 会让它发生）：先撤旧的再注册新的。
+  rearm?.();
+  expect(registered).toHaveLength(2);
+  expect(disposers[0]).toBe(true);
+  expect(disposers[1]).not.toBe(true);
+
+  dispose();
+  expect(disposers[1]).toBe(true);
+});
+
+it("槽位重注册抛错时不该把 inject 控制器带走（设置页会永久消失）", () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    let rearm: (() => void) | undefined;
+    let fail = false;
+    const slots = {
+      inject: (_name: string, callback: () => unknown) => {
+        rearm = () => {
+          callback();
+        };
+        return callback();
+      },
+      register: () => {
+        if (fail) throw new Error("slot busy");
+        return () => undefined;
+      },
+    };
+    const ctx: ClientSeamContext = { inject: (_names, callback) => callback({ slots }), slots };
+    registerSidebarCard(ctx, { id: "x", order: 1, locale: "l", component: "C" });
+    // 宿主重新声明槽位，而这时注册被拒（其它插件正在重注册）。
+    fail = true;
+    expect(() => rearm?.()).not.toThrow();
+    expect(errors).toHaveBeenCalled();
+  } finally {
+    errors.mockRestore();
+  }
+});
+
+it("中栏面板重复回调时也只保留一份", () => {
+  const registered: unknown[] = [];
+  const disposers: boolean[] = [];
+  let rearm: (() => void) | undefined;
+  const slots = {
+    inject: (_name: string, callback: () => unknown) => {
+      rearm = () => {
+        callback();
+      };
+      return callback();
+    },
+    register: (entry: Record<string, unknown>, component: unknown) => {
+      const index = registered.length;
+      registered.push({ entry, component });
+      return () => {
+        disposers[index] = true;
+      };
+    },
+  };
+
+  const dispose = registerPanelCard({ slots }, { key: "llm-account-dashboard", locale: "settings.llm-account", component: "Panel" });
+  expect(registered).toHaveLength(1);
+  rearm?.();
+  expect(registered).toHaveLength(2);
+  expect(disposers[0]).toBe(true);
+  dispose();
+  expect(disposers[1]).toBe(true);
+});
+
 it("中栏面板注册用 key 而不是 id（旧插件的 main 插槽形状）", () => {
   const registered: { entry: Record<string, unknown>; component: unknown }[] = [];
   const slots = {

@@ -64,6 +64,15 @@ const ABORTED_CODE = "ABORTED";
 /** 目录请求的预算（与另两家的同一档）。 */
 const MODELS_TIMEOUT_MS = 10_000;
 
+/**
+ * 目录读数的缓存时长（毫秒）。
+ *
+ * 每次 `resolveModel`（宿主的模型选择器、每个请求的身份解析）都会问一次目录，而目录是**厂商级**
+ * 资源、按分钟级变化。不缓存等于每个请求多打一次网络（2026-10-18 审计：一次对话里能重复十几次）。
+ * 60 秒足够让「刚在设置里勾了模型」立刻生效，也足够省掉这些重复请求；失败不缓存。
+ */
+const CATALOG_TTL_MS = 60_000;
+
 /** 错误正文最多读多少字符（与另两家同一上限）。 */
 const ERROR_BODY_LIMIT = 65_536;
 
@@ -209,6 +218,12 @@ interface AttemptFailure {
 /** Open Design 适配器：宿主 `LlmAdapter` 的一个真实子类。 */
 class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #deps: OpenDesignAdapterDeps;
+
+  /** 目录缓存：同一基地址 + 同一把密钥在 TTL 内复用；并发的请求共用同一个 promise。 */
+  #catalogCache: { base: string; key: string | undefined; at: number; entries: CatalogEntry[] } | undefined;
+
+  /** 在途的目录请求（并发去重：模型选择器一次能并发问好几条）。 */
+  #catalogInFlight: Promise<CatalogEntry[]> | undefined;
 
   /**
    * @param deps - 配置读取、轮换引擎、端口与各 I/O 注入点。
@@ -489,10 +504,43 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     }).key;
   }
 
-  /** 拉目录并解析（目录条目不缓存：与另两家一致，TTL 缓存属后续期次）。 */
+  /**
+   * 拉目录并解析（TTL 缓存 + 并发去重）。
+   *
+   * 缓存键是「基地址 + 密钥」：换账号/换基地址立即失效；`now` 走真实时钟（60 秒的量级，
+   * 不需要注入）。
+   * @param config - 已填默认值的配置。
+   * @param signal - 宿主的取消信号（有缓存时不发请求，信号自然用不上）。
+   * @returns 目录条目。
+   */
   async #catalog(config: ResolvedConfig, signal?: AbortSignal): Promise<CatalogEntry[]> {
+    const key = await this.#catalogKey();
+    const cached = this.#catalogCache;
+    if (cached !== undefined && cached.base === config.apiBase && cached.key === key && Date.now() - cached.at <= CATALOG_TTL_MS) {
+      return cached.entries;
+    }
+    if (this.#catalogInFlight !== undefined) return this.#catalogInFlight;
+    const pending = this.#fetchCatalog(config, key, signal);
+    this.#catalogInFlight = pending;
+    try {
+      const entries = await pending;
+      this.#catalogCache = { base: config.apiBase, key, at: Date.now(), entries };
+      return entries;
+    } finally {
+      this.#catalogInFlight = undefined;
+    }
+  }
+
+  /**
+   * 真正打一次目录端点。
+   * @param config - 已填默认值的配置。
+   * @param key - 目录请求用的推理密钥。
+   * @param signal - 宿主的取消信号。
+   * @returns 目录条目。
+   */
+  async #fetchCatalog(config: ResolvedConfig, key: string | undefined, signal?: AbortSignal): Promise<CatalogEntry[]> {
     // 目录与推理同一条 Bearer（2026-10-18 实测：不带密钥回 401 missing_api_key）。
-    const { url, headers } = catalogRequest(config.apiBase, await this.#catalogKey());
+    const { url, headers } = catalogRequest(config.apiBase, key);
     const response = await this.#deps.fetchImpl(url, {
       headers,
       signal: signal ?? AbortSignal.timeout(MODELS_TIMEOUT_MS),

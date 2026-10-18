@@ -1507,31 +1507,48 @@ export interface SidebarCardRegistration {
 export function registerSidebarCard(ctx: ClientSeamContext, registration: SidebarCardRegistration): () => void {
   const inject = ctx.inject;
   if (typeof inject !== "function") return () => undefined;
-  let dispose: (() => void) | undefined;
+  // `slots.inject` 会在槽位声明每次变化时重新回调（宿主重开设置、别的插件重新注册
+  // —— 插件市场的 section gate 就是反复重注册的）。旧实现丢弃了 `slots.register`
+  // 的返回句柄，于是每次回调都追加一份同名卡片，且旧条目不会被撤销。
+  let unregister: (() => void) | undefined;
+  const disposeAll = (): void => {
+    const off = unregister;
+    unregister = undefined;
+    if (typeof off === "function") off();
+  };
   inject(["layout"], (layoutCtx: ClientSeamContext) => {
     try {
       const slots = slotsOf(layoutCtx);
       if (slots === undefined) return;
-      slots.inject(SIDEBAR_SLOT, () =>
-        slots.register(
-          {
-            name: SIDEBAR_SLOT,
-            id: registration.id,
-            order: registration.order,
-            locale: registration.locale,
-            inject: registration.face ?? (() => ({ hooks: {} })),
-          },
-          registration.component,
-        ),
-      );
-      // 插槽服务不返回注销句柄，所以退订走 `ctx.effect` 的语义：由调用方在 effect 里登记本函数。
-      dispose = () => undefined;
+      slots.inject(SIDEBAR_SLOT, () => {
+        // 回调由宿主在每次槽位声明变化时重跑；抛错会被宿主当成致命错误并停掉控制器，
+        // 之后卡片再也不出现。自己兜住，让控制器活着等下一次机会。
+        try {
+          // 先撤销上一条，再注册新的：任何时刻都只有一份。
+          disposeAll();
+          const off = slots.register(
+            {
+              name: SIDEBAR_SLOT,
+              id: registration.id,
+              order: registration.order,
+              locale: registration.locale,
+              inject: registration.face ?? (() => ({ hooks: {} })),
+            },
+            registration.component,
+          );
+          unregister = typeof off === "function" ? (off as () => void) : undefined;
+          return off;
+        } catch (error) {
+          console.error("[dsh-llm-account] could not re-register the sidebar footer card:", error);
+          return () => undefined;
+        }
+      });
     } catch (error) {
       // 与旧插件同一处置：留一行错误，不让整个客户端因为一次注册失败而失效。
       console.error("[dsh-llm-account] could not register the sidebar footer card:", error);
     }
   });
-  return () => dispose?.();
+  return disposeAll;
 }
 
 /** 读一个上下文上的插槽服务。 */
@@ -1945,23 +1962,39 @@ export function registerPanelCard(
 ): () => void {
   const slots = slotsOf(ctx);
   if (slots === undefined) return () => undefined;
+  // 与 `registerSidebarCard` 同一条生命周期纪律：`slots.inject` 会重复回调，
+  // 每次回调都要先撤销上一条，否则会累积多份同 key 的面板。
+  let unregister: (() => void) | undefined;
+  const disposeAll = (): void => {
+    const off = unregister;
+    unregister = undefined;
+    if (typeof off === "function") off();
+  };
   try {
-    slots.inject(MAIN_SLOT, () =>
-      slots.register(
-        {
-          name: MAIN_SLOT,
-          key: registration.key,
-          locale: registration.locale,
-          inject: registration.face ?? (() => ({ hooks: {} })),
-        },
-        registration.component,
-      ),
-    );
+    slots.inject(MAIN_SLOT, () => {
+      try {
+        disposeAll();
+        const off = slots.register(
+          {
+            name: MAIN_SLOT,
+            key: registration.key,
+            locale: registration.locale,
+            inject: registration.face ?? (() => ({ hooks: {} })),
+          },
+          registration.component,
+        );
+        unregister = typeof off === "function" ? (off as () => void) : undefined;
+        return off;
+      } catch (error) {
+        console.error("[dsh-llm-account] could not re-register the centre-column panel:", error);
+        return () => undefined;
+      }
+    });
   } catch (error) {
     // 与侧边栏卡片同一处置：留一行错误，不让整个客户端因为一次注册失败而失效。
     console.error("[dsh-llm-account] could not register the centre-column panel:", error);
   }
-  return () => undefined;
+  return disposeAll;
 }
 
 /**

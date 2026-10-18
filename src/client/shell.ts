@@ -497,22 +497,32 @@ function registerPage(context: ClientShell, options: ApplyShellOptions): void {
     "dsh-llm-account: settings section",
   );
   context.slots.inject("settings.section", () => {
-    registered?.();
-    const off = context.slots.register(
-      {
-        name: "settings.section",
-        id: PAGE_ID,
-        order: PAGE_ORDER,
-        /** Legacy shape: `() => ctx.locale.bind(ns)("nav")`. */
-        label: () => t("nav"),
-        locale: PAGE_LOCALE_NS,
-        /** Legacy shape: a factory returning `{ hooks: { ... } }`. */
-        inject: () => ({ hooks: {} }),
-      },
-      component as PlaceholderComponent,
-    );
-    registered = typeof off === "function" ? (off as () => void) : undefined;
-    return off;
+    // 这个回调由宿主在**每次槽位声明变化**时重跑（其它插件反复注册/撤销，设置对话框重开）。
+    // 一旦回调抛错，宿主会把我们的 inject 控制器整体停掉 —— 之后永远不再回调，设置页也就
+    // 再也不出现（y 表现为「打开插件市场后我们的设置打不开」）。所以这里自己兜住：
+    // 记一行错误、返回空注销函数，让控制器活着等下一次机会。
+    try {
+      registered?.();
+      registered = undefined;
+      const off = context.slots.register(
+        {
+          name: "settings.section",
+          id: PAGE_ID,
+          order: PAGE_ORDER,
+          /** Legacy shape: `() => ctx.locale.bind(ns)("nav")`. */
+          label: () => t("nav"),
+          locale: PAGE_LOCALE_NS,
+          /** Legacy shape: a factory returning `{ hooks: { ... } }`. */
+          inject: () => ({ hooks: {} }),
+        },
+        component as PlaceholderComponent,
+      );
+      registered = typeof off === "function" ? (off as () => void) : undefined;
+      return off;
+    } catch (error) {
+      console.error("[dsh-llm-account] could not register the settings section (will retry on the next slot change):", error);
+      return () => undefined;
+    }
   });
 }
 

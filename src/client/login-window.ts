@@ -62,7 +62,26 @@ export function openLoginWindow(openWindow?: OpenWindow): LoginWindowHandle | un
  * @param url - 授权网址。
  * @returns 是否成功导航（失败时调用方应关掉窗口，别留空白页）。
  */
+/**
+ * 授权网址是否可安全打开：只接受 `http:` / `https:`。
+ *
+ * 网址来自厂商（`authUrl` / `verificationUri`），而它最终会进 `window.location` 或 `<a href>` ——
+ * `javascript:` / `data:` 这类协议在 Electron 宿主里等于执行任意脚本。协议白名单是这里唯一
+ * 可靠的闸门（渲染层 React 不会逃逸 href 的协议）。
+ * @param url - 厂商给的网址。
+ * @returns 可以打开时为 `true`。
+ */
+export function isHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function pointLoginWindowAt(handle: LoginWindowHandle | undefined, url: string): boolean {
+  if (!isHttpUrl(url)) return false;
   if (handle === undefined || handle.closed === true) return false;
   try {
     // 读 `location` 本身就可能抛（跨域窗口）：必须一起放进 try 里。

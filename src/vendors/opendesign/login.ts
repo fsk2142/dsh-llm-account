@@ -826,6 +826,12 @@ export function createVelaPreflight(deps: VelaPreflightDeps = {}): (workspaceId:
   const resolveVela = deps.resolveVela ?? defaultResolveVela;
   const timeoutMs = deps.timeoutMs ?? VELA_PREFLIGHT_TIMEOUT_MS;
   return async (workspaceId: string): Promise<unknown> => {
+    // 工作区 id 来自设置/登录产物（用户可改），最终会成为命令行参数。`--`/空格这类值会被
+    // vela 的参数解析器当成开关（参数注入），所以只接受厂商实际使用的字符集，且**不能以
+    // `-` 开头**（否则 `--help` 也能过字符集）。与 `index.ts` 的 `velaPreflight` 同一道闸门。
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(workspaceId)) {
+      throw new Error("工作区 id 形状不对（只允许字母、数字、下划线与连字符，且不能以连字符开头）");
+    }
     const vela = await resolveVela();
     if (vela === undefined) {
       throw new Error("本机找不到 vela（VELA_BIN、Open Design 桌面端内置与 PATH 都没有）");

@@ -629,6 +629,12 @@ async function resolveAccountKey(ctx: Context, credentials: CredentialPort, ref:
  * @returns preflight 的 JSON 负载；输出不是对象时读作「没有数据」。
  */
 async function velaPreflight(workspaceId: string): Promise<unknown> {
+  // 工作区 id 来自设置/登录产物（用户可改）。它是命令行参数，`--`/空格这类值会被 vela 的
+  // 参数解析器当成开关（参数注入）；只接受厂商实际使用的字符集，且不能以 `-` 开头
+  // （否则 `--help` 也能过字符集）。
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(workspaceId)) {
+    throw new Error("工作区 id 形状不对（只允许字母、数字、下划线与连字符，且不能以连字符开头）");
+  }
   const vela = findVelaBinary();
   if (vela === undefined) {
     throw new Error("本机找不到 vela：安装 Open Design 桌面端，或设置 VELA_BIN 指向 vela 可执行文件");

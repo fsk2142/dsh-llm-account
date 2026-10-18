@@ -106,3 +106,16 @@ describe("closeLoginWindow", () => {
     expect(() => closeLoginWindow(handle)).not.toThrow();
   });
 });
+
+it("授权网址只接受 http(s)：javascript:/data: 一律不导航", async () => {
+  const { isHttpUrl, pointLoginWindowAt } = await import("../../src/client/login-window");
+  expect(isHttpUrl("https://commandcode.ai/studio/auth")).toBe(true);
+  expect(isHttpUrl("http://127.0.0.1:3456/callback")).toBe(true);
+  expect(isHttpUrl("javascript:alert(1)")).toBe(false);
+  expect(isHttpUrl("data:text/html,<script>alert(1)</script>")).toBe(false);
+  expect(isHttpUrl("not a url")).toBe(false);
+
+  const handle = { closed: false, location: {} as { href?: string }, close: () => undefined };
+  expect(pointLoginWindowAt(handle, "javascript:alert(1)")).toBe(false);
+  expect(handle.location.href).toBeUndefined();
+});
