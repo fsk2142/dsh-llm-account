@@ -334,7 +334,10 @@ export class LlmAccountUsageService extends TypertRemoteService {
    * @param ref - 目标账号；`null` 表示自动轮换。
    */
   async selectAccount(vendor: VendorId, ref: string | null): Promise<void> {
-    await this.requireVendor(vendor).accounts.select(ref);
+    const deps = this.requireVendor(vendor);
+    await deps.accounts.select(ref);
+    // 手动切号后立刻把「生效账号」也指过去，页面上的「当前使用」不用等下一次请求才跟随。
+    if (ref !== null) deps.rotation.current().noteSelected(ref);
   }
 
   /**

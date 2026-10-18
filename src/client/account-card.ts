@@ -174,11 +174,12 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
   const effective = account.effective;
   // 两者相同只标一次（避免同一件事写两遍）。
   const marks: ReactNode[] = [];
-  if (effective || (account.active === true && props.status?.effective === undefined)) {
+  const selected = account.active === true || pinned;
+  if (selected) {
     marks.push(createElement("span", { key: "effective", "data-mark": "effective", className: CSS_CLASS.mark }, t("account.effectiveBy")));
-  }
-  if (pinned && !effective) {
-    marks.push(createElement("span", { key: "pinned", "data-mark": "pinned", className: CSS_CLASS.mark }, t("account.pinnedBy")));
+  } else if (effective) {
+    // 手动切到别的账号后，旧账号可能还在完成最后一个请求：标成「生效中」而不是「当前使用」。
+    marks.push(createElement("span", { key: "live", "data-mark": "live", className: CSS_CLASS.mark }, t("account.liveBy")));
   }
 
   // `?? undefined`：契约里 `rejection` 是可选字段，而线上可能把它序列化成 `null`

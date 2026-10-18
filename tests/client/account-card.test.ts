@@ -304,7 +304,7 @@ it("账号下可以单独配置可用模型；同一模型可同时属于多个�
   expect(elementsOf(tree).find((element) => element.props["data-account-model"] === "b:m1")!.props.checked).toBe(true);
 });
 
-it("固定账号与生效账号不同时，两个都标注（§8.1 第 4 条）", () => {
+it("手动切换到 A 后 A 标当前使用，仍在完成请求的 B 标生效中", () => {
   const { tree } = renderCard({
     status: statusOf({
       pinned: "a",
@@ -317,10 +317,10 @@ it("固定账号与生效账号不同时，两个都标注（§8.1 第 4 条）"
 
   const pinnedRow = elements.find((element) => element.props["data-account"] === "a")!;
   const effectiveRow = elements.find((element) => element.props["data-account"] === "b")!;
-  expect(textsOf(pinnedRow)).toContain(t("account.pinnedBy"));
-  expect(textsOf(pinnedRow)).not.toContain(t("account.effectiveBy"));
-  expect(textsOf(effectiveRow)).toContain(t("account.effectiveBy"));
-  expect(textsOf(effectiveRow)).not.toContain(t("account.pinnedBy"));
+  expect(textsOf(pinnedRow)).toContain(t("account.effectiveBy"));
+  expect(textsOf(pinnedRow)).not.toContain(t("account.liveBy"));
+  expect(textsOf(effectiveRow)).toContain(t("account.liveBy"));
+  expect(textsOf(effectiveRow)).not.toContain(t("account.effectiveBy"));
 });
 
 it("两者相同时只标注一次（不重复刷屏）", () => {

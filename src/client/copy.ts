@@ -105,6 +105,7 @@ export type CopyKey =
   | "account.plan"
   | "account.pinnedBy"
   | "account.effectiveBy"
+  | "account.liveBy"
   | "account.quotaMissing"
   | "account.newLabel"
   | "account.newLabel.placeholder"
@@ -289,6 +290,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.plan": "套餐",
     "account.pinnedBy": "已指定",
     "account.effectiveBy": "当前使用",
+    "account.liveBy": "生效中",
     "account.quotaMissing": "暂无额度数据",
     "account.newLabel": "账户名称",
     "account.newLabel.placeholder": "例如：工作账号",
@@ -468,6 +470,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.plan": "Plan",
     "account.pinnedBy": "Selected",
     "account.effectiveBy": "In use",
+    "account.liveBy": "Serving",
     "account.quotaMissing": "No quota data",
     "account.newLabel": "Account name",
     "account.newLabel.placeholder": "e.g. work",
