@@ -24,6 +24,8 @@ export interface DashboardProps {
   t: (key: string) => string;
   /** 状态；还没读到时为 `undefined`。 */
   status: VendorUsageStatus | undefined;
+  /** 多供应商视图；缺省时按单 status 渲染（兼容既有调用）。 */
+  vendors?: readonly { label: string; status?: VendorUsageStatus }[];
   /** 切换记录（**最新在前**，顺序由宿主侧 `switchNotices()` 保证）。 */
   switches: readonly SwitchRecord[] | undefined;
   /** 关闭面板。 */
@@ -107,24 +109,43 @@ export function Dashboard(props: DashboardProps): ReactElement {
             props.stale === true ? createElement("small", { key: "stale", "data-dashboard-stale": "true" }, `（${t("usage.stale")}）`) : null,
           ),
         ]),
-    ...(status === undefined
+    ...(status === undefined && props.vendors === undefined
       ? [
           // 没有数据时：失败说失败，什么都不曾说才说「暂无数据」。
           failure === undefined
             ? createElement("p", { key: "nodata", "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("dashboard.noData"))
             : createElement("p", { key: "nodata-failed", "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("usage.failed")),
         ]
-      : [
-          createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
-          // 与 account-card.ts 同一条纪律：结构校验只查「是不是数组」，渲染路径自己挑出
-          // 能画的行；集合字段缺了就当作空，不让 `.map`/`.length` 抛在渲染路径上。
-          ...(status.accounts ?? [])
-            .filter((account): account is AccountUsageStatus => typeof account === "object" && account !== null)
-            .map((account) => accountBlock(props, account)),
-          ...((status.failures ?? []).length === 0
-            ? []
-            : [createElement("ul", { key: "failures", "data-dashboard-failures": "true" }, ...(status.failures ?? []).map((item, index) => createElement("li", { key: index }, item)))]),
-        ]),
+      : props.vendors === undefined
+        ? [
+            createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
+            ...(status?.accounts ?? [])
+              .filter((account): account is AccountUsageStatus => typeof account === "object" && account !== null)
+              .map((account) => accountBlock(props, account)),
+            ...((status?.failures ?? []).length === 0
+              ? []
+              : [createElement("ul", { key: "failures", "data-dashboard-failures": "true" }, ...(status?.failures ?? []).map((item, index) => createElement("li", { key: index }, item)))]),
+          ]
+        : props.vendors.map((vendor) =>
+            createElement(
+              "section",
+              { key: vendor.label, "data-dashboard-vendor": vendor.label },
+              createElement("h3", null, vendor.label),
+              ...(vendor.status === undefined
+                ? [createElement("p", { key: "empty", className: CSS_CLASS.empty }, t("dashboard.noData"))]
+                : [
+                    ...(vendor.status.accounts ?? [])
+                      .filter((account): account is AccountUsageStatus => typeof account === "object" && account !== null)
+                      .map((account) => accountBlock(props, account)),
+                    ...((vendor.status.failures ?? []).length === 0
+                      ? []
+                      : [
+                          createElement("ul", { key: "failures", "data-dashboard-failures": "true" },
+                            ...(vendor.status.failures ?? []).map((item, index) => createElement("li", { key: index }, item))),
+                        ]),
+                  ]),
+            ),
+          )),
     switchHistory(props),
   );
 }

@@ -485,15 +485,17 @@ describe("侧边栏卡片容器仿真", () => {
 // —— 仿真 3：中栏仪表盘 ————————
 
 describe("仪表盘容器仿真", () => {
-  it("跟随开关存储里的厂商：没有厂商时给占位，不编造", async () => {
+  it("即使侧边栏开关关闭，仪表盘也列出两家的账户统计", async () => {
     const mini = await runtime();
     await freshSeams();
     const host = fakeHost(mini, { commandcodeToggle: false });
     const { panel } = await applyLikeHost(host);
     const view = mini.mount(panel);
     await settleSim(mini);
-    expect(textsOfSim(view.tree()).join(" ")).toContain("还没有可显示的用量数据");
-    expect(host.statusCalls).toEqual([]);
+    const text = textsOfSim(view.tree()).join(" ");
+    expect(text).toContain("Command Code");
+    expect(text).toContain("OpenCode");
+    expect(host.statusCalls).toHaveLength(2);
   });
 
   it("打开面板时读一次状态，手动刷新再读一次；卡片「打开」与面板「关闭」都走 layout.selectPanel", async () => {
@@ -509,7 +511,7 @@ describe("仪表盘容器仿真", () => {
 
     click(view.tree(), "data-dashboard-refresh");
     await settleSim(mini);
-    expect(host.statusCalls.length).toBe(afterOpen + 1);
+    expect(host.statusCalls.length).toBe(afterOpen + 2);
 
     // 卡片的「打开用量面板」按钮 → layout.selectPanel(面板 key)。
     click(cardView.tree(), "data-sidebar-open");

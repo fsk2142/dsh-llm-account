@@ -57,7 +57,12 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   const effective = status?.effective ?? undefined;
   const pinned = status?.pinned ?? null;
   const effectiveRow = effective === undefined ? undefined : status?.accounts.find((account) => account.ref === effective.ref);
-  const hasData = status !== undefined && effective !== undefined;
+  // 还没有请求时 effective 可能为空，但用户已经指定/自动选中了当前账号：优先显示它。
+  const currentRow =
+    effectiveRow ??
+    status?.accounts.find((account) => account.active === true) ??
+    status?.accounts.find((account) => account.effective === true);
+  const hasData = status !== undefined && currentRow !== undefined;
 
   return createElement(
     // 外壳只负责「有多宽」：宿主侧边栏收起时这个槽位只有 ~35px，整张卡片放不下（会向左溢出
@@ -71,14 +76,14 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
       createElement(
         "div",
         { className: CSS_CLASS.sidebarHead },
-        createElement("h3", { "data-sidebar-title": "true", title: titleOf(props, effectiveRow) }, titleOf(props, effectiveRow)),
+        createElement("h3", { "data-sidebar-title": "true", title: titleOf(props, currentRow) }, titleOf(props, currentRow)),
         ...(props.onRefresh === undefined ? [] : [refreshButton(props)]),
       ),
       ...(hasData
         ? [
             // `switch` 与 `effective` 同一条纪律：可选字段，线上可能是 `null`。
             switchNotice(t, effective, pinned, status.switch ?? undefined),
-            ...effectiveQuota(props, effectiveRow),
+            ...effectiveQuota(props, currentRow),
           ]
         : [
             // 没有可显示的数据：失败时说失败（附上一次数据标记），什么都没发生过时才说

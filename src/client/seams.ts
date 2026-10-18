@@ -1838,77 +1838,60 @@ export function createDashboardView(options: {
 }): () => ReactElement {
   const { ctx, entries, t } = options;
   return function ConnectedDashboard(): ReactElement {
-    const [vendor, setVendor] = useState<string | undefined>(() => sidebarVendor());
-    const [status, setStatus] = useState<VendorUsageStatus | undefined>(undefined);
+    const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
     const [switches, setSwitches] = useState<SwitchRecord[] | undefined>(undefined);
     /** 读不到数据时的原因（远程面没挂上 / 读口报错）；`undefined` = 没失败。 */
     const [problem, setProblem] = useState<string | undefined>(undefined);
 
-    useEffect(() => subscribeSidebarVendor(setVendor), []);
-
-    // 冷启动兜底：与侧边栏卡片同一条（设置页从未打开过时存储是冷的）。
-    useEffect(() => {
-      if (sidebarVendorSeeded()) return;
-      let alive = true;
-      void describeVendorSnapshots(ctx, entries).then((snapshots) => {
-        if (alive) noteSidebarSnapshots(entries, snapshots);
-      });
-      return () => {
-        alive = false;
-      };
-    }, []);
-
-    useEffect(() => {
-      if (vendor === undefined) {
-        setStatus(undefined);
-        setSwitches(undefined);
+    const load = (): void => {
+      const usage = usageNamespace(ctx);
+      if (usage === undefined) {
+        // 远程面还没挂上：记原因，别让面板显示「暂无数据」把故障说成空态。
+        setProblem(usageRemoteProblem(ctx) ?? t("usage.remoteUnavailable"));
         return;
       }
-      const load = (): void => {
-        const usage = usageNamespace(ctx);
-        if (usage === undefined) {
-          // 远程面还没挂上：记原因，别让面板显示「暂无数据」把故障说成空态。
-          setProblem(usageRemoteProblem(ctx) ?? t("usage.remoteUnavailable"));
-          return;
+      void Promise.all(
+        entries.map(async (entry) => {
+          const [detail, vendorSwitches] = await Promise.all([
+            readStatusDetail(usage, entry.providerId),
+            readSwitches(usage, entry.providerId),
+          ]);
+          return { entry, detail, switches: vendorSwitches };
+        }),
+      ).then((results) => {
+        const nextStatuses: Record<string, VendorUsageStatus | undefined> = {};
+        const problems: string[] = [];
+        const records: SwitchRecord[] = [];
+        for (const result of results) {
+          nextStatuses[result.entry.providerId] = result.detail.status;
+          if (result.detail.problem !== undefined) problems.push(result.detail.problem);
+          if (result.switches !== undefined) records.push(...result.switches);
         }
-        void readStatusDetail(usage, vendor).then(({ status: next, problem: why }) => {
-          if (next !== undefined) setStatus(next);
-          setProblem(why);
-        });
-        void readSwitches(usage, vendor).then((next) => {
-          if (next !== undefined) setSwitches(next);
-        });
-      };
+        setStatuses(nextStatuses);
+        setProblem(problems[0]);
+        records.sort((left, right) => right.at - left.at);
+        setSwitches(records);
+      });
+    };
+
+    useEffect(() => {
       load();
       // 远程面挂载完成前读取会落空：挂上时补读一次。
-      const offReady = onUsageReady(ctx, (namespace) => {
+      return onUsageReady(ctx, (namespace) => {
         if (namespace !== undefined) load();
       });
-      return offReady;
-    }, [vendor]);
+    }, []);
 
-    if (vendor === undefined) {
+    if (entries.length === 0) {
       return createElement("p", { "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("dashboard.noData")) as ReactElement;
     }
     return Dashboard({
       t,
-      status,
+      status: statuses[entries[0]!.providerId],
+      vendors: entries.map((entry) => ({ label: t(entry.labelKey), status: statuses[entry.providerId] })),
       switches,
       onClose: () => options.onClose(),
-      onRefresh: () => {
-        const usage = usageNamespace(ctx);
-        if (usage === undefined) {
-          setProblem(usageRemoteProblem(ctx) ?? t("usage.remoteUnavailable"));
-          return;
-        }
-        void readStatusDetail(usage, vendor).then(({ status: next, problem: why }) => {
-          if (next !== undefined) setStatus(next);
-          setProblem(why);
-        });
-        void readSwitches(usage, vendor).then((next) => {
-          if (next !== undefined) setSwitches(next);
-        });
-      },
+      onRefresh: () => load(),
       failure: problem,
     });
   };
