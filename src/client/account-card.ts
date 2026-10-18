@@ -252,6 +252,18 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
       createElement(
         "div",
         { className: CSS_CLASS.accountActions },
+        effective || (account.active === true && props.status?.effective === undefined)
+          ? null
+          : createElement(
+              "button",
+              {
+                type: "button",
+                "data-account-use": account.ref,
+                className: CSS_CLASS.buttonGhost,
+                onClick: () => props.onSelect(account.ref),
+              },
+              t("account.use"),
+            ),
         expandButton(props, account, expanded),
         accountMenu(props, account, index),
         // 只有支持排序的厂商才有拖拽手柄；不支持的**整块不渲染**（不是藏起来）。

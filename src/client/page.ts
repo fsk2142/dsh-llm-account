@@ -93,7 +93,6 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
     props.accounts === undefined ? null : props.accounts,
-    props.switchPanel === undefined ? null : props.switchPanel,
     props.mergeTabs === true ? null : tabRow(props),
     active === undefined
       ? createElement(
