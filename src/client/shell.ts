@@ -479,8 +479,26 @@ function registerPage(context: ClientShell, options: ApplyShellOptions): void {
     "dsh-llm-account: page copy",
   );
   const component = options.pageComponent?.(t) ?? PLACEHOLDER_PAGE;
-  context.slots.inject("settings.section", () =>
-    context.slots.register(
+  /**
+   * 上一次注册的撤销句柄。
+   *
+   * 宿主的 `slots.inject(name, cb)` 会在**每次槽位可用时**回调（设置对话框重开、其它插件
+   * 重新注册都可能再触发一次）。以前这里直接 discard 了 `register` 的返回值，于是每次回调都
+   * 追加一条同名 section；一旦宿主按句柄失效旧条目，点我们的 tab 就「打不开」
+   * （2026-10-18 报障：打开插件市场后我们的设置打不开 —— 市场自己就是靠 gate 反复重注册的）。
+   * 现在：注册前先撤销上一条，并把撤销挂到 fiber 上随插件卸载收尾。
+   */
+  let registered: (() => void) | undefined;
+  context.effect(
+    () => () => {
+      registered?.();
+      registered = undefined;
+    },
+    "dsh-llm-account: settings section",
+  );
+  context.slots.inject("settings.section", () => {
+    registered?.();
+    const off = context.slots.register(
       {
         name: "settings.section",
         id: PAGE_ID,
@@ -492,8 +510,10 @@ function registerPage(context: ClientShell, options: ApplyShellOptions): void {
         inject: () => ({ hooks: {} }),
       },
       component as PlaceholderComponent,
-    ),
-  );
+    );
+    registered = typeof off === "function" ? (off as () => void) : undefined;
+    return off;
+  });
 }
 
 /**
