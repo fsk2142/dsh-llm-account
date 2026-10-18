@@ -139,7 +139,7 @@ it("三组通用卡片按厂商声明渲染：未声明的组不出现，空组�
 
   // 「切换策略」是 2026-10-17 新增的组，排在通用组最前；「隐私与安全」这一期两家都
   // 没有声明字段，所以不渲染 —— 「厂商未声明的组不渲染」这条规则的自然结果。
-  expect(groups).toEqual(["switch", "integrations", "advanced"]);
+  expect(groups).toEqual(["integrations", "advanced"]);
 
   // 显式声明一个空组：同样不渲染（避免出现一个没有字段的空卡片）。
   const withEmpty = entryOf({
@@ -172,10 +172,6 @@ it("字段列表按声明顺序展开，值来自草稿 → 基线 → 声明默
   const fields = fieldsOf(state, commandCode);
 
   expect(fields.map((field) => field.spec.key)).toEqual([
-    "switchStrategy",
-    "switchIntervalMinutes",
-    "switchAtTurnEnd",
-    "autoSwitch",
     "showSidebarQuota",
     "quotaRefreshMinutes",
     "apiBase",
@@ -293,17 +289,6 @@ it("页面外壳渲染标题、简介与每个厂商一个标签页", () => {
   expect(texts).toContain(COPY.en["vendor.commandcode"]);
 });
 
-it("额度评估间隔用天/小时/分钟编辑：默认 60 分钟显示为 0 天 1 小时 0 分钟", () => {
-  const tree = render(createPageState(VENDORS, SNAPSHOTS), dictionaryOf("zh"));
-  const parts = elementsOf(tree)
-    .filter((element) => element.props["data-duration-part"] !== undefined)
-    .map((element) => [element.props["data-duration-part"], element.props.value]);
-  expect(parts).toEqual([
-    ["days", "0"],
-    ["hours", "1"],
-    ["minutes", "0"],
-  ]);
-});
 
 it("渲染期抛错时显示错误面板，而不是整页空白", () => {
   // React 丢弃整棵已渲染的树，所以抛错的表象是「这一段什么都没有」——连标题都没有，
@@ -330,7 +315,7 @@ it("未声明的卡片组不渲染元素；声明了的组带着字段渲染", (
   const all = elementsOf(tree);
 
   const groups = all.filter((element) => element.props["data-card-group"] !== undefined).map((element) => element.props["data-card-group"]);
-  expect(groups).toEqual(["switch", "integrations", "advanced"]);
+  expect(groups).toEqual(["integrations", "advanced"]);
   // 「隐私与安全」这一期两家都没声明 → 连标题都不出现。
   expect(textOf(tree)).not.toContain(COPY.en["group.privacy"]);
 

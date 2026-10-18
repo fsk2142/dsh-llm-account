@@ -77,7 +77,6 @@ function render(overrides: Partial<AccountsPanelProps> = {}): { tree: StubElemen
     onMove: vi.fn(),
     onToggleExpand: vi.fn(),
     onLoginBegin: vi.fn(),
-    onReorder: vi.fn(),
     ...overrides,
   };
   return { tree: AccountsPanel(props), props };
@@ -163,22 +162,3 @@ it("没有账号时只显示一次空态；某家状态读不到时原因带厂�
   expect(textsOf(tree).join(" ")).toContain("OpenCode");
 });
 
-it("切换顺序是全局的：两家账号交叉排列，上移/下移提交完整全局顺序", () => {
-  const commandCode = status("commandcode", COMMAND_CODE, [account("cc-1", "Work")]);
-  commandCode.accountOrder = ["dsh-opencode-go:oc-1", "commandcode:cc-1"];
-  const opencode = status("dsh-opencode-go", OPENCODE, [account("oc-1", "Personal")]);
-  const { tree, props } = render({
-    vendors: [
-      { entry: COMMAND_CODE_ENTRY, status: commandCode },
-      { entry: OPENCODE_ENTRY, status: opencode },
-    ],
-  });
-  const items = elementsOf(tree)
-    .filter((element) => element.props["data-order-item"] !== undefined)
-    .map((element) => element.props["data-order-item"]);
-  expect(items).toEqual(["dsh-opencode-go:oc-1", "commandcode:cc-1"]);
-
-  const down = elementsOf(tree).find((element) => element.props["data-order-down"] === "dsh-opencode-go:oc-1")!;
-  (down.props.onClick as () => void)();
-  expect(props.onReorder).toHaveBeenCalledWith(["commandcode:cc-1", "dsh-opencode-go:oc-1"]);
-});

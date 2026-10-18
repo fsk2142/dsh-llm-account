@@ -131,7 +131,7 @@ export const PAGE_CSS = `
   border-color: var(--dsw-alias-state-business-primary); }
 .dsl-field input::placeholder, .dsl-inline input::placeholder, .dsl-add-field input::placeholder,
 .dsl-search input::placeholder, .dsl-actions input::placeholder { color: var(--dsw-alias-label-dimmed); }
-.dsl-duration { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dsl-duration { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px; flex: none; }
 .dsl-duration-part { display: inline-flex; flex-direction: row; align-items: center; gap: 4px;
   color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 .dsl-duration-part > input { width: 64px; }

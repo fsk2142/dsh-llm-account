@@ -28,7 +28,7 @@ import type {
   VendorId,
 } from "../core/adapter";
 import type { RotationAccess } from "./assembly";
-import type { SwitchDecision, SwitchRuntimeState } from "../core/switching";
+import type { SwitchDecision, SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
 import {
   USAGE_NAMESPACE,
   USAGE_PACKAGE,
@@ -104,6 +104,8 @@ export interface UsageVendorDeps {
   /** 切换策略运行态（倒计时/待切换）；页面「立即切换」也走这里。 */
   readonly switchState?: () => SwitchRuntimeState;
   readonly switchNow?: () => Promise<SwitchDecision | undefined>;
+  /** 把一套全局切换设置写进这家文档。 */
+  readonly setSwitchSettings?: (settings: SwitchSettingsWrite) => Promise<void>;
 }
 
 /** 宿主 `ctx.typert` 的最小形状（只认本项目用到的 `register`）。 */
@@ -384,6 +386,18 @@ export class LlmAccountUsageService extends TypertRemoteService {
     const writes: Promise<void>[] = [];
     for (const deps of this.vendorDeps.values()) {
       if (deps.setAccountOrder !== undefined) writes.push(deps.setAccountOrder(order));
+    }
+    await Promise.all(writes);
+  }
+
+  /**
+   * 把一套全局切换设置写进**所有**已注册厂商的设置文档。
+   * @param settings - 策略/间隔/回合末/自动切换。
+   */
+  async setSwitchSettings(settings: SwitchSettingsWrite): Promise<void> {
+    const writes: Promise<void>[] = [];
+    for (const deps of this.vendorDeps.values()) {
+      if (deps.setSwitchSettings !== undefined) writes.push(deps.setSwitchSettings(settings));
     }
     await Promise.all(writes);
   }

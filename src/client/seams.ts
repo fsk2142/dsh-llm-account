@@ -24,6 +24,8 @@ import { dictionaryOf } from "./copy";
 import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
 import { AllModelsCard } from "./all-models-card";
+import type { SwitchSettingsWrite } from "../core/switching";
+import { SwitchPanel, type SwitchOrderItem } from "./switch-panel";
 import { SidebarCard } from "./sidebar-card";
 import {
   applyModelEdit,
@@ -878,10 +880,6 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         void usage?.moveAccount(vendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
       },
       onToggleExpand: (vendor: string, ref: string) => setState((current) => toggleExpanded(current, ref, vendor)),
-      onReorder: (order: readonly string[]) => {
-        if (usage === undefined || typeof usage.setAccountOrder !== "function") return;
-        void usage.setAccountOrder(order).then(() => setAccountRevision((current) => current + 1));
-      },
       onLoginBegin: (vendor: string) => {
         void remoteValue<LoginView>(usage?.loginBegin(vendor)).then((status) => {
           if (status !== undefined) setLogins((current) => ({ ...current, [vendor]: status }));
@@ -889,6 +887,44 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       },
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
+
+    // 全局切换面板：策略 + 全局顺序放在一起（两家共用一套）。
+    const switchState = availableEntries.map((entry) => statuses[entry.providerId]?.switchState).find((value) => value !== undefined);
+    const switchOrder: SwitchOrderItem[] = buildSwitchOrder(availableEntries, statuses, t);
+    const switchPanel =
+      availableEntries.length === 0
+        ? undefined
+        : createElement(SwitchPanel, {
+            t,
+            ...(switchState === undefined ? {} : { state: switchState }),
+            now: clock,
+            order: switchOrder,
+            onChange: (patch: Partial<SwitchSettingsWrite>) => {
+              if (usage === undefined || typeof usage.setSwitchSettings !== "function") return;
+              const base = switchState ?? { strategy: "order" as const, intervalMinutes: 60, atTurnEnd: true, autoSwitch: true };
+              void usage
+                .setSwitchSettings({
+                  strategy: patch.strategy ?? base.strategy,
+                  intervalMinutes: patch.intervalMinutes ?? base.intervalMinutes,
+                  atTurnEnd: patch.atTurnEnd ?? base.atTurnEnd,
+                  autoSwitch: patch.autoSwitch ?? base.autoSwitch,
+                })
+                .then(() => setAccountRevision((current) => current + 1));
+            },
+            onReorder: (order: readonly string[]) => {
+              if (usage === undefined || typeof usage.setAccountOrder !== "function") return;
+              void usage.setAccountOrder(order).then(() => setAccountRevision((current) => current + 1));
+            },
+            onSwitchNow: () => {
+              if (usage === undefined) return;
+              const targets = availableEntries
+                .map((entry) => entry.providerId)
+                .filter((vendor) => statuses[vendor]?.switchState !== undefined);
+              void Promise.all(targets.map((vendor) => usage.switchNow?.(vendor))).then(() =>
+                setAccountRevision((current) => current + 1),
+              );
+            },
+          });
 
     /** 全局模型卡的一次写：先落草稿让勾选立刻变化，再立刻写回所属厂商。 */
     const writeGlobalModel = (vendor: string, edit: ModelEdit): void => {
@@ -999,6 +1035,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       entries,
       t,
       accounts,
+      switchPanel,
       models,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
@@ -1110,6 +1147,47 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           }),
     });
   };
+}
+
+/**
+ * 全局顺序列表（账户面板与切换面板共用）：先用已保存的全局顺序，再接上新出现的账号。
+ * @param entries - 可用厂商。
+ * @param statuses - 各厂商状态。
+ * @param t - 取词函数。
+ * @returns 交叉排列的账户行。
+ */
+function buildSwitchOrder(
+  entries: readonly VendorEntry[],
+  statuses: Readonly<Record<string, VendorUsageStatus | undefined>>,
+  t: (key: string) => string,
+): SwitchOrderItem[] {
+  const byKey = new Map<string, SwitchOrderItem>();
+  for (const entry of entries) {
+    const status = statuses[entry.providerId];
+    for (const account of status?.accounts ?? []) {
+      if (typeof account !== "object" || account === null) continue;
+      byKey.set(`${entry.providerId}:${account.ref}`, {
+        key: `${entry.providerId}:${account.ref}`,
+        label: account.label,
+        vendorLabel: t(entry.labelKey),
+      });
+    }
+  }
+  const ordered: SwitchOrderItem[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    for (const key of statuses[entry.providerId]?.accountOrder ?? []) {
+      if (typeof key !== "string" || seen.has(key)) continue;
+      const item = byKey.get(key);
+      if (item === undefined) continue;
+      seen.add(key);
+      ordered.push(item);
+    }
+  }
+  for (const [key, item] of byKey) {
+    if (!seen.has(key)) ordered.push(item);
+  }
+  return ordered;
 }
 
 /**

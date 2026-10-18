@@ -30,12 +30,22 @@ export interface SwitchRuntimeState {
   strategy: SwitchStrategy;
   intervalMinutes: number;
   atTurnEnd: boolean;
+  /** 自动切换开关（各厂商默认不同，控制器按厂商默认解析后发布）。 */
+  autoSwitch: boolean;
   /** 上次评估时刻（0 = 还没评估过）。 */
   evaluatedAt: number;
   /** 下次评估时刻；手动顺序或间隔为 0 时缺省。 */
   nextAt?: number;
   /** 已决定、等回合结束的切换。 */
   pending?: { target: string; reason: SwitchDecisionReason };
+}
+
+/** 页面写入的全局切换设置（两家文档保存同一套）。 */
+export interface SwitchSettingsWrite {
+  strategy: SwitchStrategy;
+  intervalMinutes: number;
+  atTurnEnd: boolean;
+  autoSwitch: boolean;
 }
 
 /** 一个候选账号。 */

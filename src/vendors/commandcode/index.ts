@@ -35,6 +35,7 @@ import {
   createCredentialsPort,
   createRotationAccess,
   createSettingsIntentStore,
+  writeSwitchSettings,
   createSettingsPort,
   disableSettingsAutoForm,
   environmentValue,
@@ -308,6 +309,7 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     setAccountOrder: async (order) => {
       await accounts.setOrder?.(order);
     },
+    setSwitchSettings: (input) => writeSwitchSettings(settings, COMMAND_CODE_SETTINGS_NS, input),
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。

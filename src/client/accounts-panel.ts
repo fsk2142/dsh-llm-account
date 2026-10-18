@@ -47,8 +47,6 @@ export interface AccountsPanelProps {
   onMove?: (vendor: string, ref: string, toIndex: number) => void;
   onToggleExpand: (vendor: string, ref: string) => void;
   onLoginBegin: (vendor: string) => void;
-  /** 写全局顺序（`vendor:ref` 键）；两家同一份。 */
-  onReorder?: (order: readonly string[]) => void;
 }
 
 /**
@@ -65,8 +63,6 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
   );
   const addVendor = vendors.find((group) => group.action?.kind === "add");
   const addProps = addVendor === undefined ? undefined : accountPropsFor(props, addVendor);
-  const orderItems = buildOrder(vendors, t);
-  const reorder = props.onReorder;
 
   return createElement(
     "section",
@@ -143,102 +139,7 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
           { key: "add-form", "data-add-panel": addVendor!.entry.providerId, className: CSS_CLASS.inset },
           accountAddSection(addProps),
         ),
-    reorder === undefined || orderItems.length < 2
-      ? null
-      : createElement(
-          "details",
-          { key: "order", "data-account-order": "true", className: CSS_CLASS.inset, open: true },
-          createElement("summary", { className: CSS_CLASS.orderSummary }, t("account.orderTitle")),
-          createElement("small", { className: CSS_CLASS.note }, t("account.orderHint")),
-          ...orderItems.map((item, index) =>
-            createElement(
-              "div",
-              { key: item.key, "data-order-item": item.key, className: CSS_CLASS.field },
-              createElement(
-                "span",
-                { className: CSS_CLASS.fieldText },
-                createElement(
-                  "span",
-                  { className: CSS_CLASS.nameRow },
-                  createElement("span", null, item.label),
-                  createElement("small", { className: CSS_CLASS.vendorBadge }, item.vendorLabel),
-                ),
-              ),
-              createElement(
-                "button",
-                {
-                  type: "button",
-                  "data-order-up": item.key,
-                  className: CSS_CLASS.buttonGhost,
-                  "aria-label": t("account.moveUp"),
-                  disabled: index === 0,
-                  onClick: () => reorder(swapped(orderItems, index, -1)),
-                },
-                "↑",
-              ),
-              createElement(
-                "button",
-                {
-                  type: "button",
-                  "data-order-down": item.key,
-                  className: CSS_CLASS.buttonGhost,
-                  "aria-label": t("account.moveDown"),
-                  disabled: index === orderItems.length - 1,
-                  onClick: () => reorder(swapped(orderItems, index, 1)),
-                },
-                "↓",
-              ),
-            ),
-          ),
-        ),
   );
-}
-
-interface OrderItem {
-  key: string;
-  label: string;
-  vendorLabel: string;
-}
-
-/** 从两家状态拼出全局顺序：先用已保存的顺序，再接上新出现的账号。 */
-function buildOrder(vendors: readonly AccountsPanelVendor[], t: (key: string) => string): OrderItem[] {
-  const byKey = new Map<string, OrderItem>();
-  for (const group of vendors) {
-    for (const account of group.status?.accounts ?? []) {
-      if (typeof account !== "object" || account === null) continue;
-      const key = `${group.entry.providerId}:${account.ref}`;
-      byKey.set(key, {
-        key,
-        label: account.label,
-        vendorLabel: t(group.entry.labelKey),
-      });
-    }
-  }
-  const ordered: OrderItem[] = [];
-  const seen = new Set<string>();
-  for (const group of vendors) {
-    for (const key of group.status?.accountOrder ?? []) {
-      if (typeof key !== "string" || seen.has(key)) continue;
-      const item = byKey.get(key);
-      if (item === undefined) continue;
-      seen.add(key);
-      ordered.push(item);
-    }
-  }
-  for (const [key, item] of byKey) {
-    if (seen.has(key)) continue;
-    ordered.push(item);
-  }
-  return ordered;
-}
-
-/** 交换两个下标，返回 keys。 */
-function swapped(items: readonly OrderItem[], index: number, delta: number): string[] {
-  const next = items.map((item) => item.key);
-  const target = index + delta;
-  if (target < 0 || target >= next.length) return next;
-  [next[index], next[target]] = [next[target]!, next[index]!];
-  return next;
 }
 
 /** 某一家等待授权的登录面板（设备码 / 授权网址）。 */

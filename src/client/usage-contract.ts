@@ -21,7 +21,7 @@
  * @module dsh-llm-account/src/client/usage-contract
  */
 import type { AccountView, CatalogModelsResult, FailureKind, QuotaWindow, VendorCapabilities } from "../core/adapter";
-import type { SwitchRuntimeState } from "../core/switching";
+import type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
 
 // 客户端其它模块（页面、接缝）需要这几个形状时也从这里取，不必各自去 import `src/core/**`：
 // 这个模块是客户端侧唯一允许提到 core 的地方，而且是**纯类型**导入（`verbatimModuleSyntax`
@@ -34,7 +34,7 @@ export type {
   QuotaWindow,
   VendorCapabilities,
 } from "../core/adapter";
-export type { SwitchRuntimeState } from "../core/switching";
+export type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
 
 /** 贡献所属的 npm 包（描述符 id 的前缀）。 */
 export const USAGE_PACKAGE = "dsh-llm-account";
@@ -66,6 +66,8 @@ export const USAGE_METHODS = [
   "switchNow",
   // 全局账户顺序（两家同一份）
   "setAccountOrder",
+  // 全局切换策略（两家同一套）
+  "setSwitchSettings",
   // 网页登录（Task 5：Command Code 的登录入口）
   "loginBegin",
   "loginStatus",
@@ -315,6 +317,22 @@ function parseStringArray(endpoint: string, value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+/** 校验全局切换设置。 */
+function parseSwitchSettings(endpoint: string, value: unknown): SwitchSettingsWrite {
+  if (!isRecord(value)) throw boundaryError(endpoint, "expected a switch settings object");
+  const strategy = value.strategy === "best-quota" ? "best-quota" : "order";
+  const intervalMinutes =
+    typeof value.intervalMinutes === "number" && Number.isFinite(value.intervalMinutes)
+      ? Math.min(30 * 24 * 60, Math.max(0, Math.floor(value.intervalMinutes)))
+      : 60;
+  return {
+    strategy,
+    intervalMinutes,
+    atTurnEnd: value.atTurnEnd !== false,
+    autoSwitch: value.autoSwitch !== false,
+  };
+}
+
 /** 校验一个可空的字符串（`null` 表示「回到自动轮换」）。 */
 function parseNullableString(endpoint: string, value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -449,6 +467,9 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("setAccountOrder", "Void", parseVoid, [
       { name: "order", typeSymbol: "AccountOrder", parse: parseStringArray },
     ]),
+    makeDescriptor("setSwitchSettings", "Void", parseVoid, [
+      { name: "settings", typeSymbol: "SwitchSettingsWrite", parse: parseSwitchSettings },
+    ]),
     // 登录的 ref 由宿主按登录返回的用户名推导（`accountRef`），客户端**不能**指定它 ——
     // 能指定就等于让页面决定把密钥写进哪个凭据槽，那正是 T5 Step 7 要防的事。
     makeDescriptor("loginBegin", "LoginStatus", parseLoginStatus, [VENDOR_PARAM]),
@@ -472,6 +493,7 @@ export interface UsageNamespace {
   setAutoSwitch(vendor: string, value: boolean): Promise<void>;
   switchNow?(vendor: string): Promise<SwitchNowResult>;
   setAccountOrder?(order: readonly string[]): Promise<void>;
+  setSwitchSettings?(settings: SwitchSettingsWrite): Promise<void>;
   loginBegin(vendor: string): Promise<LoginStatus>;
   loginStatus(vendor: string): Promise<LoginStatus>;
   loginCancel(vendor: string): Promise<void>;

@@ -41,6 +41,7 @@ export type CopyKey =
   | "duration.hours"
   | "duration.minutes"
   | "switch.title"
+  | "switch.panelTitle"
   | "switch.now"
   | "switch.pending"
   | "switch.nextIn"
@@ -202,6 +203,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "duration.hours": "小时",
     "duration.minutes": "分钟",
     "switch.title": "切换倒计时",
+    "switch.panelTitle": "切换策略与账户顺序",
     "switch.now": "立即切换",
     "switch.pending": "已决定切换到 {target}，等待本回合结束后生效。",
     "switch.nextIn": "距离下次额度评估：{time}",
@@ -358,6 +360,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "duration.hours": "hours",
     "duration.minutes": "minutes",
     "switch.title": "Switch countdown",
+    "switch.panelTitle": "Switching & account order",
     "switch.now": "Switch now",
     "switch.pending": "Switching to {target} after this turn ends.",
     "switch.nextIn": "Next quota check in {time}",

@@ -58,6 +58,7 @@ import {
   createCredentialsPort,
   createRotationAccess,
   createSettingsIntentStore,
+  writeSwitchSettings,
   createSettingsPort,
   disableSettingsAutoForm,
   environmentValue,
@@ -402,6 +403,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     setAccountOrder: async (order) => {
       await accounts.setOrder?.(order);
     },
+    setSwitchSettings: (input) => writeSwitchSettings(settings, OPENCODE_SETTINGS_NS, input),
     // 实验性设备码网页登录。
     login,
   });

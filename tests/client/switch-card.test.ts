@@ -23,6 +23,7 @@ function state(overrides: Partial<SwitchRuntimeState> = {}): SwitchRuntimeState 
     strategy: "best-quota",
     intervalMinutes: 60,
     atTurnEnd: true,
+    autoSwitch: true,
     evaluatedAt: 1_000,
     nextAt: 61_000,
     ...overrides,

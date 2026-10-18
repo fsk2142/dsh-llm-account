@@ -11,12 +11,9 @@
  * (`./registry`) and every host seam (`./shell`). No UI yet: the page component
  * arrives in Task 4.
  */
-import { createElement, type ReactNode } from "react";
-
 import { COPY } from "./copy";
-import { createConnectedPage, registerSharedSurfaces, startSharedState, type ClientSeamContext, type VendorCardsContext } from "./seams";
+import { createConnectedPage, registerSharedSurfaces, startSharedState, type ClientSeamContext } from "./seams";
 import { applyShell, PAGE_LOCALE_NS, VENDORS } from "./shell";
-import { SwitchCard } from "./switch-card";
 
 /**
  * Debug counter: how many times the host called `apply` (plan 1c reads it to
@@ -98,8 +95,6 @@ export function apply(ctx: unknown): void {
         entries: VENDORS,
         ctx: seamContext,
         t,
-        // 专属卡片：账户卡片（Task 5）。模型卡片在 T7 接到这里，顺序即规格 §8 的卡片顺序。
-        renderVendorCards: (cards) => renderVendorCards(cards),
       }),
     // 侧边栏卡片与中栏面板：常驻注册一次（守卫在 shell 里），门控在组件里按已存储的开关做。
     sharedSurfaces: (context, t) =>
@@ -109,22 +104,6 @@ export function apply(ctx: unknown): void {
         t,
         localeNs: PAGE_LOCALE_NS,
       }),
-  });
-}
-
-/**
- * 该厂商的专属卡片：标签页里只剩模型卡片；账户已合并到标签页上方的常驻面板
- * （`AccountsPanel`，设计 §7.2），不再按厂商各渲染一张账户卡。
- * @param cards - 容器递进来的数据与回调。
- * @returns 元素树。
- */
-function renderVendorCards(cards: VendorCardsContext): ReactNode {
-  // 模型已改到标签页上方的全局卡片；这里只剩切换倒计时卡片。
-  return createElement(SwitchCard, {
-    t: cards.t,
-    state: cards.switchState,
-    now: cards.now,
-    onSwitchNow: cards.switchNow,
   });
 }
 

@@ -43,6 +43,8 @@ export interface SwitchingDeps {
   document: () => Record<string, unknown>;
   /** 只读当前账号；`null` 表示自动轮换（不主动切）。 */
   pinnedRef: () => string | null;
+  /** 文档没有 `autoSwitch` 时该厂商的默认值（CC true / OpenCode false）。 */
+  autoSwitchDefault?: boolean;
   /** 时钟（测试注入）。 */
   now?: () => number;
   /** 非致命失败的可读日志。 */
@@ -200,7 +202,8 @@ export class SwitchingController {
    * @returns 当前策略、上次/下次评估与 pending。
    */
   snapshot(): SwitchRuntimeState {
-    const settings = switchSettingsOf(this.#deps.document());
+    const document = this.#deps.document();
+    const settings = switchSettingsOf(document);
     const now = this.#now();
     const nextAt =
       settings.strategy === "best-quota" && settings.intervalMinutes > 0
@@ -210,6 +213,7 @@ export class SwitchingController {
         : undefined;
     return {
       ...settings,
+      autoSwitch: document.autoSwitch === undefined ? this.#deps.autoSwitchDefault !== false : document.autoSwitch !== false,
       evaluatedAt: this.#lastEvaluatedAt,
       ...(nextAt === undefined ? {} : { nextAt }),
       ...(this.#pending === undefined ? {} : { pending: { ...this.#pending } }),

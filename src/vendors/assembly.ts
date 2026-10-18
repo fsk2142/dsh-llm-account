@@ -17,6 +17,7 @@ import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
 import type { SettingsDescriptor, SettingsForms } from "@deepseek-ai/dsh-settings";
 
 import type { AccountState, CredentialPort, SettingsOp, SettingsPort, SettingsSnapshot } from "../core/adapter";
+import type { SwitchSettingsWrite } from "../core/switching";
 import { normalizeKey } from "../core/credentials";
 import { IntentLog } from "../core/recovery";
 import type { AccountIntent, AccountIntentKind, IntentStore } from "../core/recovery";
@@ -410,6 +411,33 @@ function readIntent(value: unknown): AccountIntent | undefined {
 /** 修订号冲突（`SettingsPort.mutate` 的约定错误形状）。 */
 function isSettingsConflict(error: unknown): boolean {
   return isRecord(error) && error.code === "SETTINGS_CONFLICT";
+}
+
+/**
+ * 把全局切换设置写进一份设置文档（修订冲突时重读重试）。
+ * @param settings - 设置端口。
+ * @param ns - 目标命名空间。
+ * @param input - 策略/间隔/回合末/自动切换。
+ */
+export async function writeSwitchSettings(settings: SettingsPort, ns: string, input: SwitchSettingsWrite): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    const snapshot = await settings.describe(ns);
+    try {
+      await settings.mutate(
+        ns,
+        [
+          { op: "set", path: ["switchStrategy"], value: input.strategy },
+          { op: "set", path: ["switchIntervalMinutes"], value: input.intervalMinutes },
+          { op: "set", path: ["switchAtTurnEnd"], value: input.atTurnEnd },
+          { op: "set", path: ["autoSwitch"], value: input.autoSwitch },
+        ],
+        snapshot.revision,
+      );
+      return;
+    } catch (error) {
+      if (attempt >= MAX_CONFLICT_RETRIES || !isSettingsConflict(error)) throw error;
+    }
+  }
 }
 
 /**
