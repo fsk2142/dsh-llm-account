@@ -25,7 +25,7 @@ import { companyLabelOf, groupModels } from "../core/model-groups";
 import { rejectionText } from "./copy";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
-import { QuotaRing } from "./quota-ring";
+import { QuotaBar } from "./quota-bar";
 import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaSummary, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
@@ -466,12 +466,12 @@ function quotaBars(props: AccountCardProps, quota: QuotaSummary): ReactNode[] {
   return [
     createElement(
       "div",
-      { key: "rings", className: CSS_CLASS.ringRow },
+      { key: "bars", className: CSS_CLASS.quotaBarList },
       ...(quota.windows ?? []).map((window) =>
         createElement(
           "div",
-          { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.ringCell },
-          QuotaRing({ t: props.t, window }),
+          { key: window.key, "data-quota-window": window.key },
+          QuotaBar({ t: props.t, window }),
         ),
       ),
     ),

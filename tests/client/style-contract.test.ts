@@ -225,31 +225,31 @@ it("账号行是两段结构：身份块与动作在身份行里，额度条在�
   expect(elementsOfSim(head).some((element) => element.props["data-quota-window"] !== undefined)).toBe(false);
 });
 
-it("额度环：中心显示剩余百分比，绿色代表剩余充足，没数据不补 0", () => {
-  const ring = (
+it("额度条：显示剩余百分比，绿色代表剩余充足，没数据不补 0", () => {
+  const bar = (
     window: { key: string; used?: number; cap?: number; percent?: number; exceeded?: boolean },
   ): { level: unknown; remaining: unknown } | undefined => {
     const tree = AccountCard(accountProps({ status: statusOf([account({ ref: "work", quota: { windows: [window], failures: [] } })]) }));
-    const wrapper = elementsOfSim(tree).find((element) => element.props["data-quota-ring"] !== undefined);
+    const wrapper = elementsOfSim(tree).find((element) => element.props["data-quota-bar"] !== undefined);
     if (wrapper === undefined) return undefined;
     return {
-      level: wrapper.props["data-quota-ring-level"],
-      remaining: wrapper.props["data-quota-ring-remaining"],
+      level: wrapper.props["data-quota-bar-level"],
+      remaining: wrapper.props["data-quota-bar-remaining"],
     };
   };
 
   // percent 是已用百分比：20% 已用 = 80% 剩余。
-  expect(ring({ key: "w", percent: 20 })).toEqual({ level: "ok", remaining: 80 });
-  expect(ring({ key: "w", percent: 50 })).toEqual({ level: "ok", remaining: 50 });
-  expect(ring({ key: "w", percent: 85 })).toEqual({ level: "ok", remaining: 15 });
-  expect(ring({ key: "w", percent: 100, exceeded: true })).toEqual({ level: "error", remaining: 0 });
+  expect(bar({ key: "w", percent: 20 })).toEqual({ level: "ok", remaining: 80 });
+  expect(bar({ key: "w", percent: 50 })).toEqual({ level: "ok", remaining: 50 });
+  expect(bar({ key: "w", percent: 85 })).toEqual({ level: "ok", remaining: 15 });
+  expect(bar({ key: "w", percent: 100, exceeded: true })).toEqual({ level: "error", remaining: 0 });
   // used/cap 型：5/35 → 已用 14%，剩余 86%。
-  expect(ring({ key: "w", used: 5, cap: 35 })).toEqual({ level: "ok", remaining: 86 });
-  // 什么数都没有 → 灰色空环，不补 0。
-  expect(ring({ key: "w" })).toEqual({ level: "missing", remaining: undefined });
-  expect(ring({ key: "w", used: 0, cap: 0 })).toEqual({ level: "missing", remaining: undefined });
+  expect(bar({ key: "w", used: 5, cap: 35 })).toEqual({ level: "ok", remaining: 86 });
+  // 什么数都没有 → 灰色文案，不补 0。
+  expect(bar({ key: "w" })).toEqual({ level: "missing", remaining: undefined });
+  expect(bar({ key: "w", used: 0, cap: 0 })).toEqual({ level: "missing", remaining: undefined });
   // 越界值夹在 0–100。
-  expect(ring({ key: "w", percent: 120 })).toEqual({ level: "error", remaining: 0 });
+  expect(bar({ key: "w", percent: 120 })).toEqual({ level: "error", remaining: 0 });
 });
 
 // —— 真实容器 ————————

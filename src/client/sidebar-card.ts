@@ -18,7 +18,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { CSS_CLASS, cls } from "./css";
 import { RefreshIcon, UsageIcon } from "./icons";
 import { quotaShape } from "./quota";
-import { QuotaRing } from "./quota-ring";
+import { QuotaBar } from "./quota-bar";
 import type { AccountUsageStatus, VendorUsageStatus } from "./usage-contract";
 
 /** 卡片属性。 */
@@ -180,12 +180,12 @@ function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undef
   return [
     createElement(
       "div",
-      { key: "rings", className: CSS_CLASS.ringRow },
+      { key: "bars", className: CSS_CLASS.quotaBarList },
       ...(quota.windows ?? []).map((window) =>
         createElement(
           "div",
           { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window) },
-          QuotaRing({ t, window }),
+          QuotaBar({ t, window }),
         ),
       ),
     ),

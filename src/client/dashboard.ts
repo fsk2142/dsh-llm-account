@@ -15,7 +15,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { CSS_CLASS } from "./css";
 import { rejectionText } from "./copy";
 import { CloseIcon, RefreshIcon } from "./icons";
-import { QuotaRing } from "./quota-ring";
+import { QuotaBar } from "./quota-bar";
 import { relativeTime } from "./time";
 import type { AccountUsageStatus, QuotaWindow, SwitchRecord, VendorUsageStatus } from "./usage-contract";
 
@@ -215,12 +215,12 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
   );
 }
 
-/** 一个额度窗口（圆环）。 */
+/** 一个额度窗口（条形）。 */
 function windowBlock(t: (key: string) => string, window: QuotaWindow): ReactNode {
   return createElement(
     "div",
-    { key: window.key, "data-dashboard-window": window.key, className: CSS_CLASS.ringCell },
-    QuotaRing({ t, window }),
+    { key: window.key, "data-dashboard-window": window.key },
+    QuotaBar({ t, window }),
   );
 }
 

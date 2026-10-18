@@ -367,7 +367,7 @@ export const PAGE_CSS = `
   border-color: var(--dsw-alias-border-l3); }
 
 /* ═══ 额度：每个窗口一小块（标签 + 读数 + 4px 进度条） ═══ */
-.dsl-meters { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.dsl-meters { display: flex; flex-direction: column; gap: 10px; }
 .dsl-sidebar .dsl-ring-row { flex-wrap: nowrap; gap: 2px; padding: 4px 0 0; }
 .dsl-sidebar .dsl-ring { flex: 1 1 0; min-width: 0; }
 .dsl-sidebar .dsl-ring-chart,
@@ -386,6 +386,28 @@ export const PAGE_CSS = `
   line-height: 18px; font-variant-numeric: tabular-nums; }
 .dsl-quota-hint { flex: none; margin-left: 6px; color: var(--dsw-alias-label-tertiary);
   font-size: 11px; line-height: 18px; }
+.dsl-quota-bar-list { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.dsl-quota-bar { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
+.dsl-quota-bar-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; }
+.dsl-quota-bar-label { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dsl-quota-bar-percent { flex: none; font-size: 13px; line-height: 18px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-state-success-primary); }
+.dsl-quota-bar[data-quota-bar-level="error"] .dsl-quota-bar-percent { color: var(--dsw-alias-state-error-primary); }
+.dsl-quota-bar[data-quota-bar-level="missing"] .dsl-quota-bar-percent { color: var(--dsw-alias-label-tertiary); font-weight: 400; }
+.dsl-quota-bar-track { display: block; overflow: hidden; height: 8px; border-radius: 999px;
+  background: var(--dsw-alias-border-l1); }
+.dsl-quota-bar-fill { display: block; height: 100%; border-radius: inherit;
+  background: var(--dsw-alias-state-success-primary); transition: width 200ms ease; }
+.dsl-quota-bar-fill[data-level="error"] { background: var(--dsw-alias-state-error-primary); }
+.dsl-quota-bar-meta { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px;
+  font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.dsl-quota-bar-reset { color: var(--dsw-alias-label-tertiary); }
+.dsl-sidebar .dsl-quota-bar-list { gap: 9px; }
+.dsl-sidebar .dsl-quota-bar { gap: 3px; }
+.dsl-sidebar .dsl-quota-bar-label,
+.dsl-sidebar .dsl-quota-bar-percent { font-size: 12px; line-height: 17px; }
+.dsl-sidebar .dsl-quota-bar-track { height: 6px; }
+.dsl-sidebar .dsl-quota-bar-meta { font-size: 10px; line-height: 14px; }
 .dsl-ring { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 64px; }
 .dsl-ring-chart { position: relative; width: 40px; height: 40px; }
 .dsl-ring-svg { display: block; width: 40px; height: 40px; }
@@ -561,6 +583,15 @@ export const CSS_CLASS = {
   meterLabel: "dsl-meter-label",
   quotaValue: "dsl-quota-value",
   quotaHint: "dsl-quota-hint",
+  quotaBar: "dsl-quota-bar",
+  quotaBarHead: "dsl-quota-bar-head",
+  quotaBarLabel: "dsl-quota-bar-label",
+  quotaBarPercent: "dsl-quota-bar-percent",
+  quotaBarTrack: "dsl-quota-bar-track",
+  quotaBarFill: "dsl-quota-bar-fill",
+  quotaBarMeta: "dsl-quota-bar-meta",
+  quotaBarReset: "dsl-quota-bar-reset",
+  quotaBarList: "dsl-quota-bar-list",
   ring: "dsl-ring",
   ringChart: "dsl-ring-chart",
   ringSvg: "dsl-ring-svg",
