@@ -13,10 +13,10 @@ function elementsOf(node: unknown): StubElement[] {
   return [element, ...elementsOf(element.props.children)];
 }
 
-it("剩余额度百分比与颜色分档", () => {
+it("剩余额度为绿色，中心显示剩余百分比", () => {
   const tree = QuotaRing({ t: dictionaryOf("zh"), window: { key: "fiveHour", used: 7, cap: 10 } });
   const ring = elementsOf(tree).find((element) => element.props["data-quota-ring"] !== undefined)!;
-  expect(ring.props["data-quota-ring-level"]).toBe("warn");
+  expect(ring.props["data-quota-ring-level"]).toBe("ok");
   expect(ring.props["data-quota-ring-remaining"]).toBe(30);
   expect(elementsOf(tree).some((element) => element.props["data-quota-ring-text"] === "30")).toBe(true);
 });

@@ -241,7 +241,7 @@ it("额度环：中心显示剩余百分比，绿色代表剩余充足，没数�
   // percent 是已用百分比：20% 已用 = 80% 剩余。
   expect(ring({ key: "w", percent: 20 })).toEqual({ level: "ok", remaining: 80 });
   expect(ring({ key: "w", percent: 50 })).toEqual({ level: "ok", remaining: 50 });
-  expect(ring({ key: "w", percent: 85 })).toEqual({ level: "error", remaining: 15 });
+  expect(ring({ key: "w", percent: 85 })).toEqual({ level: "ok", remaining: 15 });
   expect(ring({ key: "w", percent: 100, exceeded: true })).toEqual({ level: "error", remaining: 0 });
   // used/cap 型：5/35 → 已用 14%，剩余 86%。
   expect(ring({ key: "w", used: 5, cap: 35 })).toEqual({ level: "ok", remaining: 86 });

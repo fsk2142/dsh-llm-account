@@ -26,7 +26,9 @@ export function QuotaRing(props: QuotaRingProps): ReactElement {
   const { t, window } = props;
   const meter = quotaMeter(window);
   const remaining = meter === undefined ? undefined : Math.max(0, Math.min(100, 100 - meter.percent));
-  const level = remaining === undefined ? "missing" : remaining >= 50 ? "ok" : remaining >= 20 ? "warn" : "error";
+  // 剩余额度用绿色；只有真正为 0 才转红。圆环之间留一个底部缺口，避免看起来像实心圆盘。
+  const level = remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
+  const arc = remaining === undefined ? 0 : (remaining / 100) * 75;
   return createElement(
     "div",
     {
@@ -41,7 +43,15 @@ export function QuotaRing(props: QuotaRingProps): ReactElement {
       createElement(
         "svg",
         { viewBox: "0 0 44 44", className: CSS_CLASS.ringSvg, "aria-hidden": "true" },
-        createElement("circle", { cx: 22, cy: 22, r: 18, pathLength: 100, className: CSS_CLASS.ringTrack }),
+        createElement("circle", {
+          cx: 22,
+          cy: 22,
+          r: 18,
+          pathLength: 100,
+          className: CSS_CLASS.ringTrack,
+          strokeDasharray: "75 25",
+          transform: "rotate(135 22 22)",
+        }),
         remaining === undefined
           ? null
           : createElement("circle", {
@@ -51,8 +61,8 @@ export function QuotaRing(props: QuotaRingProps): ReactElement {
               pathLength: 100,
               className: CSS_CLASS.ringFill,
               "data-level": level,
-              strokeDasharray: `${remaining} 100`,
-              transform: "rotate(-90 22 22)",
+              strokeDasharray: `${arc} 100`,
+              transform: "rotate(135 22 22)",
             }),
       ),
       createElement(

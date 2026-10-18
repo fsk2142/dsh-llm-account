@@ -62,7 +62,8 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   const currentRow =
     effectiveRow ??
     status?.accounts.find((account) => account.active === true) ??
-    status?.accounts.find((account) => account.effective === true);
+    status?.accounts.find((account) => account.effective === true) ??
+    status?.accounts.find((account) => account.configured === true);
   const hasData = status !== undefined && currentRow !== undefined;
 
   return createElement(
