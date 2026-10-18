@@ -141,6 +141,36 @@ export function orderWithOverride(derived: readonly string[], override: unknown)
 }
 
 /**
+ * 厂商在**全局顺序**里的投影。
+ *
+ * 全局 `accountOrder` 存的是 `${vendor}:${ref}`：两份设置文档都保存同一份完整顺序，
+ * 每家只投影出自己的账号。旧文档里的裸 ref 仍按本厂商限定处理（零迁移）。
+ * @param derived - 本厂商的 ref（顶层默认账号 + 账号表，已去重）。
+ * @param override - 设置文档里的 `accountOrder`（内容可能是全局键或旧裸 ref）。
+ * @param vendor - 本厂商 provider id。
+ * @returns 本厂商账号在全局顺序里的排列。
+ */
+export function globalOrderOfVendor(derived: readonly string[], override: unknown, vendor: VendorId): string[] {
+  const prefix = `${vendor}:`;
+  const normalized = Array.isArray(override)
+    ? override.map((item) => {
+        if (typeof item !== "string") return item;
+        const ref = item.trim();
+        if (ref === "") return item;
+        // 已带任意 vendor 前缀：保留（其他厂商的键会被 orderWithOverride 过滤掉）。
+        return ref.startsWith(prefix) || ref.includes(":") ? ref : `${prefix}${ref}`;
+      })
+    : override;
+  const ordered = orderWithOverride(derived.map((ref) => `${prefix}${ref}`), normalized);
+  return ordered.map((key) => key.slice(prefix.length));
+}
+
+/** 全局顺序键。 */
+export function accountOrderKey(vendor: VendorId, ref: string): string {
+  return `${vendor}:${ref}`;
+}
+
+/**
  * 把一项提到首位，其余项的**相对顺序不变**（旧插件 `moveAccountFirst` 第 6779 行）。
  *
  * 与 {@link reorder} 的分工：`reorder` 服务于「用户拖动排序」这一写入路径（下标语义、

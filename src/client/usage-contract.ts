@@ -64,6 +64,8 @@ export const USAGE_METHODS = [
   "setAutoSwitch",
   // 切换策略：页面「立即切换」
   "switchNow",
+  // 全局账户顺序（两家同一份）
+  "setAccountOrder",
   // 网页登录（Task 5：Command Code 的登录入口）
   "loginBegin",
   "loginStatus",
@@ -142,6 +144,8 @@ export interface VendorUsageStatus {
   switch?: SwitchNotice;
   /** 切换策略运行态（倒计时/待切换）；老宿主没有这个字段。 */
   switchState?: SwitchRuntimeState;
+  /** 全局顺序（`vendor:ref`；两家返回同一份）。 */
+  accountOrder?: string[];
   accounts: AccountUsageStatus[];
   failures: string[];
 }
@@ -305,6 +309,12 @@ function parseSwitchNowResult(endpoint: string, value: unknown): SwitchNowResult
   };
 }
 
+/** 校验一个字符串数组。 */
+function parseStringArray(endpoint: string, value: unknown): string[] {
+  if (!Array.isArray(value)) throw boundaryError(endpoint, "expected an array of strings");
+  return value.filter((item): item is string => typeof item === "string");
+}
+
 /** 校验一个可空的字符串（`null` 表示「回到自动轮换」）。 */
 function parseNullableString(endpoint: string, value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -436,6 +446,9 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
       { name: "value", typeSymbol: "AutoSwitch", parse: parseBoolean },
     ]),
     makeDescriptor("switchNow", "SwitchNowResult", parseSwitchNowResult, [VENDOR_PARAM]),
+    makeDescriptor("setAccountOrder", "Void", parseVoid, [
+      { name: "order", typeSymbol: "AccountOrder", parse: parseStringArray },
+    ]),
     // 登录的 ref 由宿主按登录返回的用户名推导（`accountRef`），客户端**不能**指定它 ——
     // 能指定就等于让页面决定把密钥写进哪个凭据槽，那正是 T5 Step 7 要防的事。
     makeDescriptor("loginBegin", "LoginStatus", parseLoginStatus, [VENDOR_PARAM]),
@@ -458,6 +471,7 @@ export interface UsageNamespace {
   moveAccount(vendor: string, ref: string, toIndex: number): Promise<void>;
   setAutoSwitch(vendor: string, value: boolean): Promise<void>;
   switchNow?(vendor: string): Promise<SwitchNowResult>;
+  setAccountOrder?(order: readonly string[]): Promise<void>;
   loginBegin(vendor: string): Promise<LoginStatus>;
   loginStatus(vendor: string): Promise<LoginStatus>;
   loginCancel(vendor: string): Promise<void>;

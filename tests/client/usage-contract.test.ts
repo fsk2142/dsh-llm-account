@@ -118,6 +118,7 @@ describe("参数校验器接受真值", () => {
     key: "sk-1",
     toIndex: 0,
     value: true,
+    order: ["commandcode:COMMANDCODE_API_KEY"],
   };
 
   const seen = new Set<string>();
@@ -208,7 +209,7 @@ describe("边界校验器的性质", () => {
         })();
         if (!accepted) continue;
         // `void` 端点接受任何值并归一到 undefined —— 那是它的契约，不算「冒充成功」。
-        if (descriptor.method === "renameAccount" || descriptor.method === "replaceKey" || descriptor.method === "removeAccount" || descriptor.method === "moveAccount" || descriptor.method === "setAutoSwitch" || descriptor.method === "loginCancel" || descriptor.method === "selectAccount") {
+        if (descriptor.method === "renameAccount" || descriptor.method === "replaceKey" || descriptor.method === "removeAccount" || descriptor.method === "moveAccount" || descriptor.method === "setAutoSwitch" || descriptor.method === "loginCancel" || descriptor.method === "selectAccount" || descriptor.method === "setAccountOrder") {
           expect(parse(value), descriptor.method).toBeUndefined();
           continue;
         }

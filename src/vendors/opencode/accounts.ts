@@ -54,7 +54,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AccountPort, AccountView, CredentialPort, SettingsOp, SettingsPort } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN, dedupeByRef, moveFirst, readAccountSlot, reorder } from "../../core/accounts";
+import { CREDENTIAL_REF_PATTERN, dedupeByRef, globalOrderOfVendor, moveFirst, readAccountSlot, reorder } from "../../core/accounts";
 import type { AccountSlotReading } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { AccountIntent, AccountIntentKind, IntentLog } from "../../core/recovery";
@@ -92,6 +92,9 @@ const ACCOUNTS_FIELD = "accounts";
 
 /** 当前固定账号字段（顶层 `apiKeyEnv`）。 */
 const ACTIVE_FIELD = "apiKeyEnv";
+
+/** 全局顺序字段（`vendor:ref` 键；两家文档保存同一份）。 */
+const ORDER_FIELD = "accountOrder";
 
 /**
  * 待清理凭据引用数组字段。本项目引入（与 commandcode 同名同义）：删除账号只**记录**待清理的
@@ -332,8 +335,12 @@ class OpencodeAccounts implements AccountPort {
     );
     // 重复 ref 只保留第一个：同一个凭据槽不该在轮换里被算两轮（Review Focus 1）。
     const unique = dedupeByRef(moveFirst(views, slot.ref));
-    const info = await this.#deps.credentials.describe(unique.map((view) => view.ref));
-    return unique.map((view) => ({ ...view, configured: info[view.ref]?.configured === true }));
+    // 列表顺序 = 全局顺序在本厂商的投影；没有全局顺序时保留派生顺序（当前账号提位）。
+    const order = globalOrderOfVendor(unique.map((view) => view.ref), snapshot.value.accountOrder, "dsh-opencode-go");
+    const byRef = new Map(unique.map((view) => [view.ref, view]));
+    const ordered = order.map((ref) => byRef.get(ref)).filter((view): view is AccountView => view !== undefined);
+    const info = await this.#deps.credentials.describe(ordered.map((view) => view.ref));
+    return ordered.map((view) => ({ ...view, configured: info[view.ref]?.configured === true }));
   }
 
   /**
@@ -543,6 +550,18 @@ class OpencodeAccounts implements AccountPort {
         return { ops, result: undefined };
       }),
     );
+  }
+
+  /**
+   * 写全局顺序（`vendor:ref`；两家文档保存同一份）。
+   * @param order - 全局顺序键。
+   */
+  async setOrder(order: readonly string[]): Promise<void> {
+    const clean = order.filter((key): key is string => typeof key === "string" && key.trim() !== "");
+    await this.#mutate(() => ({
+      ops: [{ op: "set", path: [ORDER_FIELD], value: clean }],
+      result: undefined,
+    }));
   }
 
   /**

@@ -79,6 +79,8 @@ export type CopyKey =
   | "account.loginFor"
   | "account.addAccount"
   | "account.addAccount.hint"
+  | "account.orderTitle"
+  | "account.orderHint"
   | "account.rename"
   | "account.replaceKey"
   | "account.pin"
@@ -238,6 +240,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.loginFor": "{vendor} · 网页登录",
     "account.addAccount": "新增账户",
     "account.addAccount.hint": "先选供应商，再选 API Key 或网页登录。",
+    "account.orderTitle": "切换顺序",
+    "account.orderHint": "全局顺序，两家共用；每家按这个顺序过滤自己的账号来轮换。",
     "account.rename": "重命名",
     "account.replaceKey": "更换密钥",
     "account.pin": "切换到此账户",
@@ -392,6 +396,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.loginFor": "{vendor} · web login",
     "account.addAccount": "Add account",
     "account.addAccount.hint": "Pick a provider, then an API key or web login.",
+    "account.orderTitle": "Switch order",
+    "account.orderHint": "One global order shared by both providers; each rotates its own projection.",
     "account.rename": "Rename",
     "account.replaceKey": "Replace key",
     "account.pin": "Switch to this account",

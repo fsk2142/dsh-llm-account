@@ -163,6 +163,7 @@ it("服务注册到固定键与命名空间，并登记三个远程方法", asyn
     "moveAccount",
     "setAutoSwitch",
     "switchNow",
+    "setAccountOrder",
     "loginBegin",
     "loginStatus",
     "loginCancel",

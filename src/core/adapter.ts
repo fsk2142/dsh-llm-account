@@ -81,6 +81,11 @@ export interface AccountPort {
   /** `null` 表示回到自动轮换。 */
   select(ref: string | null): Promise<void>;
   move?(ref: string, toIndex: number): Promise<void>;
+  /**
+   * 写一份**全局**顺序（`vendor:ref` 键；两家共享同一份数组）。
+   * 每家只投影自己的账号；旧裸 ref 仍兼容。
+   */
+  setOrder?(order: readonly string[]): Promise<void>;
   setAutoSwitch?(value: boolean): Promise<void>;
 }
 

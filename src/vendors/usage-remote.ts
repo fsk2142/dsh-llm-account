@@ -97,6 +97,10 @@ export interface UsageVendorDeps {
    * 隐藏的模型不在里面；这个返回厂商的全量目录，页面才能在「隐藏」之后重新勾上。
    */
   readonly models?: () => Promise<CatalogModel[]>;
+  /** 设置文档里的全局顺序（`vendor:ref` 键；两家相同）。 */
+  readonly accountOrder?: () => readonly string[];
+  /** 把同一份全局顺序写进两家文档。 */
+  readonly setAccountOrder?: (order: readonly string[]) => Promise<void>;
   /** 切换策略运行态（倒计时/待切换）；页面「立即切换」也走这里。 */
   readonly switchState?: () => SwitchRuntimeState;
   readonly switchNow?: () => Promise<SwitchDecision | undefined>;
@@ -228,6 +232,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
       ...(effective === undefined ? {} : { effective }),
       ...(latestSwitch === undefined ? {} : { switch: latestSwitch }),
       ...(deps.switchState === undefined ? {} : { switchState: deps.switchState() }),
+      ...(deps.accountOrder === undefined ? {} : { accountOrder: [...deps.accountOrder()] }),
       accounts,
       failures,
     };
@@ -369,6 +374,18 @@ export class LlmAccountUsageService extends TypertRemoteService {
     return decision === undefined
       ? { switched: false }
       : { switched: true, target: decision.target, reason: decision.reason };
+  }
+
+  /**
+   * 把一份全局顺序写进**所有**已注册厂商的设置文档（两家保存同一份，各自投影）。
+   * @param order - `vendor:ref` 键。
+   */
+  async setAccountOrder(order: readonly string[]): Promise<void> {
+    const writes: Promise<void>[] = [];
+    for (const deps of this.vendorDeps.values()) {
+      if (deps.setAccountOrder !== undefined) writes.push(deps.setAccountOrder(order));
+    }
+    await Promise.all(writes);
   }
 
   /**

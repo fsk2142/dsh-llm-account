@@ -51,7 +51,7 @@ declare module "@deepseek-ai/cordis" {
 }
 
 import type { AccountPort, AccountState, CredentialPort, QuotaPort, VendorCapabilities } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN, orderWithOverride } from "../../core/accounts";
+import { CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -395,6 +395,13 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     models: () => adapter.catalogModels(),
     switchState: () => switching.snapshot(),
     switchNow: () => switching.switchNow(),
+    accountOrder: () => {
+      const order = document().accountOrder;
+      return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
+    },
+    setAccountOrder: async (order) => {
+      await accounts.setOrder?.(order);
+    },
     // 实验性设备码网页登录。
     login,
   });
@@ -542,7 +549,7 @@ function orderOf(document: Record<string, unknown>): string[] {
     seen.add(ref);
     derived.push(ref);
   }
-  return orderWithOverride(derived, document.accountOrder);
+  return globalOrderOfVendor(derived, document.accountOrder, "dsh-opencode-go");
 }
 
 /**

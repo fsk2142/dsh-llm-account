@@ -28,7 +28,7 @@ import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
 import type { AccountPort, AccountState, AccountView, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN, orderWithOverride } from "../../core/accounts";
+import { CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
 import { normalizeKey, pickApiKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -301,6 +301,13 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     models: () => adapter.catalogModels(),
     switchState: () => switching.snapshot(),
     switchNow: () => switching.switchNow(),
+    accountOrder: () => {
+      const order = document().accountOrder;
+      return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
+    },
+    setAccountOrder: async (order) => {
+      await accounts.setOrder?.(order);
+    },
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
@@ -425,7 +432,7 @@ function orderOf(document: Record<string, unknown>): string[] {
     derived.push(ref);
   }
   // 用户手动排序（`accountOrder`）优先于派生顺序；缺省/坏形状时原样返回派生顺序。
-  return orderWithOverride(derived, document.accountOrder);
+  return globalOrderOfVendor(derived, document.accountOrder, "commandcode");
 }
 
 /** 按模型绑定账号：只收形状完整的规则（模型列表非空、`account` 是合法 ref）。 */

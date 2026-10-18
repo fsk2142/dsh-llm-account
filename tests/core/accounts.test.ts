@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 
-import { accountRef, assignModelRule, dedupeByRef, dropAccount, moveFirst, reorder } from "../../src/core/accounts";
+import { accountRef, assignModelRule, dedupeByRef, dropAccount, globalOrderOfVendor, moveFirst, reorder } from "../../src/core/accounts";
 
 it("同一模型只属于一个账号：改派给另一账号后旧规则移除", () => {
   const r1 = assignModelRule([], ["m1"], "acc-a");
@@ -14,6 +14,16 @@ it("删除账号会同时清掉它的模型规则与当前账号标记", () => {
   expect(next.order).toEqual(["a"]);
   expect(next.rules).toEqual([]);
   expect(next.pinned).toBeNull();
+});
+
+it("全局顺序投影：每家只保留自己的键，旧裸 ref 按本厂商处理", () => {
+  const global = ["dsh-opencode-go:oc", "commandcode:cc", "commandcode:default", "dsh-opencode-go:oc2"];
+  expect(globalOrderOfVendor(["default", "cc"], global, "commandcode")).toEqual(["cc", "default"]);
+  expect(globalOrderOfVendor(["oc", "oc2"], global, "dsh-opencode-go")).toEqual(["oc", "oc2"]);
+  // 旧文档里的裸 ref 不迁移也能继续用。
+  expect(globalOrderOfVendor(["a", "b"], ["b", "a"], "commandcode")).toEqual(["b", "a"]);
+  // 另一个厂商的键被过滤掉，未知 ref 也不参与。
+  expect(globalOrderOfVendor(["a"], ["dsh-opencode-go:x", "a", "zzz"], "commandcode")).toEqual(["a"]);
 });
 
 it("排序把 ref 移到目标位置，越界索引被夹紧", () => {

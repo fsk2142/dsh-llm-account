@@ -50,7 +50,7 @@ import type {
   SettingsPort,
   VendorId,
 } from "../../core/adapter";
-import { accountRef, CREDENTIAL_REF_PATTERN, dedupeByRef, orderWithOverride, readAccountSlot, reorder } from "../../core/accounts";
+import { accountRef, CREDENTIAL_REF_PATTERN, dedupeByRef, globalOrderOfVendor, readAccountSlot, reorder } from "../../core/accounts";
 import type { AccountSlotReading } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { AccountIntent, AccountIntentKind, IntentLog } from "../../core/recovery";
@@ -327,7 +327,7 @@ class CommandCodeAccounts implements AccountPort {
     const unique = dedupeByRef(views);
     // 列表顺序 = 轮换顺序（含用户手动排序覆盖）：`usage-remote.accounts()` 的顺序同时是页面顺序
     // 与轮换顺序；两处各排一次会让「上移/下移」按错误的基准计算。
-    const order = orderWithOverride(unique.map((view) => view.ref), snapshot.value[ORDER_FIELD]);
+    const order = globalOrderOfVendor(unique.map((view) => view.ref), snapshot.value[ORDER_FIELD], VENDOR);
     const byRef = new Map(unique.map((view) => [view.ref, view]));
     const ordered = order.map((ref) => byRef.get(ref)).filter((view): view is AccountView => view !== undefined);
     const info = await this.#deps.credentials.describe(ordered.map((view) => view.ref));
@@ -497,6 +497,18 @@ class CommandCodeAccounts implements AccountPort {
         return { ops: [{ op: "set", path: [ORDER_FIELD], value: next }], result: undefined };
       }),
     );
+  }
+
+  /**
+   * 写全局顺序（`vendor:ref`；两家文档保存同一份）。
+   * @param order - 全局顺序键。
+   */
+  async setOrder(order: readonly string[]): Promise<void> {
+    const clean = order.filter((key): key is string => typeof key === "string" && key.trim() !== "");
+    await this.#mutate(() => ({
+      ops: [{ op: "set", path: [ORDER_FIELD], value: clean }],
+      result: undefined,
+    }));
   }
 
   /**

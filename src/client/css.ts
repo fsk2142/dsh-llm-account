@@ -314,6 +314,9 @@ export const PAGE_CSS = `
   gap: 4px; list-style: none; cursor: pointer; color: var(--dsw-alias-state-business-primary);
   font-size: 13px; line-height: 20px; }
 .dsl-add-summary::-webkit-details-marker { display: none; }
+.dsl-order-summary { display: inline-flex; align-self: flex-start; list-style: none; cursor: pointer;
+  color: var(--dsw-alias-label-secondary); font-size: 13px; font-weight: 600; line-height: 20px; }
+.dsl-order-summary::-webkit-details-marker { display: none; }
 .dsl-add-chooser > .dsl-actions { flex-wrap: wrap; }
 .dsl-dot { flex: none; box-sizing: border-box; width: 7px; height: 7px; border-radius: 50%;
   background: var(--dsw-alias-border-l3); transition: background 150ms ease; }
@@ -464,6 +467,7 @@ export const CSS_CLASS = {
   vendorBadge: "dsl-vendor-badge",
   addChooser: "dsl-add-chooser",
   addSummary: "dsl-add-summary",
+  orderSummary: "dsl-order-summary",
   modelSummary: "dsl-model-summary",
   modelSummaryTitle: "dsl-model-summary-title",
   modelGroup: "dsl-model-group",

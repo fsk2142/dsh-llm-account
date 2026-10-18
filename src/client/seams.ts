@@ -878,6 +878,10 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         void usage?.moveAccount(vendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
       },
       onToggleExpand: (vendor: string, ref: string) => setState((current) => toggleExpanded(current, ref, vendor)),
+      onReorder: (order: readonly string[]) => {
+        if (usage === undefined || typeof usage.setAccountOrder !== "function") return;
+        void usage.setAccountOrder(order).then(() => setAccountRevision((current) => current + 1));
+      },
       onLoginBegin: (vendor: string) => {
         void remoteValue<LoginView>(usage?.loginBegin(vendor)).then((status) => {
           if (status !== undefined) setLogins((current) => ({ ...current, [vendor]: status }));
@@ -1010,6 +1014,21 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           setState((current) => noteSaveResult(current, ns, error));
           void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
         });
+        // 切换策略 / 自动切换是**全局**设置：在一家保存后把同样的字段镜像到另一家，
+        // 两家控制器读各自的文档，但看到的是同一套策略。模型与其余字段不镜像。
+        const sharedKeys = new Set(["switchStrategy", "switchIntervalMinutes", "switchAtTurnEnd", "autoSwitch"]);
+        const shared = fields.filter((field) => sharedKeys.has(field.key));
+        if (shared.length > 0) {
+          for (const entry of entries) {
+            if (entry.ns === ns) continue;
+            const other = state.snapshots[entry.ns];
+            if (other === undefined) continue;
+            void saveSettings(ctx, other.row ?? entry.ns, shared, other.revision).then((otherError) => {
+              setState((current) => noteSaveResult(current, entry.ns, otherError));
+              void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
+            });
+          }
+        }
       },
       ...(options.renderVendorCards === undefined || activeEntry === undefined || activeVendor === undefined
         ? {}
