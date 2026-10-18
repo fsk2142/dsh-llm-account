@@ -15,6 +15,9 @@ export type CopyKey =
   | "intro"
   | "save"
   | "saveHint"
+  | "saving"
+  | "settingsTarget"
+  | "settingsTarget.hint"
   | "advanced"
   | "advancedHint"
   | "group.switch"
@@ -123,6 +126,11 @@ export type CopyKey =
   | "models.refresh"
   | "models.refreshing"
   | "models.newBadge"
+  | "models.removedTitle"
+  | "models.removedHint"
+  | "models.restore"
+  | "models.addTitle"
+  | "models.updatedAt"
   | "models.freeGroup"
   | "models.otherCompany"
   | "models.allTitle"
@@ -180,6 +188,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     title: "LLM 账号中心",
     intro: "统一管理 Command Code 与 OpenCode 的账号、额度与模型可见性。",
     save: "保存",
+    saving: "保存中…",
+    settingsTarget: "设置对象",
+    "settingsTarget.hint": "通用显示设置两家同步；高级字段只写当前这家。",
     saveHint: "账号操作立即生效；这里的保存只作用于下方设置字段。",
     advanced: "高级设置",
     advancedHint: "默认折叠。这些值影响请求构造与超时。",
@@ -289,6 +300,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.refresh": "重新获取模型",
     "models.refreshing": "重新获取中…",
     "models.newBadge": "New",
+    "models.removedTitle": "已移除的模型",
+    "models.removedHint": "恢复后不会自动开启，只会回到列表。",
+    "models.restore": "恢复",
+    "models.addTitle": "手动添加模型",
+    "models.updatedAt": "更新于 {time}",
     "models.freeGroup": "免费模型",
     "models.otherCompany": "其他",
     "models.allTitle": "全部模型",
@@ -341,6 +357,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     title: "LLM account centre",
     intro: "Manage Command Code and OpenCode accounts, quota and model visibility in one place.",
     save: "Save",
+    saving: "Saving…",
+    settingsTarget: "Settings for",
+    "settingsTarget.hint": "Display settings sync to both; advanced fields write only to this provider.",
     saveHint: "Account changes take effect immediately; Save only applies to the settings fields below.",
     advanced: "Advanced",
     advancedHint: "Collapsed by default. These values affect request construction and timeouts.",
@@ -450,6 +469,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.refresh": "Refresh models",
     "models.refreshing": "Refreshing…",
     "models.newBadge": "New",
+    "models.removedTitle": "Removed models",
+    "models.removedHint": "Restoring only puts it back in the list; it stays off.",
+    "models.restore": "Restore",
+    "models.addTitle": "Add a model manually",
+    "models.updatedAt": "Updated at {time}",
     "models.freeGroup": "Free models",
     "models.otherCompany": "Other",
     "models.allTitle": "All models",

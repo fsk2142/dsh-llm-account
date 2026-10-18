@@ -726,6 +726,9 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     /** 最近一次刷新新出现的模型（按厂商），用于 New 标记。 */
     const [newModels, setNewModels] = useState<Record<string, string[]>>({});
     const modelCatalogIds = useRef<Record<string, string[]>>({});
+    const [modelRefreshedAt, setModelRefreshedAt] = useState<number | undefined>(undefined);
+    /** 正在保存的命名空间（保存按钮立即反馈）。 */
+    const [savingNs, setSavingNs] = useState<string | undefined>(undefined);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
     /** 全局模型卡的搜索/添加草稿。 */
@@ -849,6 +852,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           }
           setModelCatalogs((current) => ({ ...current, [entry.providerId]: result }));
           setModelCatalogLoading((current) => ({ ...current, [entry.providerId]: false }));
+          setModelRefreshedAt(Date.now());
         });
       }
       return () => {
@@ -982,6 +986,24 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       if (edit.kind === "add") setAllModelDraft("");
     };
 
+    /** 从 removedModels 恢复一个模型（不自动开启）。 */
+    const restoreGlobalModel = (vendor: string, model: string): void => {
+      const entry = entries.find((candidate) => candidate.providerId === vendor);
+      const spec = entry?.models;
+      if (entry === undefined || spec === undefined) return;
+      const baseline = state.snapshots[entry.ns]?.value ?? {};
+      const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
+      const removed = normalizeModels(effective[spec.removed]).filter((id) => id !== model);
+      setState((current) => setField(current, entry.ns, spec.removed, removed));
+      const snapshot = state.snapshots[entry.ns];
+      void saveSettings(ctx, snapshot?.row ?? entry.ns, [{ key: spec.removed, value: removed }], snapshot?.revision ?? 0).then(
+        (error) => {
+          setState((current) => noteSaveResult(current, entry.ns, error));
+          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
+        },
+      );
+    };
+
     /** 批量设置一组模型的可见性（公司分组/供应商分组）。 */
     const writeGlobalModelGroup = (vendor: string, ids: readonly string[], visible: boolean): void => {
       const entry = entries.find((candidate) => candidate.providerId === vendor);
@@ -1051,10 +1073,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
             onToggle: (vendor: string, model: string, visible: boolean) =>
               writeGlobalModel(vendor, { kind: "toggle", model, visible }),
             onRemove: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "remove", model }),
+            onRestore: restoreGlobalModel,
             onGroupVisibility: writeGlobalModelGroup,
             onAdd: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "add", model }),
             onRefresh: () => setModelCatalogRevision((current) => current + 1),
             refreshing: Object.values(modelCatalogLoading).some((value) => value === true),
+            ...(modelRefreshedAt === undefined ? {} : { refreshedAt: modelRefreshedAt }),
             draft: allModelDraft,
             onDraftChange: setAllModelDraft,
             draftVendor: availableEntries.some((entry) => entry.providerId === allModelVendor)
@@ -1070,11 +1094,14 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       accounts,
       switchPanel,
       models,
+      mergeTabs: true,
+      saving: savingNs === state.activeNs,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
       onSave: (ns) => {
         const fields = dirtyFields(state, ns);
         if (fields.length === 0) return;
+        setSavingNs(ns);
         // 用户按下保存：New 标记完成使命（模型改动本身也会立即写回并清掉）。
         setNewModels({});
         // 写**命中的行名**（opencode 的行 id 与命名空间不同，用 ns 会写到一个不存在的条目上）。
@@ -1084,11 +1111,19 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           // 成功即清除。随后一律重读一遍宿主：基线以宿主为准，不猜修订号（紧接着的第二次
           // 保存不会带着猜出来的围栏再次失败），已落盘的草稿条目随之清掉。
           setState((current) => noteSaveResult(current, ns, error));
+          setSavingNs(undefined);
           void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
         });
         // 切换策略 / 自动切换是**全局**设置：在一家保存后把同样的字段镜像到另一家，
         // 两家控制器读各自的文档，但看到的是同一套策略。模型与其余字段不镜像。
-        const sharedKeys = new Set(["switchStrategy", "switchIntervalMinutes", "switchAtTurnEnd", "autoSwitch"]);
+        const sharedKeys = new Set([
+          "switchStrategy",
+          "switchIntervalMinutes",
+          "switchAtTurnEnd",
+          "autoSwitch",
+          "showSidebarQuota",
+          "quotaRefreshMinutes",
+        ]);
         const shared = fields.filter((field) => sharedKeys.has(field.key));
         if (shared.length > 0) {
           for (const entry of entries) {

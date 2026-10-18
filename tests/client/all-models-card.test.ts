@@ -60,6 +60,7 @@ function render(overrides: Partial<AllModelsCardProps> = {}): { tree: StubElemen
     onFilterChange: vi.fn(),
     onToggle: vi.fn(),
     onRemove: vi.fn(),
+    onRestore: vi.fn(),
     onRefresh: vi.fn(),
     onGroupVisibility: vi.fn(),
     onAdd: vi.fn(),
@@ -173,6 +174,29 @@ it("重新获取模型按钮触发一次刷新", () => {
   const refresh = elementsOf(tree).find((element) => element.props["data-all-model-refresh"] !== undefined)!;
   (refresh.props.onClick as () => void)();
   expect(props.onRefresh).toHaveBeenCalledTimes(1);
+});
+
+it("名称带 Free 的模型先归免费组；已移除的模型有恢复入口", () => {
+  const { tree, props } = render({
+    vendors: [
+      {
+        vendor: "commandcode",
+        label: "Command Code",
+        catalog: [{ id: "glm-5.2-fast", name: "GLM-5.2 Free", company: "zhipuai" }],
+        visibleModels: [],
+        visibility: {},
+        removedModels: ["old-model"],
+      },
+    ],
+  });
+  const groups = elementsOf(tree)
+    .filter((element) => element.props["data-all-model-group"] !== undefined)
+    .map((element) => element.props["data-all-model-group"]);
+  expect(groups[0]).toBe("free");
+  expect(elementsOf(tree).some((element) => element.props["data-all-models-removed"] !== undefined)).toBe(true);
+  const restore = elementsOf(tree).find((element) => element.props["data-all-model-restore"] === "commandcode:old-model")!;
+  (restore.props.onClick as () => void)();
+  expect(props.onRestore).toHaveBeenCalledWith("commandcode", "old-model");
 });
 
 it("勾选/移除/添加路由到所属厂商；搜索只留匹配行", () => {

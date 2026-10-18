@@ -130,8 +130,10 @@ describe("设置页容器仿真", () => {
     const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
 
-    // 切到 opencode 标签页，改 baseURL，保存。
-    click(page.tree(), "data-tab", "llm-opencode-go");
+    // 切到 opencode（合并模式没有 tab 行，用设置对象下拉），改 baseURL，保存。
+    fireSim(find(page.tree(), "data-settings-target-select", "true"), "onChange", {
+      target: { value: "llm-opencode-go" },
+    });
     await settleSim(mini);
     fireSim(find(page.tree(), "data-field-input", "baseURL"), "onChange", { target: { value: "https://new.example" } });
     await settleSim(mini);

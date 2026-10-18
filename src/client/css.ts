@@ -101,6 +101,13 @@ export const PAGE_CSS = `
 .dsl-model-group[open] > .dsl-model-group-summary > svg,
 .dsl-model-vendor-group[open] > .dsl-model-group-summary > svg { transform: rotate(180deg); }
 .dsl-model-group-title { font-size: 12px; line-height: 18px; font-weight: 600; }
+.dsl-model-add { display: flex; flex-direction: column; gap: 8px; padding-top: 12px;
+  border-top: .5px solid var(--dsw-alias-border-l1); }
+.dsl-model-add-title { font-size: 13px; line-height: 20px; font-weight: 600; }
+.dsl-model-add-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dsl-model-add-select { flex: 0 0 auto; min-width: 140px; }
+.dsl-model-add-input { flex: 1 1 220px; min-width: 0; }
+.dsl-model-add .dsl-actions { justify-content: flex-end; }
 .dsl-card > summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 4px; border-radius: var(--dsw-radius-xs); }
 /* 卡片底部的常驻开关（如 OpenCode 的自动切换）：一条分隔线把它们与账号列表分开。 */
@@ -479,6 +486,11 @@ export const CSS_CLASS = {
   modelVendorGroup: "dsl-model-vendor-group",
   modelGroupSummary: "dsl-model-group-summary",
   modelGroupTitle: "dsl-model-group-title",
+  modelAdd: "dsl-model-add",
+  modelAddTitle: "dsl-model-add-title",
+  modelAddRow: "dsl-model-add-row",
+  modelAddSelect: "dsl-model-add-select",
+  modelAddInput: "dsl-model-add-input",
   duration: "dsl-duration",
   durationPart: "dsl-duration-part",
   mark: "dsl-mark",

@@ -35,12 +35,16 @@ export interface AllModelsCardProps {
   onFilterChange: (value: string) => void;
   onToggle: (vendor: string, model: string, visible: boolean) => void;
   onRemove: (vendor: string, model: string) => void;
+  /** 从 removedModels 恢复（不自动开启）。 */
+  onRestore: (vendor: string, model: string) => void;
   /** 批量设置一组模型的可见性；同组可能跨两家，由卡片按厂商拆分。 */
   onGroupVisibility: (vendor: string, models: readonly string[], visible: boolean) => void;
   onAdd: (vendor: string, model: string) => void;
   /** 重新拉取两家目录并重新分组。 */
   onRefresh: () => void;
   refreshing?: boolean;
+  /** 最近一次成功拉取目录的时间（毫秒）。 */
+  refreshedAt?: number;
   draft: string;
   onDraftChange: (value: string) => void;
   draftVendor: string;
@@ -82,12 +86,17 @@ function rowsOf(vendor: AllModelsVendor): Row[] {
       id,
       ...(model?.name === undefined ? {} : { name: model.name }),
       ...(model?.company === undefined ? {} : { company: model.company }),
-      free: isFreeModel(id, model?.free),
+      free: isFreeModel(id, model?.free) || isFreeName(model?.name),
       visible: isModelIdVisible(id, visibility),
       configured: configured.has(id),
       fresh: fresh.has(id),
     };
   });
+}
+
+/** 目录没有 free 标记时，名字里带 Free 的也归免费组。 */
+function isFreeName(name: string | undefined): boolean {
+  return name !== undefined && /(?:^|[\s_-])free(?:$|[\s_-])/i.test(name);
 }
 
 /** 免费 → 公司首次出现 → 其他。跨厂商。 */
@@ -143,6 +152,9 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
   const failures = props.vendors.flatMap((vendor) => (vendor.failure === undefined ? [] : [`${vendor.label}: ${vendor.failure}`]));
   const loading = props.vendors.some((vendor) => vendor.loading === true);
   const addVendor = props.vendors.find((vendor) => vendor.vendor === props.draftVendor) ?? props.vendors[0];
+  const removedItems = props.vendors.flatMap((vendor) =>
+    (vendor.removedModels ?? []).map((model) => ({ vendor: vendor.vendor, label: vendor.label, model })),
+  );
 
   const body: ReactNode[] = [];
   if (allRows.length === 0) {
@@ -241,45 +253,103 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
         },
         props.refreshing === true ? t("models.refreshing") : t("models.refresh"),
       ),
+      props.refreshedAt === undefined
+        ? null
+        : createElement(
+            "small",
+            { "data-all-model-updated": String(props.refreshedAt), className: CSS_CLASS.note },
+            t("models.updatedAt").replace("{time}", clockOf(props.refreshedAt)),
+          ),
     ),
     ...failures.map((failure) =>
       createElement("p", { key: failure, "data-all-model-failure": "true", className: CSS_CLASS.failure }, failure),
     ),
     ...body,
+    removedItems.length === 0
+      ? null
+      : createElement(
+          "details",
+          { key: "removed", "data-all-models-removed": "true", className: CSS_CLASS.inset },
+          createElement("summary", { className: CSS_CLASS.orderSummary }, `${t("models.removedTitle")} (${removedItems.length})`),
+          createElement("small", { className: CSS_CLASS.note }, t("models.removedHint")),
+          ...removedItems.map((item) =>
+            createElement(
+              "div",
+              { key: `${item.vendor}:${item.model}`, className: CSS_CLASS.field },
+              createElement(
+                "span",
+                { className: CSS_CLASS.fieldText },
+                createElement(
+                  "span",
+                  { className: CSS_CLASS.nameRow },
+                  createElement("span", { className: CSS_CLASS.mono }, item.model),
+                  createElement("small", { className: CSS_CLASS.vendorBadge }, item.label),
+                ),
+              ),
+              createElement(
+                "button",
+                {
+                  type: "button",
+                  "data-all-model-restore": `${item.vendor}:${item.model}`,
+                  className: CSS_CLASS.buttonGhost,
+                  onClick: () => props.onRestore(item.vendor, item.model),
+                },
+                t("models.restore"),
+              ),
+            ),
+          ),
+        ),
     addVendor === undefined
       ? null
       : createElement(
           "div",
-          { key: "add", "data-card": "all-models-add", className: CSS_CLASS.actions },
+          { key: "add", "data-card": "all-models-add", className: CSS_CLASS.modelAdd },
+          createElement("div", { className: CSS_CLASS.modelAddTitle }, t("models.addTitle")),
           createElement(
-            "select",
-            {
-              "data-all-model-add-vendor": "true",
-              value: addVendor.vendor,
-              onChange: (event: { target?: { value?: string } }) => props.onDraftVendorChange(event.target?.value ?? ""),
-            },
-            ...props.vendors.map((vendor) => createElement("option", { key: vendor.vendor, value: vendor.vendor }, vendor.label)),
+            "div",
+            { className: CSS_CLASS.modelAddRow },
+            createElement(
+              "select",
+              {
+                "data-all-model-add-vendor": "true",
+                className: CSS_CLASS.modelAddSelect,
+                value: addVendor.vendor,
+                onChange: (event: { target?: { value?: string } }) => props.onDraftVendorChange(event.target?.value ?? ""),
+              },
+              ...props.vendors.map((vendor) => createElement("option", { key: vendor.vendor, value: vendor.vendor }, vendor.label)),
+            ),
+            createElement("input", {
+              "data-all-model-add-draft": "true",
+              className: CSS_CLASS.modelAddInput,
+              type: "text",
+              value: props.draft,
+              placeholder: t("models.placeholder"),
+              onChange: (event: { target?: { value?: string } }) => props.onDraftChange(event.target?.value ?? ""),
+            }),
           ),
-          createElement("input", {
-            "data-all-model-add-draft": "true",
-            type: "text",
-            value: props.draft,
-            placeholder: t("models.placeholder"),
-            onChange: (event: { target?: { value?: string } }) => props.onDraftChange(event.target?.value ?? ""),
-          }),
           createElement(
-            "button",
-            {
-              type: "button",
-              "data-all-model-add": "true",
-              className: CSS_CLASS.buttonPrimary,
-              disabled: props.draft.trim() === "",
-              onClick: () => props.onAdd(addVendor.vendor, props.draft),
-            },
-            t("models.add"),
+            "div",
+            { className: CSS_CLASS.actions },
+            createElement(
+              "button",
+              {
+                type: "button",
+                "data-all-model-add": "true",
+                className: CSS_CLASS.buttonPrimary,
+                disabled: props.draft.trim() === "",
+                onClick: () => props.onAdd(addVendor.vendor, props.draft),
+              },
+              t("models.add"),
+            ),
           ),
         ),
   );
+}
+
+/** 本地时间 HH:mm。 */
+function clockOf(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
 /** 一行模型。 */

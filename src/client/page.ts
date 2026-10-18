@@ -44,6 +44,10 @@ export interface PageShellProps {
    * 字段卡片**之前**，与规格 §8 的卡片顺序一致）。
    */
   renderVendorCards?: (ns: string) => ReactNode;
+  /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
+  mergeTabs?: boolean;
+  /** 当前是否正在保存（保存按钮的即时反馈）。 */
+  saving?: boolean;
 }
 
 /**
@@ -91,7 +95,7 @@ function pageBody(props: PageShellProps): ReactElement {
     props.accounts === undefined ? null : props.accounts,
     props.switchPanel === undefined ? null : props.switchPanel,
     props.models === undefined ? null : props.models,
-    tabRow(props),
+    props.mergeTabs === true ? settingsTarget(props) : tabRow(props),
     active === undefined
       ? createElement(
           Fragment,
@@ -108,6 +112,33 @@ function pageBody(props: PageShellProps): ReactElement {
               ),
         )
       : vendorBody(props, active),
+  );
+}
+
+/** 合并模式下的设置对象下拉（替代供应商 tab 行）。 */
+function settingsTarget(props: PageShellProps): ReactNode {
+  const { state, t } = props;
+  if (state.tabs.length === 0) return null;
+  return createElement(
+    "div",
+    { "data-settings-target": "true", className: CSS_CLASS.field },
+    createElement(
+      "span",
+      { className: CSS_CLASS.fieldText },
+      createElement("span", null, t("settingsTarget")),
+      createElement("small", null, t("settingsTarget.hint")),
+    ),
+    createElement(
+      "select",
+      {
+        "data-settings-target-select": "true",
+        value: state.activeNs ?? state.tabs[0]?.ns ?? "",
+        onChange: (event: { target?: { value?: string } }) => {
+          if (event.target?.value !== undefined) props.onSelectTab(event.target.value);
+        },
+      },
+      ...state.tabs.map((tab) => createElement("option", { key: tab.ns, value: tab.ns }, t(tab.labelKey))),
+    ),
   );
 }
 
@@ -262,10 +293,11 @@ function saveBar(props: PageShellProps, entry: VendorEntry): ReactElement {
   const { t } = props;
   // 失败原因原文放在 data 属性上供排查，界面上只显示通用文案（宿主的错误串对用户没有意义）。
   const error = props.state.saveErrors[entry.ns];
+  const saving = props.saving === true;
   return createElement(
     "div",
     { "data-save-bar": "true", className: CSS_CLASS.save },
-    createElement("button", { type: "button", "data-save": entry.ns, className: CSS_CLASS.buttonPrimary, onClick: () => props.onSave(entry.ns) }, t("save")),
+    createElement("button", { type: "button", "data-save": entry.ns, className: CSS_CLASS.buttonPrimary, disabled: saving, onClick: () => props.onSave(entry.ns) }, saving ? t("saving") : t("save")),
     createElement("small", null, t("saveHint")),
     ...(error === undefined
       ? []
