@@ -98,8 +98,23 @@ it("按手动顺序时不显示间隔/回合末；定时策略显示定时设置
   expect(elementsOf(scheduled.tree).some((element) => element.props["data-switch-toggle"] === "switchAtTurnEnd")).toBe(true);
 });
 
-it("顺序上移/下移提交完整全局顺序；可以直接选某个账号", () => {
-  const { tree, props } = render();
+it("额度优先只展示顺序和当前账号，不能手动调整", () => {
+  const { tree } = render({
+    order: [
+      { key: "commandcode:cc", label: "Work", vendorLabel: "Command Code", vendor: "commandcode", ref: "cc", current: true },
+      { key: "dsh-opencode-go:oc", label: "Personal", vendorLabel: "OpenCode", vendor: "dsh-opencode-go", ref: "oc" },
+    ],
+  });
+  expect(elementsOf(tree).some((element) => element.props["data-order-up"] !== undefined)).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-order-select"] !== undefined)).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-order-current"] === "commandcode:cc")).toBe(true);
+  expect(elementsOf(tree).some((element) => element.props["data-switch-current"] === "commandcode:cc")).toBe(true);
+});
+
+it("额度用尽/定时模式可调整顺序并直接选账号", () => {
+  const { tree, props } = render({
+    state: { strategy: "order", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true, evaluatedAt: 1_000 },
+  });
   const down = elementsOf(tree).find((element) => element.props["data-order-down"] === "commandcode:cc")!;
   (down.props.onClick as () => void)();
   expect(props.onReorder).toHaveBeenCalledWith(["dsh-opencode-go:oc", "commandcode:cc"]);

@@ -23,6 +23,8 @@ export interface SwitchOrderItem {
   /** 动作路由用。 */
   vendor: string;
   ref: string;
+  /** 是否是当前使用的账号。 */
+  current?: boolean;
 }
 
 /** 全局切换面板属性。 */
@@ -65,11 +67,19 @@ export function SwitchPanel(props: SwitchPanelProps): ReactElement {
     props.onChange({ intervalMinutes: minutesOfDurationParts({ ...parts, [part]: Number(raw) }) });
   };
   const countdown = state === undefined ? t("switch.unknown") : countdownText(t, state, props.now);
+  const current = props.order.find((item) => item.current === true);
 
   return createElement(
     "section",
     { "data-card": "switch-panel", className: CSS_CLASS.card },
     createElement("h2", null, t("switch.panelTitle")),
+    createElement(
+      "small",
+      { "data-switch-current": current?.key ?? "none", className: CSS_CLASS.note },
+      current === undefined
+        ? t("switch.noCurrent")
+        : t("switch.current").replace("{account}", `${current.label} · ${current.vendorLabel}`),
+    ),
     createElement(
       "div",
       { "data-switch-strategy-field": "true", className: CSS_CLASS.field },
@@ -178,6 +188,7 @@ function toggleRow(
 /** 全局顺序：交叉列出两家账号，上移/下移提交完整顺序。 */
 function orderSection(props: SwitchPanelProps): ReactNode {
   const items = props.order;
+  const adjustable = (props.state?.strategy ?? "best-quota") !== "best-quota";
   return createElement(
     "details",
     { "data-switch-order": "true", className: CSS_CLASS.inset, open: true },
@@ -195,40 +206,54 @@ function orderSection(props: SwitchPanelProps): ReactNode {
             { className: CSS_CLASS.nameRow },
             createElement("span", null, item.label),
             createElement("small", { className: CSS_CLASS.vendorBadge }, item.vendorLabel),
+            item.current === true
+              ? createElement(
+                  "small",
+                  { "data-order-current": item.key, className: CSS_CLASS.newBadge },
+                  props.t("account.current"),
+                )
+              : null,
           ),
         ),
-        createElement(
-          "button",
-          {
-            type: "button",
-            "data-order-select": item.key,
-            className: CSS_CLASS.buttonGhost,
-            onClick: () => props.onSelect(item.vendor, item.ref),
-          },
-          props.t("account.use"),
-        ),
-        createElement(
-          "button",
-          {
-            type: "button",
-            "data-order-up": item.key,
-            className: CSS_CLASS.buttonGhost,
-            disabled: index === 0,
-            onClick: () => props.onReorder(swapped(items, index, -1)),
-          },
-          "↑",
-        ),
-        createElement(
-          "button",
-          {
-            type: "button",
-            "data-order-down": item.key,
-            className: CSS_CLASS.buttonGhost,
-            disabled: index === items.length - 1,
-            onClick: () => props.onReorder(swapped(items, index, 1)),
-          },
-          "↓",
-        ),
+        ...(adjustable
+          ? [
+              createElement(
+                "button",
+                {
+                  type: "button",
+                  key: "use",
+                  "data-order-select": item.key,
+                  className: CSS_CLASS.buttonGhost,
+                  onClick: () => props.onSelect(item.vendor, item.ref),
+                },
+                props.t("account.use"),
+              ),
+              createElement(
+                "button",
+                {
+                  type: "button",
+                  key: "up",
+                  "data-order-up": item.key,
+                  className: CSS_CLASS.buttonGhost,
+                  disabled: index === 0,
+                  onClick: () => props.onReorder(swapped(items, index, -1)),
+                },
+                "↑",
+              ),
+              createElement(
+                "button",
+                {
+                  type: "button",
+                  key: "down",
+                  "data-order-down": item.key,
+                  className: CSS_CLASS.buttonGhost,
+                  disabled: index === items.length - 1,
+                  onClick: () => props.onReorder(swapped(items, index, 1)),
+                },
+                "↓",
+              ),
+            ]
+          : []),
       ),
     ),
   );

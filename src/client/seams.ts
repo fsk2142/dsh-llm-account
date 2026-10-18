@@ -1242,6 +1242,7 @@ function buildSwitchOrder(
         vendorLabel: t(entry.labelKey),
         vendor: entry.providerId,
         ref: account.ref,
+        current: account.active === true || account.effective === true,
       });
     }
   }

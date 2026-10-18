@@ -208,8 +208,14 @@ export function chooseSwitch(input: SwitchInput): SwitchDecision | undefined {
     return next === undefined ? undefined : { target: next.ref, reason };
   };
 
+  if (input.strategy === "scheduled") {
+    // 定时策略只在到点时切；额度耗尽不触发自动切换。
+    if (!input.due) return undefined;
+    return rotate("scheduled");
+  }
+
   if (currentExhausted) {
-    // 顺序/定时策略都按顺序找下一个；额度优先按剩余额度排序。
+    // 顺序/额度优先：耗尽时按顺序或额度排序找下一个。
     if (input.strategy !== "best-quota") return rotate("quota");
     const ranked = available
       .flatMap((candidate) => {
@@ -222,8 +228,6 @@ export function chooseSwitch(input: SwitchInput): SwitchDecision | undefined {
   }
 
   if (!input.due) return undefined;
-  // 定时切换：不看额度，到期就换到顺序里的下一个可用账号。
-  if (input.strategy === "scheduled") return rotate("scheduled");
   if (input.strategy !== "best-quota") return undefined;
   const currentRemaining = remainingFraction(currentSnapshot);
   if (currentRemaining === undefined) return undefined;

@@ -167,7 +167,7 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
   const effective = account.effective;
   // 两者相同只标一次（避免同一件事写两遍）。
   const marks: ReactNode[] = [];
-  if (effective) {
+  if (effective || (account.active === true && props.status?.effective === undefined)) {
     marks.push(createElement("span", { key: "effective", "data-mark": "effective", className: CSS_CLASS.mark }, t("account.effectiveBy")));
   }
   if (pinned && !effective) {

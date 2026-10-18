@@ -74,7 +74,17 @@ it("scheduled 策略：到期按顺序切下一个，不看额度；未到期不
   expect(
     chooseSwitch({ strategy: "scheduled", candidates: [{ ref: "a" }, { ref: "b" }], current: "a", due: false }),
   ).toBeUndefined();
-  // 当前耗尽时仍按顺序切，原因记为额度。
+  // 当前耗尽但计时器未到期：不自动切。
+  expect(
+    chooseSwitch({
+      strategy: "scheduled",
+      candidates: [{ ref: "a" }, { ref: "b" }],
+      current: "a",
+      currentRejected: true,
+      due: false,
+    }),
+  ).toBeUndefined();
+  // 计时器到期：即使当前耗尽也按顺序切，原因记为定时。
   expect(
     chooseSwitch({
       strategy: "scheduled",
@@ -83,7 +93,7 @@ it("scheduled 策略：到期按顺序切下一个，不看额度；未到期不
       currentRejected: true,
       due: true,
     }),
-  ).toEqual({ target: "b", reason: "quota" });
+  ).toEqual({ target: "b", reason: "scheduled" });
 });
 
 it("order 策略：只在当前耗尽时切到顺序里的下一个可用账号", () => {

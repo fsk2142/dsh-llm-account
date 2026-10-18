@@ -48,6 +48,8 @@ export type CopyKey =
   | "duration.minutes"
   | "switch.title"
   | "switch.panelTitle"
+  | "switch.current"
+  | "switch.noCurrent"
   | "switch.now"
   | "switch.pending"
   | "switch.nextIn"
@@ -94,6 +96,7 @@ export type CopyKey =
   | "account.replaceKey"
   | "account.pin"
   | "account.use"
+  | "account.current"
   | "account.remove"
   | "account.menu"
   | "account.expand"
@@ -213,12 +216,12 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.autoSwitch": "自动切换账号",
     "field.autoSwitch.hint": "关闭后只使用当前账号，额度耗尽也不换。",
     "field.switchStrategy": "切换方式",
-    "field.switchStrategy.hint": "手动顺序只在上一个账号额度用尽时切；额度优先按间隔比较剩余额度。",
+    "field.switchStrategy.hint": "额度用尽后切换：当前账号耗尽时按顺序切；额度优先按间隔比较剩余额度；定时按间隔轮换。",
     "field.switchIntervalMinutes": "额度评估间隔（分钟）",
     "field.switchIntervalMinutes.hint": "仅额度优先模式使用。最大 30 天；分钟满 60 进小时、小时满 24 进天。全为 0 表示只在当前账号耗尽时评估。",
     "field.switchAtTurnEnd": "等任务结束后再切换",
     "field.switchAtTurnEnd.hint": "开启时回合内只记录决定，下一回合的首次请求才真正换号。",
-    "options.switchOrder": "按手动顺序",
+    "options.switchOrder": "额度用尽后切换",
     "options.switchBestQuota": "按可用额度优先",
     "options.switchScheduled": "定时切换",
     "duration.days": "天",
@@ -226,6 +229,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "duration.minutes": "分钟",
     "switch.title": "切换倒计时",
     "switch.panelTitle": "切换策略与账户顺序",
+    "switch.current": "当前使用：{account}",
+    "switch.noCurrent": "未选择当前账号",
     "switch.now": "立即切换",
     "switch.pending": "已决定切换到 {target}，等待本回合结束后生效。",
     "switch.nextIn": "距离下次额度评估：{time}",
@@ -269,11 +274,12 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.addAccount": "新增账户",
     "account.addAccount.hint": "先选供应商，再选 API Key 或网页登录。",
     "account.orderTitle": "切换顺序",
-    "account.orderHint": "全局顺序，两家共用；每家按这个顺序过滤自己的账号来轮换。",
+    "account.orderHint": "全局顺序；额度用尽/定时可调整顺序，额度优先只展示顺序和当前账号。",
     "account.rename": "重命名",
     "account.replaceKey": "更换密钥",
     "account.pin": "切换到此账户",
     "account.use": "使用",
+    "account.current": "当前使用",
     "account.remove": "移除",
     "account.menu": "更多操作",
     "account.expand": "展开完整报告",
@@ -393,7 +399,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.switchIntervalMinutes.hint": "Quota-first only. Up to 30 days; 60 minutes carry into an hour and 24 hours into a day. All zero evaluates only when the current account is exhausted.",
     "field.switchAtTurnEnd": "Wait until the turn ends",
     "field.switchAtTurnEnd.hint": "When on, a decision is parked during the turn and applied on the first request of the next turn.",
-    "options.switchOrder": "Manual order",
+    "options.switchOrder": "Switch when exhausted",
     "options.switchBestQuota": "Quota-first",
     "options.switchScheduled": "Scheduled",
     "duration.days": "days",
@@ -401,6 +407,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "duration.minutes": "minutes",
     "switch.title": "Switch countdown",
     "switch.panelTitle": "Switching & account order",
+    "switch.current": "Current: {account}",
+    "switch.noCurrent": "No current account",
     "switch.now": "Switch now",
     "switch.pending": "Switching to {target} after this turn ends.",
     "switch.nextIn": "Next quota check in {time}",
@@ -449,6 +457,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.replaceKey": "Replace key",
     "account.pin": "Switch to this account",
     "account.use": "Use",
+    "account.current": "Current",
     "account.remove": "Remove",
     "account.menu": "More actions",
     "account.expand": "Show full report",

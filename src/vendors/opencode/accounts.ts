@@ -388,16 +388,16 @@ class OpencodeAccounts implements AccountPort {
           await this.#settleQuietly(intent);
           throw tooManyAccounts();
         }
-        return {
-          ops: [
-            {
-              op: "set",
-              path: [ACCOUNTS_FIELD],
-              value: [...accounts, { [ID_FIELD]: ref, [LABEL_FIELD]: label, [REF_FIELD]: ref }],
-            },
-          ],
-          result: true,
-        };
+        const ops: SettingsOp[] = [
+          {
+            op: "set",
+            path: [ACCOUNTS_FIELD],
+            value: [...accounts, { [ID_FIELD]: ref, [LABEL_FIELD]: label, [REF_FIELD]: ref }],
+          },
+        ];
+        // 第一条账号自动成为当前账号。
+        if (accounts.length === 0) ops.push({ op: "set", path: [ACTIVE_FIELD], value: ref });
+        return { ops, result: true };
       });
       if (applied && key !== undefined) await this.#deps.credentials.set(ref, key);
       return current;

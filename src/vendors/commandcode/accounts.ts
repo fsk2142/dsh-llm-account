@@ -359,16 +359,19 @@ class CommandCodeAccounts implements AccountPort {
         // 最新文档里已经有这个 ref：这次 add 已经落地（自己的重试，或并发的同标签 add
         // 冻结到同一个确定性 ref）→ 空 ops 表示不落盘（见 `#mutate`），也不再写凭据槽。
         if (hasAccount(value, ref)) return { ops: [], result: false };
-        return {
-          ops: [
-            {
-              op: "set",
-              path: [ACCOUNTS_FIELD],
-              value: [...rawAccounts(value), { [LABEL_FIELD]: label, [REF_FIELD]: ref }],
-            },
-          ],
-          result: true,
-        };
+        const existing = rawAccounts(value);
+        const ops: SettingsOp[] = [
+          {
+            op: "set",
+            path: [ACCOUNTS_FIELD],
+            value: [...existing, { [LABEL_FIELD]: label, [REF_FIELD]: ref }],
+          },
+        ];
+        // 第一条账号自动成为当前账号：页面不该出现「有账号但没有当前」的空窗。
+        if (existing.length === 0 && activeRefOf(value) === null) {
+          ops.push({ op: "set", path: [ACTIVE_FIELD], value: ref });
+        }
+        return { ops, result: true };
       });
       if (applied && key !== undefined) await this.#deps.credentials.set(ref, key);
       return current;

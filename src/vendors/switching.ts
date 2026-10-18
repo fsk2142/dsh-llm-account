@@ -270,12 +270,14 @@ export class SwitchingController {
     // 手动顺序模式没有「按时间评估」：只等当前耗尽（force 时允许手动轮换到下一个）。
     // 定时切换和额度优先都走 isDue 的定时判断。
     if (!force && settings.strategy === "order" && !currentExhausted) return undefined;
-    // 定时切换从第一次请求开始计时，不在启动时立刻换号。
-    if (!force && settings.strategy === "scheduled" && this.#lastEvaluatedAt <= 0 && !currentExhausted) {
+    // 定时切换从第一次请求开始计时，不在启动时立刻换号（即使当前已耗尽）。
+    if (!force && settings.strategy === "scheduled" && this.#lastEvaluatedAt <= 0) {
       this.#lastEvaluatedAt = now;
       return undefined;
     }
-    if (!force && !isDue(this.#lastEvaluatedAt, now, settings.intervalMinutes, currentExhausted)) return undefined;
+    // 定时策略只看计时器，额度耗尽不自动换号。
+    const quotaDriven = settings.strategy !== "scheduled";
+    if (!force && !isDue(this.#lastEvaluatedAt, now, settings.intervalMinutes, quotaDriven ? currentExhausted : false)) return undefined;
 
     // 账号列表的顺序就是轮换顺序（含手动排序覆盖）。
     const views = (await this.#deps.accounts.list()).filter((view) => view.configured);

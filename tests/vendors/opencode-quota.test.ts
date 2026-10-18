@@ -482,7 +482,7 @@ it("add 追加条目并返回新 ref，密钥只进凭据服务（设置文档�
   // ref 用旧插件的槽名前缀，新账号零迁移；哈希后缀让「转义后同名」仍是两个 ref。
   expect(view.ref).toMatch(/^DSH_OPENCODE_GO_ACCOUNT_TEAM_A_[0-9a-f]{12}$/);
   expect(view.ref).toBe(opencodeAccountRef("Team A"));
-  expect(view).toMatchObject({ label: "Team A", configured: true, active: false });
+  expect(view).toMatchObject({ label: "Team A", configured: true, active: true });
   expect(settings.doc().accounts).toEqual([entry("Team A", view.ref)]);
   expect(JSON.stringify(settings.doc())).not.toContain("sk-live-secret");
   expect(credentials.sets).toEqual([{ ref: view.ref, value: "sk-live-secret" }]);
