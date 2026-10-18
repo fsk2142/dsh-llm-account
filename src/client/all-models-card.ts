@@ -193,7 +193,6 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
             key: group.key,
             "data-all-model-group": group.key,
             className: CSS_CLASS.modelGroup,
-            open: true,
           },
           createElement(
             "summary",
@@ -231,7 +230,7 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
 
   return createElement(
     "details",
-    { "data-card": "all-models", className: CSS_CLASS.card, open: true },
+    { "data-card": "all-models", className: CSS_CLASS.card },
     createElement(
       "summary",
       { className: CSS_CLASS.modelSummary, "data-all-model-collapse": "true" },
@@ -335,7 +334,7 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
               {
                 type: "button",
                 "data-all-model-add": "true",
-                className: CSS_CLASS.buttonPrimary,
+                className: CSS_CLASS.buttonGhost,
                 disabled: props.draft.trim() === "",
                 onClick: () => props.onAdd(addVendor.vendor, props.draft),
               },

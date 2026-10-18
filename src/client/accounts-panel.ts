@@ -94,7 +94,7 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
               key: `${group.entry.providerId}-login`,
               type: "button",
               "data-action": group.entry.providerId === "commandcode" ? "login" : `login-${group.entry.providerId}`,
-              className: CSS_CLASS.buttonGhost,
+              className: CSS_CLASS.buttonSecondary,
               onClick: () => props.onLoginBegin(group.entry.providerId),
             },
             t("account.loginFor").replace("{vendor}", t(group.entry.labelKey)),

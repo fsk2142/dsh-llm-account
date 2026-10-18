@@ -105,8 +105,10 @@ export const PAGE_CSS = `
   border-top: .5px solid var(--dsw-alias-border-l1); }
 .dsl-model-add-title { font-size: 13px; line-height: 20px; font-weight: 600; }
 .dsl-model-add-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; align-items: center; }
-.dsl-model-add-select { flex: 0 0 auto; min-width: 140px; }
-.dsl-model-add-input { flex: 1 1 220px; min-width: 0; }
+.dsl-model-add-select { flex: 0 0 auto; min-width: 120px; border: 0; background: transparent;
+  padding: 4px 0; color: var(--dsw-alias-label-secondary); }
+.dsl-model-add-input { flex: 1 1 220px; min-width: 0; border: 0;
+  border-bottom: .5px solid var(--dsw-alias-border-l2); border-radius: 0; background: transparent; padding: 6px 0; }
 .dsl-model-add .dsl-actions { justify-content: flex-end; }
 .dsl-card > summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 4px; border-radius: var(--dsw-radius-xs); }

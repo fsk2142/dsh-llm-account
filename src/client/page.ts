@@ -95,7 +95,7 @@ function pageBody(props: PageShellProps): ReactElement {
     props.accounts === undefined ? null : props.accounts,
     props.switchPanel === undefined ? null : props.switchPanel,
     props.models === undefined ? null : props.models,
-    props.mergeTabs === true ? settingsTarget(props) : tabRow(props),
+    props.mergeTabs === true ? null : tabRow(props),
     active === undefined
       ? createElement(
           Fragment,
@@ -198,6 +198,8 @@ function cardGroupElement(props: PageShellProps, entry: VendorEntry, group: Card
       "details",
       { key: group.group, "data-card-group": group.group, className: CSS_CLASS.card },
       createElement("summary", null, createElement(ChevronIcon, null), props.t("advanced")),
+      // 集成显示不再分供应商；只有高级字段仍按厂商区分，所以把「设置对象」放进高级里。
+      props.mergeTabs === true ? settingsTarget(props) : null,
       hint,
       ...body,
     );
