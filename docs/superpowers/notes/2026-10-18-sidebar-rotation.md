@@ -75,3 +75,30 @@ web-search-card / panel 全过。61 文件 / 816 例全绿。
   时出现；`onSave` 先 `void webSearchSave.current?.()` 再写厂商字段（两个独立设置行，互不阻塞）。
 
 结果：`tsc` 0 错；61 文件 / 813 例全绿；`tsdown` 重建。
+
+## 6. 2026-10-18 23:45 与插件市场（dshmarket）的冲突排查
+
+用户报：打开「插件市场」后，我们插件的设置页打不开。
+
+**静态审计（本机已装的三个注册 settings.section 的插件）**
+
+| 插件 | section id | order |
+|---|---|---|
+| 本包 | `llm-account` | 12 |
+| dshmarket | `market` | 40 |
+| dsh-plugin-save-token | `save-token` | 430 |
+
+- **没有 id / order 冲突**；主栏面板 key 也不冲突（`llm-account-dashboard` vs 市场的 `SIDEBAR_PANEL_ID`）。
+- 我们的样式全部带 `.dsl-` 前缀（268 条选择器，无全局选择器）；locale 命名空间
+  `settings.llm-account` 唯一；CSS 注入用 `data-plugin-css` 标识，市场用自己的 `data-dsh-market-nav-icon`。
+- 市场会按**导航文字**给行加图标（`[role="dialog"] nav button` + MutationObserver），
+  只命中它自己的行（label 文本匹配），不改结构。
+
+**找到一处我们自己的脆弱点（已修）**：`registerPage` 在 `slots.inject("settings.section", …)`
+回调里注册，但**丢弃了 `register` 返回的撤销句柄**，也从不撤销上一条。宿主在槽位重新可用时
+（设置对话框重开、其它插件用 gate 反复注册）会再次回调 —— 于是同名 section 可能累积/失效，
+表现就是「点我们的 tab 打不开」。市场自己就是显式处理这件事的（`createSectionGate` + `off`）。
+现在：注册前先 `off()`，并把撤销挂到 `context.effect` 随插件卸载收尾。
+
+注意：以上是静态审计 + 一处确定性修复；真正的根因还需要用户机器上的宿主控制台报错来确认
+（本机无法启动 GUI 复现）。
