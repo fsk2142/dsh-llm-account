@@ -201,18 +201,19 @@ export class LlmAccountUsageService extends TypertRemoteService {
     const rejections = engine.rejections();
     const failures: string[] = [];
 
-    // 额度读数只属于「当前选中的账号」（各厂商的额度端口就是这么做的）。归属必须显式给出，
-    // 否则就会出现「把 A 的额度挂在 B 的卡片上」——那也是一种编造。
-    const quotaRef = deps.quotaRef();
-    const quotaApplies = quotaRef !== undefined && views.some((view) => view.ref === quotaRef);
-    let quota: QuotaSummary | undefined;
-    if (quotaApplies) {
-      try {
-        quota = quotaSummaryOf(await deps.quota.snapshot());
-      } catch (error) {
-        failures.push(`quota: ${vendor} read failed (${messageOf(error)})`);
-      }
-    }
+    // 每个已配置账号都读一次额度：账号卡片要显示各自的可用额度，不能只给当前账号。
+    const quotas = new Map<string, QuotaSummary>();
+    await Promise.all(
+      views
+        .filter((view) => view.configured)
+        .map(async (view) => {
+          try {
+            quotas.set(view.ref, quotaSummaryOf(await deps.quota.snapshot(view.ref)));
+          } catch (error) {
+            failures.push(`quota: ${vendor} ${view.ref} read failed (${messageOf(error)})`);
+          }
+        }),
+    );
 
     const accounts = views.map((view): AccountUsageStatus => {
       const rejection = rejections.get(view.ref);
@@ -227,7 +228,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
                 ...(rejection.resetAt === undefined ? {} : { until: rejection.resetAt }),
               },
             }),
-        ...(quota !== undefined && view.ref === quotaRef ? { quota } : {}),
+        ...(quotas.has(view.ref) ? { quota: quotas.get(view.ref)! } : {}),
       };
     });
 

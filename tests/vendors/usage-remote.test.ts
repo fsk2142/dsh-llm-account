@@ -207,7 +207,7 @@ it("status() 给出生效账号与固定账号；没有请求时生效账号缺�
   expect(after.pinned).toBe("a");
 });
 
-it("每账号额度摘要只挂在额度读数所属的账号上，缺失字段不进摘要", async () => {
+it("每个已配置账号都读一次额度，缺失字段不进摘要", async () => {
   const engine = new RotationEngine({ order: ["a", "b"], pinned: "a", rules: [] });
   engine.pick({ model: "m", tried: new Set() }); // 生效账号 a
   const { service } = await mount([vendorDeps({ vendor: "commandcode", engine })]);
@@ -217,10 +217,9 @@ it("每账号额度摘要只挂在额度读数所属的账号上，缺失字段�
 
   expect(first!.quota?.plan).toBe("pro");
   expect(first!.quota?.windows).toEqual([{ key: "5h", used: 10, cap: 100, resetAt: 1_700_000_000_000 }]);
-  // 读数里没有的字段不许补 0（`percent` 缺失就是缺失）。
   expect("percent" in (first!.quota!.windows[0] ?? {})).toBe(false);
-  // 另一个账号没有读数：宁可没有这个字段，也不给它一个 0 摘要。
-  expect(second!.quota).toBeUndefined();
+  // 两个账号都各自读到额度，而不是只给当前账号。
+  expect(second!.quota?.plan).toBe("pro");
 });
 
 it("额度读取失败只记在 failures 里，不产出任何摘要", async () => {
@@ -235,7 +234,7 @@ it("额度读取失败只记在 failures 里，不产出任何摘要", async () 
 
   const status = await service.status("commandcode");
   expect(status.accounts.every((row) => row.quota === undefined)).toBe(true);
-  expect(status.failures).toHaveLength(1);
+  expect(status.failures).toHaveLength(status.accounts.length);
   expect(status.failures[0]).toContain("commandcode");
   expect(status.failures[0]).toContain("quota");
 });
@@ -285,19 +284,16 @@ it("未知厂商报明确错误，而不是静默返回空结果", async () => {
   await expect(service.status("nope" as VendorId)).rejects.toThrow(/nope/);
 });
 
-it("额度读数归属的账号与生效账号不同时，摘要挂在读数那一行（不挪到生效账号上）", async () => {
+it("额度按每个账号分别读取，不再只挂在当前账号上", async () => {
   const engine = new RotationEngine({ order: ["a", "b"], pinned: null, rules: [] });
   engine.markRejected("a", { kind: "quota", message: "exhausted" });
   engine.pick({ model: "m", tried: new Set(["a"]) }); // 生效账号 b
-  const { service } = await mount([
-    // 额度端口读的是「当前选中的账号」（这里仍是 a）—— 摘要必须留在 a 行。
-    vendorDeps({ vendor: "commandcode", engine, quotaRef: () => "a" }),
-  ]);
+  const { service } = await mount([vendorDeps({ vendor: "commandcode", engine, quotaRef: () => "a" })]);
 
   const status = await service.status("commandcode");
   expect(status.effective?.ref).toBe("b");
   expect(status.accounts[0]!.quota?.plan).toBe("pro");
-  expect(status.accounts[1]!.quota).toBeUndefined();
+  expect(status.accounts[1]!.quota?.plan).toBe("pro");
 });
 
 it("没有在跑的账号库（引擎为空）时 status 仍可用，只是没有生效账号", async () => {

@@ -291,7 +291,7 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
       const all = group.models.every((id) => selected.has(id));
       return createElement(
         "details",
-        { key: group.key, "data-account-model-group": group.key, className: CSS_CLASS.modelGroup, open: true },
+        { key: group.key, "data-account-model-group": group.key, className: CSS_CLASS.modelGroup },
         createElement(
           "summary",
           { className: CSS_CLASS.modelGroupSummary },
