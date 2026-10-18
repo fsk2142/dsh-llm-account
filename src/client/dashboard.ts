@@ -16,6 +16,7 @@ import { CSS_CLASS } from "./css";
 import { rejectionText } from "./copy";
 import { CloseIcon, RefreshIcon } from "./icons";
 import { QuotaBar } from "./quota-bar";
+import { fallbackQuotaWindows } from "./quota";
 import { relativeTime } from "./time";
 import type { AccountUsageStatus, QuotaWindow, SwitchRecord, VendorUsageStatus } from "./usage-contract";
 
@@ -203,15 +204,13 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
     ...(quotaOf?.failures ?? []).map((item, index) =>
       createElement("small", { key: `qf-${index}`, "data-dashboard-account-failure": `${account.ref}:${index}`, className: CSS_CLASS.failure }, item),
     ),
-    ...(quotaOf === undefined
-      ? []
-      : [
-          createElement(
-            "div",
-            { key: "meters", className: CSS_CLASS.meters },
-            ...(quotaOf.windows ?? []).map((window) => windowBlock(t, window)),
-          ),
-        ]),
+    createElement(
+      "div",
+      { key: "meters", className: CSS_CLASS.meters },
+      ...(quotaOf?.windows?.length ? quotaOf.windows : fallbackQuotaWindows(props.status?.vendor ?? "")).map((window) =>
+        windowBlock(t, window),
+      ),
+    ),
   );
 }
 

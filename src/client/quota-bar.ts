@@ -44,21 +44,21 @@ export function QuotaBar(props: QuotaBarProps): ReactElement {
       createElement(
         "span",
         { "data-quota-bar-percent": remaining === undefined ? "missing" : String(remaining), className: CSS_CLASS.quotaBarPercent },
-        remaining === undefined ? t("account.quotaMissing") : t("quota.remaining").replace("{percent}", String(remaining)),
+        remaining === undefined ? "—" : t("quota.remaining").replace("{percent}", String(remaining)),
       ),
     ),
-    meter === undefined
-      ? null
-      : createElement(
-          "span",
-          { className: CSS_CLASS.quotaBarTrack },
-          createElement("span", {
+    createElement(
+      "span",
+      { className: CSS_CLASS.quotaBarTrack },
+      meter === undefined
+        ? null
+        : createElement("span", {
             "data-quota-bar-fill": window.key,
             "data-level": level,
             className: CSS_CLASS.quotaBarFill,
             style: { width: `${remaining}%` },
           }),
-        ),
+    ),
     createElement(
       "div",
       { className: CSS_CLASS.quotaBarMeta },

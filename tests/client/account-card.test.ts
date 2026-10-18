@@ -141,9 +141,11 @@ it("额度字段缺失时显示「暂无数据」，绝不渲染成 0", () => {
   expect(textsOf(windows[1]).join(" ")).toContain("已用 0 / 共 0");
 });
 
-it("没有额度摘要的账号连额度条都不渲染（缺失不是 0）", () => {
+it("没有额度摘要时画空进度条（缺失不是 0）", () => {
   const { tree } = renderCard({ status: statusOf({ accounts: [row({ ref: "a" })] }) });
-  expect(elementsOf(tree).filter((element) => element.props["data-quota-window"] !== undefined)).toEqual([]);
+  const windows = elementsOf(tree).filter((element) => element.props["data-quota-window"] !== undefined);
+  expect(windows.map((element) => element.props["data-quota-window"])).toEqual(["5h", "weekly", "monthlyCredits"]);
+  expect(elementsOf(tree).some((element) => element.props["data-quota-bar-fill"] !== undefined)).toBe(false);
   expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.quotaMissing"));
 });
 
@@ -161,10 +163,9 @@ it("百分比形状的读数（opencode）同样只按存在的字段渲染", ()
 
 // —— Step 1：菜单按能力降级 ——
 
-it("`⋯` 菜单按能力降级：无排序能力时没有拖拽手柄，固定项已移除", () => {
+it("`⋯` 菜单按能力降级：拖拽手柄已移除，固定项已移除", () => {
   const commandCode = renderCard({ status: statusOf({ accounts: [row({ ref: "a" })] }) }).tree;
   const ccElements = elementsOf(commandCode);
-  // commandcode：`reorder: false` → 没有手柄；`browserLogin: true` → 有登录按钮；固定项已移除。
   expect(ccElements.filter((element) => element.props["data-drag-handle"] !== undefined)).toEqual([]);
   expect(ccElements.filter((element) => element.props["data-action"] === "pin")).toEqual([]);
   expect(ccElements.filter((element) => element.props["data-action"] === "login")).toHaveLength(1);
@@ -173,8 +174,8 @@ it("`⋯` 菜单按能力降级：无排序能力时没有拖拽手柄，固定�
     status: statusOf({ capabilities: OPENCODE, accounts: [row({ ref: "a" })] }),
   }).tree;
   const ocElements = elementsOf(opencode);
-  // opencode：`reorder: true` → 有手柄；`pin: false` → 没有固定项；没有网页登录 → 没有登录按钮。
-  expect(ocElements.filter((element) => element.props["data-drag-handle"] !== undefined)).toHaveLength(1);
+  // 拖拽手柄已从行内移除；pin/login 仍按能力降级。
+  expect(ocElements.filter((element) => element.props["data-drag-handle"] !== undefined)).toHaveLength(0);
   expect(ocElements.filter((element) => element.props["data-action"] === "pin")).toEqual([]);
   expect(ocElements.filter((element) => element.props["data-action"] === "login")).toEqual([]);
 });
@@ -381,7 +382,9 @@ it("登录等待中显示授权网址；失败时把原因翻译成可读文案�
 it("服务端的失败项（failures）以文字提示，不静默吞掉", () => {
   const status = statusOf({ accounts: [row({ ref: "a" })] });
   const { tree } = renderCard({ status: { ...status, failures: ["quota: commandcode read failed (timeout)"] } });
-  expect(textsOf(tree).join(" ")).toContain("timeout");
+  const note = elementsOf(tree).find((element) => element.props["data-failure"] !== undefined)!;
+  expect(note.props["data-failure-detail"]).toContain("timeout");
+  expect(textsOf(note).join(" ")).toContain(dictionaryOf("zh")("usage.quotaTimeout"));
 });
 
 it("状态还没到（远程面未挂载）时给出说明而不是空白", () => {

@@ -115,6 +115,19 @@ export function quotaWindowText(t: (key: string) => string, window: QuotaWindow)
 }
 
 /**
+ * 额度读数还没回来时，先按厂商的窗口形状画空进度条。
+ *
+ * 只给窗口名，不给数值：空条 +「暂无额度数据」，既保持版面一致，也不把未知写成 0。
+ * @param vendor - 厂商 id。
+ * @returns 该厂商常规的窗口列表。
+ */
+export function fallbackQuotaWindows(vendor: string): QuotaWindow[] {
+  if (vendor.includes("opencode")) return [{ key: "rolling" }, { key: "weekly" }, { key: "monthly" }];
+  if (vendor.includes("command")) return [{ key: "5h" }, { key: "weekly" }, { key: "monthlyCredits" }];
+  return [{ key: "" }];
+}
+
+/**
  * 额度窗口的重置时间文案（本地时间；今天/明天用相对日）。
  * @param t - 取词函数。
  * @param window - 额度窗口。

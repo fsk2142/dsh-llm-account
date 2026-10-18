@@ -17,7 +17,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS, cls } from "./css";
 import { RefreshIcon, UsageIcon } from "./icons";
-import { quotaShape } from "./quota";
+import { fallbackQuotaWindows, quotaShape } from "./quota";
 import { QuotaBar } from "./quota-bar";
 import type { AccountUsageStatus, VendorUsageStatus } from "./usage-contract";
 
@@ -170,18 +170,16 @@ function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): 
   return account === "" ? props.t("nav") : account;
 }
 
-/** 生效账号的额度：每个窗口一个圆环，缺失的窗口按「暂无数据」处理。 */
+/** 生效账号的额度：每个窗口一条进度条；读数缺失时画空条，不改成纯文字。 */
 function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode[] {
   const { t } = props;
   const quota = row?.quota;
-  if (quota === undefined) {
-    return [createElement("p", { key: "noquota", "data-sidebar-quota-missing": "true", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))];
-  }
+  const windows = quota?.windows?.length ? quota.windows : fallbackQuotaWindows(props.status?.vendor ?? "");
   return [
     createElement(
       "div",
       { key: "bars", className: CSS_CLASS.quotaBarList },
-      ...(quota.windows ?? []).map((window) =>
+      ...windows.map((window) =>
         createElement(
           "div",
           { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window) },
@@ -192,4 +190,4 @@ function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undef
   ];
 }
 
-/** 一个窗口的紧凑读数（已由 {@link QuotaRing} 统一渲染）。 */
+

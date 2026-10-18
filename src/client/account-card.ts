@@ -26,7 +26,8 @@ import { rejectionText } from "./copy";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
 import { QuotaBar } from "./quota-bar";
-import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaSummary, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
+import { fallbackQuotaWindows } from "./quota";
+import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
 export interface LoginView {
@@ -265,16 +266,13 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
               t("account.use"),
             ),
         accountMenu(props, account, index),
-        // 只有支持排序的厂商才有拖拽手柄；不支持的**整块不渲染**（不是藏起来）。
-        ...(capabilitiesOf(props).reorder
-          ? [createElement("span", { key: "drag", "data-drag-handle": account.ref, className: CSS_CLASS.drag, title: t("account.moveUp") })]
-          : []),
       ),
     ),
     rejection,
-    ...(quotaOf === undefined
-      ? [createElement("small", { key: "quota-none", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))]
-      : [createElement("div", { key: "meters", className: CSS_CLASS.meters }, ...quotaBars(props, quotaOf))]),
+    ...(() => {
+      const windows = quotaOf?.windows?.length ? quotaOf.windows : fallbackQuotaWindows(props.status?.vendor ?? "");
+      return [createElement("div", { key: "meters", className: CSS_CLASS.meters }, ...quotaBars(props, windows))];
+    })(),
     editingRename ? renameEditor(props, account) : null,
     editingKey ? keyEditor(props, account) : null,
     accountModelsSection(props, account),
@@ -460,14 +458,12 @@ function menuButtons(props: AccountCardProps, account: AccountUsageStatus): Reac
  * 数字只在读数里真的有那个字段时才渲染 —— `used`/`cap` 缺任何一个都不拼 `x/y`，
  * `percent` 缺失也不补 0。全都缺就显示「暂无额度数据」。
  */
-function quotaBars(props: AccountCardProps, quota: QuotaSummary): ReactNode[] {
-  // `windows` 在 QuotaSummary 里是必填字段，但线上同样可能缺或为 null：当「没有窗口」处理，
-  // 而不是让 `.map` 抛在渲染路径上。
+function quotaBars(props: AccountCardProps, windows: readonly QuotaWindow[]): ReactNode[] {
   return [
     createElement(
       "div",
       { key: "bars", className: CSS_CLASS.quotaBarList },
-      ...(quota.windows ?? []).map((window) =>
+      ...windows.map((window) =>
         createElement(
           "div",
           { key: window.key, "data-quota-window": window.key },
@@ -523,10 +519,14 @@ function keyEditor(props: AccountCardProps, account: AccountUsageStatus): ReactN
   );
 }
 
-/** 服务端失败项提示。 */
+/** 服务端失败项提示；额度超时只给人话，原文留在 data 属性里。 */
 function failureNotes(props: AccountCardProps): ReactNode[] {
   return (props.status?.failures ?? []).map((failure, index) =>
-    createElement("p", { key: `failure-${index}`, "data-failure": index, className: CSS_CLASS.failure }, failure),
+    createElement(
+      "p",
+      { key: `failure-${index}`, "data-failure": index, "data-failure-detail": failure, className: CSS_CLASS.failure },
+      /timeout/i.test(failure) ? props.t("usage.quotaTimeout") : failure,
+    ),
   );
 }
 
