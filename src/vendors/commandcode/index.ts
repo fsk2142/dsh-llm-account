@@ -107,6 +107,7 @@ export const Config: PluginConfigSchema = z.object(
       defaultMaxTokens: z.number(),
       visibleModels: z.array(z.string()),
       modelVisibility: z.dict(z.boolean()),
+      removedModels: z.array(z.string()),
       showSidebarQuota: z.boolean().default(false),
       /**
        * 侧边栏额度卡片的刷新间隔（分钟），与 opencode 对称。缺省 1 分钟、上限 120 分钟，
@@ -134,7 +135,7 @@ export const Config: PluginConfigSchema = z.object(
        */
       autoSwitch: z.boolean().default(true),
       /** 切换策略：手动顺序（只在耗尽时切）或额度优先。 */
-      switchStrategy: z.union(["order", "best-quota"]).default("order"),
+      switchStrategy: z.union(["order", "best-quota"]).default("best-quota"),
       /** 额度优先模式的评估间隔（分钟）；`0` 表示只在当前耗尽时评估。 */
       switchIntervalMinutes: z.number().default(60),
       /** 是否等回合结束再切（默认 `true`，任务进行中不换号）。 */
@@ -343,6 +344,7 @@ function adapterConfigOf(document: Record<string, unknown>): CommandCodeConfig {
   const defaultMaxTokens = positiveNumber(document.defaultMaxTokens);
   const visibleModels = stringList(document.visibleModels);
   const modelVisibility = booleanMap(document.modelVisibility);
+  const removedModels = stringList(document.removedModels);
   return {
     ...(apiBase === undefined ? {} : { apiBase }),
     ...(apiKey === undefined ? {} : { apiKey }),
@@ -353,6 +355,7 @@ function adapterConfigOf(document: Record<string, unknown>): CommandCodeConfig {
     ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
     ...(visibleModels === undefined ? {} : { visibleModels }),
     ...(modelVisibility === undefined ? {} : { modelVisibility }),
+    ...(removedModels === undefined ? {} : { removedModels }),
   };
 }
 

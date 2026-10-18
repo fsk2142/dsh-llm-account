@@ -298,6 +298,7 @@ const COMMAND_CODE_SHAPE = {
   accounts: [{ label: "sample-user-2", apiKeyEnv: "COMMANDCODE_API_KEY_2" }],
   activeAccount: "default",
   modelAccountRules: [],
+  switchStrategy: "order",
 };
 
 /** 用户现有的 opencode 配置形状（task-14-brief；profile patch 第 117-153 行的子集）。 */
@@ -708,6 +709,7 @@ function twoAccountConfig(autoSwitch: boolean): Record<string, unknown> {
     apiKeyEnv: "PREFERRED_REF",
     accounts: [{ id: "other", name: "other", apiKeyEnv: "OTHER_REF" }],
     autoSwitch,
+    switchStrategy: "order",
   };
 }
 

@@ -723,6 +723,9 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [modelCatalogLoading, setModelCatalogLoading] = useState<Record<string, boolean | undefined>>({});
     /** 「重试目录」的计数器：每次 +1 触发一次重读。 */
     const [modelCatalogRevision, setModelCatalogRevision] = useState(0);
+    /** 最近一次刷新新出现的模型（按厂商），用于 New 标记。 */
+    const [newModels, setNewModels] = useState<Record<string, string[]>>({});
+    const modelCatalogIds = useRef<Record<string, string[]>>({});
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
     /** 全局模型卡的搜索/添加草稿。 */
@@ -837,6 +840,13 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       for (const entry of targets) {
         void readModels(usage, entry.providerId).then((result) => {
           if (!alive) return;
+          const ids = result.models.map((model) => model.id);
+          const previous = modelCatalogIds.current[entry.providerId] ?? [];
+          const fresh = ids.filter((id) => !previous.includes(id));
+          modelCatalogIds.current = { ...modelCatalogIds.current, [entry.providerId]: ids };
+          if (modelCatalogRevision > 0) {
+            setNewModels((current) => ({ ...current, [entry.providerId]: fresh }));
+          }
           setModelCatalogs((current) => ({ ...current, [entry.providerId]: result }));
           setModelCatalogLoading((current) => ({ ...current, [entry.providerId]: false }));
         });
@@ -940,13 +950,29 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         { visible: effective[spec.visible], visibility: effective[spec.visibility] },
         edit,
       );
+      const removed = normalizeModels(effective[spec.removed]);
+      const nextRemoved =
+        edit.kind === "remove"
+          ? normalizeModels([...removed, edit.model])
+          : edit.kind === "add"
+            ? removed.filter((model) => model !== edit.model)
+            : removed;
       const fields = [
         { key: spec.visible, value: patch.visibleModels },
         { key: spec.visibility, value: patch.modelVisibility },
+        { key: spec.removed, value: nextRemoved },
       ];
       setState((current) => {
         const withVisible = setField(current, entry.ns, spec.visible, patch.visibleModels);
-        return setField(withVisible, entry.ns, spec.visibility, patch.modelVisibility);
+        const withVisibility = setField(withVisible, entry.ns, spec.visibility, patch.modelVisibility);
+        return setField(withVisibility, entry.ns, spec.removed, nextRemoved);
+      });
+      // 用户已经操作过这一家的模型：New 标记完成使命。
+      setNewModels((current) => {
+        if (current[vendor] === undefined) return current;
+        const next = { ...current };
+        delete next[vendor];
+        return next;
       });
       const snapshot = state.snapshots[entry.ns];
       void saveSettings(ctx, snapshot?.row ?? entry.ns, fields, snapshot?.revision ?? 0).then((error) => {
@@ -1002,6 +1028,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           label: t(entry.labelKey),
           catalog: modelCatalogs[entry.providerId]?.models ?? [],
           visibleModels: normalizeModels(effective[spec.visible]),
+          removedModels: normalizeModels(effective[spec.removed]),
+          newModels: newModels[entry.providerId] ?? [],
           visibility:
             typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
               ? { ...(rawVisibility as Record<string, boolean>) }
@@ -1025,6 +1053,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
             onRemove: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "remove", model }),
             onGroupVisibility: writeGlobalModelGroup,
             onAdd: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "add", model }),
+            onRefresh: () => setModelCatalogRevision((current) => current + 1),
+            refreshing: Object.values(modelCatalogLoading).some((value) => value === true),
             draft: allModelDraft,
             onDraftChange: setAllModelDraft,
             draftVendor: availableEntries.some((entry) => entry.providerId === allModelVendor)
@@ -1045,6 +1075,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       onSave: (ns) => {
         const fields = dirtyFields(state, ns);
         if (fields.length === 0) return;
+        // 用户按下保存：New 标记完成使命（模型改动本身也会立即写回并清掉）。
+        setNewModels({});
         // 写**命中的行名**（opencode 的行 id 与命名空间不同，用 ns 会写到一个不存在的条目上）。
         const snapshot = state.snapshots[ns];
         void saveSettings(ctx, snapshot?.row ?? ns, fields, snapshot?.revision ?? 0).then((error) => {

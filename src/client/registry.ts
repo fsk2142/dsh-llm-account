@@ -61,6 +61,8 @@ export interface ModelsSpec {
   visible: string;
   /** 逐模型显隐字段名（`modelVisibility`）。 */
   visibility: string;
+  /** 从目录里移除、暂时不显示的模型字段名（`removedModels`）。 */
+  removed: string;
 }
 
 /** The two provider routes this package hosts (`src/core/adapter.ts` `VendorId`). */

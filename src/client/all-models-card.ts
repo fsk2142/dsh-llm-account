@@ -21,6 +21,8 @@ export interface AllModelsVendor {
   catalog: readonly CatalogModel[];
   visibleModels: readonly string[];
   visibility: Record<string, boolean>;
+  removedModels?: readonly string[];
+  newModels?: readonly string[];
   loading?: boolean;
   failure?: string;
 }
@@ -36,6 +38,9 @@ export interface AllModelsCardProps {
   /** 批量设置一组模型的可见性；同组可能跨两家，由卡片按厂商拆分。 */
   onGroupVisibility: (vendor: string, models: readonly string[], visible: boolean) => void;
   onAdd: (vendor: string, model: string) => void;
+  /** 重新拉取两家目录并重新分组。 */
+  onRefresh: () => void;
+  refreshing?: boolean;
   draft: string;
   onDraftChange: (value: string) => void;
   draftVendor: string;
@@ -51,6 +56,7 @@ interface Row {
   free: boolean;
   visible: boolean;
   configured: boolean;
+  fresh: boolean;
 }
 
 interface Group {
@@ -61,9 +67,11 @@ interface Group {
 /** 收集一家厂商的行（目录 ∪ 白名单 ∪ 显隐表）。 */
 function rowsOf(vendor: AllModelsVendor): Row[] {
   const catalog = new Map(vendor.catalog.map((model) => [model.id, model]));
+  const removed = new Set(vendor.removedModels ?? []);
+  const fresh = new Set(vendor.newModels ?? []);
   const ids = [
     ...new Set([...vendor.catalog.map((model) => model.id), ...vendor.visibleModels, ...Object.keys(vendor.visibility)]),
-  ];
+  ].filter((id) => !removed.has(id));
   const configured = new Set([...vendor.visibleModels, ...Object.keys(vendor.visibility)]);
   const visibility = { visibleModels: vendor.visibleModels, modelVisibility: vendor.visibility };
   return ids.map((id) => {
@@ -77,6 +85,7 @@ function rowsOf(vendor: AllModelsVendor): Row[] {
       free: isFreeModel(id, model?.free),
       visible: isModelIdVisible(id, visibility),
       configured: configured.has(id),
+      fresh: fresh.has(id),
     };
   });
 }
@@ -218,6 +227,21 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
       createElement(ChevronIcon, null),
     ),
     createElement("small", { className: CSS_CLASS.note }, t("models.allHint")),
+    createElement(
+      "div",
+      { className: CSS_CLASS.actions },
+      createElement(
+        "button",
+        {
+          type: "button",
+          "data-all-model-refresh": "true",
+          className: CSS_CLASS.buttonGhost,
+          disabled: props.refreshing === true,
+          onClick: () => props.onRefresh(),
+        },
+        props.refreshing === true ? t("models.refreshing") : t("models.refresh"),
+      ),
+    ),
     ...failures.map((failure) =>
       createElement("p", { key: failure, "data-all-model-failure": "true", className: CSS_CLASS.failure }, failure),
     ),
@@ -270,6 +294,7 @@ function modelRow(props: AllModelsCardProps, row: Row): ReactNode {
         "span",
         { className: CSS_CLASS.nameRow },
         createElement("span", { "data-model-label": row.id, className: CSS_CLASS.mono }, row.name ?? row.id),
+        row.fresh ? createElement("span", { "data-model-new": "true", className: CSS_CLASS.newBadge }, props.t("models.newBadge")) : null,
         createElement("small", { "data-model-vendor": row.vendor, className: CSS_CLASS.vendorBadge }, row.label),
       ),
     ),
@@ -281,19 +306,17 @@ function modelRow(props: AllModelsCardProps, row: Row): ReactNode {
       onChange: (event: { target?: { checked?: boolean } }) =>
         props.onToggle(row.vendor, row.id, event.target?.checked === true),
     }),
-    row.configured
-      ? createElement(
-          "button",
-          {
-            type: "button",
-            "data-all-model-remove": `${row.vendor}:${row.id}`,
-            className: CSS_CLASS.iconDanger,
-            title: props.t("models.remove"),
-            "aria-label": props.t("models.remove"),
-            onClick: () => props.onRemove(row.vendor, row.id),
-          },
-          createElement(RemoveIcon, null),
-        )
-      : null,
+    createElement(
+      "button",
+      {
+        type: "button",
+        "data-all-model-remove": `${row.vendor}:${row.id}`,
+        className: CSS_CLASS.iconDanger,
+        title: props.t("models.remove"),
+        "aria-label": props.t("models.remove"),
+        onClick: () => props.onRemove(row.vendor, row.id),
+      },
+      createElement(RemoveIcon, null),
+    ),
   );
 }

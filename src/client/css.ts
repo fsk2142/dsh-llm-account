@@ -310,6 +310,9 @@ export const PAGE_CSS = `
 .dsl-account-actions > .dsl-actions { gap: 2px; flex-wrap: nowrap; }
 .dsl-vendor-badge { flex: none; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l2);
   border-radius: 999px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; }
+.dsl-new-badge { flex: none; padding: 1px 6px; border-radius: 999px; background:
+  var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-inverse, var(--dsw-alias-label-primary));
+  font-size: 10px; line-height: 16px; font-weight: 600; }
 .dsl-add-chooser { display: flex; flex-direction: column; gap: 6px; }
 .dsl-add-summary { display: inline-flex; flex-direction: row; align-items: center; align-self: flex-start;
   gap: 4px; list-style: none; cursor: pointer; color: var(--dsw-alias-state-business-primary);
@@ -382,11 +385,11 @@ export const PAGE_CSS = `
   color: var(--dsw-alias-label-secondary); font-family: var(--dsw-font-mono); font-size: 11px;
   line-height: 17px; overflow-wrap: anywhere; }
 
-/* ═══ 底部保存条（有改动才出现；贴在内容底部，带一层浮起） ═══ */
-.dsl-save { position: sticky; bottom: 12px; z-index: 5; display: flex; flex-direction: row;
-  align-items: center; gap: 12px; box-sizing: border-box; margin-top: 0; padding: 10px 14px;
+/* ═══ 底部保存条（有改动才出现；放在内容末尾，不浮动遮挡） ═══ */
+.dsl-save { position: static; display: flex; flex-direction: row;
+  align-items: center; gap: 12px; box-sizing: border-box; margin-top: 12px; padding: 10px 14px;
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-shadow-lv3); }
+  background: var(--dsw-alias-bg-layer-2); }
 .dsl-save > small { flex: 1 1 auto; min-width: 0; }
 
 /* ═══ 侧边栏额度卡（紧凑一档） ═══
@@ -466,6 +469,7 @@ export const CSS_CLASS = {
   account: "dsl-account",
   accountGroup: "dsl-account-group",
   vendorBadge: "dsl-vendor-badge",
+  newBadge: "dsl-new-badge",
   addChooser: "dsl-add-chooser",
   addSummary: "dsl-add-summary",
   orderSummary: "dsl-order-summary",

@@ -183,7 +183,7 @@ it("modelEditTarget：按能力把编辑分流到草稿或立刻写", () => {
 });
 
 it("厂商不支持的卡片不渲染：没声明 models 的厂商没有专属卡片", () => {
-  const withModels: VendorEntry = { ns: "llm-commandcode", rowIds: ["llm-commandcode"], providerId: "commandcode", order: 1, labelKey: "vendor.commandcode", cards: [], models: { visible: "visibleModels", visibility: "modelVisibility" } };
+  const withModels: VendorEntry = { ns: "llm-commandcode", rowIds: ["llm-commandcode"], providerId: "commandcode", order: 1, labelKey: "vendor.commandcode", cards: [], models: { visible: "visibleModels", visibility: "modelVisibility", removed: "removedModels" } };
   const withoutModels: VendorEntry = { ...withModels, models: undefined };
 
   expect(vendorCardKinds(withModels)).toEqual(["models"]);

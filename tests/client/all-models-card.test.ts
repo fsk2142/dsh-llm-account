@@ -60,6 +60,7 @@ function render(overrides: Partial<AllModelsCardProps> = {}): { tree: StubElemen
     onFilterChange: vi.fn(),
     onToggle: vi.fn(),
     onRemove: vi.fn(),
+    onRefresh: vi.fn(),
     onGroupVisibility: vi.fn(),
     onAdd: vi.fn(),
     draft: "",
@@ -139,6 +140,39 @@ it("同一家公司的模型跨供应商合并到一组，组开关按厂商分�
   (toggle.props.onClick as () => void)();
   expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], true);
   expect(props.onGroupVisibility).toHaveBeenCalledWith("dsh-opencode-go", ["claude-opus-5"], true);
+});
+
+it("移除的模型不再显示；刷新按钮回调；新模型带 New 标记", () => {
+  const { tree } = render({
+    vendors: [
+      {
+        vendor: "commandcode",
+        label: "Command Code",
+        catalog: [
+          { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", company: "anthropic" },
+          { id: "gpt-gone", name: "Gone", company: "openai" },
+        ],
+        visibleModels: [],
+        visibility: {},
+        removedModels: ["gpt-gone"],
+        newModels: ["claude-haiku-5-5"],
+      },
+    ],
+  });
+  const rows = elementsOf(tree)
+    .filter((element) => element.props["data-all-model"] !== undefined)
+    .map((element) => element.props["data-all-model"]);
+  expect(rows).toEqual(["commandcode:claude-haiku-5-5"]);
+  expect(elementsOf(tree).some((element) => element.props["data-model-new"] !== undefined)).toBe(true);
+  // 每一行都有移除按钮（目录项也能移除），所以开关列对齐。
+  expect(elementsOf(tree).some((element) => element.props["data-all-model-remove"] !== undefined)).toBe(true);
+});
+
+it("重新获取模型按钮触发一次刷新", () => {
+  const { tree, props } = render();
+  const refresh = elementsOf(tree).find((element) => element.props["data-all-model-refresh"] !== undefined)!;
+  (refresh.props.onClick as () => void)();
+  expect(props.onRefresh).toHaveBeenCalledTimes(1);
 });
 
 it("勾选/移除/添加路由到所属厂商；搜索只留匹配行", () => {

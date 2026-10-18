@@ -120,6 +120,9 @@ export type CopyKey =
   | "models.loading"
   | "models.summary"
   | "models.retry"
+  | "models.refresh"
+  | "models.refreshing"
+  | "models.newBadge"
   | "models.freeGroup"
   | "models.otherCompany"
   | "models.allTitle"
@@ -283,6 +286,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.loading": "正在读取模型目录…",
     "models.summary": "已显示 {n} / 共 {total} 个模型",
     "models.retry": "重试",
+    "models.refresh": "重新获取模型",
+    "models.refreshing": "重新获取中…",
+    "models.newBadge": "New",
     "models.freeGroup": "免费模型",
     "models.otherCompany": "其他",
     "models.allTitle": "全部模型",
@@ -441,6 +447,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.loading": "Loading the model catalog…",
     "models.summary": "{n} of {total} models shown",
     "models.retry": "Retry",
+    "models.refresh": "Refresh models",
+    "models.refreshing": "Refreshing…",
+    "models.newBadge": "New",
     "models.freeGroup": "Free models",
     "models.otherCompany": "Other",
     "models.allTitle": "All models",

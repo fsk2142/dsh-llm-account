@@ -40,7 +40,7 @@ export interface SwitchPanelProps {
 
 /** 默认值（宿主还没有发布 switchState 时）。 */
 const DEFAULTS: SwitchSettingsWrite = {
-  strategy: "order",
+  strategy: "best-quota",
   intervalMinutes: 60,
   atTurnEnd: true,
   autoSwitch: true,
@@ -70,6 +70,21 @@ export function SwitchPanel(props: SwitchPanelProps): ReactElement {
     "section",
     { "data-card": "switch-panel", className: CSS_CLASS.card },
     createElement("h2", null, t("switch.panelTitle")),
+    createElement(
+      "div",
+      { className: CSS_CLASS.cardFooter, "data-switch-countdown": "true" },
+      createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, countdown)),
+      createElement(
+        "button",
+        {
+          type: "button",
+          "data-switch-now": "true",
+          className: CSS_CLASS.buttonSecondary,
+          onClick: () => props.onSwitchNow(),
+        },
+        t("switch.now"),
+      ),
+    ),
     ...toggleRow("autoSwitch", t("field.autoSwitch"), t("field.autoSwitch.hint"), settings.autoSwitch, (value) =>
       props.onChange({ autoSwitch: value }),
     ),
@@ -119,21 +134,6 @@ export function SwitchPanel(props: SwitchPanelProps): ReactElement {
     ),
     ...toggleRow("switchAtTurnEnd", t("field.switchAtTurnEnd"), t("field.switchAtTurnEnd.hint"), settings.atTurnEnd, (value) =>
       props.onChange({ atTurnEnd: value }),
-    ),
-    createElement(
-      "div",
-      { className: CSS_CLASS.cardFooter, "data-switch-countdown": "true" },
-      createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, countdown)),
-      createElement(
-        "button",
-        {
-          type: "button",
-          "data-switch-now": "true",
-          className: CSS_CLASS.buttonSecondary,
-          onClick: () => props.onSwitchNow(),
-        },
-        t("switch.now"),
-      ),
     ),
     orderSection(props),
   );

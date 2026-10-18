@@ -122,6 +122,8 @@ export const Config: PluginConfigSchema = z.object(
     enabled: z.boolean().default(true),
     usageDisplay: z.union(["auto", "always", "off"]).default("auto"),
     modelVisibility: z.dict(z.boolean().required()).default({}),
+    visibleModels: z.array(z.string()),
+    removedModels: z.array(z.string()),
     apiKeyEnv: z.string().role("credential-ref").default(OPENCODE_DEFAULT_REF),
     // 条目按用户现有形状声明（`id` / `name` / `apiKeyEnv`）。不写死的上限：账号数上限由
     // 账号端口在写入路径上拒绝（`MAX_ACCOUNTS`），schema 拒绝存量文档会让整行起不来。
@@ -141,7 +143,7 @@ export const Config: PluginConfigSchema = z.object(
     accountOrder: z.array(z.string()),
     autoSwitch: z.boolean().default(false),
     /** 切换策略：手动顺序（只在耗尽时切）或额度优先。 */
-    switchStrategy: z.union(["order", "best-quota"]).default("order"),
+    switchStrategy: z.union(["order", "best-quota"]).default("best-quota"),
     /** 额度优先模式的评估间隔（分钟）；`0` 表示只在当前耗尽时评估。 */
     switchIntervalMinutes: z.number().default(60),
     /** 是否等回合结束再切（默认 `true`，任务进行中不换号）。 */
@@ -442,6 +444,8 @@ function adapterConfigOf(document: Record<string, unknown>): OpencodeConfig {
   const defaultMaxTokens = positiveNumber(document.defaultMaxTokens);
   const catalogTtlMs = nonNegativeNumber(document.catalogTtlMs);
   const modelVisibility = booleanMap(document.modelVisibility);
+  const visibleModels = stringList(document.visibleModels);
+  const removedModels = stringList(document.removedModels);
   const modelLimits = modelLimitsOf(document.modelLimits);
   return {
     // `apiBase` 是本包自己的字段名（组合层可直接用）；用户文档里的 `baseURL` 优先于它。
@@ -452,6 +456,8 @@ function adapterConfigOf(document: Record<string, unknown>): OpencodeConfig {
     ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
     ...(catalogTtlMs === undefined ? {} : { catalogTtlMs }),
     ...(modelVisibility === undefined ? {} : { modelVisibility }),
+    ...(visibleModels === undefined ? {} : { visibleModels }),
+    ...(removedModels === undefined ? {} : { removedModels }),
     ...(modelLimits === undefined ? {} : { modelLimits }),
   };
 }
@@ -464,6 +470,12 @@ function positiveNumber(value: unknown): number | undefined {
 /** 读一个非负有限数（目录 TTL 允许 0 = 不缓存）。 */
 function nonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** 读一个字符串数组；非数组读作缺省，空数组保留（表示显式清空）。 */
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
 }
 
 /** 读一个 id → 布尔 的映射；非对象读作缺省，一个合法项都没有时也读作缺省。 */
