@@ -207,9 +207,8 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
   // `quota` 同上：可选字段，线上可能是 `null`（当作「没有摘要」，不是「有摘要但为空」）。
   const quotaOf = account.quota ?? undefined;
 
-  // 副文案：名称与 ref 不同时显示 ref（排查时真正有用的那个键），否则显示配置状态。
-  const showRef = account.configured && account.label !== account.ref;
-  const statusText = account.configured ? (showRef ? account.ref : t("account.configured")) : t("account.missing");
+  // 副文案只显示配置状态；ref 是宿主生成的内部键，不再上屏。
+  const statusText = account.configured ? t("account.configured") : t("account.missing");
 
   return createElement(
     "div",
@@ -242,7 +241,7 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
           ),
           createElement(
             "small",
-            { "data-account-status": account.configured ? "configured" : "missing", ...(showRef ? { className: CSS_CLASS.mono } : {}) },
+            { "data-account-status": account.configured ? "configured" : "missing" },
             statusText,
           ),
         ),
