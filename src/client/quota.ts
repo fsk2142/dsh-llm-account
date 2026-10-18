@@ -115,6 +115,32 @@ export function quotaWindowText(t: (key: string) => string, window: QuotaWindow)
 }
 
 /**
+ * 额度窗口的重置时间文案（本地时间；今天/明天用相对日）。
+ * @param t - 取词函数。
+ * @param window - 额度窗口。
+ * @returns 文案；没有 resetAt 时为 `undefined`。
+ */
+export function quotaResetText(t: (key: string) => string, window: QuotaWindow): string | undefined {
+  const at = window.resetAt;
+  if (at === undefined || !Number.isFinite(at)) return undefined;
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const now = new Date();
+  const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const sameDay =
+    date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  if (sameDay) return t("quota.resetToday").replace("{time}", time);
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const isTomorrow =
+    date.getFullYear() === tomorrow.getFullYear() &&
+    date.getMonth() === tomorrow.getMonth() &&
+    date.getDate() === tomorrow.getDate();
+  if (isTomorrow) return t("quota.resetTomorrow").replace("{time}", time);
+  const day = date.toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
+  return t("quota.resetAtLong").replace("{date}", day).replace("{time}", time);
+}
+
+/**
  * 展开报告里的一行明细：把存在的字段都写出来，缺失的一律不出现。
  * @param t - 取词函数。
  * @param window - 额度窗口。

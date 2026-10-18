@@ -112,6 +112,9 @@ export type CopyKey =
   | "quota.usedOf"
   | "quota.usedPercent"
   | "quota.remaining"
+  | "quota.resetToday"
+  | "quota.resetTomorrow"
+  | "quota.resetAtLong"
   | "quota.resetAt"
   | "quota.window.fiveHour"
   | "quota.window.rolling"
@@ -312,6 +315,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.usedOf": "已用 {used} / 共 {cap}",
     "quota.usedPercent": "已用 {percent}%",
     "quota.remaining": "剩余 {percent}%",
+    "quota.resetToday": "今天 {time} 重置",
+    "quota.resetTomorrow": "明天 {time} 重置",
+    "quota.resetAtLong": "{date} {time} 重置",
     "quota.resetAt": "重置于",
     "quota.window.fiveHour": "5 小时",
     "quota.window.rolling": "滚动窗口",
@@ -507,6 +513,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.usedOf": "Used {used} of {cap}",
     "quota.usedPercent": "Used {percent}%",
     "quota.remaining": "{percent}% left",
+    "quota.resetToday": "Resets today at {time}",
+    "quota.resetTomorrow": "Resets tomorrow at {time}",
+    "quota.resetAtLong": "Resets {date} {time}",
     "quota.resetAt": "Resets at",
     "quota.window.fiveHour": "5 hours",
     "quota.window.rolling": "Rolling window",

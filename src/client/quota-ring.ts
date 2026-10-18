@@ -8,7 +8,7 @@
 import { createElement, type ReactElement } from "react";
 
 import { CSS_CLASS } from "./css";
-import { quotaMeter, quotaWindowLabel, quotaWindowText } from "./quota";
+import { quotaMeter, quotaResetText, quotaWindowLabel, quotaWindowText } from "./quota";
 import type { QuotaWindow } from "./usage-contract";
 
 /** 圆环属性。 */
@@ -73,5 +73,14 @@ export function QuotaRing(props: QuotaRingProps): ReactElement {
     ),
     createElement("span", { className: CSS_CLASS.ringLabel }, quotaWindowLabel(t, window.key)),
     createElement("span", { className: CSS_CLASS.ringNote }, quotaWindowText(t, window)),
+    ...(quotaResetText(t, window) === undefined
+      ? []
+      : [
+          createElement(
+            "span",
+            { key: "reset", "data-quota-ring-reset": window.resetAt, className: CSS_CLASS.ringReset },
+            quotaResetText(t, window),
+          ),
+        ]),
   );
 }

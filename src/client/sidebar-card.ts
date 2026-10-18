@@ -19,8 +19,7 @@ import { CSS_CLASS, cls } from "./css";
 import { RefreshIcon, UsageIcon } from "./icons";
 import { quotaShape } from "./quota";
 import { QuotaRing } from "./quota-ring";
-import { relativeTime } from "./time";
-import type { AccountUsageStatus, SwitchNotice, VendorUsageStatus } from "./usage-contract";
+import type { AccountUsageStatus, VendorUsageStatus } from "./usage-contract";
 
 /** 卡片属性。 */
 export interface SidebarCardProps {
@@ -56,7 +55,6 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   // 模式）。所以这里把 `null` 一律收敛成「没有生效账号」，并把收敛后的值递给标注区，
   // 全卡片只有这一处读它。
   const effective = status?.effective ?? undefined;
-  const pinned = status?.pinned ?? null;
   const effectiveRow = effective === undefined ? undefined : status?.accounts.find((account) => account.ref === effective.ref);
   // 还没有请求时 effective 可能为空，但用户已经指定/自动选中了当前账号：优先显示它。
   const currentRow =
@@ -83,8 +81,7 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
       ),
       ...(hasData
         ? [
-            // `switch` 与 `effective` 同一条纪律：可选字段，线上可能是 `null`。
-            switchNotice(t, effective, pinned, status.switch ?? undefined),
+            // 简要信息只显示当前账号和额度；不再显示「已指定/生效」等标记。
             ...effectiveQuota(props, currentRow),
           ]
         : [
@@ -175,57 +172,7 @@ function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): 
   return `${account} · ${plan}`;
 }
 
-/**
- * 顶部提示与「固定/当前」两个标注。
- *
- * 提示**只在两者不同**时出现（规格 §8.1 第 3 条）；相同就只标一个「当前」，不重复刷屏。
- *
- * 三个值都由 {@link SidebarCard} 递进来（`effective` 已在那一处把 `null` 收敛成 `undefined`），
- * 本函数不再自己读 `status` —— 两处各读一次就有一处可能忘掉收敛。
- */
-function switchNotice(
-  t: (key: string) => string,
-  effective: { ref: string; at: number } | undefined,
-  pinned: string | null,
-  switchRecord: SwitchNotice | undefined,
-): ReactNode {
-  const differs = effective !== undefined && pinned !== null && pinned !== effective.ref;
-  const marks: ReactNode[] = [];
-
-  if (pinned !== null && (differs || effective === undefined)) {
-    marks.push(createElement("span", { key: "pinned", "data-sidebar-pinned": pinned, className: CSS_CLASS.mark }, `${t("sidebar.pinned")}: ${pinned}`));
-  }
-  if (effective !== undefined) {
-    marks.push(createElement("span", { key: "effective", "data-sidebar-effective": effective.ref, className: CSS_CLASS.mark }, `${t("sidebar.effective")}: ${effective.ref}`));
-  }
-
-  const notice = switchRecord;
-  if (!differs || notice === undefined) {
-    return createElement("div", { key: "marks", "data-sidebar-marks": "true", className: CSS_CLASS.marks }, ...marks);
-  }
-
-  return createElement(
-    "div",
-    {
-      key: "switch",
-      "data-switch-notice": "true",
-      className: CSS_CLASS.switchNotice,
-      "data-switch-from": notice.fromRef,
-      "data-switch-to": notice.toRef,
-      "data-switch-reason": notice.reason,
-    },
-    createElement("span", { "data-switch-summary": "true" }, `${notice.fromRef} → ${notice.toRef}`),
-    createElement("span", { "data-switch-reason-label": notice.reason }, t(`switch.reason.${notice.reason}`)),
-    createElement(
-      "time",
-      { "data-switch-at": notice.at, dateTime: new Date(notice.at).toISOString() },
-      relativeTime(t, notice.at),
-    ),
-    ...marks,
-  );
-}
-
-/** 生效账号的额度：每个窗口一行（标签 + 读数 + 进度条），缺失的窗口按「暂无数据」处理。 */
+/** 生效账号的额度：每个窗口一个圆环，缺失的窗口按「暂无数据」处理。 */
 function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode[] {
   const { t } = props;
   const quota = row?.quota;

@@ -96,39 +96,19 @@ it("开启后显示**生效账号**的额度（不是固定账号的）", () => 
   expect(textsOf(tree)).toContain("Serving · pro");
 });
 
-it("生效账号与固定账号不同时：顶部给切换提示（谁→谁、原因、时间），并同时标注两个账号", () => {
+it("侧边栏只显示当前账号名称，不再标注「已指定/生效」或切换提示", () => {
   const tree = renderCard(
     statusOf({
       pinned: "fixed",
       effective: { ref: "serving", at: 1_700_000_000_000 },
       switch: { fromRef: "fixed", toRef: "serving", reason: "quota", at: 1_700_000_000_000 },
-      accounts: [row("fixed"), row("serving", { effective: true })],
+      accounts: [row("fixed"), row("serving", { label: "Serving", effective: true })],
     }),
   );
-  const notice = elementsOf(tree).find((element) => element.props["data-switch-notice"] !== undefined)!;
-  expect(notice.props["data-switch-from"]).toBe("fixed");
-  expect(notice.props["data-switch-to"]).toBe("serving");
-  expect(notice.props["data-switch-reason"]).toBe("quota");
-  // 时间以 ISO 放在 `dateTime` 上（可断言、不依赖本地化文本）。
-  const time = elementsOf(notice).find((element) => element.props["data-switch-at"] !== undefined)!;
-  expect(time.props.dateTime).toBe(new Date(1_700_000_000_000).toISOString());
-  expect(textsOf(notice)).toContain(dictionaryOf("zh")("switch.reason.quota"));
-
-  // 两个账号都标注出来了（规格 §8.1 第 4 条：不能让用户以为固定设置没生效）。
-  expect(elementsOf(tree).find((element) => element.props["data-sidebar-pinned"] !== undefined)!.props["data-sidebar-pinned"]).toBe("fixed");
-  expect(elementsOf(tree).find((element) => element.props["data-sidebar-effective"] !== undefined)!.props["data-sidebar-effective"]).toBe("serving");
-});
-
-it("生效与固定相同（或未固定）时不显示切换提示，只标「当前」", () => {
-  const same = renderCard(
-    statusOf({ pinned: "a", effective: { ref: "a", at: 1 }, switch: { fromRef: "x", toRef: "a", reason: "quota", at: 1 }, accounts: [row("a", { effective: true })] }),
-  );
-  expect(elementsOf(same).filter((element) => element.props["data-switch-notice"] !== undefined)).toEqual([]);
-  expect(elementsOf(same).find((element) => element.props["data-sidebar-effective"] !== undefined)).toBeDefined();
-
-  // 没有固定账号（自动轮换）时同样没有提示。
-  const auto = renderCard(statusOf({ pinned: null, effective: { ref: "a", at: 1 }, accounts: [row("a", { effective: true })] }));
-  expect(elementsOf(auto).filter((element) => element.props["data-switch-notice"] !== undefined)).toEqual([]);
+  expect(textsOf(tree)).toContain("Serving");
+  expect(elementsOf(tree).some((element) => element.props["data-switch-notice"] !== undefined)).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-sidebar-pinned"] !== undefined)).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-sidebar-effective"] !== undefined)).toBe(false);
 });
 
 it("没有请求过时显示占位，而不是 0%", () => {
