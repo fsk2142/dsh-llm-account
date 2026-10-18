@@ -36,6 +36,16 @@ export function countdownText(
   if (state.pending !== undefined) {
     return t("switch.pending").replace("{target}", state.pending.target);
   }
+  if (state.strategy === "scheduled") {
+    if (state.intervalMinutes <= 0) return t("switch.noInterval");
+    if (state.nextAt === undefined || state.nextAt <= now) return t("switch.switchDue");
+    const parts = countdownPartsOf(state.nextAt - now);
+    const chunks: string[] = [];
+    if (parts.days > 0) chunks.push(`${parts.days} ${t("duration.days")}`);
+    if (parts.hours > 0) chunks.push(`${parts.hours} ${t("duration.hours")}`);
+    if (parts.minutes > 0 || chunks.length === 0) chunks.push(`${parts.minutes} ${t("duration.minutes")}`);
+    return t("switch.nextSwitchIn").replace("{time}", chunks.join(" "));
+  }
   if (state.strategy !== "best-quota") return t("switch.order");
   if (state.intervalMinutes <= 0) return t("switch.noInterval");
   if (state.nextAt === undefined || state.nextAt <= now) return t("switch.due");

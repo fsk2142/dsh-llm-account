@@ -71,7 +71,7 @@ export interface EffectiveAccount {
  * 刻意不包含 `unavailable`：它在失败分类里存在，但规格没有给它文案，硬塞进
  * `quota` 之类的桶里就是编造原因 —— 指不出原因的变化只更新生效账号、不产出提示。
  */
-export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual" | "balance";
+export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual" | "balance" | "scheduled";
 
 /** 一次切换提示：谁 → 谁、原因、时刻。 */
 export interface SwitchNotice {

@@ -40,6 +40,9 @@ export type CopyKey =
   | "field.switchAtTurnEnd.hint"
   | "options.switchOrder"
   | "options.switchBestQuota"
+  | "options.switchScheduled"
+  | "field.scheduledIntervalMinutes"
+  | "field.scheduledIntervalMinutes.hint"
   | "duration.days"
   | "duration.hours"
   | "duration.minutes"
@@ -48,6 +51,8 @@ export type CopyKey =
   | "switch.now"
   | "switch.pending"
   | "switch.nextIn"
+  | "switch.nextSwitchIn"
+  | "switch.switchDue"
   | "switch.due"
   | "switch.order"
   | "switch.noInterval"
@@ -160,6 +165,7 @@ export type CopyKey =
   | "switch.reason.invalid-credential"
   | "switch.reason.manual"
   | "switch.reason.balance"
+  | "switch.reason.scheduled"
   | "dashboard.title"
   | "dashboard.close"
   | "dashboard.refresh"
@@ -214,6 +220,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.switchAtTurnEnd.hint": "开启时回合内只记录决定，下一回合的首次请求才真正换号。",
     "options.switchOrder": "按手动顺序",
     "options.switchBestQuota": "按可用额度优先",
+    "options.switchScheduled": "定时切换",
     "duration.days": "天",
     "duration.hours": "小时",
     "duration.minutes": "分钟",
@@ -222,6 +229,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.now": "立即切换",
     "switch.pending": "已决定切换到 {target}，等待本回合结束后生效。",
     "switch.nextIn": "距离下次额度评估：{time}",
+    "switch.nextSwitchIn": "距离下次定时切换：{time}",
+    "switch.switchDue": "即将按定时切换",
+    "field.scheduledIntervalMinutes": "定时切换间隔（分钟）",
+    "field.scheduledIntervalMinutes.hint": "到点后按顺序切到下一个账号，不看额度。最大 30 天。",
     "switch.due": "即将评估",
     "switch.order": "当前账号额度耗尽时自动切换。",
     "switch.noInterval": "仅在当前账号额度耗尽时评估。",
@@ -334,6 +345,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.reason.invalid-credential": "凭据失效",
     "switch.reason.manual": "手动切换",
     "switch.reason.balance": "额度更充足",
+    "switch.reason.scheduled": "定时切换",
     "dashboard.title": "账号与用量",
     "dashboard.close": "关闭",
     "dashboard.refresh": "刷新",
@@ -383,6 +395,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.switchAtTurnEnd.hint": "When on, a decision is parked during the turn and applied on the first request of the next turn.",
     "options.switchOrder": "Manual order",
     "options.switchBestQuota": "Quota-first",
+    "options.switchScheduled": "Scheduled",
     "duration.days": "days",
     "duration.hours": "hours",
     "duration.minutes": "minutes",
@@ -391,6 +404,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.now": "Switch now",
     "switch.pending": "Switching to {target} after this turn ends.",
     "switch.nextIn": "Next quota check in {time}",
+    "switch.nextSwitchIn": "Next scheduled switch in {time}",
+    "switch.switchDue": "Scheduled switch due",
+    "field.scheduledIntervalMinutes": "Scheduled switch interval (minutes)",
+    "field.scheduledIntervalMinutes.hint": "Switch to the next account in order when due, regardless of quota. Up to 30 days.",
     "switch.due": "Due now",
     "switch.order": "Switches automatically when the current account is exhausted.",
     "switch.noInterval": "Only checked when the current account is exhausted.",
@@ -503,6 +520,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "switch.reason.invalid-credential": "credential rejected",
     "switch.reason.manual": "switched manually",
     "switch.reason.balance": "more quota available",
+    "switch.reason.scheduled": "scheduled switch",
     "dashboard.title": "Accounts & usage",
     "dashboard.close": "Close",
     "dashboard.refresh": "Refresh",

@@ -45,6 +45,10 @@ it("switchSettingsOf：坏值落默认（order / 60 分钟 / 回合末切换）"
     intervalMinutes: 15,
     atTurnEnd: false,
   });
+  expect(switchSettingsOf({ switchStrategy: "scheduled", switchIntervalMinutes: 15 })).toMatchObject({
+    strategy: "scheduled",
+    intervalMinutes: 15,
+  });
   expect(switchSettingsOf({ switchStrategy: "nonsense", switchIntervalMinutes: -5, switchAtTurnEnd: "no" }).strategy).toBe("order");
   expect(switchSettingsOf({ switchIntervalMinutes: 0 }).intervalMinutes).toBe(0);
   expect(switchSettingsOf({ switchIntervalMinutes: "15" }).intervalMinutes).toBe(60);
@@ -56,6 +60,30 @@ it("isDue：当前耗尽立刻评估；间隔为 0 不按时间评估；首次�
   expect(isDue(1_000, 2_000, 0, false)).toBe(false);
   expect(isDue(1_000, 2_000, 1, false)).toBe(false);
   expect(isDue(1_000, 61_000, 1, false)).toBe(true);
+});
+
+it("scheduled 策略：到期按顺序切下一个，不看额度；未到期不切", () => {
+  expect(
+    chooseSwitch({
+      strategy: "scheduled",
+      candidates: [{ ref: "a" }, { ref: "b" }, { ref: "c" }],
+      current: "a",
+      due: true,
+    }),
+  ).toEqual({ target: "b", reason: "scheduled" });
+  expect(
+    chooseSwitch({ strategy: "scheduled", candidates: [{ ref: "a" }, { ref: "b" }], current: "a", due: false }),
+  ).toBeUndefined();
+  // 当前耗尽时仍按顺序切，原因记为额度。
+  expect(
+    chooseSwitch({
+      strategy: "scheduled",
+      candidates: [{ ref: "a" }, { ref: "b" }],
+      current: "a",
+      currentRejected: true,
+      due: true,
+    }),
+  ).toEqual({ target: "b", reason: "quota" });
 });
 
 it("order 策略：只在当前耗尽时切到顺序里的下一个可用账号", () => {

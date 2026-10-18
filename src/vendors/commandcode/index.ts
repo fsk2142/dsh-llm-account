@@ -135,7 +135,7 @@ export const Config: PluginConfigSchema = z.object(
        */
       autoSwitch: z.boolean().default(true),
       /** 切换策略：手动顺序（只在耗尽时切）或额度优先。 */
-      switchStrategy: z.union(["order", "best-quota"]).default("best-quota"),
+      switchStrategy: z.union(["order", "best-quota", "scheduled"]).default("best-quota"),
       /** 额度优先模式的评估间隔（分钟）；`0` 表示只在当前耗尽时评估。 */
       switchIntervalMinutes: z.number().default(60),
       /** 是否等回合结束再切（默认 `true`，任务进行中不换号）。 */

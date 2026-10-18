@@ -7,8 +7,8 @@
  */
 import type { QuotaSnapshot, QuotaWindow } from "./adapter";
 
-/** 切换策略：`order` 手动顺序（只在耗尽时切），`best-quota` 额度优先（可定时评估）。 */
-export type SwitchStrategy = "order" | "best-quota";
+/** 切换策略：`order` 手动顺序（只在耗尽时切），`best-quota` 额度优先，`scheduled` 定时切换。 */
+export type SwitchStrategy = "order" | "best-quota" | "scheduled";
 
 /** 从设置文档解析出的策略参数。 */
 export interface SwitchSettings {
@@ -23,7 +23,7 @@ export interface SwitchSettings {
 export const SWITCH_MARGIN = 0.1;
 
 /** 切换原因（与 `core/rotation.ts` 的 `SwitchReason` 对齐）。 */
-export type SwitchDecisionReason = "quota" | "balance" | "manual";
+export type SwitchDecisionReason = "quota" | "balance" | "manual" | "scheduled";
 
 /** 控制器对页面发布的运行态（倒计时/待切换）。 */
 export interface SwitchRuntimeState {
@@ -139,7 +139,12 @@ export function quotaExhausted(snapshot: QuotaSnapshot | undefined): boolean {
  * @returns 清洗后的策略参数。
  */
 export function switchSettingsOf(document: Record<string, unknown>): SwitchSettings {
-  const strategy = document.switchStrategy === "best-quota" ? "best-quota" : "order";
+  const strategy =
+    document.switchStrategy === "best-quota"
+      ? "best-quota"
+      : document.switchStrategy === "scheduled"
+        ? "scheduled"
+        : "order";
   const rawInterval = document.switchIntervalMinutes;
   const intervalMinutes =
     typeof rawInterval === "number" && Number.isFinite(rawInterval)
@@ -195,15 +200,17 @@ export function chooseSwitch(input: SwitchInput): SwitchDecision | undefined {
   const available = others.filter((candidate) => !unavailable(candidate));
   if (available.length === 0) return undefined;
 
+  const rotate = (reason: SwitchDecisionReason): SwitchDecision | undefined => {
+    const at = input.candidates.findIndex((candidate) => candidate.ref === input.current);
+    const rotated =
+      at === -1 ? input.candidates : [...input.candidates.slice(at + 1), ...input.candidates.slice(0, at)];
+    const next = rotated.find((candidate) => candidate.ref !== input.current && !unavailable(candidate));
+    return next === undefined ? undefined : { target: next.ref, reason };
+  };
+
   if (currentExhausted) {
-    if (input.strategy === "order") {
-      // 手动顺序＝「当前之后的下一个」，到末尾绕回开头（规格 §6.2）。
-      const at = input.candidates.findIndex((candidate) => candidate.ref === input.current);
-      const rotated =
-        at === -1 ? input.candidates : [...input.candidates.slice(at + 1), ...input.candidates.slice(0, at)];
-      const next = rotated.find((candidate) => candidate.ref !== input.current && !unavailable(candidate));
-      return next === undefined ? undefined : { target: next.ref, reason: "quota" };
-    }
+    // 顺序/定时策略都按顺序找下一个；额度优先按剩余额度排序。
+    if (input.strategy !== "best-quota") return rotate("quota");
     const ranked = available
       .flatMap((candidate) => {
         const remaining = remainingFraction(candidate.quota);
@@ -214,7 +221,10 @@ export function chooseSwitch(input: SwitchInput): SwitchDecision | undefined {
     return { target: ranked[0]?.ref ?? available[0]!.ref, reason: "quota" };
   }
 
-  if (!input.due || input.strategy !== "best-quota") return undefined;
+  if (!input.due) return undefined;
+  // 定时切换：不看额度，到期就换到顺序里的下一个可用账号。
+  if (input.strategy === "scheduled") return rotate("scheduled");
+  if (input.strategy !== "best-quota") return undefined;
   const currentRemaining = remainingFraction(currentSnapshot);
   if (currentRemaining === undefined) return undefined;
   const best = available

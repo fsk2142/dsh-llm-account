@@ -18,7 +18,7 @@ function elementsOf(node: unknown): StubElement[] {
 function render(overrides: Partial<SwitchPanelProps> = {}): { tree: StubElement; props: SwitchPanelProps } {
   const props: SwitchPanelProps = {
     t: dictionaryOf("zh"),
-    state: { strategy: "order", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true, evaluatedAt: 1_000 },
+    state: { strategy: "best-quota", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true, evaluatedAt: 1_000 },
     now: 1_000,
     order: [
       { key: "commandcode:cc", label: "Work", vendorLabel: "Command Code", vendor: "commandcode", ref: "cc" },
@@ -53,8 +53,8 @@ it("策略、间隔、自动切换与账户顺序在同一张卡片；间隔三�
 it("修改策略/间隔/开关立刻上报", () => {
   const strategy = render();
   const select = elementsOf(strategy.tree).find((element) => element.props["data-switch-strategy"] !== undefined)!;
-  (select.props.onChange as (event: unknown) => void)({ target: { value: "best-quota" } });
-  expect(strategy.props.onChange).toHaveBeenCalledWith({ strategy: "best-quota" });
+  (select.props.onChange as (event: unknown) => void)({ target: { value: "scheduled" } });
+  expect(strategy.props.onChange).toHaveBeenCalledWith({ strategy: "scheduled" });
 
   const interval = render();
   const minutes = elementsOf(interval.tree).find((element) => element.props["data-switch-duration-part"] === "minutes")!;
@@ -68,7 +68,7 @@ it("修改策略/间隔/开关立刻上报", () => {
   expect(turnEnd.props.onChange).toHaveBeenCalledWith({ atTurnEnd: false });
 });
 
-it("自动切换是面板的第一个选项", () => {
+it("选择切换策略是面板的第一个选项", () => {
   const { tree } = render();
   const controls = elementsOf(tree)
     .map((element) =>
@@ -81,7 +81,21 @@ it("自动切换是面板的第一个选项", () => {
             : undefined,
     )
     .filter((value): value is string => value !== undefined);
-  expect(controls[0]).toBe("toggle:autoSwitch");
+  expect(controls[0]).toBe("strategy");
+});
+
+it("按手动顺序时不显示间隔/回合末；定时策略显示定时设置", () => {
+  const order = render({
+    state: { strategy: "order", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true, evaluatedAt: 1_000 },
+  });
+  expect(elementsOf(order.tree).some((element) => element.props["data-switch-interval"] !== undefined)).toBe(false);
+  expect(elementsOf(order.tree).some((element) => element.props["data-switch-toggle"] === "switchAtTurnEnd")).toBe(false);
+
+  const scheduled = render({
+    state: { strategy: "scheduled", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true, evaluatedAt: 1_000 },
+  });
+  expect(elementsOf(scheduled.tree).some((element) => element.props["data-switch-interval"] !== undefined)).toBe(true);
+  expect(elementsOf(scheduled.tree).some((element) => element.props["data-switch-toggle"] === "switchAtTurnEnd")).toBe(true);
 });
 
 it("顺序上移/下移提交完整全局顺序；可以直接选某个账号", () => {

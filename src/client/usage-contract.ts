@@ -112,7 +112,7 @@ export interface AccountUsageStatus extends AccountView {
 }
 
 /** 切换原因（规格 §8.1 第 3 条列出的四种）。 */
-export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual" | "balance";
+export type SwitchReason = "quota" | "rate-limit" | "invalid-credential" | "manual" | "balance" | "scheduled";
 
 /** 一次切换：谁 → 谁、原因、时刻（`status()` 发布的最近一条。**不带**厂商标签）。 */
 export interface SwitchNotice {
@@ -320,7 +320,8 @@ function parseStringArray(endpoint: string, value: unknown): string[] {
 /** 校验全局切换设置。 */
 function parseSwitchSettings(endpoint: string, value: unknown): SwitchSettingsWrite {
   if (!isRecord(value)) throw boundaryError(endpoint, "expected a switch settings object");
-  const strategy = value.strategy === "best-quota" ? "best-quota" : "order";
+  const strategy =
+    value.strategy === "best-quota" ? "best-quota" : value.strategy === "scheduled" ? "scheduled" : "order";
   const intervalMinutes =
     typeof value.intervalMinutes === "number" && Number.isFinite(value.intervalMinutes)
       ? Math.min(30 * 24 * 60, Math.max(0, Math.floor(value.intervalMinutes)))

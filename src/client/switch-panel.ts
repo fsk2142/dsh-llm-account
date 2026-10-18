@@ -72,6 +72,68 @@ export function SwitchPanel(props: SwitchPanelProps): ReactElement {
     createElement("h2", null, t("switch.panelTitle")),
     createElement(
       "div",
+      { "data-switch-strategy-field": "true", className: CSS_CLASS.field },
+      createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, t("field.switchStrategy")), createElement("small", null, t("field.switchStrategy.hint"))),
+      createElement(
+        "select",
+        {
+          "data-switch-strategy": "true",
+          value: settings.strategy,
+          onChange: (event: { target?: { value?: string } }) => {
+            const next = event.target?.value;
+            props.onChange({ strategy: next === "best-quota" ? "best-quota" : next === "scheduled" ? "scheduled" : "order" });
+          },
+        },
+        createElement("option", { value: "order" }, t("options.switchOrder")),
+        createElement("option", { value: "best-quota" }, t("options.switchBestQuota")),
+        createElement("option", { value: "scheduled" }, t("options.switchScheduled")),
+      ),
+    ),
+    ...toggleRow("autoSwitch", t("field.autoSwitch"), t("field.autoSwitch.hint"), settings.autoSwitch, (value) =>
+      props.onChange({ autoSwitch: value }),
+    ),
+    ...(settings.strategy === "order"
+      ? []
+      : [
+          createElement(
+            "div",
+            { key: "interval", "data-switch-interval-field": "true", className: CSS_CLASS.field },
+            createElement(
+              "span",
+              { className: CSS_CLASS.fieldText },
+              createElement("span", null, t(settings.strategy === "scheduled" ? "field.scheduledIntervalMinutes" : "field.switchIntervalMinutes")),
+              createElement("small", null, t(settings.strategy === "scheduled" ? "field.scheduledIntervalMinutes.hint" : "field.switchIntervalMinutes.hint")),
+            ),
+            createElement(
+              "div",
+              { className: CSS_CLASS.duration, "data-switch-interval": "true" },
+              ...([
+                ["days", 30],
+                ["hours", 24],
+                ["minutes", 60],
+              ] as const).map(([part, max]) =>
+                createElement(
+                  "span",
+                  { key: part, className: CSS_CLASS.durationPart },
+                  createElement("input", {
+                    type: "number",
+                    min: 0,
+                    max,
+                    value: String(parts[part]),
+                    "data-switch-duration-part": part,
+                    onChange: (event: { target?: { value?: string } }) => changePart(part, event.target?.value ?? ""),
+                  }),
+                  createElement("span", null, t(`duration.${part}`)),
+                ),
+              ),
+            ),
+          ),
+          ...toggleRow("switchAtTurnEnd", t("field.switchAtTurnEnd"), t("field.switchAtTurnEnd.hint"), settings.atTurnEnd, (value) =>
+            props.onChange({ atTurnEnd: value }),
+          ),
+        ]),
+    createElement(
+      "div",
       { className: CSS_CLASS.cardFooter, "data-switch-countdown": "true" },
       createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, countdown)),
       createElement(
@@ -84,56 +146,6 @@ export function SwitchPanel(props: SwitchPanelProps): ReactElement {
         },
         t("switch.now"),
       ),
-    ),
-    ...toggleRow("autoSwitch", t("field.autoSwitch"), t("field.autoSwitch.hint"), settings.autoSwitch, (value) =>
-      props.onChange({ autoSwitch: value }),
-    ),
-    createElement(
-      "div",
-      { "data-switch-strategy-field": "true", className: CSS_CLASS.field },
-      createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, t("field.switchStrategy")), createElement("small", null, t("field.switchStrategy.hint"))),
-      createElement(
-        "select",
-        {
-          "data-switch-strategy": "true",
-          value: settings.strategy,
-          onChange: (event: { target?: { value?: string } }) =>
-            props.onChange({ strategy: event.target?.value === "best-quota" ? "best-quota" : "order" }),
-        },
-        createElement("option", { value: "order" }, t("options.switchOrder")),
-        createElement("option", { value: "best-quota" }, t("options.switchBestQuota")),
-      ),
-    ),
-    createElement(
-      "div",
-      { "data-switch-interval-field": "true", className: CSS_CLASS.field },
-      createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, t("field.switchIntervalMinutes")), createElement("small", null, t("field.switchIntervalMinutes.hint"))),
-      createElement(
-        "div",
-        { className: CSS_CLASS.duration, "data-switch-interval": "true" },
-        ...([
-          ["days", 30],
-          ["hours", 24],
-          ["minutes", 60],
-        ] as const).map(([part, max]) =>
-          createElement(
-            "span",
-            { key: part, className: CSS_CLASS.durationPart },
-            createElement("input", {
-              type: "number",
-              min: 0,
-              max,
-              value: String(parts[part]),
-              "data-switch-duration-part": part,
-              onChange: (event: { target?: { value?: string } }) => changePart(part, event.target?.value ?? ""),
-            }),
-            createElement("span", null, t(`duration.${part}`)),
-          ),
-        ),
-      ),
-    ),
-    ...toggleRow("switchAtTurnEnd", t("field.switchAtTurnEnd"), t("field.switchAtTurnEnd.hint"), settings.atTurnEnd, (value) =>
-      props.onChange({ atTurnEnd: value }),
     ),
     orderSection(props),
   );

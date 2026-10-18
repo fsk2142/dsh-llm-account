@@ -206,7 +206,7 @@ export class SwitchingController {
     const settings = switchSettingsOf(document);
     const now = this.#now();
     const nextAt =
-      settings.strategy === "best-quota" && settings.intervalMinutes > 0
+      (settings.strategy === "best-quota" || settings.strategy === "scheduled") && settings.intervalMinutes > 0
         ? this.#lastEvaluatedAt > 0
           ? this.#lastEvaluatedAt + settings.intervalMinutes * 60_000
           : now
@@ -268,7 +268,13 @@ export class SwitchingController {
     const currentExhausted = rejections.has(current) || quotaExhausted(this.#freshQuota(current, now));
 
     // 手动顺序模式没有「按时间评估」：只等当前耗尽（force 时允许手动轮换到下一个）。
+    // 定时切换和额度优先都走 isDue 的定时判断。
     if (!force && settings.strategy === "order" && !currentExhausted) return undefined;
+    // 定时切换从第一次请求开始计时，不在启动时立刻换号。
+    if (!force && settings.strategy === "scheduled" && this.#lastEvaluatedAt <= 0 && !currentExhausted) {
+      this.#lastEvaluatedAt = now;
+      return undefined;
+    }
     if (!force && !isDue(this.#lastEvaluatedAt, now, settings.intervalMinutes, currentExhausted)) return undefined;
 
     // 账号列表的顺序就是轮换顺序（含手动排序覆盖）。
@@ -294,8 +300,8 @@ export class SwitchingController {
       currentSnapshot = await this.#readQuota(current, now);
     }
     let decision: SwitchDecision | undefined;
-    if (force && settings.strategy === "order" && !currentExhausted) {
-      // 「立即切换」在手动顺序模式下就是：切到当前之后的第一个可用账号。
+    if (force && settings.strategy !== "best-quota" && !currentExhausted) {
+      // 「立即切换」在顺序/定时模式下就是：切到当前之后的第一个可用账号。
       const target = nextInOrder(current, candidates);
       decision = target === undefined ? undefined : { target, reason: "manual" };
     } else {
