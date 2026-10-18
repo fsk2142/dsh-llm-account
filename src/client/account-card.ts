@@ -25,7 +25,6 @@ import { companyLabelOf, groupModels } from "../core/model-groups";
 import { rejectionText } from "./copy";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
-import { quotaWindowDetail, quotaWindowLabel } from "./quota";
 import { QuotaRing } from "./quota-ring";
 import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaSummary, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
@@ -206,7 +205,6 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
   const editingRename = actionOf(props, "rename", account.ref);
   // `quota` 同上：可选字段，线上可能是 `null`（当作「没有摘要」，不是「有摘要但为空」）。
   const quotaOf = account.quota ?? undefined;
-  const expanded = props.expandedRef === account.ref;
 
   // 副文案：名称与 ref 不同时显示 ref（排查时真正有用的那个键），否则显示配置状态。
   const showRef = account.configured && account.label !== account.ref;
@@ -266,7 +264,6 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
               },
               t("account.use"),
             ),
-        expandButton(props, account, expanded),
         accountMenu(props, account, index),
         // 只有支持排序的厂商才有拖拽手柄；不支持的**整块不渲染**（不是藏起来）。
         ...(capabilitiesOf(props).reorder
@@ -278,7 +275,6 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
     ...(quotaOf === undefined
       ? [createElement("small", { key: "quota-none", className: CSS_CLASS.quotaMissing }, t("account.quotaMissing"))]
       : [createElement("div", { key: "meters", className: CSS_CLASS.meters }, ...quotaBars(props, quotaOf))]),
-    expanded ? reportBlock(props, account) : null,
     editingRename ? renameEditor(props, account) : null,
     editingKey ? keyEditor(props, account) : null,
     accountModelsSection(props, account),
@@ -379,30 +375,6 @@ function capabilitiesOf(props: AccountCardProps): VendorCapabilities {
 /** 该行是否正在做某个账户操作。 */
 function actionOf(props: AccountCardProps, kind: AccountAction["kind"], ref: string): boolean {
   return props.action?.kind === kind && props.action.ref === ref;
-}
-
-/**
- * 展开/收起报告的图标按钮。
- *
- * 图标本身不换：`.dsl-icon[aria-expanded="true"] svg` 把它转 180°，展开与否由 `aria-expanded`
- * 同时承担语义与视觉（屏幕阅读器与样式表读的是同一个属性）。
- */
-function expandButton(props: AccountCardProps, account: AccountUsageStatus, expanded: boolean): ReactNode {
-  const label = expanded ? props.t("account.collapse") : props.t("account.expand");
-  return createElement(
-    "button",
-    {
-      key: "expand",
-      type: "button",
-      "data-action": "expand",
-      "aria-expanded": expanded,
-      "aria-label": label,
-      title: label,
-      className: CSS_CLASS.icon,
-      onClick: () => props.onToggleExpand(account.ref),
-    },
-    createElement(ChevronIcon, null),
-  );
 }
 
 /**
@@ -510,28 +482,6 @@ function quotaBars(props: AccountCardProps, quota: QuotaSummary): ReactNode[] {
  * 一个额度窗口。
  * 圆环由 `quota-ring.ts` 统一渲染：中心是剩余百分比，绿色代表额度充足。
  */
-
-/** 展开后的完整报告：窗口明细与失败项，一块内嵌面板（等宽、可断行）。 */
-function reportBlock(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
-  const { t } = props;
-  const quota = account.quota ?? undefined;
-  return createElement(
-    "div",
-    { "data-report": account.ref, className: CSS_CLASS.inset },
-    ...(quota === undefined
-      ? [createElement("p", { key: "none" }, t("account.quotaMissing"))]
-      : [
-          ...quota.windows.map((window) =>
-            createElement(
-              "p",
-              { key: `w-${window.key}`, "data-report-window": window.key },
-              `${quotaWindowLabel(props.t, window.key)}：${quotaWindowDetail(props.t, window)}`,
-            ),
-          ),
-          ...quota.failures.map((failure, index) => createElement("p", { key: `f-${index}`, "data-report-failure": index }, failure)),
-        ]),
-  );
-}
 
 /** 重命名编辑器（受控）。 */
 function renameEditor(props: AccountCardProps, account: AccountUsageStatus): ReactNode {

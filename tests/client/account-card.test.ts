@@ -193,27 +193,6 @@ it("菜单操作打开对应操作并带上目标账号（值与提交由页面�
   expect(props.onRemove).toHaveBeenCalledWith("a");
 });
 
-it("展开报告按钮切换展开状态", () => {
-  const collapsed = renderCard({ status: statusOf({ accounts: [row({ ref: "a" })] }) });
-  const toggle = elementsOf(collapsed.tree).find((element) => element.props["data-action"] === "expand")!;
-  expect(toggle.props["aria-expanded"]).toBe(false);
-  fire(toggle, "onClick");
-  expect(collapsed.props.onToggleExpand).toHaveBeenCalledWith("a");
-
-  // 展开态：完整报告区出现（额度窗口在这里也渲染一遍）。
-  const expanded = renderCard({
-    status: statusOf({
-      accounts: [row({ ref: "a", quota: { windows: [{ key: "5h", used: 3, cap: 10 }], failures: ["billing: timeout"] } })],
-    }),
-    expandedRef: "a",
-  });
-  const elements = elementsOf(expanded.tree);
-  expect(elements.find((element) => element.props["data-action"] === "expand")!.props["aria-expanded"]).toBe(true);
-  const report = elements.find((element) => element.props["data-report"] === "a")!;
-  expect(textsOf(report).join(" ")).toContain("已用 3 / 共 10");
-  expect(textsOf(report).join(" ")).toContain("timeout");
-});
-
 it("「添加账户」是收起的入口：点它只打开表单，不提交", () => {
   // 回归：先前入口与提交是同一个按钮。空字段点下去派发按规矩不发调用，于是**这一次点击
   // 没有任何可见反应** —— 用户看到的是「按钮坏了」。

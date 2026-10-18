@@ -122,7 +122,7 @@ export function quotaWindowText(t: (key: string) => string, window: QuotaWindow)
  */
 export function quotaResetText(t: (key: string) => string, window: QuotaWindow): string | undefined {
   const at = window.resetAt;
-  if (at === undefined || !Number.isFinite(at)) return undefined;
+  if (at === undefined || !Number.isFinite(at) || at <= 0) return undefined;
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return undefined;
   const now = new Date();
