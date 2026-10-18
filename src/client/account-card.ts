@@ -470,7 +470,7 @@ function quotaBars(props: AccountCardProps, quota: QuotaSummary): ReactNode[] {
       ...(quota.windows ?? []).map((window) =>
         createElement(
           "div",
-          { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.ring },
+          { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.ringCell },
           QuotaRing({ t: props.t, window }),
         ),
       ),

@@ -29,6 +29,7 @@ export function QuotaRing(props: QuotaRingProps): ReactElement {
   // 剩余额度用绿色；只有真正为 0 才转红。圆环之间留一个底部缺口，避免看起来像实心圆盘。
   const level = remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
   const arc = remaining === undefined ? 0 : (remaining / 100) * 75;
+  const reset = quotaResetText(t, window);
   return createElement(
     "div",
     {
@@ -73,13 +74,13 @@ export function QuotaRing(props: QuotaRingProps): ReactElement {
     ),
     createElement("span", { className: CSS_CLASS.ringLabel }, quotaWindowLabel(t, window.key)),
     createElement("span", { className: CSS_CLASS.ringNote }, quotaWindowText(t, window)),
-    ...(quotaResetText(t, window) === undefined
+    ...(reset === undefined
       ? []
       : [
           createElement(
             "span",
             { key: "reset", "data-quota-ring-reset": window.resetAt, className: CSS_CLASS.ringReset },
-            quotaResetText(t, window),
+            reset,
           ),
         ]),
   );

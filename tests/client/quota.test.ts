@@ -10,7 +10,15 @@
 import { expect, it } from "vitest";
 
 import { dictionaryOf } from "../../src/client/copy";
-import { formatNumber, quotaMeter, quotaReading, quotaShape, quotaWindowDetail, quotaWindowText } from "../../src/client/quota";
+import {
+  formatNumber,
+  quotaMeter,
+  quotaReading,
+  quotaResetText,
+  quotaShape,
+  quotaWindowDetail,
+  quotaWindowText,
+} from "../../src/client/quota";
 
 const t = dictionaryOf("zh");
 
@@ -56,6 +64,17 @@ it("文案：百分比按 0–100 原样写，明细把存在的字段都写出�
     `已用 1 / 共 2 · 已用 50% · 重置于 ${new Date(1700).toLocaleString()}`,
   );
   expect(quotaWindowDetail(t, { key: "w" })).toBe("-");
+});
+
+it("重置时间：有值才写，resetAt 为 0 不显示 1970", () => {
+  const now = new Date(2026, 9, 18, 12, 0, 0).getTime();
+  const reset = new Date(2026, 9, 18, 18, 0, 0).getTime();
+  expect(quotaResetText(t, { key: "w", resetAt: reset })).toContain("今天");
+  expect(quotaResetText(t, { key: "w", resetAt: reset })).toContain("重置");
+  expect(quotaResetText(t, { key: "w", resetAt: 0 })).toBeUndefined();
+  expect(quotaResetText(t, { key: "w" })).toBeUndefined();
+  // 未来日期也显示，不因为不是今天而丢。
+  expect(quotaResetText(t, { key: "w", resetAt: now + 86400_000 * 3 })).toContain("重置");
 });
 
 it("进度条：单位是 0–100 的已用百分比，用得越多档位越糟，缺失与除零不画条", () => {

@@ -23,9 +23,6 @@ import { AccountsPanel } from "./accounts-panel";
 import { dictionaryOf } from "./copy";
 import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
-import { AllModelsCard } from "./all-models-card";
-import type { SwitchSettingsWrite } from "../core/switching";
-import { SwitchPanel, type SwitchOrderItem } from "./switch-panel";
 import { SidebarCard } from "./sidebar-card";
 import {
   applyModelEdit,
@@ -727,24 +724,10 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [modelCatalogLoading, setModelCatalogLoading] = useState<Record<string, boolean | undefined>>({});
     /** 「重试目录」的计数器：每次 +1 触发一次重读。 */
     const [modelCatalogRevision, setModelCatalogRevision] = useState(0);
-    /** 最近一次刷新新出现的模型（按厂商），用于 New 标记。 */
-    const [newModels, setNewModels] = useState<Record<string, string[]>>({});
-    const modelCatalogIds = useRef<Record<string, string[]>>({});
-    const [modelRefreshedAt, setModelRefreshedAt] = useState<number | undefined>(undefined);
     /** 正在保存的命名空间（保存按钮立即反馈）。 */
     const [savingNs, setSavingNs] = useState<string | undefined>(undefined);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
-    /** 全局模型卡的搜索/添加草稿。 */
-    const [allModelFilter, setAllModelFilter] = useState("");
-    const [allModelDraft, setAllModelDraft] = useState("");
-    const [allModelVendor, setAllModelVendor] = useState(() => entries[0]?.providerId ?? "");
-    /** 每秒推进的时钟：切换倒计时用；卡片保持纯 props。 */
-    const [clock, setClock] = useState(() => Date.now());
-    useEffect(() => {
-      const timer = setInterval(() => setClock(Date.now()), 1_000);
-      return () => clearInterval(timer);
-    }, []);
 
     /** 采纳一次发现结果：页面状态与侧边栏开关存储（同一来源、两个消费者）。 */
     const adopt = (discovery: VendorDiscovery): void => {
@@ -854,16 +837,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       for (const entry of targets) {
         void readModels(usage, entry.providerId).then((result) => {
           if (!alive) return;
-          const ids = result.models.map((model) => model.id);
-          const previous = modelCatalogIds.current[entry.providerId] ?? [];
-          const fresh = ids.filter((id) => !previous.includes(id));
-          modelCatalogIds.current = { ...modelCatalogIds.current, [entry.providerId]: ids };
-          if (modelCatalogRevision > 0) {
-            setNewModels((current) => ({ ...current, [entry.providerId]: fresh }));
-          }
           setModelCatalogs((current) => ({ ...current, [entry.providerId]: result }));
           setModelCatalogLoading((current) => ({ ...current, [entry.providerId]: false }));
-          setModelRefreshedAt(Date.now());
         });
       }
       return () => {
@@ -922,198 +897,11 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
 
-    // 全局切换面板：策略 + 全局顺序放在一起（两家共用一套）。
-    const switchState = availableEntries.map((entry) => statuses[entry.providerId]?.switchState).find((value) => value !== undefined);
-    const switchOrder: SwitchOrderItem[] = buildSwitchOrder(availableEntries, statuses, t);
-    const switchPanel =
-      availableEntries.length === 0
-        ? undefined
-        : createElement(SwitchPanel, {
-            t,
-            ...(switchState === undefined ? {} : { state: switchState }),
-            now: clock,
-            order: switchOrder,
-            onChange: (patch: Partial<SwitchSettingsWrite>) => {
-              if (usage === undefined || typeof usage.setSwitchSettings !== "function") return;
-              const base = switchState ?? { strategy: "order" as const, intervalMinutes: 60, atTurnEnd: true, autoSwitch: true };
-              void usage
-                .setSwitchSettings({
-                  strategy: patch.strategy ?? base.strategy,
-                  intervalMinutes: patch.intervalMinutes ?? base.intervalMinutes,
-                  atTurnEnd: patch.atTurnEnd ?? base.atTurnEnd,
-                  autoSwitch: patch.autoSwitch ?? base.autoSwitch,
-                })
-                .then(() => setAccountRevision((current) => current + 1));
-            },
-            onReorder: (order: readonly string[]) => {
-              if (usage === undefined || typeof usage.setAccountOrder !== "function") return;
-              void usage.setAccountOrder(order).then(() => setAccountRevision((current) => current + 1));
-            },
-            onSwitchNow: () => {
-              if (usage === undefined) return;
-              const targets = availableEntries
-                .map((entry) => entry.providerId)
-                .filter((vendor) => statuses[vendor]?.switchState !== undefined);
-              void Promise.all(targets.map((vendor) => usage.switchNow?.(vendor))).then(() =>
-                setAccountRevision((current) => current + 1),
-              );
-            },
-            onSelect: (vendor: string, ref: string) => {
-              void usage?.selectAccount(vendor, ref).then(() => setAccountRevision((current) => current + 1));
-            },
-          });
-
-    /** 全局模型卡的一次写：先落草稿让勾选立刻变化，再立刻写回所属厂商。 */
-    const writeGlobalModel = (vendor: string, edit: ModelEdit): void => {
-      const entry = entries.find((candidate) => candidate.providerId === vendor);
-      const spec = entry?.models;
-      if (entry === undefined || spec === undefined) return;
-      const baseline = state.snapshots[entry.ns]?.value ?? {};
-      const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
-      const patch = applyModelEdit(
-        { visible: effective[spec.visible], visibility: effective[spec.visibility] },
-        edit,
-      );
-      const removed = normalizeModels(effective[spec.removed]);
-      const nextRemoved =
-        edit.kind === "remove"
-          ? normalizeModels([...removed, edit.model])
-          : edit.kind === "add"
-            ? removed.filter((model) => model !== edit.model)
-            : removed;
-      const fields = [
-        { key: spec.visible, value: patch.visibleModels },
-        { key: spec.visibility, value: patch.modelVisibility },
-        { key: spec.removed, value: nextRemoved },
-      ];
-      setState((current) => {
-        const withVisible = setField(current, entry.ns, spec.visible, patch.visibleModels);
-        const withVisibility = setField(withVisible, entry.ns, spec.visibility, patch.modelVisibility);
-        return setField(withVisibility, entry.ns, spec.removed, nextRemoved);
-      });
-      // 用户已经操作过这一家的模型：New 标记完成使命。
-      setNewModels((current) => {
-        if (current[vendor] === undefined) return current;
-        const next = { ...current };
-        delete next[vendor];
-        return next;
-      });
-      const snapshot = state.snapshots[entry.ns];
-      void saveSettings(ctx, snapshot?.row ?? entry.ns, fields, snapshot?.revision ?? 0).then((error) => {
-        setState((current) => noteSaveResult(current, entry.ns, error));
-        void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
-      });
-      if (edit.kind === "add") setAllModelDraft("");
-    };
-
-    /** 从 removedModels 恢复一个模型（不自动开启）。 */
-    const restoreGlobalModel = (vendor: string, model: string): void => {
-      const entry = entries.find((candidate) => candidate.providerId === vendor);
-      const spec = entry?.models;
-      if (entry === undefined || spec === undefined) return;
-      const baseline = state.snapshots[entry.ns]?.value ?? {};
-      const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
-      const removed = normalizeModels(effective[spec.removed]).filter((id) => id !== model);
-      setState((current) => setField(current, entry.ns, spec.removed, removed));
-      const snapshot = state.snapshots[entry.ns];
-      void saveSettings(ctx, snapshot?.row ?? entry.ns, [{ key: spec.removed, value: removed }], snapshot?.revision ?? 0).then(
-        (error) => {
-          setState((current) => noteSaveResult(current, entry.ns, error));
-          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
-        },
-      );
-    };
-
-    /** 批量设置一组模型的可见性（公司分组/供应商分组）。 */
-    const writeGlobalModelGroup = (vendor: string, ids: readonly string[], visible: boolean): void => {
-      const entry = entries.find((candidate) => candidate.providerId === vendor);
-      const spec = entry?.models;
-      if (entry === undefined || spec === undefined) return;
-      const baseline = state.snapshots[entry.ns]?.value ?? {};
-      const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
-      let visibleModels = normalizeModels(effective[spec.visible]);
-      let modelVisibility =
-        typeof effective[spec.visibility] === "object" &&
-        effective[spec.visibility] !== null &&
-        !Array.isArray(effective[spec.visibility])
-          ? { ...(effective[spec.visibility] as Record<string, boolean>) }
-          : {};
-      for (const model of ids) {
-        const patch = applyModelEdit({ visible: visibleModels, visibility: modelVisibility }, { kind: "toggle", model, visible });
-        visibleModels = patch.visibleModels;
-        modelVisibility = patch.modelVisibility;
-      }
-      const fields = [
-        { key: spec.visible, value: visibleModels },
-        { key: spec.visibility, value: modelVisibility },
-      ];
-      setState((current) => {
-        const withVisible = setField(current, entry.ns, spec.visible, visibleModels);
-        return setField(withVisible, entry.ns, spec.visibility, modelVisibility);
-      });
-      const snapshot = state.snapshots[entry.ns];
-      void saveSettings(ctx, snapshot?.row ?? entry.ns, fields, snapshot?.revision ?? 0).then((error) => {
-        setState((current) => noteSaveResult(current, entry.ns, error));
-        void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
-      });
-    };
-
-    const modelVendors = availableEntries
-      .filter((entry) => entry.models !== undefined)
-      .map((entry) => {
-        const baseline = state.snapshots[entry.ns]?.value ?? {};
-        const effective = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
-        const spec = entry.models!;
-        const rawVisibility = effective[spec.visibility];
-        return {
-          vendor: entry.providerId,
-          label: t(entry.labelKey),
-          catalog: modelCatalogs[entry.providerId]?.models ?? [],
-          visibleModels: normalizeModels(effective[spec.visible]),
-          removedModels: normalizeModels(effective[spec.removed]),
-          newModels: newModels[entry.providerId] ?? [],
-          visibility:
-            typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
-              ? { ...(rawVisibility as Record<string, boolean>) }
-              : {},
-          ...(modelCatalogLoading[entry.providerId] === true ? { loading: true } : {}),
-          ...(modelCatalogs[entry.providerId] === undefined || modelCatalogs[entry.providerId]!.failures.length === 0
-            ? {}
-            : { failure: modelCatalogs[entry.providerId]!.failures.join("；") }),
-        };
-      });
-    const models =
-      modelVendors.length === 0
-        ? undefined
-        : createElement(AllModelsCard, {
-            t,
-            vendors: modelVendors,
-            filter: allModelFilter,
-            onFilterChange: setAllModelFilter,
-            onToggle: (vendor: string, model: string, visible: boolean) =>
-              writeGlobalModel(vendor, { kind: "toggle", model, visible }),
-            onRemove: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "remove", model }),
-            onRestore: restoreGlobalModel,
-            onGroupVisibility: writeGlobalModelGroup,
-            onAdd: (vendor: string, model: string) => writeGlobalModel(vendor, { kind: "add", model }),
-            onRefresh: () => setModelCatalogRevision((current) => current + 1),
-            refreshing: Object.values(modelCatalogLoading).some((value) => value === true),
-            ...(modelRefreshedAt === undefined ? {} : { refreshedAt: modelRefreshedAt }),
-            draft: allModelDraft,
-            onDraftChange: setAllModelDraft,
-            draftVendor: availableEntries.some((entry) => entry.providerId === allModelVendor)
-              ? allModelVendor
-              : availableEntries[0]?.providerId ?? "",
-            onDraftVendorChange: setAllModelVendor,
-          });
-
     return PageShell({
       state,
       entries,
       t,
       accounts,
-      switchPanel,
-      models,
       mergeTabs: true,
       saving: savingNs === state.activeNs,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
@@ -1122,8 +910,6 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         const fields = dirtyFields(state, ns);
         if (fields.length === 0) return;
         setSavingNs(ns);
-        // 用户按下保存：New 标记完成使命（模型改动本身也会立即写回并清掉）。
-        setNewModels({});
         // 写**命中的行名**（opencode 的行 id 与命名空间不同，用 ns 会写到一个不存在的条目上）。
         const snapshot = state.snapshots[ns];
         void saveSettings(ctx, snapshot?.row ?? ns, fields, snapshot?.revision ?? 0).then((error) => {
@@ -1223,7 +1009,8 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                   },
                 }),
                 switchState: statuses[activeVendor]?.switchState,
-                now: clock,
+                // 切换面板已不再渲染；这里给一个静态时间，避免整页每秒重渲染。
+                now: Date.now(),
                 switchNow: () => {
                   if (usage === undefined || typeof usage.switchNow !== "function") return;
                   void usage.switchNow(activeVendor).then(() => setAccountRevision((current) => current + 1));
@@ -1239,49 +1026,6 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
   };
 }
 
-/**
- * 全局顺序列表（账户面板与切换面板共用）：先用已保存的全局顺序，再接上新出现的账号。
- * @param entries - 可用厂商。
- * @param statuses - 各厂商状态。
- * @param t - 取词函数。
- * @returns 交叉排列的账户行。
- */
-function buildSwitchOrder(
-  entries: readonly VendorEntry[],
-  statuses: Readonly<Record<string, VendorUsageStatus | undefined>>,
-  t: (key: string) => string,
-): SwitchOrderItem[] {
-  const byKey = new Map<string, SwitchOrderItem>();
-  for (const entry of entries) {
-    const status = statuses[entry.providerId];
-    for (const account of status?.accounts ?? []) {
-      if (typeof account !== "object" || account === null) continue;
-      byKey.set(`${entry.providerId}:${account.ref}`, {
-        key: `${entry.providerId}:${account.ref}`,
-        label: account.label,
-        vendorLabel: t(entry.labelKey),
-        vendor: entry.providerId,
-        ref: account.ref,
-        current: account.active === true || account.effective === true,
-      });
-    }
-  }
-  const ordered: SwitchOrderItem[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    for (const key of statuses[entry.providerId]?.accountOrder ?? []) {
-      if (typeof key !== "string" || seen.has(key)) continue;
-      const item = byKey.get(key);
-      if (item === undefined) continue;
-      seen.add(key);
-      ordered.push(item);
-    }
-  }
-  for (const [key, item] of byKey) {
-    if (!seen.has(key)) ordered.push(item);
-  }
-  return ordered;
-}
 
 /**
  * 模型卡片要的数据与回调。

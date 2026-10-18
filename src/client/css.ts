@@ -367,8 +367,15 @@ export const PAGE_CSS = `
   border-color: var(--dsw-alias-border-l3); }
 
 /* ═══ 额度：每个窗口一小块（标签 + 读数 + 4px 进度条） ═══ */
-.dsl-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px 24px; }
+.dsl-meters { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.dsl-sidebar .dsl-ring-row { flex-wrap: nowrap; gap: 2px; padding: 4px 0 0; }
+.dsl-sidebar .dsl-ring { flex: 1 1 0; min-width: 0; }
+.dsl-sidebar .dsl-ring-chart,
+.dsl-sidebar .dsl-ring-svg { width: 38px; height: 38px; }
+.dsl-sidebar .dsl-ring-percent { font-size: 11px; }
+.dsl-sidebar .dsl-ring-label { font-size: 12px; line-height: 16px; }
+.dsl-sidebar .dsl-ring-note { display: none; }
+.dsl-sidebar .dsl-ring-reset { font-size: 10px; line-height: 13px; text-align: center; }
 .dsl-sidebar .dsl-meters { display: flex; flex-direction: column; gap: 9px; }
 .dsl-quota-row { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .dsl-meter-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between;
@@ -379,23 +386,24 @@ export const PAGE_CSS = `
   line-height: 18px; font-variant-numeric: tabular-nums; }
 .dsl-quota-hint { flex: none; margin-left: 6px; color: var(--dsw-alias-label-tertiary);
   font-size: 11px; line-height: 18px; }
-.dsl-ring { display: flex; flex-direction: column; align-items: center; gap: 0; min-width: 42px; }
-.dsl-ring-chart { position: relative; width: 38px; height: 38px; }
-.dsl-ring-svg { display: block; width: 38px; height: 38px; }
-.dsl-ring-track { fill: none; stroke: var(--dsw-alias-border-l1); stroke-width: 3; }
+.dsl-ring { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 64px; }
+.dsl-ring-chart { position: relative; width: 40px; height: 40px; }
+.dsl-ring-svg { display: block; width: 40px; height: 40px; }
+.dsl-ring-track { fill: none; stroke: var(--dsw-alias-border-l2); stroke-width: 3; }
 .dsl-ring-fill { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke-dasharray 200ms ease; }
 .dsl-ring-fill[data-level="ok"] { stroke: var(--dsw-alias-state-success-primary); }
 .dsl-ring-fill[data-level="warn"] { stroke: var(--dsw-alias-state-warn-primary); }
 .dsl-ring-fill[data-level="error"] { stroke: var(--dsw-alias-state-error-primary); }
 .dsl-ring-percent { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary); }
+  font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary); }
 .dsl-ring[data-quota-ring-level="ok"] .dsl-ring-percent { color: var(--dsw-alias-state-success-primary); }
 .dsl-ring[data-quota-ring-level="warn"] .dsl-ring-percent { color: var(--dsw-alias-state-warn-primary); }
 .dsl-ring[data-quota-ring-level="error"] .dsl-ring-percent { color: var(--dsw-alias-state-error-primary); }
-.dsl-ring-label { font-size: 10px; line-height: 14px; color: var(--dsw-alias-label-secondary); }
-.dsl-ring-note { font-size: 9px; line-height: 13px; color: var(--dsw-alias-label-tertiary); }
-.dsl-ring-reset { font-size: 9px; line-height: 13px; color: var(--dsw-alias-label-tertiary); }
-.dsl-ring-row { display: flex; flex-direction: row; gap: 4px; justify-content: space-around; padding: 2px 0; }
+.dsl-ring-label { font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-primary); font-weight: 600; }
+.dsl-ring-note { font-size: 12px; line-height: 16px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.dsl-ring-reset { font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-secondary); }
+.dsl-ring-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 6px 0 2px; }
+.dsl-ring-cell { display: flex; justify-content: center; }
 .dsl-quota-track { display: block; flex: none; overflow: hidden; box-sizing: border-box; width: 100%;
   height: 4px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); }
 .dsl-quota-fill { display: block; height: 100%; border-radius: inherit;
@@ -563,6 +571,7 @@ export const CSS_CLASS = {
   ringNote: "dsl-ring-note",
   ringReset: "dsl-ring-reset",
   ringRow: "dsl-ring-row",
+  ringCell: "dsl-ring-cell",
   identity: "dsl-identity",
   identityText: "dsl-identity-text",
   mono: "dsl-mono",

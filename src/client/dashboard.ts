@@ -219,7 +219,7 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
 function windowBlock(t: (key: string) => string, window: QuotaWindow): ReactNode {
   return createElement(
     "div",
-    { key: window.key, "data-dashboard-window": window.key, className: CSS_CLASS.ring },
+    { key: window.key, "data-dashboard-window": window.key, className: CSS_CLASS.ringCell },
     QuotaRing({ t, window }),
   );
 }

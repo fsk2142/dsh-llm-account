@@ -164,12 +164,10 @@ function failureNote(props: SidebarCardProps): ReactElement {
   );
 }
 
-/** 卡片标题：有套餐名就带套餐，否则用生效账号的名字；什么都没有时用页面名兜底。 */
+/** 卡片标题：只显示当前账号名称；没有账号时用页面名兜底。 */
 function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): string {
-  const plan = row?.quota?.plan;
   const account = row === undefined ? (props.status?.effective?.ref ?? "") : row.label;
-  if (plan === undefined) return account === "" ? props.t("nav") : account;
-  return `${account} · ${plan}`;
+  return account === "" ? props.t("nav") : account;
 }
 
 /** 生效账号的额度：每个窗口一个圆环，缺失的窗口按「暂无数据」处理。 */

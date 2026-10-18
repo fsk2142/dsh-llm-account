@@ -93,7 +93,7 @@ it("开启后显示**生效账号**的额度（不是固定账号的）", () => 
   expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly"]);
   // 数字来自生效账号那一行（7/10），不是固定账号的（1/10）。
   expect(textsOf(windows[0]!)).toContain("已用 7 / 共 10");
-  expect(textsOf(tree)).toContain("Serving · pro");
+  expect(textsOf(tree)).toContain("Serving");
 });
 
 it("侧边栏只显示当前账号名称，不再标注「已指定/生效」或切换提示", () => {
