@@ -239,9 +239,6 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
               ? []
               : [createElement("small", { key: "vendor", "data-account-vendor": props.vendorLabel, className: CSS_CLASS.vendorBadge }, props.vendorLabel)]),
             ...marks,
-            ...(quotaOf?.plan === undefined
-              ? []
-              : [createElement("span", { key: "plan", "data-mark": "plan", "data-plan": quotaOf.plan, className: CSS_CLASS.mark }, quotaOf.plan)]),
           ),
           createElement(
             "small",

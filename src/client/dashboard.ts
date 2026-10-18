@@ -189,9 +189,6 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
             createElement("h4", null, account.label),
             ...(effective ? [createElement("span", { key: "effective", "data-dashboard-mark": "effective", className: CSS_CLASS.mark }, t("sidebar.effective"))] : []),
             ...(pinned ? [createElement("span", { key: "pinned", "data-dashboard-pinned": account.ref, className: CSS_CLASS.mark }, t("sidebar.pinned"))] : []),
-            ...(quotaOf?.plan === undefined
-              ? []
-              : [createElement("span", { key: "plan", "data-dashboard-plan": quotaOf.plan, "data-mark": "plan", className: CSS_CLASS.mark }, quotaOf.plan)]),
           ),
           createElement("small", { key: "configured" }, account.configured ? t("account.configured") : t("account.missing")),
         ),

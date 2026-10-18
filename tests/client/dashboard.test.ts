@@ -84,7 +84,6 @@ it("逐账号列出状态与额度（每个窗口一行，缺失不写 0）", ()
 
   const first = rows[0]!;
   expect(textsOf(first)).toContain("Account A");
-  expect(textsOf(first)).toContain("pro");
   expect(textsOf(first)).toContain("已用 10 / 共 100");
   // 缺数字的窗口显示「暂无额度数据」，不是 0。
   const weekly = elementsOf(first).find((element) => element.props["data-dashboard-window"] === "weekly")!;

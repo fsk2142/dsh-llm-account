@@ -115,6 +115,7 @@ export type CopyKey =
   | "quota.resetToday"
   | "quota.resetTomorrow"
   | "quota.resetAtLong"
+  | "quota.resetUnknown"
   | "quota.resetAt"
   | "quota.window.fiveHour"
   | "quota.window.rolling"
@@ -318,6 +319,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.resetToday": "今天 {time} 重置",
     "quota.resetTomorrow": "明天 {time} 重置",
     "quota.resetAtLong": "{date} {time} 重置",
+    "quota.resetUnknown": "重置时间未提供",
     "quota.resetAt": "重置于",
     "quota.window.fiveHour": "5 小时",
     "quota.window.rolling": "滚动窗口",
@@ -516,6 +518,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.resetToday": "Resets today at {time}",
     "quota.resetTomorrow": "Resets tomorrow at {time}",
     "quota.resetAtLong": "Resets {date} {time}",
+    "quota.resetUnknown": "Reset time not provided",
     "quota.resetAt": "Resets at",
     "quota.window.fiveHour": "5 hours",
     "quota.window.rolling": "Rolling window",

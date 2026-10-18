@@ -28,7 +28,7 @@ export function QuotaBar(props: QuotaBarProps): ReactElement {
   const remaining = meter === undefined ? undefined : Math.max(0, Math.min(100, 100 - meter.percent));
   // 剩余额度用绿色；只有真正为 0 才转红。
   const level = remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
-  const reset = quotaResetText(t, window);
+  const reset = quotaResetText(t, window) ?? t("quota.resetUnknown");
   return createElement(
     "div",
     {
@@ -63,9 +63,11 @@ export function QuotaBar(props: QuotaBarProps): ReactElement {
       "div",
       { className: CSS_CLASS.quotaBarMeta },
       createElement("span", { "data-quota-bar-value": window.key }, quotaWindowText(t, window)),
-      ...(reset === undefined
-        ? []
-        : [createElement("span", { key: "reset", "data-quota-bar-reset": window.resetAt, className: CSS_CLASS.quotaBarReset }, reset)]),
+      createElement(
+        "span",
+        { key: "reset", "data-quota-bar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.quotaBarReset },
+        reset,
+      ),
     ),
   );
 }
