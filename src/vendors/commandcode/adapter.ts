@@ -213,7 +213,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
 
   /** @returns 路由的展示元数据（name 用产品名，id 必须是路由 id）。 */
   override providerInfo(provider: string): LlmProviderInfo {
-    return { id: provider, name: "Command Code" };
+    return { id: provider, name: "LLM" };
   }
 
   /**

@@ -267,7 +267,7 @@ it("providerRetryPolicy 把两个超时码列入 retryableCodes（裁决 12）",
   expect(policy.retryableCodes).toContain("RATE_LIMIT");
   // Fix round 3：空响应（EMPTY_RESPONSE）必须在白名单里，否则空答案不会被重试。
   expect(policy.retryableCodes).toContain("EMPTY_RESPONSE");
-  expect(adapter.providerInfo("commandcode")).toEqual({ id: "commandcode", name: "Command Code" });
+  expect(adapter.providerInfo("commandcode")).toEqual({ id: "commandcode", name: "LLM" });
 });
 
 // ---------------------------------------------------------------------------
