@@ -664,7 +664,7 @@ it("list 的当前账号提位是派生：不改设置文档，select 之后顺�
 
   // 文档顺序原样不动（提位只发生在读侧）。
   expect(settings.doc().accounts).toEqual([entry("A", "a"), entry("B", "b"), entry("C", "c")]);
-  expect((await port.list()).map((view) => view.ref)).toEqual(["OPENCODE_API_KEY", "a", "b", "c"]);
+  expect((await port.list()).map((view) => view.ref)).toEqual(["a", "b", "c"]);
 
   await port.select("c");
   // 一次 select（写顶层引用）之后，列表顺序随即反映新当前账号；文档里 accounts 的顺序没变。
@@ -672,35 +672,15 @@ it("list 的当前账号提位是派生：不改设置文档，select 之后顺�
   expect(settings.doc().accounts).toEqual([entry("A", "a"), entry("B", "b"), entry("C", "c")]);
 });
 
-it("用户真实形状（没有 accounts 键）：顶层当前账号仍然列出并标成 active，且可固定、不可移除（I1）", async () => {
+it("用户真实形状（没有 accounts 键）：没有账号就是没有", async () => {
   // 用户 profile patch 里的真实 opencode 行：根本没有 `accounts` 键，只有顶层 `apiKeyEnv`。
-  const { port, settings, credentials, store } = accountsPort(
+  const { port } = accountsPort(
     { apiKeyEnv: "OPENCODE_API_KEY", autoSwitch: true },
     fakeCredentials({ OPENCODE_API_KEY: "sk-live" }),
   );
 
-  // 旧插件 `accountsOf`（第 6783-6790 行）会把它补成 `legacy:<ref>` 放在首行；这里同一行必须
-  // 出现，而且它就是正在服务请求的那个账号（active）。
-  expect(await port.list()).toEqual([
-    { ref: "OPENCODE_API_KEY", label: "OPENCODE_API_KEY", configured: true, active: true },
-  ]);
-
-  // 可固定：页面拿这一行的 ref 回来必须成立（不再抛 unknown account ref）。
-  const before = settings.mutations.length;
-  await port.select("OPENCODE_API_KEY");
-  expect(settings.doc().apiKeyEnv).toBe("OPENCODE_API_KEY");
-  expect(settings.mutations).toHaveLength(before + 1);
-  expect(store.snapshot()).toEqual([]);
-
-  // 不可移除：合成的默认槽不是账号条目 —— 不写 accounts、不记待清理 ref、凭据不动。
-  await port.remove("OPENCODE_API_KEY");
-  expect(settings.mutations).toHaveLength(before + 1);
-  expect(settings.doc().accounts).toBeUndefined();
-  expect(settings.doc().credentialCleanupRefs).toBeUndefined();
-  expect(credentials.unsets).toEqual([]);
-  await expect(port.rename("OPENCODE_API_KEY", "x")).rejects.toThrow(/unknown account ref/);
-  // 认不出的 ref 照旧拒绝：合成行不把 select 变成「什么都收」。
-  await expect(port.select("missing")).rejects.toThrow(/unknown account ref/);
+  // 不再合成 default 行；顶层 apiKeyEnv 仍可作为宿主的回退凭据，但账号列表为空。
+  expect(await port.list()).toEqual([]);
 });
 
 it("当前账号已在账号表里时不合成第二行（真条目仍是可改名的那一行）", async () => {

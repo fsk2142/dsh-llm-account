@@ -71,46 +71,74 @@ function render(overrides: Partial<AllModelsCardProps> = {}): { tree: StubElemen
   return { tree: AllModelsCard(props), props };
 }
 
-it("先按供应商分组，再按模型公司/免费分组；两级都有折叠箭头", () => {
+it("两家模型合并后按公司/免费分组，行上标供应商；分组跨厂商", () => {
   const { tree } = render();
-  const vendors = elementsOf(tree)
-    .filter((element) => element.props["data-all-model-vendor-group"] !== undefined)
-    .map((element) => element.props["data-all-model-vendor-group"]);
-  expect(vendors).toEqual(["commandcode", "dsh-opencode-go"]);
   const groups = elementsOf(tree)
     .filter((element) => element.props["data-all-model-group"] !== undefined)
     .map((element) => element.props["data-all-model-group"]);
-  expect(groups).toEqual(["commandcode:anthropic", "dsh-opencode-go:free", "dsh-opencode-go:openai"]);
-  expect(elementsOf(tree).filter((element) => element.props["data-all-model-vendor-collapse"] !== undefined)).toHaveLength(2);
+  expect(groups).toEqual(["free", "anthropic", "openai"]);
   expect(elementsOf(tree).filter((element) => element.props["data-all-model-group-collapse"] !== undefined)).toHaveLength(3);
+  // 没有供应商一级分组：Command Code / OpenCode 的模型在同一张列表里。
+  expect(elementsOf(tree).some((element) => element.props["data-all-model-vendor-group"] !== undefined)).toBe(false);
   const rows = elementsOf(tree).filter((element) => element.props["data-all-model"] !== undefined);
   expect(rows.map((element) => element.props["data-all-model"])).toEqual([
-    "commandcode:claude-haiku-5-5",
     "dsh-opencode-go:beam-free",
+    "commandcode:claude-haiku-5-5",
     "dsh-opencode-go:gpt-6-luna",
   ]);
+  const vendors = elementsOf(tree)
+    .filter((element) => element.props["data-model-vendor"] !== undefined)
+    .map((element) => element.props["data-model-vendor"]);
+  expect(vendors).toEqual(["dsh-opencode-go", "commandcode", "dsh-opencode-go"]);
 });
 
-it("公司分组可以一次性开启/关闭全组；供应商分组也能批量", () => {
+it("公司分组可以一次性开启/关闭全组（跨厂商按厂商拆分）", () => {
   const { tree, props } = render();
-  // 默认关闭：commandcode/anthropic 全不可见 → 按钮是「全开本组」，点击传 true。
-  const showGroupButton = elementsOf(tree).find(
-    (element) => element.props["data-all-model-group-toggle"] === "commandcode:anthropic",
+  // 默认关闭：anthropic 全不可见 → 按钮是「全开本组」，点击按厂商写回。
+  const showAnthropic = elementsOf(tree).find(
+    (element) => element.props["data-all-model-group-toggle"] === "anthropic",
   )!;
-  (showGroupButton.props.onClick as () => void)();
+  (showAnthropic.props.onClick as () => void)();
   expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], true);
 
-  const showVendorButton = elementsOf(tree).find(
-    (element) => element.props["data-all-model-vendor-toggle"] === "commandcode",
-  )!;
-  (showVendorButton.props.onClick as () => void)();
-  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], true);
-
-  const showOpenai = elementsOf(tree).find(
-    (element) => element.props["data-all-model-group-toggle"] === "dsh-opencode-go:openai",
-  )!;
+  const showOpenai = elementsOf(tree).find((element) => element.props["data-all-model-group-toggle"] === "openai")!;
   (showOpenai.props.onClick as () => void)();
   expect(props.onGroupVisibility).toHaveBeenCalledWith("dsh-opencode-go", ["gpt-6-luna"], true);
+});
+
+it("同一家公司的模型跨供应商合并到一组，组开关按厂商分别写回", () => {
+  const { tree, props } = render({
+    vendors: [
+      {
+        vendor: "commandcode",
+        label: "Command Code",
+        catalog: [{ id: "claude-haiku-5-5", name: "Claude Haiku 5.5", company: "anthropic" }],
+        visibleModels: [],
+        visibility: {},
+      },
+      {
+        vendor: "dsh-opencode-go",
+        label: "OpenCode",
+        catalog: [{ id: "claude-opus-5", name: "Claude Opus 5", company: "anthropic" }],
+        visibleModels: [],
+        visibility: {},
+      },
+    ],
+  });
+  const groups = elementsOf(tree)
+    .filter((element) => element.props["data-all-model-group"] !== undefined)
+    .map((element) => element.props["data-all-model-group"]);
+  expect(groups).toEqual(["anthropic"]);
+  expect(
+    elementsOf(tree)
+      .filter((element) => element.props["data-all-model"] !== undefined)
+      .map((element) => element.props["data-all-model"]),
+  ).toEqual(["commandcode:claude-haiku-5-5", "dsh-opencode-go:claude-opus-5"]);
+
+  const toggle = elementsOf(tree).find((element) => element.props["data-all-model-group-toggle"] === "anthropic")!;
+  (toggle.props.onClick as () => void)();
+  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], true);
+  expect(props.onGroupVisibility).toHaveBeenCalledWith("dsh-opencode-go", ["claude-opus-5"], true);
 });
 
 it("勾选/移除/添加路由到所属厂商；搜索只留匹配行", () => {

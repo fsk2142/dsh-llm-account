@@ -48,7 +48,56 @@ const COMPANY_LABELS: Readonly<Record<string, string>> = {
   baidu: "Baidu",
   bytedance: "ByteDance",
   opencode: "OpenCode",
+  perplexity: "Perplexity",
+  amazon: "Amazon",
+  microsoft: "Microsoft",
+  nvidia: "NVIDIA",
+  ibm: "IBM",
+  ai21: "AI21",
+  nousresearch: "Nous Research",
+  liquid: "Liquid AI",
+  allenai: "Allen Institute",
+  iflytek: "iFlytek",
+  sensetime: "SenseTime",
+  "01ai": "01.AI",
+  baichuan: "Baichuan",
+  shanghai_ai_laboratory: "Shanghai AI Lab",
   other: "其他",
+};
+
+/** models.dev / 目录里的公司别名（路径段 → 统一键）。 */
+const COMPANY_ALIASES: Readonly<Record<string, string>> = {
+  "x-ai": "xai",
+  xai: "xai",
+  "meta-llama": "meta",
+  meta: "meta",
+  "z-ai": "zhipuai",
+  zhipu: "zhipuai",
+  zhipuai: "zhipuai",
+  moonshot: "moonshotai",
+  moonshotai: "moonshotai",
+  alibaba: "alibaba",
+  qwen: "alibaba",
+  google: "google",
+  anthropic: "anthropic",
+  openai: "openai",
+  deepseek: "deepseek",
+  mistral: "mistralai",
+  mistralai: "mistralai",
+  cohere: "cohere",
+  perplexity: "perplexity",
+  amazon: "amazon",
+  microsoft: "microsoft",
+  nvidia: "nvidia",
+  ibm: "ibm",
+  ai21: "ai21",
+  nousresearch: "nousresearch",
+  liquid: "liquid",
+  allenai: "allenai",
+  iflytek: "iflytek",
+  sensetime: "sensetime",
+  "01ai": "01ai",
+  baichuan: "baichuan",
 };
 
 /** id 前缀 → 公司键；顺序有意义（`gpt` 先于更泛的规则）。 */
@@ -57,6 +106,7 @@ const ID_PREFIXES: readonly (readonly [RegExp, string])[] = [
   [/^(?:gpt|codex)(?:[-_]|$)/i, "openai"],
   [/^o[1-9](?:[-_]|$)/i, "openai"],
   [/^gemini(?:[-_]|$)/i, "google"],
+  [/^gemma(?:[-_]|$)/i, "google"],
   [/^grok(?:[-_]|$)/i, "xai"],
   [/^deepseek(?:[-_]|$)/i, "deepseek"],
   [/^glm(?:[-_]|$)/i, "zhipuai"],
@@ -74,6 +124,21 @@ const ID_PREFIXES: readonly (readonly [RegExp, string])[] = [
   [/^command(?:[-_]|$)/i, "cohere"],
   [/^ernie(?:[-_]|$)/i, "baidu"],
   [/^(?:doubao|seed)(?:[-_]|$)/i, "bytedance"],
+  [/^phi(?:[-_]|$)/i, "microsoft"],
+  [/^nova(?:[-_]|$)/i, "amazon"],
+  [/^sonar(?:[-_]|$)/i, "perplexity"],
+  [/^jamba(?:[-_]|$)/i, "ai21"],
+  [/^granite(?:[-_]|$)/i, "ibm"],
+  [/^nemotron(?:[-_]|$)/i, "nvidia"],
+  [/^olmo(?:[-_]|$)/i, "allenai"],
+  [/^lfm(?:[-_]|$)/i, "liquid"],
+  [/^hermes(?:[-_]|$)/i, "nousresearch"],
+  [/^yi(?:[-_]|$)/i, "01ai"],
+  [/^internlm(?:[-_]|$)/i, "shanghai_ai_laboratory"],
+  [/^baichuan(?:[-_]|$)/i, "baichuan"],
+  [/^spark(?:[-_]|$)/i, "iflytek"],
+  [/^sense(?:[-_]|$)/i, "sensetime"],
+  [/^(?:chatglm|codegeex)(?:[-_]|$)/i, "zhipuai"],
   [/^beam(?:[-_]|$)/i, "reflection"],
 ];
 
@@ -85,7 +150,19 @@ const ID_PREFIXES: readonly (readonly [RegExp, string])[] = [
  */
 export function companyKeyOf(id: string, company?: string): string {
   if (company !== undefined && company.trim() !== "") return company.trim();
-  for (const [pattern, key] of ID_PREFIXES) if (pattern.test(id)) return key;
+  // 目录 id 可能是 `anthropic/claude-…`、`cc/openai/gpt-…`：先看路径段里的公司名，
+  // Command Code 的目录没有 canonical id，这一步是它不全部落进「其他」的依据。
+  const segments = id.toLowerCase().split("/");
+  for (const segment of segments.slice(0, -1)) {
+    const alias = COMPANY_ALIASES[segment];
+    if (alias !== undefined) return alias;
+    if (Object.prototype.hasOwnProperty.call(COMPANY_LABELS, segment) && segment !== "other") return segment;
+  }
+  const base = segments.at(-1) ?? id;
+  const normalized = base.replace(/\s+/g, "-").toLowerCase();
+  for (const [pattern, key] of ID_PREFIXES) {
+    if (pattern.test(base) || pattern.test(normalized) || pattern.test(id)) return key;
+  }
   return "other";
 }
 

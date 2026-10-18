@@ -324,9 +324,6 @@ class OpencodeAccounts implements AccountPort {
     const snapshot = await this.#deps.settings.describe(OPENCODE_SETTINGS_NS);
     const slot = opencodeAccountSlot(snapshot.value);
     const views: AccountView[] = [];
-    if (!hasAccount(snapshot.value, slot.ref)) {
-      views.push({ ref: slot.ref, label: slot.ref, configured: false, active: slot.pinned === slot.ref });
-    }
     views.push(
       ...rawAccounts(snapshot.value)
         .map((item) => ({ ref: refOf(item), label: labelOf(item) }))

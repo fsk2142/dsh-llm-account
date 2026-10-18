@@ -161,12 +161,12 @@ it("百分比形状的读数（opencode）同样只按存在的字段渲染", ()
 
 // —— Step 1：菜单按能力降级 ——
 
-it("`⋯` 菜单按能力降级：无排序能力时没有拖拽手柄，无 pin 能力时没有固定项", () => {
+it("`⋯` 菜单按能力降级：无排序能力时没有拖拽手柄，固定项已移除", () => {
   const commandCode = renderCard({ status: statusOf({ accounts: [row({ ref: "a" })] }) }).tree;
   const ccElements = elementsOf(commandCode);
-  // commandcode：`reorder: false` → 没有手柄；`pin: true` → 有固定项；`browserLogin: true` → 有登录按钮。
+  // commandcode：`reorder: false` → 没有手柄；`browserLogin: true` → 有登录按钮；固定项已移除。
   expect(ccElements.filter((element) => element.props["data-drag-handle"] !== undefined)).toEqual([]);
-  expect(ccElements.filter((element) => element.props["data-action"] === "pin")).toHaveLength(1);
+  expect(ccElements.filter((element) => element.props["data-action"] === "pin")).toEqual([]);
   expect(ccElements.filter((element) => element.props["data-action"] === "login")).toHaveLength(1);
 
   const opencode = renderCard({
@@ -185,8 +185,6 @@ it("菜单操作打开对应操作并带上目标账号（值与提交由页面�
   });
   const elements = elementsOf(tree);
 
-  fire(elements.find((element) => element.props["data-action"] === "pin")!, "onClick");
-  expect(props.onSelect).toHaveBeenCalledWith("a");
   fire(elements.find((element) => element.props["data-action"] === "rename")!, "onClick");
   expect(props.onOpenAction).toHaveBeenCalledWith({ kind: "rename", ref: "a" });
   fire(elements.find((element) => element.props["data-action"] === "replaceKey")!, "onClick");

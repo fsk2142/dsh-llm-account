@@ -25,6 +25,16 @@ it("公司键：优先 canonical，缺失时按 id 前缀兜底，认不出来�
   expect(companyKeyOf("space-bunny")).toBe("other");
 });
 
+it("Command Code 的目录：路径段和模型名也能归到公司", () => {
+  expect(companyKeyOf("anthropic/claude-3.7-sonnet")).toBe("anthropic");
+  expect(companyKeyOf("cc/openai/gpt-5")).toBe("openai");
+  expect(companyKeyOf("Claude Sonnet 4.5")).toBe("anthropic");
+  expect(companyKeyOf("Qwen3 Max")).toBe("alibaba");
+  expect(companyKeyOf("gemma-3-27b")).toBe("google");
+  expect(companyKeyOf("amazon/nova-pro")).toBe("amazon");
+  expect(companyKeyOf("microsoft/phi-4")).toBe("microsoft");
+});
+
 it("公司展示名：已知品牌用规范名，未知键原样返回", () => {
   expect(companyLabelOf("anthropic")).toBe("Anthropic");
   expect(companyLabelOf("zhipuai")).toBe("Zhipu AI");

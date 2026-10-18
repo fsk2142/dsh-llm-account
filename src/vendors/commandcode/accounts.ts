@@ -78,9 +78,6 @@ export const ACTIVE_ACCOUNT_AUTO = "auto";
  */
 export const ACTIVE_ACCOUNT_DEFAULT = "default";
 
-/** 合成默认槽行的展示名（旧插件同一槽的 `label`，第 10133 行）。 */
-const DEFAULT_SLOT_LABEL = "Default";
-
 /** 账号条目的凭据引用字段（旧插件 Config schema 第 10059-10064 行）。 */
 const REF_FIELD = "apiKeyEnv";
 
@@ -312,11 +309,7 @@ class CommandCodeAccounts implements AccountPort {
   async list(): Promise<AccountView[]> {
     const snapshot = await this.#deps.settings.describe(COMMAND_CODE_SETTINGS_NS);
     const slot = commandCodeAccountSlot(snapshot.value);
-    const defaultRef = commandCodeDefaultRef(snapshot.value);
     const views: AccountView[] = [];
-    if (!hasAccount(snapshot.value, defaultRef)) {
-      views.push({ ref: defaultRef, label: DEFAULT_SLOT_LABEL, configured: false, active: slot.pinned === defaultRef });
-    }
     views.push(
       ...rawAccounts(snapshot.value)
         .map((item) => ({ ref: refOf(item), label: labelOf(item) }))

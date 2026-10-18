@@ -582,10 +582,8 @@ it("opencode 的固定命名空间在宿主上解析到 profile 行 id", async (
   // 程序化构造（绕过 schemastery 归一化）也必须能装配。
   const bundle = opencode.apply(host.ctx, OPENCODE_SHAPE);
 
-  // 顶层 `apiKeyEnv`（"OPENCODE_API_KEY"）不在 `accounts[]` 里 → 第一行是合成的默认槽，而且
-  // 它就是当前账号（active）；真条目照旧列出（I1）。
+  // 顶层 `apiKeyEnv` 不在 `accounts[]` 里也不再合成默认行：没有账号就是没有。
   await expect(bundle.accounts.list()).resolves.toEqual([
-    { ref: "OPENCODE_API_KEY", label: "OPENCODE_API_KEY", configured: true, active: true },
     { ref: "OPENCODE_API_KEY_2", label: "work", configured: true, active: false },
   ]);
 
@@ -894,10 +892,8 @@ it("commandcode 的 list() 顺序不随固定账号重排：固定标记换行�
     commandcode.Config({ ...COMMAND_CODE_SHAPE, activeAccount: "COMMANDCODE_API_KEY_2" }),
   );
 
-  // 固定的其实是第二行（`active: true` 在它身上），但顺序仍与轮换顺序一致：顶层默认账号
-  // 在前 —— 刻意不抄 opencode 的 `moveFirst`（`reorder: false` 的设计选择，测试锁死）。
+  // 固定的其实是第二行（`active: true` 在它身上）；默认槽不再合成。
   await expect(bundle.accounts.list()).resolves.toEqual([
-    { ref: "COMMANDCODE_API_KEY", label: "Default", configured: true, active: false },
     { ref: "COMMANDCODE_API_KEY_2", label: "sample-user-2", configured: true, active: true },
   ]);
   // 固定账号仍被引擎优先（固定 ≠ 顺序）：固定它之后下一次选择就是它。

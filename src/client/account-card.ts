@@ -361,7 +361,6 @@ function closeMenu(event: { currentTarget?: { closest?: (selector: string) => { 
  */
 function menuButtons(props: AccountCardProps, account: AccountUsageStatus): ReactNode[] {
   const { t } = props;
-  const capabilities = capabilitiesOf(props);
   const buttons: ReactNode[] = [
     createElement(
       "button",
@@ -374,16 +373,7 @@ function menuButtons(props: AccountCardProps, account: AccountUsageStatus): Reac
       t("account.replaceKey"),
     ),
   ];
-  // 只有支持固定的厂商才给「固定使用此账户」；opencode 用 select 切换（T6 处理）。
-  if (capabilities.pin) {
-    buttons.push(
-      createElement(
-        "button",
-        { key: "pin", type: "button", "data-action": "pin", className: CSS_CLASS.item, onClick: () => props.onSelect(account.ref) },
-        t("account.pin"),
-      ),
-    );
-  }
+  // 「使用此账户」已移除（2026-10-19）：切换账号改到全局切换面板的顺序列表。
   buttons.push(
     createElement(
       "button",
