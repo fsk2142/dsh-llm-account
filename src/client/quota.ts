@@ -60,6 +60,39 @@ export function quotaReading(window: QuotaWindow): QuotaReading {
 }
 
 /**
+ * 额度窗口的中文名称。
+ * @param t - 取词函数。
+ * @param key - 厂商窗口键。
+ * @returns 可读名称；未知键原样返回。
+ */
+export function quotaWindowLabel(t: (key: string) => string, key: string): string {
+  switch (key) {
+    case "fiveHour":
+    case "5h":
+      return t("quota.window.fiveHour");
+    case "rolling":
+      return t("quota.window.rolling");
+    case "daily":
+    case "day":
+      return t("quota.window.daily");
+    case "weekly":
+    case "week":
+      return t("quota.window.weekly");
+    case "monthly":
+    case "month":
+      return t("quota.window.monthly");
+    case "monthlyCredits":
+      return t("quota.window.monthlyCredits");
+    case "plan":
+      return t("quota.window.plan");
+    case "":
+      return t("quota.window.unknown");
+    default:
+      return key;
+  }
+}
+
+/**
  * 一个窗口的读数文案。
  * @param t - 取词函数（缺失时要用到 `account.quotaMissing`）。
  * @param window - 额度窗口。
@@ -69,11 +102,13 @@ export function quotaWindowText(t: (key: string) => string, window: QuotaWindow)
   const reading = quotaReading(window);
   switch (reading.shape) {
     case "used-cap":
-      return `${formatNumber(reading.used)}/${formatNumber(reading.cap)}`;
+      return t("quota.usedOf")
+        .replace("{used}", formatNumber(reading.used))
+        .replace("{cap}", formatNumber(reading.cap));
     case "percent":
-      return `${formatNumber(reading.percent)}%`;
+      return t("quota.usedPercent").replace("{percent}", formatNumber(reading.percent));
     case "used":
-      return formatNumber(reading.used);
+      return t("quota.used").replace("{used}", formatNumber(reading.used));
     case "missing":
       return t("account.quotaMissing");
   }
@@ -81,15 +116,22 @@ export function quotaWindowText(t: (key: string) => string, window: QuotaWindow)
 
 /**
  * 展开报告里的一行明细：把存在的字段都写出来，缺失的一律不出现。
+ * @param t - 取词函数。
  * @param window - 额度窗口。
  * @returns 明细文案；一个字段都没有时为 `-`。
  */
-export function quotaWindowDetail(window: QuotaWindow): string {
+export function quotaWindowDetail(t: (key: string) => string, window: QuotaWindow): string {
   const parts: string[] = [];
-  if (window.used !== undefined && window.cap !== undefined) parts.push(`${formatNumber(window.used)}/${formatNumber(window.cap)}`);
-  if (window.percent !== undefined) parts.push(`${formatNumber(window.percent)}%`);
-  if (window.resetAt !== undefined) parts.push(`@${window.resetAt}`);
-  return parts.length === 0 ? "-" : parts.join(" ");
+  if (window.used !== undefined && window.cap !== undefined) {
+    parts.push(
+      t("quota.usedOf").replace("{used}", formatNumber(window.used)).replace("{cap}", formatNumber(window.cap)),
+    );
+  }
+  if (window.percent !== undefined) {
+    parts.push(t("quota.usedPercent").replace("{percent}", formatNumber(window.percent)));
+  }
+  if (window.resetAt !== undefined) parts.push(`${t("quota.resetAt")} ${new Date(window.resetAt).toLocaleString()}`);
+  return parts.length === 0 ? "-" : parts.join(" · ");
 }
 
 /** 进度条的档位：健康 / 偏高 / 用尽。颜色由样式表的 `[data-level]` 决定。 */

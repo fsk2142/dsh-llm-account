@@ -138,7 +138,7 @@ it("额度字段缺失时显示「暂无数据」，绝不渲染成 0", () => {
   expect(textsOf(windows[0])).toContain(dictionaryOf("zh")("account.quotaMissing"));
   expect(textsOf(windows[0]).join(" ")).not.toMatch(/\b0\b/);
   // 第二个窗口是真的 0/0（厂商就是这么报告的）：按原样显示，和「缺失」区分开。
-  expect(textsOf(windows[1]).join(" ")).toContain("0/0");
+  expect(textsOf(windows[1]).join(" ")).toContain("已用 0 / 共 0");
 });
 
 it("没有额度摘要的账号连额度条都不渲染（缺失不是 0）", () => {
@@ -156,7 +156,7 @@ it("百分比形状的读数（opencode）同样只按存在的字段渲染", ()
   });
   const window = elementsOf(tree).find((element) => element.props["data-quota-window"] === "rolling")!;
   expect(textsOf(window).join(" ")).toContain("40%");
-  expect(textsOf(window).join(" ")).not.toContain("0/0");
+  expect(textsOf(window).join(" ")).not.toContain("已用 0 / 共 0");
 });
 
 // —— Step 1：菜单按能力降级 ——
@@ -210,7 +210,7 @@ it("展开报告按钮切换展开状态", () => {
   const elements = elementsOf(expanded.tree);
   expect(elements.find((element) => element.props["data-action"] === "expand")!.props["aria-expanded"]).toBe(true);
   const report = elements.find((element) => element.props["data-report"] === "a")!;
-  expect(textsOf(report).join(" ")).toContain("3/10");
+  expect(textsOf(report).join(" ")).toContain("已用 3 / 共 10");
   expect(textsOf(report).join(" ")).toContain("timeout");
 });
 

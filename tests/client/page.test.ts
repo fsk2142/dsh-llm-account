@@ -7,7 +7,7 @@
  *   组件并遍历返回的树（替身的 Hook 会抛错，所以「被测组件必须无状态」是机械保证，不是纪律）；
  * - **接缝**在 `seams.ts`（宿主调用的形状）→ 用假宿主测。
  */
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { COPY, dictionaryOf, missingCopyKeys } from "../../src/client/copy";
 import { PageShell } from "../../src/client/page";
@@ -308,6 +308,23 @@ it("渲染期抛错时显示错误面板，而不是整页空白", () => {
   const all = elementsOf(tree);
   expect(all.some((element) => element.props["data-render-error"] !== undefined)).toBe(true);
   expect(textOf(tree).join("\n")).toContain("t() exploded");
+});
+
+it("数字字段写回 number（字符串会让宿主按非法值回落）", () => {
+  const state = createPageState(VENDORS, SNAPSHOTS);
+  const t = dictionaryOf("en");
+  const onSetField = vi.fn();
+  const tree = PageShell({
+    state,
+    entries: VENDORS,
+    t,
+    onSelectTab: () => undefined,
+    onSetField,
+    onSave: () => undefined,
+  });
+  const input = elementsOf(tree).find((element) => element.props["data-field-input"] === "quotaRefreshMinutes")!;
+  (input.props.onChange as (event: unknown) => void)({ target: { value: "5" } });
+  expect(onSetField).toHaveBeenCalledWith("llm-commandcode", "quotaRefreshMinutes", 5);
 });
 
 it("未声明的卡片组不渲染元素；声明了的组带着字段渲染", () => {

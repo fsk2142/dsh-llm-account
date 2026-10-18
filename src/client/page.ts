@@ -282,7 +282,16 @@ function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftFie
       type: spec.kind === "number" ? "number" : "text",
       // 没有值时留空串：不能把「没有值」显示成 0（全局约束）。
       value: value === undefined || value === null ? "" : String(value),
-      onChange: (event: { target?: { value?: string } }) => change(event.target?.value ?? ""),
+      onChange: (event: { target?: { value?: string } }) => {
+        const raw = event.target?.value ?? "";
+        if (spec.kind !== "number") {
+          change(raw);
+          return;
+        }
+        // 设置文档里 `quotaRefreshMinutes` 等是 number；留着字符串会让宿主按「非法值」回落。
+        const parsed = raw.trim() === "" ? undefined : Number(raw);
+        change(parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined);
+      },
     });
   }
   return undefined;

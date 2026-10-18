@@ -17,7 +17,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS, cls } from "./css";
 import { RefreshIcon, UsageIcon } from "./icons";
-import { quotaMeter, quotaShape, quotaWindowText } from "./quota";
+import { quotaMeter, quotaShape, quotaWindowLabel, quotaWindowText } from "./quota";
 import { relativeTime } from "./time";
 import type { AccountUsageStatus, QuotaWindow, SwitchNotice, VendorUsageStatus } from "./usage-contract";
 
@@ -249,7 +249,7 @@ function meterRow(t: (key: string) => string, window: QuotaWindow): ReactElement
     createElement(
       "div",
       { className: CSS_CLASS.meterHead },
-      createElement("span", { className: CSS_CLASS.meterLabel }, window.key),
+      createElement("span", { className: CSS_CLASS.meterLabel }, quotaWindowLabel(t, window.key)),
       createElement(
         "span",
         { "data-sidebar-window-value": window.key, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },

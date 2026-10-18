@@ -25,7 +25,7 @@ import { companyLabelOf, groupModels } from "../core/model-groups";
 import { rejectionText } from "./copy";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
-import { quotaMeter, quotaShape, quotaWindowDetail, quotaWindowText } from "./quota";
+import { quotaMeter, quotaShape, quotaWindowDetail, quotaWindowLabel, quotaWindowText } from "./quota";
 import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
@@ -510,7 +510,7 @@ function quotaBar(props: AccountCardProps, window: QuotaWindow): ReactNode {
     createElement(
       "div",
       { className: CSS_CLASS.meterHead },
-      createElement("span", { className: CSS_CLASS.meterLabel }, window.key),
+      createElement("span", { className: CSS_CLASS.meterLabel }, quotaWindowLabel(props.t, window.key)),
       quotaText(props, window),
     ),
     meter === undefined
@@ -551,7 +551,7 @@ function reportBlock(props: AccountCardProps, account: AccountUsageStatus): Reac
             createElement(
               "p",
               { key: `w-${window.key}`, "data-report-window": window.key },
-              `${window.key}: ${quotaWindowDetail(window)}`,
+              `${quotaWindowLabel(props.t, window.key)}：${quotaWindowDetail(props.t, window)}`,
             ),
           ),
           ...quota.failures.map((failure, index) => createElement("p", { key: `f-${index}`, "data-report-failure": index }, failure)),

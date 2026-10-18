@@ -1516,7 +1516,13 @@ export function backoffInterval(base: number, failures: number): number {
  * @returns 轮询间隔（毫秒）。
  */
 export function quotaRefreshMs(value: unknown): number {
-  const minutes = typeof value === "number" && Number.isFinite(value) ? value : SIDEBAR_POLL_MS / 60_000;
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() !== ""
+        ? Number(value)
+        : Number.NaN;
+  const minutes = Number.isFinite(parsed) ? parsed : SIDEBAR_POLL_MS / 60_000;
   const clamped = Math.max(1, Math.min(120, minutes));
   return clamped * 60_000;
 }

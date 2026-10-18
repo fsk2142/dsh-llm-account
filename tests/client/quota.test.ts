@@ -48,12 +48,14 @@ it("quotaShape 与 quotaReading 永远说同一件事（同一份实现，不许
 });
 
 it("文案：百分比按 0–100 原样写，明细把存在的字段都写出来", () => {
-  expect(quotaWindowText(t, { key: "w", percent: 35 })).toBe("35%");
-  expect(quotaWindowText(t, { key: "w", used: 5.0011194891, cap: 35 })).toBe("5/35");
-  expect(quotaWindowText(t, { key: "w", used: 0, cap: 0 })).toBe("0/0");
+  expect(quotaWindowText(t, { key: "w", percent: 35 })).toBe("已用 35%");
+  expect(quotaWindowText(t, { key: "w", used: 5.0011194891, cap: 35 })).toBe("已用 5 / 共 35");
+  expect(quotaWindowText(t, { key: "w", used: 0, cap: 0 })).toBe("已用 0 / 共 0");
   expect(quotaWindowText(t, { key: "w" })).toBe(t("account.quotaMissing"));
-  expect(quotaWindowDetail({ key: "w", used: 1, cap: 2, percent: 50, resetAt: 1700 })).toBe("1/2 50% @1700");
-  expect(quotaWindowDetail({ key: "w" })).toBe("-");
+  expect(quotaWindowDetail(t, { key: "w", used: 1, cap: 2, percent: 50, resetAt: 1700 })).toBe(
+    `已用 1 / 共 2 · 已用 50% · 重置于 ${new Date(1700).toLocaleString()}`,
+  );
+  expect(quotaWindowDetail(t, { key: "w" })).toBe("-");
 });
 
 it("进度条：单位是 0–100 的已用百分比，用得越多档位越糟，缺失与除零不画条", () => {

@@ -107,6 +107,18 @@ export type CopyKey =
   | "account.effectiveBy"
   | "account.liveBy"
   | "account.quotaMissing"
+  | "quota.used"
+  | "quota.usedOf"
+  | "quota.usedPercent"
+  | "quota.resetAt"
+  | "quota.window.fiveHour"
+  | "quota.window.rolling"
+  | "quota.window.daily"
+  | "quota.window.weekly"
+  | "quota.window.monthly"
+  | "quota.window.monthlyCredits"
+  | "quota.window.plan"
+  | "quota.window.unknown"
   | "account.newLabel"
   | "account.newLabel.placeholder"
   | "account.newKey.placeholder"
@@ -292,6 +304,18 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.effectiveBy": "当前使用",
     "account.liveBy": "生效中",
     "account.quotaMissing": "暂无额度数据",
+    "quota.used": "已用 {used}",
+    "quota.usedOf": "已用 {used} / 共 {cap}",
+    "quota.usedPercent": "已用 {percent}%",
+    "quota.resetAt": "重置于",
+    "quota.window.fiveHour": "5 小时",
+    "quota.window.rolling": "滚动窗口",
+    "quota.window.daily": "每日",
+    "quota.window.weekly": "每周",
+    "quota.window.monthly": "每月",
+    "quota.window.monthlyCredits": "月度额度",
+    "quota.window.plan": "套餐",
+    "quota.window.unknown": "额度",
     "account.newLabel": "账户名称",
     "account.newLabel.placeholder": "例如：工作账号",
     "account.newKey.placeholder": "粘贴 API Key",
@@ -472,6 +496,18 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.effectiveBy": "In use",
     "account.liveBy": "Serving",
     "account.quotaMissing": "No quota data",
+    "quota.used": "Used {used}",
+    "quota.usedOf": "Used {used} of {cap}",
+    "quota.usedPercent": "Used {percent}%",
+    "quota.resetAt": "Resets at",
+    "quota.window.fiveHour": "5 hours",
+    "quota.window.rolling": "Rolling window",
+    "quota.window.daily": "Daily",
+    "quota.window.weekly": "Weekly",
+    "quota.window.monthly": "Monthly",
+    "quota.window.monthlyCredits": "Monthly credits",
+    "quota.window.plan": "Plan",
+    "quota.window.unknown": "Quota",
     "account.newLabel": "Account name",
     "account.newLabel.placeholder": "e.g. work",
     "account.newKey.placeholder": "Paste the API key",
