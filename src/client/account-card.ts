@@ -512,6 +512,13 @@ function quotaBar(props: AccountCardProps, window: QuotaWindow): ReactNode {
       { className: CSS_CLASS.meterHead },
       createElement("span", { className: CSS_CLASS.meterLabel }, quotaWindowLabel(props.t, window.key)),
       quotaText(props, window),
+      meter === undefined
+        ? null
+        : createElement(
+            "small",
+            { key: "remaining", "data-quota-remaining": 100 - meter.percent, className: CSS_CLASS.quotaHint },
+            props.t("quota.remaining").replace("{percent}", String(100 - meter.percent)),
+          ),
     ),
     meter === undefined
       ? null

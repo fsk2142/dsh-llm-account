@@ -713,6 +713,10 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     const [statusProblems, setStatusProblems] = useState<Record<string, string | undefined>>({});
     const [logins, setLogins] = useState<Record<string, LoginView | undefined>>({});
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
+    /** 首次状态读取是否仍在进行（区分加载中/读失败）。 */
+    const [statusLoading, setStatusLoading] = useState<Record<string, boolean>>(() =>
+      Object.fromEntries(entries.map((entry) => [entry.providerId, true])),
+    );
     /** 「添加模型」的输入草稿（按厂商分开）。 */
     const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({});
     /** 模型搜索关键词（按厂商分开；纯展示，不进设置草稿、不进保存条）。 */
@@ -795,6 +799,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
             if (!alive) return;
             if (status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
             setStatusProblems((current) => ({ ...current, [entry.providerId]: problem }));
+            setStatusLoading((current) => ({ ...current, [entry.providerId]: false }));
           });
         }
       }
@@ -802,6 +807,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         alive = false;
       };
     }, [usage, state.credentialRevision, accountRevision]);
+
+    // 远程面本身挂载失败：结束加载态，让面板显示「暂不可用 + 原因」，而不是一直转圈。
+    useEffect(() => {
+      if (usageProblem === undefined) return;
+      setStatusLoading(Object.fromEntries(entries.map((entry) => [entry.providerId, false])));
+    }, [usageProblem]);
 
     // 登录轮询：只在等待授权时跑（规格 §8.1 第 6 条的「关闭即静默」精神 —— 没有等待就不问）。
     const waitingVendors = entries.map((entry) => entry.providerId).filter((vendor) => shouldPollLogin(logins[vendor]));
@@ -878,6 +889,7 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
         ...(statuses[entry.providerId]?.modelRules === undefined
           ? {}
           : { modelRules: statuses[entry.providerId]!.modelRules! }),
+        ...(statusLoading[entry.providerId] === true ? { loading: true } : {}),
       })),
       onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string }) => setState((current) => openAction(current, action, vendor)),
       onActionField: (field: "label" | "key", value: string) => setState((current) => setActionField(current, field, value)),

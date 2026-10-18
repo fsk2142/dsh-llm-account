@@ -231,6 +231,13 @@ function windowBlock(t: (key: string) => string, window: QuotaWindow): ReactNode
         { "data-dashboard-window-value": window.key, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },
         quotaWindowText(t, window),
       ),
+      meter === undefined
+        ? null
+        : createElement(
+            "small",
+            { key: "remaining", "data-dashboard-window-remaining": 100 - meter.percent, className: CSS_CLASS.quotaHint },
+            t("quota.remaining").replace("{percent}", String(100 - meter.percent)),
+          ),
     ),
     meter === undefined
       ? null

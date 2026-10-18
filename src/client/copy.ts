@@ -85,6 +85,7 @@ export type CopyKey =
   | "account.missing"
   | "account.empty"
   | "account.unavailable"
+  | "account.loading"
   | "account.add"
   | "account.addFor"
   | "account.loginFor"
@@ -110,6 +111,7 @@ export type CopyKey =
   | "quota.used"
   | "quota.usedOf"
   | "quota.usedPercent"
+  | "quota.remaining"
   | "quota.resetAt"
   | "quota.window.fiveHour"
   | "quota.window.rolling"
@@ -282,6 +284,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.missing": "未配置",
     "account.empty": "还没有添加任何账户。",
     "account.unavailable": "账号数据暂不可用。",
+    "account.loading": "正在读取账号数据…",
     "account.add": "添加账户",
     "account.addFor": "{vendor} · 使用 API Key",
     "account.loginFor": "{vendor} · 网页登录",
@@ -307,6 +310,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.used": "已用 {used}",
     "quota.usedOf": "已用 {used} / 共 {cap}",
     "quota.usedPercent": "已用 {percent}%",
+    "quota.remaining": "剩余 {percent}%",
     "quota.resetAt": "重置于",
     "quota.window.fiveHour": "5 小时",
     "quota.window.rolling": "滚动窗口",
@@ -474,6 +478,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.missing": "Not configured",
     "account.empty": "No accounts yet.",
     "account.unavailable": "Account data is not available yet.",
+    "account.loading": "Loading accounts…",
     "account.add": "Add account",
     "account.addFor": "{vendor} · API key",
     "account.loginFor": "{vendor} · web login",
@@ -499,6 +504,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.used": "Used {used}",
     "quota.usedOf": "Used {used} of {cap}",
     "quota.usedPercent": "Used {percent}%",
+    "quota.remaining": "{percent}% left",
     "quota.resetAt": "Resets at",
     "quota.window.fiveHour": "5 hours",
     "quota.window.rolling": "Rolling window",

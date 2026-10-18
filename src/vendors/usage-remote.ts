@@ -208,7 +208,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
         .filter((view) => view.configured)
         .map(async (view) => {
           try {
-            quotas.set(view.ref, quotaSummaryOf(await deps.quota.snapshot(view.ref)));
+            quotas.set(view.ref, quotaSummaryOf(await quotaWithTimeout(deps.quota, view.ref)));
           } catch (error) {
             failures.push(`quota: ${vendor} ${view.ref} read failed (${messageOf(error)})`);
           }
@@ -468,6 +468,29 @@ export class LlmAccountUsageService extends TypertRemoteService {
       throw new Error(`dsh-llm-account: vendor "${vendor}" does not support browser login`);
     }
     return login;
+  }
+}
+
+/** 单个账号额度读取的超时（毫秒）；一个账号卡住不能拖住整页状态。 */
+const QUOTA_READ_TIMEOUT_MS = 4_000;
+
+/**
+ * 带超时的额度读取。
+ * @param quota - 额度端口。
+ * @param ref - 账号 ref。
+ * @returns 读数；超时抛错（由调用方记入 failures）。
+ */
+async function quotaWithTimeout(quota: QuotaPort, ref: string): Promise<QuotaSnapshot> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      quota.snapshot(ref),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`timeout after ${QUOTA_READ_TIMEOUT_MS}ms`)), QUOTA_READ_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

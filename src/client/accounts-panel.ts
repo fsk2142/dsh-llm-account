@@ -34,6 +34,8 @@ export interface AccountsPanelVendor {
   catalog?: readonly CatalogModel[];
   /** 这家的模型→账号规则。 */
   modelRules?: readonly ModelRule[];
+  /** 首次读取尚未完成（用于区分「加载中」和「读失败」）。 */
+  loading?: boolean;
 }
 
 /** 合并账户面板属性。 */
@@ -113,22 +115,30 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
     ...vendors.flatMap((group) =>
       group.status !== undefined
         ? []
-        : [
-            createElement(
-              "p",
-              { key: `${group.entry.providerId}-unavailable`, "data-accounts-vendor": group.entry.providerId, className: CSS_CLASS.note },
-              `${t(group.entry.labelKey)}: ${t("account.unavailable")}`,
-            ),
-            ...(group.problem === undefined
-              ? []
-              : [
-                  createElement(
-                    "pre",
-                    { key: `${group.entry.providerId}-problem`, "data-usage-problem": true, className: CSS_CLASS.diagnostic },
-                    group.problem,
-                  ),
-                ]),
-          ],
+        : group.loading === true
+          ? [
+              createElement(
+                "p",
+                { key: `${group.entry.providerId}-loading`, "data-accounts-loading": group.entry.providerId, className: CSS_CLASS.note },
+                `${t(group.entry.labelKey)}: ${t("account.loading")}`,
+              ),
+            ]
+          : [
+              createElement(
+                "p",
+                { key: `${group.entry.providerId}-unavailable`, "data-accounts-vendor": group.entry.providerId, className: CSS_CLASS.note },
+                `${t(group.entry.labelKey)}: ${t("account.unavailable")}`,
+              ),
+              ...(group.problem === undefined
+                ? []
+                : [
+                    createElement(
+                      "pre",
+                      { key: `${group.entry.providerId}-problem`, "data-usage-problem": true, className: CSS_CLASS.diagnostic },
+                      group.problem,
+                    ),
+                  ]),
+            ],
     ),
     ...(total === 0
       ? [createElement("p", { key: "empty", "data-accounts-empty": "true", className: CSS_CLASS.note }, t("account.empty"))]

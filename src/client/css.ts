@@ -377,6 +377,8 @@ export const PAGE_CSS = `
   color: var(--dsw-alias-label-tertiary); }
 .dsl-quota-value { flex: none; color: var(--dsw-alias-label-primary); font-size: 12px;
   line-height: 18px; font-variant-numeric: tabular-nums; }
+.dsl-quota-hint { flex: none; margin-left: 6px; color: var(--dsw-alias-label-tertiary);
+  font-size: 11px; line-height: 18px; }
 .dsl-quota-track { display: block; flex: none; overflow: hidden; box-sizing: border-box; width: 100%;
   height: 4px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); }
 .dsl-quota-fill { display: block; height: 100%; border-radius: inherit;
@@ -533,6 +535,7 @@ export const CSS_CLASS = {
   meterHead: "dsl-meter-head",
   meterLabel: "dsl-meter-label",
   quotaValue: "dsl-quota-value",
+  quotaHint: "dsl-quota-hint",
   identity: "dsl-identity",
   identityText: "dsl-identity-text",
   mono: "dsl-mono",
