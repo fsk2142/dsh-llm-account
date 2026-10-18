@@ -273,12 +273,12 @@ describe("设置页容器仿真", () => {
     );
     await settleSim(mini);
 
-    // 目录里的 m1 初始可见；点一下必须立刻变成未勾选（还没保存）。
+    // 新规则：目录里的 m1 默认关闭；点一下必须立刻变成已勾选（还没保存）。
     const toggle = find(page.tree(), "data-model-visible", "m1");
-    expect(toggle.props.checked).toBe(true);
-    fireSim(toggle, "onChange", { target: { checked: false } });
+    expect(toggle.props.checked).toBe(false);
+    fireSim(toggle, "onChange", { target: { checked: true } });
     await settleSim(mini);
-    expect(find(page.tree(), "data-model-visible", "m1").props.checked).toBe(false);
+    expect(find(page.tree(), "data-model-visible", "m1").props.checked).toBe(true);
     // 草稿已经脏了：保存条出现，勾选不是假象。
     expect(findSim(page.tree(), "data-save-bar")).toBeDefined();
   });

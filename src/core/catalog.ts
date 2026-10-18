@@ -85,8 +85,9 @@ export function isModelIdVisible(id: string, visibility: Visibility): boolean {
   const allow = visibility.visibleModels;
   if (allow !== undefined && allow.length > 0) return allow.includes(id);
 
-  // 规则 3：白名单缺省或为空——全部可见。
-  return true;
+  // 规则 3：白名单缺省或为空——没有显式选择，默认关闭（2026-10-18 用户要求：
+  // 模型选择不能默认把所有模型都打开；勾选/按组开启后才进入选择器）。
+  return false;
 }
 
 /**

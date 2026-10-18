@@ -85,6 +85,7 @@ export type CopyKey =
   | "account.rename"
   | "account.replaceKey"
   | "account.pin"
+  | "account.use"
   | "account.remove"
   | "account.menu"
   | "account.expand"
@@ -247,6 +248,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.rename": "重命名",
     "account.replaceKey": "更换密钥",
     "account.pin": "切换到此账户",
+    "account.use": "使用",
     "account.remove": "移除",
     "account.menu": "更多操作",
     "account.expand": "展开完整报告",
@@ -284,7 +286,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.freeGroup": "免费模型",
     "models.otherCompany": "其他",
     "models.allTitle": "全部模型",
-    "models.allHint": "两家厂商的模型放在一起；勾选立即写入所属厂商。",
+    "models.allHint": "两家厂商的模型放在一起；勾选立即写入所属厂商。默认关闭，勾选或按组开启后才会出现在模型选择里。",
     "models.hideGroup": "隐藏本组全部模型",
     "models.showGroup": "显示本组全部模型",
     "models.hideVendor": "隐藏该厂商全部模型",
@@ -404,6 +406,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.rename": "Rename",
     "account.replaceKey": "Replace key",
     "account.pin": "Switch to this account",
+    "account.use": "Use",
     "account.remove": "Remove",
     "account.menu": "More actions",
     "account.expand": "Show full report",
@@ -441,7 +444,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.freeGroup": "Free models",
     "models.otherCompany": "Other",
     "models.allTitle": "All models",
-    "models.allHint": "Models from both providers; a toggle writes through to its provider immediately.",
+    "models.allHint": "Models from both providers; a toggle writes through to its provider immediately. Models start off until checked or enabled by group.",
     "models.hideGroup": "Hide all models in this group",
     "models.showGroup": "Show all models in this group",
     "models.hideVendor": "Hide all models from this provider",

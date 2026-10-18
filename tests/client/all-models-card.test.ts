@@ -91,24 +91,25 @@ it("先按供应商分组，再按模型公司/免费分组；两级都有折叠
   ]);
 });
 
-it("公司分组可以一次性隐藏/显示全组；供应商分组也能批量", () => {
+it("公司分组可以一次性开启/关闭全组；供应商分组也能批量", () => {
   const { tree, props } = render();
-  const hideGroup = elementsOf(tree).find(
+  // 默认关闭：commandcode/anthropic 全不可见 → 按钮是「全开本组」，点击传 true。
+  const showGroupButton = elementsOf(tree).find(
     (element) => element.props["data-all-model-group-toggle"] === "commandcode:anthropic",
   )!;
-  (hideGroup.props.onClick as () => void)();
-  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], false);
+  (showGroupButton.props.onClick as () => void)();
+  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], true);
 
-  const hideVendor = elementsOf(tree).find(
+  const showVendorButton = elementsOf(tree).find(
     (element) => element.props["data-all-model-vendor-toggle"] === "commandcode",
   )!;
-  (hideVendor.props.onClick as () => void)();
-  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], false);
+  (showVendorButton.props.onClick as () => void)();
+  expect(props.onGroupVisibility).toHaveBeenCalledWith("commandcode", ["claude-haiku-5-5"], true);
 
-  const showGroup = elementsOf(tree).find(
+  const showOpenai = elementsOf(tree).find(
     (element) => element.props["data-all-model-group-toggle"] === "dsh-opencode-go:openai",
   )!;
-  (showGroup.props.onClick as () => void)();
+  (showOpenai.props.onClick as () => void)();
   expect(props.onGroupVisibility).toHaveBeenCalledWith("dsh-opencode-go", ["gpt-6-luna"], true);
 });
 

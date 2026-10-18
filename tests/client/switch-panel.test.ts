@@ -21,12 +21,13 @@ function render(overrides: Partial<SwitchPanelProps> = {}): { tree: StubElement;
     state: { strategy: "order", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true, evaluatedAt: 1_000 },
     now: 1_000,
     order: [
-      { key: "commandcode:cc", label: "Work", vendorLabel: "Command Code" },
-      { key: "dsh-opencode-go:oc", label: "Personal", vendorLabel: "OpenCode" },
+      { key: "commandcode:cc", label: "Work", vendorLabel: "Command Code", vendor: "commandcode", ref: "cc" },
+      { key: "dsh-opencode-go:oc", label: "Personal", vendorLabel: "OpenCode", vendor: "dsh-opencode-go", ref: "oc" },
     ],
     onChange: vi.fn(),
     onReorder: vi.fn(),
     onSwitchNow: vi.fn(),
+    onSelect: vi.fn(),
     ...overrides,
   };
   return { tree: SwitchPanel(props), props };
@@ -67,11 +68,31 @@ it("修改策略/间隔/开关立刻上报", () => {
   expect(turnEnd.props.onChange).toHaveBeenCalledWith({ atTurnEnd: false });
 });
 
-it("顺序上移/下移提交完整全局顺序；倒计时与立即切换可用", () => {
+it("自动切换是面板的第一个选项", () => {
+  const { tree } = render();
+  const controls = elementsOf(tree)
+    .map((element) =>
+      element.props["data-switch-toggle"] !== undefined
+        ? `toggle:${element.props["data-switch-toggle"]}`
+        : element.props["data-switch-strategy"] !== undefined
+          ? "strategy"
+          : element.props["data-switch-interval"] !== undefined
+            ? "interval"
+            : undefined,
+    )
+    .filter((value): value is string => value !== undefined);
+  expect(controls[0]).toBe("toggle:autoSwitch");
+});
+
+it("顺序上移/下移提交完整全局顺序；可以直接选某个账号", () => {
   const { tree, props } = render();
   const down = elementsOf(tree).find((element) => element.props["data-order-down"] === "commandcode:cc")!;
   (down.props.onClick as () => void)();
   expect(props.onReorder).toHaveBeenCalledWith(["dsh-opencode-go:oc", "commandcode:cc"]);
+
+  const use = elementsOf(tree).find((element) => element.props["data-order-select"] === "dsh-opencode-go:oc")!;
+  (use.props.onClick as () => void)();
+  expect(props.onSelect).toHaveBeenCalledWith("dsh-opencode-go", "oc");
 
   const now = elementsOf(tree).find((element) => element.props["data-switch-now"] !== undefined)!;
   (now.props.onClick as () => void)();

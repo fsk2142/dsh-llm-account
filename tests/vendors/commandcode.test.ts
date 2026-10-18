@@ -237,7 +237,7 @@ it("listModels 应用目录可见性规则", async () => {
       headers: { "content-type": "application/json" },
     })) as typeof fetch;
   const adapter = createCommandCodeAdapter({
-    config: () => ({ apiBase: "https://api.example.test", modelVisibility: { m2: false } }),
+    config: () => ({ apiBase: "https://api.example.test", visibleModels: ["m1"], modelVisibility: { m2: false } }),
     rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
     quota: stubQuota(),
     accounts: stubAccounts(),

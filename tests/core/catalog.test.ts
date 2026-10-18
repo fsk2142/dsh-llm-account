@@ -14,16 +14,16 @@ it("显式布尔覆盖优先于白名单", () => {
   );
 });
 
-it("白名单为空表示显示全部", () => {
-  expect(isModelVisible(entry("m"), { visibleModels: [] })).toBe(true);
+it("白名单为空表示默认关闭", () => {
+  expect(isModelVisible(entry("m"), { visibleModels: [] })).toBe(false);
 });
 
 it("非布尔值被忽略", () => {
   expect(normalizeVisibility({ m: "yes" })).toEqual({});
 });
 
-it("未提供可见性时显示全部", () => {
-  expect(isModelVisible(entry("m"), {})).toBe(true);
+it("未提供可见性时默认关闭", () => {
+  expect(isModelVisible(entry("m"), {})).toBe(false);
 });
 
 it("白名单非空时，不在名单内的模型隐藏", () => {
@@ -43,11 +43,11 @@ it("normalizeVisibility 只保留 modelVisibility 中的布尔键值对", () => 
   });
 });
 
-it("normalizeVisibility 丢弃白名单里的空串与纯空白（[] 不能把模型全部筛掉）", () => {
-  // `[""]` 是非空白名单：不过滤的话所有模型都不命中，选择器里一个都不出。
+it("normalizeVisibility 丢弃白名单里的空串与纯空白（清洗后为空 → 默认关闭）", () => {
+  // 清洗后为空 → 没有显式选择，默认关闭。
   expect(normalizeVisibility({ visibleModels: ["a", "", "  ", "b"] })).toEqual({ visibleModels: ["a", "b"] });
-  expect(isModelVisible(entry("a"), normalizeVisibility({ visibleModels: [""] }))).toBe(true);
-  expect(isModelVisible(entry("a"), normalizeVisibility({ visibleModels: ["  "] }))).toBe(true);
+  expect(isModelVisible(entry("a"), normalizeVisibility({ visibleModels: [""] }))).toBe(false);
+  expect(isModelVisible(entry("a"), normalizeVisibility({ visibleModels: ["  "] }))).toBe(false);
   // 显隐表里的空串键同样丢弃（它永远匹配不上任何真实 id）。
   expect(normalizeVisibility({ modelVisibility: { "": true, " ": false, a: true } })).toEqual({ modelVisibility: { a: true } });
 });
@@ -88,8 +88,8 @@ it("selectVisible 在覆盖与白名单组合下按同一规则逐条判定", ()
   expect(result.map((e) => e.id)).toEqual(["b", "c"]);
 });
 
-it("selectVisible 在无可见性约束时返回全部条目", () => {
+it("selectVisible 在无可见性约束时返回空（默认关闭）", () => {
   const entries: CatalogEntry[] = [entry("a"), entry("b")];
 
-  expect(selectVisible(entries, {}).map((e) => e.id)).toEqual(["a", "b"]);
+  expect(selectVisible(entries, {}).map((e) => e.id)).toEqual([]);
 });

@@ -924,6 +924,9 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
                 setAccountRevision((current) => current + 1),
               );
             },
+            onSelect: (vendor: string, ref: string) => {
+              void usage?.selectAccount(vendor, ref).then(() => setAccountRevision((current) => current + 1));
+            },
           });
 
     /** 全局模型卡的一次写：先落草稿让勾选立刻变化，再立刻写回所属厂商。 */
@@ -1170,6 +1173,8 @@ function buildSwitchOrder(
         key: `${entry.providerId}:${account.ref}`,
         label: account.label,
         vendorLabel: t(entry.labelKey),
+        vendor: entry.providerId,
+        ref: account.ref,
       });
     }
   }

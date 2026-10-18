@@ -97,6 +97,7 @@ export const PAGE_CSS = `
   padding: 2px 0; list-style: none; cursor: pointer; color: var(--dsw-alias-label-secondary); }
 .dsl-model-group-summary::-webkit-details-marker { display: none; }
 .dsl-model-group-summary > svg { flex: none; transition: transform 150ms ease; }
+.dsl-model-group-summary > button { flex: none; margin-left: auto; padding: 0 6px; font-size: 11px; line-height: 18px; }
 .dsl-model-group[open] > .dsl-model-group-summary > svg,
 .dsl-model-vendor-group[open] > .dsl-model-group-summary > svg { transform: rotate(180deg); }
 .dsl-model-group-title { font-size: 12px; line-height: 18px; font-weight: 600; }

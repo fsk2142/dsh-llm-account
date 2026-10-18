@@ -358,7 +358,7 @@ it("已消耗 token 或调用方已中止时同样不切账号", async () => {
 });
 
 it("listModels 应用 modelVisibility（能力声明为 immediate 的逐模型开关）", async () => {
-  const { adapter } = harness(() => sseResponse(TEXT_FRAMES), { m2: false });
+  const { adapter } = harness(() => sseResponse(TEXT_FRAMES), { m1: true, m2: false });
   const models = await adapter.listModels("dsh-opencode-go");
   expect(models.map((model) => model.id)).toEqual(["m1"]);
 });

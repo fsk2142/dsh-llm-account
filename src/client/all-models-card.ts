@@ -179,22 +179,25 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
             { className: CSS_CLASS.modelGroupSummary, "data-all-model-vendor-collapse": section.vendor.vendor },
             createElement("span", { className: CSS_CLASS.modelGroupTitle }, section.vendor.label),
             createElement("small", null, `${section.matching.filter((row) => row.visible).length}/${section.matching.length}`),
+            createElement(
+              "button",
+              {
+                type: "button",
+                "data-all-model-vendor-toggle": section.vendor.vendor,
+                className: CSS_CLASS.buttonGhost,
+                onClick: (event?: { stopPropagation?: () => void; preventDefault?: () => void }) => {
+                  event?.preventDefault?.();
+                  event?.stopPropagation?.();
+                  props.onGroupVisibility(
+                    section.vendor.vendor,
+                    section.matching.map((row) => row.id),
+                    !showVendor,
+                  );
+                },
+              },
+              showVendor ? t("models.hideVendor") : t("models.showVendor"),
+            ),
             createElement(ChevronIcon, null),
-          ),
-          createElement(
-            "button",
-            {
-              type: "button",
-              "data-all-model-vendor-toggle": section.vendor.vendor,
-              className: CSS_CLASS.buttonGhost,
-              onClick: () =>
-                props.onGroupVisibility(
-                  section.vendor.vendor,
-                  section.matching.map((row) => row.id),
-                  !showVendor,
-                ),
-            },
-            showVendor ? t("models.hideVendor") : t("models.showVendor"),
           ),
           ...section.groups.flatMap((group) => {
             const label = groupLabel(t, group.key);
@@ -213,22 +216,25 @@ export function AllModelsCard(props: AllModelsCardProps): ReactElement {
                   { className: CSS_CLASS.modelGroupSummary, "data-all-model-group-collapse": `${section.vendor.vendor}:${group.key}` },
                   createElement("span", { className: CSS_CLASS.modelGroupTitle }, label),
                   createElement("small", null, `${group.rows.filter((row) => row.visible).length}/${group.rows.length}`),
+                  createElement(
+                    "button",
+                    {
+                      type: "button",
+                      "data-all-model-group-toggle": `${section.vendor.vendor}:${group.key}`,
+                      className: CSS_CLASS.buttonGhost,
+                      onClick: (event?: { stopPropagation?: () => void; preventDefault?: () => void }) => {
+                        event?.preventDefault?.();
+                        event?.stopPropagation?.();
+                        props.onGroupVisibility(
+                          section.vendor.vendor,
+                          group.rows.map((row) => row.id),
+                          !show,
+                        );
+                      },
+                    },
+                    show ? t("models.hideGroup") : t("models.showGroup"),
+                  ),
                   createElement(ChevronIcon, null),
-                ),
-                createElement(
-                  "button",
-                  {
-                    type: "button",
-                    "data-all-model-group-toggle": `${section.vendor.vendor}:${group.key}`,
-                    className: CSS_CLASS.buttonGhost,
-                    onClick: () =>
-                      props.onGroupVisibility(
-                        section.vendor.vendor,
-                        group.rows.map((row) => row.id),
-                        !show,
-                      ),
-                  },
-                  show ? t("models.hideGroup") : t("models.showGroup"),
                 ),
                 ...group.rows.map((row) => modelRow(props, row)),
               ),

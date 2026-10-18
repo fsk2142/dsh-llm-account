@@ -20,6 +20,9 @@ export interface SwitchOrderItem {
   key: string;
   label: string;
   vendorLabel: string;
+  /** 动作路由用。 */
+  vendor: string;
+  ref: string;
 }
 
 /** 全局切换面板属性。 */
@@ -31,6 +34,8 @@ export interface SwitchPanelProps {
   onChange: (patch: Partial<SwitchSettingsWrite>) => void;
   onReorder: (order: readonly string[]) => void;
   onSwitchNow: () => void;
+  /** 直接切到某个账号（自动切换关闭时也能手动选）。 */
+  onSelect: (vendor: string, ref: string) => void;
 }
 
 /** 默认值（宿主还没有发布 switchState 时）。 */
@@ -65,6 +70,9 @@ export function SwitchPanel(props: SwitchPanelProps): ReactElement {
     "section",
     { "data-card": "switch-panel", className: CSS_CLASS.card },
     createElement("h2", null, t("switch.panelTitle")),
+    ...toggleRow("autoSwitch", t("field.autoSwitch"), t("field.autoSwitch.hint"), settings.autoSwitch, (value) =>
+      props.onChange({ autoSwitch: value }),
+    ),
     createElement(
       "div",
       { "data-switch-strategy-field": "true", className: CSS_CLASS.field },
@@ -111,9 +119,6 @@ export function SwitchPanel(props: SwitchPanelProps): ReactElement {
     ),
     ...toggleRow("switchAtTurnEnd", t("field.switchAtTurnEnd"), t("field.switchAtTurnEnd.hint"), settings.atTurnEnd, (value) =>
       props.onChange({ atTurnEnd: value }),
-    ),
-    ...toggleRow("autoSwitch", t("field.autoSwitch"), t("field.autoSwitch.hint"), settings.autoSwitch, (value) =>
-      props.onChange({ autoSwitch: value }),
     ),
     createElement(
       "div",
@@ -179,6 +184,16 @@ function orderSection(props: SwitchPanelProps): ReactNode {
             createElement("span", null, item.label),
             createElement("small", { className: CSS_CLASS.vendorBadge }, item.vendorLabel),
           ),
+        ),
+        createElement(
+          "button",
+          {
+            type: "button",
+            "data-order-select": item.key,
+            className: CSS_CLASS.buttonGhost,
+            onClick: () => props.onSelect(item.vendor, item.ref),
+          },
+          props.t("account.use"),
         ),
         createElement(
           "button",

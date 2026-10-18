@@ -91,8 +91,8 @@ it("每个模型一行：显示名称、可见开关、移除按钮", () => {
 
   expect(rows.map((element) => element.props["data-model"])).toEqual(["m1", "m2"]);
   const toggles = elementsOf(rows[0]!).find((element) => element.props["data-model-visible"] !== undefined)!;
-  expect(toggles.props.checked).toBe(true);
-  // 显式 `false` 与缺省都按「不可见/可见」的既有语义：只有显式 false 才关闭。
+  expect(toggles.props.checked).toBe(false);
+  // 默认关闭；只有显式 true 或白名单命中才开启。
   const second = elementsOf(rows[1]!).find((element) => element.props["data-model-visible"] !== undefined)!;
   expect(second.props.checked).toBe(false);
 });
