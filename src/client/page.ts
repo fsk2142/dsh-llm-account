@@ -94,7 +94,6 @@ function pageBody(props: PageShellProps): ReactElement {
     ),
     props.accounts === undefined ? null : props.accounts,
     props.switchPanel === undefined ? null : props.switchPanel,
-    props.models === undefined ? null : props.models,
     props.mergeTabs === true ? null : tabRow(props),
     active === undefined
       ? createElement(

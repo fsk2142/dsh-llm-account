@@ -21,6 +21,7 @@
 import { createElement, Fragment, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS, cls } from "./css";
+import { companyLabelOf, groupModels } from "../core/model-groups";
 import { rejectionText } from "./copy";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
@@ -274,6 +275,10 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
 function accountModelsSection(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
   if (props.onSetAccountModels === undefined || props.catalog === undefined) return null;
   const selected = new Set(props.modelRules?.find((rule) => rule.account === account.ref)?.models ?? []);
+  const groups = groupModels(props.catalog.map((model) => ({ id: model.id, company: model.company, free: model.free })));
+  const byId = new Map(props.catalog.map((model) => [model.id, model]));
+  const groupLabel = (key: string): string =>
+    key === "free" ? props.t("models.freeGroup") : key === "other" ? props.t("models.otherCompany") : companyLabelOf(key);
   return createElement(
     "details",
     { "data-account-models": account.ref, className: CSS_CLASS.inset },
@@ -282,29 +287,63 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
       { className: CSS_CLASS.orderSummary },
       `${props.t("account.models")} (${selected.size}/${props.catalog.length})`,
     ),
-    ...props.catalog.map((model) =>
-      createElement(
-        "label",
-        { key: model.id, className: CSS_CLASS.field },
+    ...groups.map((group) => {
+      const all = group.models.every((id) => selected.has(id));
+      return createElement(
+        "details",
+        { key: group.key, "data-account-model-group": group.key, className: CSS_CLASS.modelGroup, open: true },
         createElement(
-          "span",
-          { className: CSS_CLASS.fieldText },
-          createElement("span", { className: CSS_CLASS.mono }, model.name ?? model.id),
+          "summary",
+          { className: CSS_CLASS.modelGroupSummary },
+          createElement("span", { className: CSS_CLASS.modelGroupTitle }, groupLabel(group.key)),
+          createElement("small", null, `${group.models.filter((id) => selected.has(id)).length}/${group.models.length}`),
+          createElement(
+            "button",
+            {
+              type: "button",
+              "data-account-model-group-toggle": group.key,
+              className: CSS_CLASS.buttonGhost,
+              onClick: (event?: { stopPropagation?: () => void; preventDefault?: () => void }) => {
+                event?.preventDefault?.();
+                event?.stopPropagation?.();
+                const next = new Set(selected);
+                for (const id of group.models) {
+                  if (all) next.delete(id);
+                  else next.add(id);
+                }
+                props.onSetAccountModels?.(account.ref, [...next]);
+              },
+            },
+            all ? props.t("models.hideGroup") : props.t("models.showGroup"),
+          ),
+          createElement(ChevronIcon, null),
         ),
-        createElement("input", {
-          type: "checkbox",
-          className: CSS_CLASS.toggle,
-          "data-account-model": `${account.ref}:${model.id}`,
-          checked: selected.has(model.id),
-          onChange: (event: { target?: { checked?: boolean } }) => {
-            const next = new Set(selected);
-            if (event.target?.checked === true) next.add(model.id);
-            else next.delete(model.id);
-            props.onSetAccountModels?.(account.ref, [...next]);
-          },
+        ...group.models.map((id) => {
+          const model = byId.get(id);
+          return createElement(
+            "label",
+            { key: id, className: CSS_CLASS.field },
+            createElement(
+              "span",
+              { className: CSS_CLASS.fieldText },
+              createElement("span", { className: CSS_CLASS.mono }, model?.name ?? id),
+            ),
+            createElement("input", {
+              type: "checkbox",
+              className: CSS_CLASS.toggle,
+              "data-account-model": `${account.ref}:${id}`,
+              checked: selected.has(id),
+              onChange: (event: { target?: { checked?: boolean } }) => {
+                const next = new Set(selected);
+                if (event.target?.checked === true) next.add(id);
+                else next.delete(id);
+                props.onSetAccountModels?.(account.ref, [...next]);
+              },
+            }),
+          );
         }),
-      ),
-    ),
+      );
+    }),
   );
 }
 

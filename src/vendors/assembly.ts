@@ -452,7 +452,18 @@ export async function writeModelRules(settings: SettingsPort, ns: string, rules:
     try {
       await settings.mutate(
         ns,
-        [{ op: "set", path: ["modelAccountRules"], value: rules.map((rule) => ({ ...rule, models: [...rule.models] })) }],
+        [
+          { op: "set", path: ["modelAccountRules"], value: rules.map((rule) => ({ ...rule, models: [...rule.models] })) },
+          // 模型可见性由账户分配决定：分配了才出现在模型选择器里。
+          { op: "set", path: ["visibleModels"], value: [...new Set(rules.flatMap((rule) => rule.models))] },
+          {
+            op: "set",
+            path: ["modelVisibility"],
+            value: Object.fromEntries(
+              [...new Set(rules.flatMap((rule) => rule.models))].map((model) => [model, true]),
+            ),
+          },
+        ],
         snapshot.revision,
       );
       return;
