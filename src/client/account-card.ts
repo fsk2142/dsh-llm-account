@@ -25,7 +25,7 @@ import { rejectionText } from "./copy";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
 import { quotaMeter, quotaShape, quotaWindowDetail, quotaWindowText } from "./quota";
-import type { AccountUsageStatus, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
+import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
 export interface LoginView {
@@ -77,6 +77,12 @@ export interface AccountCardProps {
    * @param index - 它在轮换顺序里的下标（排序控件要用）。
    */
   rowExtras?: (account: AccountUsageStatus, index: number) => ReactNode;
+  /** 该厂商的模型目录（用于每个账号的可用模型）。 */
+  catalog?: readonly CatalogModel[];
+  /** 当前模型→账号规则。 */
+  modelRules?: readonly ModelRule[];
+  /** 覆盖某个账号的模型；同一模型可属于多个账号。 */
+  onSetAccountModels?: (ref: string, models: readonly string[]) => void;
   /**
    * 卡片底部的常驻内容（OpenCode 的 `autoSwitch` 开关）。
    *
@@ -260,6 +266,45 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
     expanded ? reportBlock(props, account) : null,
     editingRename ? renameEditor(props, account) : null,
     editingKey ? keyEditor(props, account) : null,
+    accountModelsSection(props, account),
+  );
+}
+
+/** 每个账号下的模型选择；同一模型可以同时出现在多个账号里。 */
+function accountModelsSection(props: AccountCardProps, account: AccountUsageStatus): ReactNode {
+  if (props.onSetAccountModels === undefined || props.catalog === undefined) return null;
+  const selected = new Set(props.modelRules?.find((rule) => rule.account === account.ref)?.models ?? []);
+  return createElement(
+    "details",
+    { "data-account-models": account.ref, className: CSS_CLASS.inset },
+    createElement(
+      "summary",
+      { className: CSS_CLASS.orderSummary },
+      `${props.t("account.models")} (${selected.size}/${props.catalog.length})`,
+    ),
+    ...props.catalog.map((model) =>
+      createElement(
+        "label",
+        { key: model.id, className: CSS_CLASS.field },
+        createElement(
+          "span",
+          { className: CSS_CLASS.fieldText },
+          createElement("span", { className: CSS_CLASS.mono }, model.name ?? model.id),
+        ),
+        createElement("input", {
+          type: "checkbox",
+          className: CSS_CLASS.toggle,
+          "data-account-model": `${account.ref}:${model.id}`,
+          checked: selected.has(model.id),
+          onChange: (event: { target?: { checked?: boolean } }) => {
+            const next = new Set(selected);
+            if (event.target?.checked === true) next.add(model.id);
+            else next.delete(model.id);
+            props.onSetAccountModels?.(account.ref, [...next]);
+          },
+        }),
+      ),
+    ),
   );
 }
 

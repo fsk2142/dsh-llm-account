@@ -22,6 +22,7 @@ import type {
   CatalogModelsResult,
   LoginPort,
   LoginStatus,
+  ModelRule,
   QuotaPort,
   QuotaSnapshot,
   VendorCapabilities,
@@ -101,6 +102,10 @@ export interface UsageVendorDeps {
   readonly accountOrder?: () => readonly string[];
   /** 把同一份全局顺序写进两家文档。 */
   readonly setAccountOrder?: (order: readonly string[]) => Promise<void>;
+  /** 模型→账号分配规则（同一模型可属于多个账号）。 */
+  readonly modelRules?: () => readonly ModelRule[];
+  /** 覆盖某个账号的模型列表。 */
+  readonly setAccountModels?: (ref: string, models: readonly string[]) => Promise<void>;
   /** 切换策略运行态（倒计时/待切换）；页面「立即切换」也走这里。 */
   readonly switchState?: () => SwitchRuntimeState;
   readonly switchNow?: () => Promise<SwitchDecision | undefined>;
@@ -235,6 +240,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
       ...(latestSwitch === undefined ? {} : { switch: latestSwitch }),
       ...(deps.switchState === undefined ? {} : { switchState: deps.switchState() }),
       ...(deps.accountOrder === undefined ? {} : { accountOrder: [...deps.accountOrder()] }),
+      ...(deps.modelRules === undefined ? {} : { modelRules: deps.modelRules().map((rule) => ({ ...rule, models: [...rule.models] })) }),
       accounts,
       failures,
     };
@@ -400,6 +406,18 @@ export class LlmAccountUsageService extends TypertRemoteService {
       if (deps.setSwitchSettings !== undefined) writes.push(deps.setSwitchSettings(settings));
     }
     await Promise.all(writes);
+  }
+
+  /**
+   * 覆盖一个账号可用的模型；同一模型可以同时属于多个账号。
+   * @param vendor - 厂商 id。
+   * @param ref - 账号 ref。
+   * @param models - 该账号的模型 id 列表。
+   */
+  async setAccountModels(vendor: VendorId, ref: string, models: readonly string[]): Promise<void> {
+    const setter = this.requireVendor(vendor).setAccountModels;
+    if (setter === undefined) return;
+    await setter(ref, models);
   }
 
   /**

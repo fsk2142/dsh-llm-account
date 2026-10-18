@@ -28,7 +28,7 @@ import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
 import type { AccountPort, AccountState, AccountView, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
+import { assignModelsToAccount, CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
 import { normalizeKey, pickApiKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -36,6 +36,7 @@ import {
   createRotationAccess,
   createSettingsIntentStore,
   writeSwitchSettings,
+  writeModelRules,
   createSettingsPort,
   disableSettingsAutoForm,
   environmentValue,
@@ -311,6 +312,9 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
       await accounts.setOrder?.(order);
     },
     setSwitchSettings: (input) => writeSwitchSettings(settings, COMMAND_CODE_SETTINGS_NS, input),
+    modelRules: () => rulesOf(document()),
+    setAccountModels: (ref, models) =>
+      writeModelRules(settings, COMMAND_CODE_SETTINGS_NS, assignModelsToAccount(rulesOf(document()), ref, models)),
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。

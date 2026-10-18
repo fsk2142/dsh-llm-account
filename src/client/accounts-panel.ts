@@ -14,7 +14,7 @@ import { accountAddSection, accountRows, type AccountCardProps, type LoginView }
 import { CSS_CLASS } from "./css";
 import type { AccountAction } from "./page-state";
 import type { VendorEntry } from "./registry";
-import type { VendorUsageStatus } from "./usage-contract";
+import type { CatalogModel, ModelRule, VendorUsageStatus } from "./usage-contract";
 
 /** 面板里的一个厂商。 */
 export interface AccountsPanelVendor {
@@ -30,6 +30,10 @@ export interface AccountsPanelVendor {
   expandedRef?: string;
   /** 这家的网页登录状态。 */
   login?: LoginView;
+  /** 这家的模型目录（每个账号的模型选择用）。 */
+  catalog?: readonly CatalogModel[];
+  /** 这家的模型→账号规则。 */
+  modelRules?: readonly ModelRule[];
 }
 
 /** 合并账户面板属性。 */
@@ -47,6 +51,8 @@ export interface AccountsPanelProps {
   onMove?: (vendor: string, ref: string, toIndex: number) => void;
   onToggleExpand: (vendor: string, ref: string) => void;
   onLoginBegin: (vendor: string) => void;
+  /** 覆盖某个账号可用的模型。 */
+  onSetAccountModels?: (vendor: string, ref: string, models: readonly string[]) => void;
 }
 
 /**
@@ -194,5 +200,10 @@ function accountPropsFor(props: AccountsPanelProps, group: AccountsPanelVendor):
     onRemove: (ref) => props.onRemove(vendor, ref),
     onToggleExpand: (ref) => props.onToggleExpand(vendor, ref),
     onLoginBegin: () => props.onLoginBegin(vendor),
+    ...(group.catalog === undefined ? {} : { catalog: group.catalog }),
+    ...(group.modelRules === undefined ? {} : { modelRules: group.modelRules }),
+    ...(props.onSetAccountModels === undefined
+      ? {}
+      : { onSetAccountModels: (ref: string, models: readonly string[]) => props.onSetAccountModels?.(vendor, ref, models) }),
   };
 }

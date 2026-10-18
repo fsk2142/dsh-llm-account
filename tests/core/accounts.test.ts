@@ -1,11 +1,20 @@
 import { expect, it } from "vitest";
 
-import { accountRef, assignModelRule, dedupeByRef, dropAccount, globalOrderOfVendor, moveFirst, reorder } from "../../src/core/accounts";
+import { accountRef, assignModelRule, assignModelsToAccount, dedupeByRef, dropAccount, globalOrderOfVendor, moveFirst, reorder } from "../../src/core/accounts";
 
 it("同一模型只属于一个账号：改派给另一账号后旧规则移除", () => {
   const r1 = assignModelRule([], ["m1"], "acc-a");
   const r2 = assignModelRule(r1, ["m1"], "acc-b");
   expect(r2).toEqual([{ models: ["m1"], account: "acc-b" }]);
+});
+
+it("同一模型可以分配给多个账号，不互相摘除", () => {
+  const rules = assignModelsToAccount([{ models: ["m1"], account: "a" }], "b", ["m1", "m2"]);
+  expect(rules).toEqual([
+    { models: ["m1"], account: "a" },
+    { models: ["m1", "m2"], account: "b" },
+  ]);
+  expect(assignModelsToAccount(rules, "b", [])).toEqual([{ models: ["m1"], account: "a" }]);
 });
 
 it("删除账号会同时清掉它的模型规则与当前账号标记", () => {

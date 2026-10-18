@@ -151,8 +151,16 @@ export class RotationEngine {
    * @returns 选中的账号 ref；无可选账号时为 `undefined`（此时不动生效账号）。
    */
   pick({ model, tried }: PickRequest): string | undefined {
-    const rule = this.#rules.find((entry) => entry.models.includes(model));
-    const candidates: readonly (string | null | undefined)[] = [rule?.account, this.#pinned, ...this.#order];
+    // 同一模型可以分配给多个账号：按全局顺序尝试这些账号，再退回固定账号/普通顺序。
+    const assigned = this.#rules.filter((entry) => entry.models.includes(model)).map((entry) => entry.account);
+    const assignedInOrder = this.#order.filter((ref) => assigned.includes(ref));
+    const assignedExtra = assigned.filter((ref) => !this.#order.includes(ref));
+    const candidates: readonly (string | null | undefined)[] = [
+      ...assignedInOrder,
+      ...assignedExtra,
+      this.#pinned,
+      ...this.#order,
+    ];
     for (const ref of candidates) {
       if (ref === null || ref === undefined) continue;
       if (tried.has(ref)) continue;

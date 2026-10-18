@@ -16,7 +16,7 @@ import type { CredentialProvider } from "@deepseek-ai/dsh-credentials";
 import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
 import type { SettingsDescriptor, SettingsForms } from "@deepseek-ai/dsh-settings";
 
-import type { AccountState, CredentialPort, SettingsOp, SettingsPort, SettingsSnapshot } from "../core/adapter";
+import type { AccountState, CredentialPort, ModelRule, SettingsOp, SettingsPort, SettingsSnapshot } from "../core/adapter";
 import type { SwitchSettingsWrite } from "../core/switching";
 import { normalizeKey } from "../core/credentials";
 import { IntentLog } from "../core/recovery";
@@ -431,6 +431,28 @@ export async function writeSwitchSettings(settings: SettingsPort, ns: string, in
           { op: "set", path: ["switchAtTurnEnd"], value: input.atTurnEnd },
           { op: "set", path: ["autoSwitch"], value: input.autoSwitch },
         ],
+        snapshot.revision,
+      );
+      return;
+    } catch (error) {
+      if (attempt >= MAX_CONFLICT_RETRIES || !isSettingsConflict(error)) throw error;
+    }
+  }
+}
+
+/**
+ * 把模型→账号分配规则写进设置文档（修订冲突时重读重试）。
+ * @param settings - 设置端口。
+ * @param ns - 目标命名空间。
+ * @param rules - 完整规则数组（同一模型可属于多个账号）。
+ */
+export async function writeModelRules(settings: SettingsPort, ns: string, rules: readonly ModelRule[]): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    const snapshot = await settings.describe(ns);
+    try {
+      await settings.mutate(
+        ns,
+        [{ op: "set", path: ["modelAccountRules"], value: rules.map((rule) => ({ ...rule, models: [...rule.models] })) }],
         snapshot.revision,
       );
       return;

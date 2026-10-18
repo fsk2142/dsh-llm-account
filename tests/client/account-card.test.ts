@@ -284,6 +284,26 @@ it("非编辑态下没有密钥输入框（避免把密钥长期摆在界面上�
 
 // —— Step 6：固定账号与生效账号并列标注 ——
 
+it("账号下可以单独配置可用模型；同一模型可同时属于多个账号", () => {
+  const { tree, props } = renderCard({
+    status: statusOf({ accounts: [row({ ref: "a" }), row({ ref: "b" })] }),
+    catalog: [
+      { id: "m1", name: "M1" },
+      { id: "m2", name: "M2" },
+    ],
+    modelRules: [
+      { models: ["m1"], account: "a" },
+      { models: ["m1"], account: "b" },
+    ],
+    onSetAccountModels: vi.fn(),
+  });
+  const checkbox = elementsOf(tree).find((element) => element.props["data-account-model"] === "a:m2")!;
+  expect(checkbox.props.checked).toBe(false);
+  fire(checkbox, "onChange", { target: { checked: true } });
+  expect(props.onSetAccountModels).toHaveBeenCalledWith("a", ["m1", "m2"]);
+  expect(elementsOf(tree).find((element) => element.props["data-account-model"] === "b:m1")!.props.checked).toBe(true);
+});
+
 it("固定账号与生效账号不同时，两个都标注（§8.1 第 4 条）", () => {
   const { tree } = renderCard({
     status: statusOf({

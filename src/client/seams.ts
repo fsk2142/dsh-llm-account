@@ -872,6 +872,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
           ? { expandedRef: state.expandedRef }
           : {}),
         ...(logins[entry.providerId] === undefined ? {} : { login: logins[entry.providerId] }),
+        ...(modelCatalogs[entry.providerId] === undefined
+          ? {}
+          : { catalog: modelCatalogs[entry.providerId]!.models }),
+        ...(statuses[entry.providerId]?.modelRules === undefined
+          ? {}
+          : { modelRules: statuses[entry.providerId]!.modelRules! }),
       })),
       onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string }) => setState((current) => openAction(current, action, vendor)),
       onActionField: (field: "label" | "key", value: string) => setState((current) => setActionField(current, field, value)),
@@ -893,11 +899,13 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       onMove: (vendor: string, ref: string, toIndex: number) => {
         void usage?.moveAccount(vendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
       },
+      onSetAccountModels: (vendor: string, ref: string, models: readonly string[]) => {
+        void usage?.setAccountModels?.(vendor, ref, models).then(() => setAccountRevision((current) => current + 1));
+      },
       onToggleExpand: (vendor: string, ref: string) => setState((current) => toggleExpanded(current, ref, vendor)),
       onLoginBegin: (vendor: string) => {
         void remoteValue<LoginView>(usage?.loginBegin(vendor)).then((status) => {
-          if (status !== undefined) setLogins((current) => ({ ...current, [vendor]: status }));
-        });
+          if (status !== undefined) setLogins((current) => ({ ...current, [vendor]: status }));        });
       },
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;

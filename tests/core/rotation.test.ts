@@ -13,6 +13,19 @@ it("按模型规则优先选择账号", () => {
   expect(e.pick({ model: "m1", tried: new Set() })).toBe("b");
 });
 
+it("同一模型分配给多个账号时按全局顺序选，第一个试过后换下一个", () => {
+  const e = new RotationEngine({
+    order: ["a", "b"],
+    pinned: null,
+    rules: [
+      { models: ["m1"], account: "b" },
+      { models: ["m1"], account: "a" },
+    ],
+  });
+  expect(e.pick({ model: "m1", tried: new Set() })).toBe("a");
+  expect(e.pick({ model: "m1", tried: new Set(["a"]) })).toBe("b");
+});
+
 it("固定账号优先，但被标记失效后回落到其它账号", () => {
   const e = new RotationEngine({ order: ["a", "b"], pinned: "b", rules: [] });
   expect(e.pick({ model: "m", tried: new Set() })).toBe("b");

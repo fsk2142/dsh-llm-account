@@ -50,8 +50,8 @@ declare module "@deepseek-ai/cordis" {
   }
 }
 
-import type { AccountPort, AccountState, CredentialPort, QuotaPort, VendorCapabilities } from "../../core/adapter";
-import { CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
+import type { AccountPort, AccountState, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
+import { assignModelsToAccount, CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -59,6 +59,7 @@ import {
   createRotationAccess,
   createSettingsIntentStore,
   writeSwitchSettings,
+  writeModelRules,
   createSettingsPort,
   disableSettingsAutoForm,
   environmentValue,
@@ -124,6 +125,7 @@ export const Config: PluginConfigSchema = z.object(
     modelVisibility: z.dict(z.boolean().required()).default({}),
     visibleModels: z.array(z.string()),
     removedModels: z.array(z.string()),
+    modelAccountRules: z.array(z.object({ models: z.array(z.string()), account: z.string() })),
     apiKeyEnv: z.string().role("credential-ref").default(OPENCODE_DEFAULT_REF),
     // 条目按用户现有形状声明（`id` / `name` / `apiKeyEnv`）。不写死的上限：账号数上限由
     // 账号端口在写入路径上拒绝（`MAX_ACCOUNTS`），schema 拒绝存量文档会让整行起不来。
@@ -238,7 +240,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     // OpenCode 的「当前账号」由 `select` 改写顶层 `apiKeyEnv`，没有独立的「固定」概念。
     pin: false,
     browserLogin: true,
-    modelAccountRules: false,
+    modelAccountRules: true,
     quotaShape: "percent",
     modelVisibilityWrite: "immediate",
     automaticSwitch: true,
@@ -406,6 +408,9 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
       await accounts.setOrder?.(order);
     },
     setSwitchSettings: (input) => writeSwitchSettings(settings, OPENCODE_SETTINGS_NS, input),
+    modelRules: () => modelRulesOf(document()),
+    setAccountModels: (ref, models) =>
+      writeModelRules(settings, OPENCODE_SETTINGS_NS, assignModelsToAccount(modelRulesOf(document()), ref, models)),
     // 实验性设备码网页登录。
     login,
   });
@@ -520,11 +525,28 @@ function modelLimitsOf(value: unknown): Record<string, OpencodeModelLimits> | un
  * 额度拒绝就会把请求打到用户没允许的第二个账号上。只有**显式** `false` 才收窄：程序化构造的
  * 文档没有这个字段时保持完整的顺序（与旧插件 `readConfig` 拿到的归一化值同义）。
  */
+/** 按模型分配规则；形状不可信时逐条收窄。 */
+function modelRulesOf(document: Record<string, unknown>): ModelRule[] {
+  const raw = document.modelAccountRules;
+  if (!Array.isArray(raw)) return [];
+  const rules: ModelRule[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const models = Array.isArray(item.models)
+      ? item.models.filter((model): model is string => typeof model === "string" && model.trim() !== "")
+      : undefined;
+    const account = normalizeKey(item.account);
+    if (models === undefined || models.length === 0 || account === undefined) continue;
+    rules.push({ models, account });
+  }
+  return rules;
+}
+
 function accountStateOf(document: Record<string, unknown>): AccountState {
   const slot = opencodeAccountSlot(document);
   return {
     order: document.autoSwitch === false ? [slot.ref] : orderOf(document),
-    rules: [],
+    rules: modelRulesOf(document),
     pinned: slot.pinned,
   };
 }

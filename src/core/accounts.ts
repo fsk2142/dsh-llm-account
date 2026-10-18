@@ -206,6 +206,24 @@ export function assignModelRule(rules: ModelRule[], models: string[], account: s
 }
 
 /**
+ * 把一组模型分配给一个账号，**不**从其他账号删除同一模型。
+ * 同一模型可被多个账号使用；该账号没有模型时移除它的规则。
+ * @param rules - 现有按模型规则。
+ * @param account - 目标账号 ref。
+ * @param models - 该账号可用的模型 id。
+ * @returns 新的规则数组；入参不被修改。
+ */
+export function assignModelsToAccount(
+  rules: readonly ModelRule[],
+  account: string,
+  models: readonly string[],
+): ModelRule[] {
+  const clean = [...new Set(models.filter((model) => typeof model === "string" && model.trim() !== ""))];
+  const others = rules.filter((rule) => rule.account !== account);
+  return clean.length === 0 ? others : [...others, { models: clean, account }];
+}
+
+/**
  * 删除账号后的状态：从顺序里去掉它的每一处，丢掉挂在它名下的整条模型规则
  * （规则归账号所有，删账号即删规则），并在它是当前固定账号时把标记清成 `null`
  * （回到自动轮换）。删除不存在的 ref 是恒等变换。

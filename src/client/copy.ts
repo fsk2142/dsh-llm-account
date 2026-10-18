@@ -97,6 +97,7 @@ export type CopyKey =
   | "account.pin"
   | "account.use"
   | "account.current"
+  | "account.models"
   | "account.remove"
   | "account.menu"
   | "account.expand"
@@ -280,6 +281,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.pin": "切换到此账户",
     "account.use": "使用",
     "account.current": "当前使用",
+    "account.models": "可用模型",
     "account.remove": "移除",
     "account.menu": "更多操作",
     "account.expand": "展开完整报告",
@@ -458,6 +460,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.pin": "Switch to this account",
     "account.use": "Use",
     "account.current": "Current",
+    "account.models": "Models",
     "account.remove": "Remove",
     "account.menu": "More actions",
     "account.expand": "Show full report",

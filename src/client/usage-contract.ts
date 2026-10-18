@@ -31,10 +31,13 @@ export type {
   CatalogModel,
   CatalogModelsResult,
   FailureKind,
+  ModelRule,
   QuotaWindow,
   VendorCapabilities,
 } from "../core/adapter";
 export type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
+
+import type { ModelRule } from "../core/adapter";
 
 /** 贡献所属的 npm 包（描述符 id 的前缀）。 */
 export const USAGE_PACKAGE = "dsh-llm-account";
@@ -68,6 +71,8 @@ export const USAGE_METHODS = [
   "setAccountOrder",
   // 全局切换策略（两家同一套）
   "setSwitchSettings",
+  // 账户可用的模型（同一模型可属于多个账号）
+  "setAccountModels",
   // 网页登录（Task 5：Command Code 的登录入口）
   "loginBegin",
   "loginStatus",
@@ -148,6 +153,8 @@ export interface VendorUsageStatus {
   switchState?: SwitchRuntimeState;
   /** 全局顺序（`vendor:ref`；两家返回同一份）。 */
   accountOrder?: string[];
+  /** 模型→账号分配规则；同一模型可以属于多个账号。 */
+  modelRules?: ModelRule[];
   accounts: AccountUsageStatus[];
   failures: string[];
 }
@@ -373,6 +380,8 @@ interface ParamSpec {
 const VENDOR_PARAM: ParamSpec = { name: "vendor", typeSymbol: "VendorId", parse: (_endpoint, value) => parseVendorId(value) };
 /** 账号 ref 参数。 */
 const REF_PARAM: ParamSpec = { name: "ref", typeSymbol: "AccountRef", parse: parseString };
+/** 模型 id 数组参数。 */
+const MODELS_PARAM: ParamSpec = { name: "models", typeSymbol: "AccountModels", parse: parseStringArray };
 
 /**
  * 造一个参数描述符。
@@ -471,6 +480,7 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("setSwitchSettings", "Void", parseVoid, [
       { name: "settings", typeSymbol: "SwitchSettingsWrite", parse: parseSwitchSettings },
     ]),
+    makeDescriptor("setAccountModels", "Void", parseVoid, [VENDOR_PARAM, REF_PARAM, MODELS_PARAM]),
     // 登录的 ref 由宿主按登录返回的用户名推导（`accountRef`），客户端**不能**指定它 ——
     // 能指定就等于让页面决定把密钥写进哪个凭据槽，那正是 T5 Step 7 要防的事。
     makeDescriptor("loginBegin", "LoginStatus", parseLoginStatus, [VENDOR_PARAM]),
@@ -495,6 +505,7 @@ export interface UsageNamespace {
   switchNow?(vendor: string): Promise<SwitchNowResult>;
   setAccountOrder?(order: readonly string[]): Promise<void>;
   setSwitchSettings?(settings: SwitchSettingsWrite): Promise<void>;
+  setAccountModels?(vendor: string, ref: string, models: readonly string[]): Promise<void>;
   loginBegin(vendor: string): Promise<LoginStatus>;
   loginStatus(vendor: string): Promise<LoginStatus>;
   loginCancel(vendor: string): Promise<void>;
