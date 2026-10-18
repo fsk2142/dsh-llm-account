@@ -594,10 +594,14 @@ describe("侧边栏卡片容器仿真", () => {
     expect(host.rows.get("llm-commandcode")!.value.showSidebarQuota).toBe(true);
 
     expect(cardView.tree()).not.toBeNull();
-    expect(host.statusCalls.slice(baseline)).toEqual(["commandcode"]);
+    // 保存的是「通用显示设置」→ 三家一起打开。三家都没有账号，于是轮播逐家试一遍
+    // （2026-10-18 用户要求：没有账号的厂商自动跳过，不显示「未配置」），
+    // 一轮都试完仍没有可显示的账号时停在最后一家显示空态。
+    const probed = host.statusCalls.slice(baseline);
+    expect(new Set(probed)).toEqual(new Set(["commandcode", "dsh-opencode-go", "opendesign"]));
     vi.advanceTimersByTime(60_000);
     await settleSim(mini);
-    expect(host.statusCalls.slice(baseline)).toEqual(["commandcode", "commandcode"]);
+    expect(cardView.tree()).not.toBeNull();
     vi.useRealTimers();
   });
 
@@ -630,7 +634,15 @@ describe("侧边栏卡片容器仿真", () => {
     const mini = await runtime();
     await freshSeams();
     vi.useFakeTimers();
-    const host = fakeHost(mini, { commandcodeToggle: true, opencodeToggle: true });
+    const host = fakeHost(mini, {
+      commandcodeToggle: true,
+      opencodeToggle: true,
+      // 两家都带一个已配置账号：轮播「跳过未配置厂商」的逻辑不该在这里触发。
+      accounts: {
+        commandcode: [{ ref: "cc-1", label: "CC", configured: true, active: true }],
+        "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true }],
+      },
+    });
     const { card } = await applyLikeHost(host);
     const cardView = mini.mount(card);
     await settleSim(mini);
@@ -736,43 +748,8 @@ describe("仪表盘容器仿真", () => {
     click(view.tree(), "data-dashboard-close");
     expect(host.panels).toEqual([DASHBOARD_PANEL_ID, null]);
   });
-
-  it("「转到设置」经 selectPanel 打开设置页面板；面板的返回栏送回仪表盘", async () => {
-    const mini = await runtime();
-    await freshSeams();
-    const host = fakeHost(mini);
-    const { registerSharedSurfaces, startSharedState, DASHBOARD_PANEL_ID, SETTINGS_PANEL_ID } = await import("../../src/client/seams");
-    const { VENDORS, PAGE_LOCALE_NS } = await import("../../src/client/shell");
-    const { dictionaryOf } = await import("../../src/client/copy");
-    const { createElement } = await import("react");
-    startSharedState(host.ctx as never, VENDORS);
-    // 与 apply 同序同物，只把页面工厂换成纯函数桩：被测的是外壳与接线，不是设置页本身
-    // （设置页容器在本文件仿真 1 里另测）。
-    registerSharedSurfaces({
-      ctx: host.ctx as never,
-      entries: VENDORS,
-      t: dictionaryOf("zh"),
-      localeNs: PAGE_LOCALE_NS,
-      pageComponent: () => () => createElement("div", { "data-stub-settings-page": "true" }, "设置页"),
-    });
-    const dashboard = host.registered.find((entry) => entry.slot === "main" && entry.entry["key"] === DASHBOARD_PANEL_ID)!;
-    const settings = host.registered.find((entry) => entry.slot === "main" && entry.entry["key"] === SETTINGS_PANEL_ID)!;
-    const dashView = mini.mount(dashboard.component);
-    await settleSim(mini);
-
-    // 宿主有 layout.selectPanel → 按钮渲染出来；点它 → selectPanel(设置页面板 key)。
-    click(dashView.tree(), "data-dashboard-settings");
-    expect(host.panels).toEqual([SETTINGS_PANEL_ID]);
-
-    // 设置页面板挂起来：页面组件在里面，返回栏在它上面。
-    const settingsView = mini.mount(settings.component);
-    await settleSim(mini);
-    expect(find(settingsView.tree(), "data-stub-settings-page")).toBeDefined();
-    // 返回 → 送回仪表盘（不是 selectPanel(null)：用户是从仪表盘来的）。
-    click(settingsView.tree(), "data-settings-back");
-    expect(host.panels).toEqual([SETTINGS_PANEL_ID, DASHBOARD_PANEL_ID]);
-  });
 });
+
 // —— 仿真 4：网页登录（2026-10-18 报障：没自动弹出 / 链接不消失 / 另外两家没反应） ——
 
 describe("网页登录容器仿真", () => {
@@ -1084,4 +1061,65 @@ it("加完账号后模型目录自动重读：加之前读不到（401），加�
   // 账号修订号变化 → 目录重读（否则界面会一直停在挂载时那次空目录上）。
   expect(host.modelCalls.length).toBeGreaterThan(before);
   page.unmount();
+});
+
+it("侧边栏轮播：两家都开时轮流显示（默认 1 分钟一换，先显示按标签页顺序的第一家）", async () => {
+  const mini = await runtime();
+  await freshSeams();
+  vi.useFakeTimers();
+  const host = fakeHost(mini, {
+    commandcodeToggle: true,
+    opencodeToggle: true,
+    accounts: {
+      commandcode: [{ ref: "cc-1", label: "CC", configured: true, active: true }],
+      "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true }],
+    },
+  });
+  const { card } = await applyLikeHost(host);
+  const cardView = mini.mount(card);
+  await settleSim(mini);
+
+  // 起点：第一家（commandcode）。
+  expect(cardView.tree()).not.toBeNull();
+  expect(host.statusCalls).toEqual(["commandcode"]);
+
+  // 30 秒：还没到轮播点，仍是同一家。
+  vi.advanceTimersByTime(30_000);
+  await settleSim(mini);
+  expect(host.statusCalls).not.toContain("dsh-opencode-go");
+
+  // 到 60 秒：轮播切到第二家并读它的状态（卡片标题随之换供应商）。
+  vi.advanceTimersByTime(30_000);
+  await settleSim(mini);
+  expect(host.statusCalls).toContain("dsh-opencode-go");
+
+  // 再一轮回到第一家（两家循环）。
+  vi.advanceTimersByTime(60_000);
+  await settleSim(mini);
+  const commandCodeReads = host.statusCalls.filter((vendor) => vendor === "commandcode").length;
+  expect(commandCodeReads).toBeGreaterThanOrEqual(3);
+  vi.useRealTimers();
+});
+
+it("轮播跳过没有账号的厂商：第一家未配置 → 直接落到第二家，不显示「未配置」", async () => {
+  const mini = await runtime();
+  await freshSeams();
+  vi.useFakeTimers();
+  const host = fakeHost(mini, {
+    commandcodeToggle: true,
+    opencodeToggle: true,
+    // 只有 opencode 有账号：commandcode 这一轮必须被跳过（2026-10-18 用户要求）。
+    accounts: { "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true, effective: true }] },
+  });
+  const { card } = await applyLikeHost(host);
+  const cardView = mini.mount(card);
+  await settleSim(mini);
+
+  // 探过 commandcode（发现没账号）→ 跳到 opencode 并显示它的账号。
+  expect(host.statusCalls).toContain("commandcode");
+  expect(host.statusCalls).toContain("dsh-opencode-go");
+  const text = textsOfSim(cardView.tree()).join(" ");
+  expect(text).toContain("OC");
+  expect(text).not.toContain("未配置");
+  vi.useRealTimers();
 });

@@ -34,9 +34,14 @@ export class ReadingCache<T> {
    * @param now - 取当前时刻（毫秒；测试注入假时钟）。
    */
   constructor(
-    private readonly ttlMs: number,
+    private readonly ttlMs: number | (() => number),
     private readonly now: () => number = () => Date.now(),
   ) {}
+
+  /** 当前生效的新鲜期（毫秒）：允许传函数 —— 用户改「刷新间隔」时不必重建缓存。 */
+  private ttl(): number {
+    return typeof this.ttlMs === "function" ? this.ttlMs() : this.ttlMs;
+  }
 
   /**
    * 取一条仍然新鲜的读数。
@@ -46,7 +51,7 @@ export class ReadingCache<T> {
   get(key: string): T | undefined {
     const entry = this.entries.get(key);
     if (entry === undefined) return undefined;
-    if (this.now() - entry.at > this.ttlMs) {
+    if (this.now() - entry.at > this.ttl()) {
       this.entries.delete(key);
       return undefined;
     }

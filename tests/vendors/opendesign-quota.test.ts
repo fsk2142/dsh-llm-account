@@ -108,7 +108,11 @@ it("data 包装与 data: null：剥一层拿里层；null 是「没有数据」�
   expect(wrapped.plan).toMatchObject({ id: "pro", name: "pro" });
   expect(wrapped.plan?.status).toBeUndefined();
   expect(wrapped.plan?.periodEnd).toBe(Date.parse("2026-11-14T00:00:00Z"));
-  expect(wrapped.windows).toEqual([]);
+  // 没有 preflight 也有一行：套餐是 `pro`，月度上限 $480（`used` 读不到就留空），
+  // 重置时刻就是订阅本期结束（不编别的日期）。
+  expect(wrapped.windows).toEqual([
+    { key: "monthly", unit: "usd", cap: 480, resetAt: Date.parse("2026-11-14T00:00:00Z") },
+  ]);
 
   const nulled = toQuotaSnapshot({ summary: { data: null }, failures: [] });
   expect(nulled.plan).toBeUndefined();
@@ -249,4 +253,64 @@ it("套餐字段宽容读取：tier/plan/status 与 subscription 子对象都认
   // 一个都不认：不造套餐（「缺失」与「有套餐但没名字」必须分得开）。
   const empty = scriptedFetch([() => json({ creditsPerUsd: 10 })]);
   expect((await createOpenDesignQuota(deps(empty)).snapshot()).plan).toBeUndefined();
+});
+
+it("工作区可以是异步发现的（网页登录产物不带 workspaceId）：解析出来后照常查 vela", async () => {
+  const preflight = vi.fn(async () => ({
+    codingPlan: { windows: [{ usedCredits: 906, limitCredits: 50_000, durationSeconds: 18_000, resetsAt: 1_800_000_000_000 }] },
+  }));
+  // 真实换算率（`/billing/summary` 实测）：10000 credits = 1 美元。
+  const fetchImpl = scriptedFetch([() => json({ creditsPerUsd: 10_000, membershipTier: "go" })]);
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      // 装配层在缺省时会去问 vela（`team-projects list`），所以这里返回的是 Promise。
+      workspaceIdOf: async () => "ws-discovered",
+      preflight,
+    }),
+  );
+
+  const snapshot = await quota.snapshot();
+  expect(preflight).toHaveBeenCalledWith("ws-discovered");
+  // 厂商只发 5 小时/7 天两个窗口；套餐是 `go`，所以末尾补一行**月度上限**（$120），
+  // 用量读不到就留空（`used` 缺席），绝不编一个 0。
+  expect(snapshot.windows).toEqual([
+    { key: "fiveHour", unit: "usd", used: 0.0906, cap: 5, resetAt: 1_800_000_000_000 },
+    { key: "monthly", unit: "usd", cap: 120 },
+  ]);
+  expect(snapshot.failures).toEqual([]);
+});
+
+it("月度上限：只按官方套餐表补，认不出的套餐不补；已有月度窗口不重复补", () => {
+  // Go：$120（open-design.ai/model-credits 的 Plan 表）。
+  expect(toQuotaSnapshot({ summary: { membershipTier: "go" }, failures: [] }).windows).toEqual([
+    { key: "monthly", unit: "usd", cap: 120 },
+  ]);
+  // 认不出的套餐（旧快照 / 新套餐）：不编数字。
+  expect(toQuotaSnapshot({ summary: { membershipTier: "enterprise-x" }, failures: [] }).windows).toEqual([]);
+  // 厂商自己发了月度窗口（2592000 秒）就不补。
+  const snapshot = toQuotaSnapshot({
+    summary: { membershipTier: "go", creditsPerUsd: 10_000 },
+    preflight: { codingPlan: { windows: [{ usedCredits: 1000, limitCredits: 5000, durationSeconds: 2_592_000 }] } },
+    failures: [],
+  });
+  expect(snapshot.windows).toEqual([{ key: "monthly", unit: "usd", used: 0.1, cap: 0.5 }]);
+});
+
+it("preflight 的数字是字符串（\"906\"/\"50000\"）：照样折算成美元读数，不能只剩重置时间", () => {
+  // 2026-10-18 真机实测：`vela billing preflight --format json` 里 usedCredits / limitCredits
+  // 是字符串。只认 number 时窗口只有 resetAt，界面显示「有额度条但没有额度信息」。
+  const snapshot = toQuotaSnapshot({
+    summary: { creditsPerUsd: 10_000, membershipTier: "go" },
+    preflight: {
+      codingPlan: {
+        windows: [
+          { usedCredits: "906", limitCredits: "50000", durationSeconds: 18_000, resetsAt: "2026-10-18T15:21:12.000Z" },
+          { usedCredits: "906", limitCredits: "150000", durationSeconds: 604_800, resetsAt: "2026-10-25T10:21:12.000Z" },
+        ],
+      },
+    },
+    failures: [],
+  });
+  expect(snapshot.windows[0]).toMatchObject({ key: "fiveHour", unit: "usd", used: 0.0906, cap: 5 });
+  expect(snapshot.windows[1]).toMatchObject({ key: "weekly", unit: "usd", used: 0.0906, cap: 15 });
 });

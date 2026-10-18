@@ -118,7 +118,7 @@ it("额度带单位：美元窗口在面板上排版成 `$`（user 2026-10-18：
   expect(texts).not.toContain("62.2122");
 });
 
-it("生效账号高亮；固定与生效不同时两者都标注", () => {
+it("生效账号高亮；「当前使用」只标在真正生效的那个账号上（不是选中的那个）", () => {
   const { tree } = render({
     status: statusOf([row("fixed", { active: true }), row("serving", { effective: true })], {
       pinned: "fixed",
@@ -134,8 +134,11 @@ it("生效账号高亮；固定与生效不同时两者都标注", () => {
   expect(fixed.props["data-dashboard-effective"]).toBe(false);
   // 高亮只有一个。
   expect(rows.filter((element) => element.props["data-dashboard-effective"] === true)).toHaveLength(1);
-  // 「固定」也标注出来了。
-  expect(elementsOf(fixed).some((element) => element.props["data-dashboard-pinned"] !== undefined)).toBe(true);
+  // 每家只标一个「当前使用」：生效账号存在时就是它，不再给「选中的」另画一个徽标。
+  const current = elementsOf(tree).filter((element) => element.props["data-dashboard-current"] !== undefined);
+  expect(current).toHaveLength(1);
+  expect(current[0]!.props["data-dashboard-current"]).toBe("serving");
+  expect(elementsOf(tree).some((element) => element.props["data-dashboard-pinned"] !== undefined)).toBe(false);
 });
 
 it("多厂商视图：每家的账号用自己厂商的兜底窗口与固定标注", () => {
@@ -144,7 +147,7 @@ it("多厂商视图：每家的账号用自己厂商的兜底窗口与固定标�
   const { tree } = render({
     status: statusOf([row("a", { label: "A" })]),
     vendors: [
-      { label: "Command Code", status: statusOf([row("a", { label: "A" })], { pinned: "a" }) },
+      { label: "Command Code", status: statusOf([row("a", { label: "A", active: true })], { pinned: "a" }) },
       { label: "OpenCode", status: { ...statusOf([row("b", { label: "B" })]), vendor: "dsh-opencode-go" } },
     ],
   });
@@ -155,10 +158,10 @@ it("多厂商视图：每家的账号用自己厂商的兜底窗口与固定标�
     .map((element) => element.props["data-dashboard-window"]);
   // opencode 的形状是滚动窗口/每周/每月；commandcode 的是 5 小时/每周/月度额度。
   expect(windows).toEqual(["rolling", "weekly", "monthly"]);
-  // pinned 只标在第一家固定住的那个账号上，不张冠李戴。
-  const pinned = elementsOf(tree).filter((element) => element.props["data-dashboard-pinned"] !== undefined);
-  expect(pinned).toHaveLength(1);
-  expect(pinned[0]!.props["data-dashboard-pinned"]).toBe("a");
+  // 「当前使用」只标在第一家选中的那个账号上，不张冠李戴（第二家没有 active 账号就不标）。
+  const current = elementsOf(tree).filter((element) => element.props["data-dashboard-current"] !== undefined);
+  expect(current).toHaveLength(1);
+  expect(current[0]!.props["data-dashboard-current"]).toBe("a");
 });
 
 it("厂商级失败项给人话：端点短名与超时都不再原样上屏，原文留 data 属性", () => {
@@ -231,15 +234,3 @@ it("状态还没到时给出占位说明；关闭与刷新按钮把意图报出�
   expect(props.onRefresh).toHaveBeenCalledTimes(1);
 });
 
-it("「转到设置」按钮：给了 onOpenSettings 才渲染，点击把意图报出去", () => {
-  // 不传 = 不渲染：宿主没有 layout.selectPanel 时渲染一个点了没反应的按钮比不渲染更糟。
-  const bare = render();
-  expect(elementsOf(bare.tree).some((element) => element.props["data-dashboard-settings"] !== undefined)).toBe(false);
-
-  const { tree, props } = render({ onOpenSettings: vi.fn() });
-  const settings = elementsOf(tree).find((element) => element.props["data-dashboard-settings"] !== undefined)!;
-  expect(settings.type).toBe("button");
-  expect(settings.props["aria-label"]).toBe(dictionaryOf("zh")("dashboard.openSettings"));
-  (settings.props.onClick as () => void)();
-  expect(props.onOpenSettings).toHaveBeenCalledTimes(1);
-});

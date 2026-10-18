@@ -759,6 +759,50 @@ function collectVelaRun(child: VelaChild, timeoutMs: number): Promise<VelaRunRes
   });
 }
 
+/** 发现工作区的预算（毫秒）：登录收尾时的一次查询，不该把收尾拖住。 */
+export const WORKSPACE_DISCOVERY_TIMEOUT_MS = 5_000;
+
+/** `discoverWorkspaceId` 的依赖（全部可选：缺省读本机的 vela）。 */
+export interface WorkspaceDiscoveryDeps {
+  /** 启动 vela 的方式；缺省 {@link defaultSpawn}。 */
+  spawn?: VelaSpawn;
+  /** 解析 vela 可执行文件；缺省按 {@link findVelaBinary}。 */
+  resolveVela?: () => Promise<string | undefined>;
+  /** 预算（毫秒）；缺省 {@link WORKSPACE_DISCOVERY_TIMEOUT_MS}。 */
+  timeoutMs?: number;
+}
+
+/**
+ * 问本机 vela 要「当前工作区 id」。
+ *
+ * 为什么要问：`~/.amr/config.json` 的 profile **不一定**带 `workspaceId`（本机实测：只有两把
+ * 密钥与 user，没有工作区）。而周期额度（`billing preflight --workspace-id …`）必须有它 ——
+ * 没有工作区就是一条额度窗口都读不到，用户还得自己去找 id。`vela team-projects list` 会回
+ * `{ workspaceId, projects }`，那是 CLI 自己认的当前工作区，正好是这个值。
+ *
+ * 任何失败（找不到 vela、命令非零、输出不是 JSON）都读作「没发现」：这条路径是**锦上添花**，
+ * 不能因为它把登录判成失败。
+ * @param deps - 注入点（spawn / resolveVela / 预算）。
+ * @returns 工作区 id，或 `undefined`。
+ */
+export async function discoverWorkspaceId(deps: WorkspaceDiscoveryDeps = {}): Promise<string | undefined> {
+  const vela = await (deps.resolveVela ?? defaultResolveVela)();
+  if (vela === undefined) return undefined;
+  const spawn = deps.spawn ?? defaultSpawn;
+  let child: VelaChild;
+  try {
+    child = spawn(vela, ["team-projects", "list"]);
+  } catch {
+    return undefined;
+  }
+  const run = await collectVelaRun(child, deps.timeoutMs ?? WORKSPACE_DISCOVERY_TIMEOUT_MS);
+  if (run.code !== 0) return undefined;
+  const payload = parseVelaJson(run.stdout);
+  if (!isRecord(payload)) return undefined;
+  const workspaceId = normalizeKey(payload.workspaceId);
+  return workspaceId === undefined ? undefined : workspaceId;
+}
+
 /** `createVelaPreflight` 的依赖（全部可选：缺省读本机的 vela 与 `process.env`）。 */
 export interface VelaPreflightDeps {
   /** 启动 vela 的方式；缺省 {@link defaultSpawn}。 */

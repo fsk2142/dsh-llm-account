@@ -20,7 +20,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { CSS_CLASS } from "./css";
 import { rejectionText } from "./copy";
 import { failureText } from "./failure-text";
-import { CloseIcon, RefreshIcon, SettingsIcon } from "./icons";
+import { CloseIcon, RefreshIcon } from "./icons";
 import { QuotaBar } from "./quota-bar";
 import { fallbackQuotaWindows, quotaPlanText } from "./quota";
 import type { AccountUsageStatus, QuotaWindow, VendorUsageStatus } from "./usage-contract";
@@ -36,13 +36,6 @@ export interface DashboardProps {
   onClose: () => void;
   /** 手动刷新（可选）。 */
   onRefresh?: () => void;
-  /**
-   * 打开设置页（「转到设置」按钮）。
-   *
-   * **不传 = 不渲染这个按钮**：宿主没有 `layout.selectPanel` 接缝时渲染一个点了没反应的
-   * 按钮，比不渲染更糟（与 {@link DashboardProps.onRefresh} 同一条纪律）。
-   */
-  onOpenSettings?: () => void;
   /**
    * 最近一次读取的失败原因（宿主给出的可读文本）；读取正常时为 `undefined`。
    * 与 {@link SidebarCardProps.failure} 同一条纪律：读失败与没有数据是两件事。
@@ -86,24 +79,6 @@ export function Dashboard(props: DashboardProps): ReactElement {
                   onClick: () => props.onRefresh?.(),
                 },
                 createElement(RefreshIcon, null),
-              ),
-            ]),
-        // 「转到设置」：面板里看到哪个账号有问题，直接去设置里管它（换密钥/移除/改模型）。
-        ...(props.onOpenSettings === undefined
-          ? []
-          : [
-              createElement(
-                "button",
-                {
-                  key: "settings",
-                  type: "button",
-                  "data-dashboard-settings": "true",
-                  "aria-label": t("dashboard.openSettings"),
-                  title: t("dashboard.openSettings"),
-                  className: CSS_CLASS.icon,
-                  onClick: () => props.onOpenSettings?.(),
-                },
-                createElement(SettingsIcon, null),
               ),
             ]),
         createElement(
@@ -233,7 +208,14 @@ function accountBlock(
 ): ReactNode {
   const { t } = props;
   const effective = account.effective;
-  const pinned = status?.pinned === account.ref;
+  // 「当前使用」= 这家供应商此刻在服务的账号，**每家只有一个**：有生效账号就标生效的那个
+  // （自动轮换后的真实服务者），没有生效账号时才退回「设置里选中的那个」。
+  // 以前这里还画一个「已指定」（pinned），两个徽标说的是同一件事，用户看到的却是「每个
+  // 账户都写着已指定」—— 语义收拢成一个。
+  const serving = (status?.accounts ?? []).some(
+    (candidate) => typeof candidate === "object" && candidate !== null && candidate.effective === true,
+  );
+  const current = serving ? effective : account.active === true;
   // 契约里 `rejection` / `quota` 都是**可选**字段，而线上可能把它们序列化成 `null`
   // （JSON 没有 undefined）。只写 `=== undefined` 会让 `null` 走进来，接着读 `.kind` /
   // `.windows` 抛错 —— 渲染路径一抛，整块仪表盘变空白。与 `sidebar-card.ts` 同一条纪律。
@@ -270,8 +252,15 @@ function accountBlock(
             ...(label === ""
               ? []
               : [createElement("small", { key: "vendor", "data-account-vendor": label, className: CSS_CLASS.vendorBadge }, label)]),
-            ...(effective ? [createElement("span", { key: "effective", "data-dashboard-mark": "effective", className: CSS_CLASS.mark }, t("sidebar.effective"))] : []),
-            ...(pinned ? [createElement("span", { key: "pinned", "data-dashboard-pinned": account.ref, className: CSS_CLASS.mark }, t("sidebar.pinned"))] : []),
+            ...(current
+              ? [
+                  createElement(
+                    "span",
+                    { key: "current", "data-dashboard-current": account.ref, className: CSS_CLASS.mark },
+                    t("account.effectiveBy"),
+                  ),
+                ]
+              : []),
           ),
           createElement("small", { key: "configured" }, account.configured ? t("account.configured") : t("account.missing")),
           // 订阅套餐：厂商报告了订阅才有这一行（与设置页账户卡片同一形状、同一份文案）。

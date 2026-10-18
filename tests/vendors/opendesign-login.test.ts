@@ -13,6 +13,7 @@ import {
   parseVelaPrompt,
   profileLabel,
   createOpenDesignLogin,
+  discoverWorkspaceId,
   type OpenDesignLoginDeps,
   type VelaChild,
 } from "../../src/vendors/opendesign/login";
@@ -239,4 +240,37 @@ it("vela 解析顺序：VELA_BIN 直接采信，桌面端内置按 LOCALAPPDATA 
   expect(findVelaBinary({ PATH: "C:\\bin" }, (path) => path.endsWith("vela.exe"))).toContain("C:\\bin");
   // 三个来源都没有：undefined（调用方据此走导入路径或报 vela-missing）。
   expect(findVelaBinary({}, () => false)).toBeUndefined();
+});
+
+// —— 工作区发现：登录产物通常只有两把密钥，工作区要问 vela（2026-10-18 本机实测） ——
+
+/**
+ * 跑一次发现：假子进程要等 `spawn` 真的被调用之后再 `emitExit`（退出事件是按订阅派发的，
+ * 提前发等于没发）。
+ */
+async function discoverWith(promptText: string, code: number): Promise<string | undefined> {
+  const child = fakeChild({ prompt: promptText });
+  const spawn = vi.fn(() => child);
+  const pending = discoverWorkspaceId({ spawn, resolveVela: async () => "vela", timeoutMs: 500 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  child.emitExit(code);
+  return pending;
+}
+
+it("discoverWorkspaceId：从 vela team-projects list 的 JSON 里取当前工作区", async () => {
+  const child = fakeChild({ prompt: '{"workspaceId":"ws-abc","projects":[]}' });
+  const spawn = vi.fn(() => child);
+  const pending = discoverWorkspaceId({ spawn, resolveVela: async () => "vela", timeoutMs: 500 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  child.emitExit(0);
+
+  expect(await pending).toBe("ws-abc");
+  expect(spawn).toHaveBeenCalledWith("vela", ["team-projects", "list"]);
+});
+
+it("discoverWorkspaceId：找不到 vela / 命令失败 / 输出不是 JSON / 空 id 都读作「没发现」", async () => {
+  expect(await discoverWorkspaceId({ spawn: vi.fn(), resolveVela: async () => undefined })).toBeUndefined();
+  expect(await discoverWith("boom", 1)).toBeUndefined();
+  expect(await discoverWith("not json at all", 0)).toBeUndefined();
+  expect(await discoverWith('{"workspaceId":"  "}', 0)).toBeUndefined();
 });

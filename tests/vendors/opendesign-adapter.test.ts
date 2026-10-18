@@ -418,16 +418,48 @@ it("resolveModel：目录不声明档位时按模型族兜底（宿主的思考�
 
   const resolved = await adapter.resolveModel("opendesign", "claude-sonnet-4-5-20250929");
 
+  // Claude 族五档（含 `max` —— 以前只声明三档，用户看不到最高档）。
   expect(resolved.reasoning?.efforts.map((effort) => effort.id)).toEqual([
     ReasoningEffortId("low"),
     ReasoningEffortId("medium"),
     ReasoningEffortId("high"),
+    ReasoningEffortId("xhigh"),
+    ReasoningEffortId("max"),
   ]);
   // 同一份目录里展示名也统一成官方名。
   expect(resolved.name).toBe("Claude-Sonnet-4.5");
 });
 
-it("stream：网关不认 reasoning_effort（400）时去掉字段重发一次，回答照常拿到", async () => {
+it("stream：网关拒绝档位但念出白名单时，按白名单降一档重发（不是直接丢掉档位）", async () => {
+  const fetchImpl = scriptedFetch([
+    // ① 核档位：目录声明到 max（我们以为它有 max）。
+    () => catalogResponse([{ id: "glm-5.3-flash", efforts: ["low", "high", "max"] }]),
+    // ② 网关实际只认到 high，且把白名单念出来（真实口吻，2026-10-18 实测）。
+    () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "[code=invalid_request_error] reasoning effort is unsupported for glm-5.3-flash; use one of low, high",
+          },
+        }),
+        { status: 400 },
+      ),
+    // ③ 降一档（high）重发 → 成功。
+    () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
+  ]);
+  const { chunks, calls } = await runStream(
+    { ...request("glm-5.3-flash"), reasoningEffort: ReasoningEffortId("max") },
+    adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }),
+  );
+
+  expect(calls).toHaveLength(3);
+  expect(field(calls[1]!.body, "reasoning_effort")).toBe("max");
+  // 用户的选择只退到白名单里最强的那档，而不是整段消失。
+  expect(field(calls[2]!.body, "reasoning_effort")).toBe("high");
+  expect(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "ok")).toBe(true);
+});
+
+it("stream：网关不认 reasoning_effort（400）且没念白名单时去掉字段重发一次，回答照常拿到", async () => {
   const fetchImpl = scriptedFetch([
     // ① 核档位（目录声明了 high）。
     () => catalogResponse([{ id: "claude-sonnet-4-5", efforts: ["low", "high"] }]),

@@ -63,9 +63,10 @@ export interface WebSearchCardProps {
   readonly customKey: WebSearchKeyView;
   /** 凭据服务是否可用（不可用时不说「未配置」，说「读不到」）。 */
   readonly credentialsAvailable: boolean;
+  /** 正在保存（控件据此禁用；保存动作由页面底部的「保存」按钮发起）。 */
+  readonly saving?: boolean;
   /** 读取设置失败的原因（人话）。 */
   readonly problem?: string;
-  readonly saving: boolean;
   /** 保存后的提示（含「已保存但没切换」的情形）。 */
   readonly notice?: string;
   /** 保存失败的原因。 */
@@ -301,22 +302,6 @@ export function WebSearchCard(props: WebSearchCardProps): ReactElement {
     choiceRow(props, "custom", "webSearch.option.custom", "webSearch.option.custom.hint"),
     effectiveLine(props),
     ...details,
-    createElement(
-      "div",
-      { className: CSS_CLASS.actions },
-      createElement(
-        "button",
-        {
-          type: "button",
-          "data-web-search-save": "true",
-          className: CSS_CLASS.buttonPrimary,
-          disabled: props.saving,
-          onClick: () => props.onSave(),
-        },
-        props.saving ? t("webSearch.saving") : t("webSearch.save"),
-      ),
-      createElement("small", { key: "hint", className: CSS_CLASS.note }, t("webSearch.saveHint")),
-    ),
     ...(props.notice === undefined
       ? []
       : [

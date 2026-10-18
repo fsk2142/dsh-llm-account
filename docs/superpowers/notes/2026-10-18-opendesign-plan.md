@@ -241,3 +241,124 @@ workspace 缺失用例改为"不查 vela + 必须给出原因"。
 
 测试：`tests/core/model-names.test.ts`（5）、`tests/vendors/opendesign-catalog.test.ts`（7，
 目录命名 + 档位族）、adapter +3（族兜底声明、400 去字段重放、无关 400 不重放）、quota +1（宽容读套餐）。
+
+## 第四轮（22:25）：工作区自动发现
+
+用户网页登录成功后问「工作区怎么设置」。实测 `~/.amr/config.json` 的 profile **只带两把
+密钥与 user，没有 workspaceId**（`profile[prod] keys: apiUrl, controlKey, linkUrl, runtimeKey, user`），
+所以登录并不会自动填上工作区 —— 而周期额度必须有它。
+
+- 新增 `discoverWorkspaceId()`（`login.ts`）：跑 `vela team-projects list`，从
+  `{"workspaceId":"…"}` 里取当前工作区；找不到 vela / 非零 / 输出不是 JSON / 空 id 一律读作
+  「没发现」（附加动作，不能把登录判成失败）。5 秒预算。
+- `index.ts` 的 `storeKey`：`input.workspaceId ?? await discoverWorkspaceId()`。
+  - 新账号：直接写进账号条目；
+  - 已有账号：写**顶层** `workspaceId`（条目没配时的回退）—— 只补空，不覆盖用户填过的值。
+- 本机实测：`vela team-projects list` → `sample-workspace-id`；
+  `vela billing preflight --workspace-id sample-workspace-id --format json` 正常返回两条窗口
+  （18000s / 50000 credits、604800s / 150000 credits），账单摘要 `Membership: go, active monthly`。
+
+**手动路径**（已有账号、或不想重新登录）：设置页 →「LLM 账号」→ 顶部「设置对象」选 Open Design →
+「集成与显示」卡片里的「工作区 ID」→ 粘贴 → 保存。
+
+## 第五轮（22:40）：思考档位改为「逐模型实测表」，DeepSeek 拿到 max
+
+用户问：「opendesign 的 DeepSeek 不能设置 max 思考吗？」—— 不能，因为第三轮按**模型族**给的
+保守集是 `low / high`，而实测这家支持到 8 档。
+
+**怎么测出来的**：这个网关对不认识的档位回 400，且正文把该模型的白名单念出来：
+
+```
+deepseek-v4-pro: [code=invalid_request_error] reasoning effort is unsupported for
+  deepseek-v4-pro; use one of none, minimal, low, medium, high, xhigh, ultra, max
+glm-5.3-flash:   ... use one of low, high, max
+kimi-k2.7-code:  ... use one of none, minimal, low, medium, high, xhigh      ← 没有 max
+claude-haiku-5.5: [code=upstream_error] reasoning_effort: Invalid option:
+  expected one of "max"|"xhigh"|"high"|"medium"|"low"|"minimal"|"none"        ← 没有 ultra
+```
+
+于是用本机登录产物（`~/.amr/config.json` 的 `runtimeKey` + `x-vela-workspace-id`）对账号可用的
+**12 个模型逐个**打一次 `reasoning_effort: __probe__`，把白名单抄成
+`src/vendors/opendesign/efforts.ts` 的 `MEASURED_EFFORTS`：
+
+| 模型 | 白名单 |
+|---|---|
+| deepseek-v4-pro / -flash / -flash-vision-exp / v4.1-flash | none, minimal, low, medium, high, xhigh, **ultra**, **max** |
+| claude-haiku-5.5 / hy4-preview / mimo-v2.6-flash / -pro | none, minimal, low, medium, high, xhigh, **max** |
+| glm-5.3-flash / -flashx | low, high, **max** |
+| kimi-k2.7-code | none, minimal, low, medium, high, xhigh（**无 max**） |
+| gpt-6-luna | 全档（含 ultra） |
+
+**实测证明档位真的生效**（同一条行程题，deepseek-v4-pro）：
+
+| reasoning_effort | completion tokens | reasoning tokens |
+|---|---|---|
+| `none` | 555 | 0（不想） |
+| `high` | 1629 | 1159 |
+| `max` | 3052 | **2571** |
+
+**改动**：
+1. `efforts.ts` 改为「实测表优先 → 模型族兜底」：表里有的只用表（含顺序，由弱到强）；
+   族兜底现在也带 `max`（claude/gpt 七档、deepseek 八档、glm 三档、kimi 到 xhigh）；
+   未实测的族（gemini/grok/qwen）给含 `max` 的保守集；认不出的照旧不声明。
+2. 适配器的 400 兜底从「去掉字段重发」升级为**按网关念出的白名单降一档重发**
+   （`allowedEffortsIn` + `nearestAllowedEffort`）：推错档位最多退一档，不再整段丢失；
+   读不出白名单才退回去掉字段。
+3. 测试：`opendesign-catalog` 12 例（实测表逐模型差异、两种 400 口吻、降档挑选）、
+   `opendesign-adapter` 18 例（新增「网关拒绝 max 时降成 high 重发」）。
+
+结果：`tsc` 0 错；**61 文件 / 811 例全绿**；`tsdown` 已重建。
+
+## 第六轮（22:55）：档位按官方口径收敛 + 额度自动发现工作区
+
+**用户确认**：DeepSeek 官方只有四档 `off / low / high / max`。上一轮把网关接受的别名全摆出来
+（8 档）是错的 —— 网关确实接受 `none/minimal/medium/xhigh/ultra`（摊平到上游四档），但界面
+该按官方口径只给四档。`efforts.ts` 已改为：
+
+| 族 | 声明档位 |
+|---|---|
+| deepseek | `off, low, high, max` |
+| claude / gpt / hy4 / mimo | `low, medium, high, xhigh, max` |
+| glm | `low, high, max` |
+| kimi-k2.7-code | `low, high`（网关不接受 max） |
+
+另外 `off` 与 `none` 视为同一档（`STRENGTH_ORDER` 里 off 排最前）：网关只认 `none` 时降档会
+落到 `none`，不会升成 `max`。
+
+**额度不显示（真 bug）**：网页登录产物 `~/.amr/config.json` 只有 runtimeKey/controlKey/user，
+**没有 workspaceId**；而周期额度窗口只来自 `vela billing preflight --workspace-id`。以前的
+"登录时发现一次" 只覆盖登录当刻，手动加的 API 账号走不到那条路径。
+
+- `quota.ts` 的 `workspaceIdOf` 允许返回 Promise；`index.ts` 新增 `workspaceFor()`：
+  条目/顶层都没有时问一次 `vela team-projects list`，成功即写回顶层设置并进程内常驻
+  （失败缓存 1 分钟）。
+- 本机实测：`sample-workspace-id` → preflight 返回两条窗口（906/50000、906/150000 credits），
+  账单 `membershipTier: go`、`creditsPerUsd: 10000`。
+
+## 第七轮（23:15）：月度额度 + 账单摘要改走 vela 回退
+
+用户报「opendesign 缺少月额度信息」。查了厂商自己的文档（`open-design.ai/model-credits`）：
+
+| 套餐 | 月度上限 | 7 天窗口 | 5 小时窗口 | 计划模型额度 |
+|---|---|---|---|---|
+| Go | **$120** | $30 | $10 | $0 |
+| Plus | $180 | $160 + $20 | — | $20 |
+| Pro | $480 | $360 + $120 | — | $120 |
+| Max | $900 | $600 + $300 | — | $300 |
+
+**结论**：月度上限**存在**（写在套餐卡上），但 `billing preflight` 只发 5 小时与 7 天两个窗口，
+月度的**用量**在接口里读不到（控制面 HTTP 403、vela CLI 也不给）。所以实现为：
+
+- `toQuotaSnapshot` 在厂商没发月度窗口时补一行 `{ key: "monthly", unit: "usd", cap }`，
+  `cap` 取官方套餐表（go 120 / plus 180 / pro 480 / max 900），**`used` 留空**（不编 0）；
+  `resetAt` 取订阅本期结束（摘要里的 `subscriptionCurrentPeriodEnd`）。
+- 客户端新增 `quotaReading` 的 `cap` 形状 + 文案 `quota.capOnly`（「上限 {cap}」），
+  否则「只有上限」会被当成「额度数据暂缺」而不显示。
+- `DURATION_KEYS` 补 30/31 天 → `monthly`：厂商哪天开始发月度窗口就直接映射，不再变成裸秒数键。
+
+**顺带修掉一个真 bug**：控制面的 `GET /billing/summary` 对本机的 runtimeKey / controlKey **都回 403**
+（试过带/不带 workspace 头），所以套餐与换算率一直是空的。`vela billing summary --format json`
+却能读到同一份数据（`membershipTier: go`、`creditsPerUsd: 10000`、`subscriptionCurrentPeriodEnd`）。
+额度端口新增 `summaryFallback`，HTTP 失败时回退到 vela；两边都失败才记失败项。
+
+结果：`tsc` 0 错；61 文件 / 815 例全绿；`tsdown` 重建。

@@ -642,8 +642,6 @@ export const CSS_CLASS = {
   sidebarFoot: "dsl-sidebar-foot",
   marks: "dsl-marks",
   dashboard: "dsl-dashboard",
-  settingsPanel: "dsl-settings-panel",
-  settingsBack: "dsl-settings-back",
 } as const;
 
 /** 本模块用到的 DOM 形状（只读 + 建标签 + 挂载/移除）。 */

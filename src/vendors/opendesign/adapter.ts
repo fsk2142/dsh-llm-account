@@ -14,9 +14,10 @@
  * 6. `tried.size` 达到 `MAX_TRIED` 时停止轮换，并把最后一次失败抛给宿主。
  *
  * **推理档位**：Open Design 的目录**不公布档位**（OpenAI 形状），所以声明与闸门都以
- * `./efforts` 的模型族表兜底（目录哪天公布了就以目录为准）。宿主给了 `reasoningEffort` 时
- * 才核对一次，不在允许集合里的值**不发** —— 宁可不调档，也不能让厂商不认识的档位把整次
- * 请求打成 400。没有档位需求的请求不产生额外请求。
+ * `./efforts` 的**逐模型实测表**（其次模型族）为准（目录哪天公布了就以目录为准）。宿主给了
+ * `reasoningEffort` 时只核对一次，不在集合里的值**不发**。真的被网关拒（400 并点名
+ * `reasoning_effort`）时按它回的白名单**降一档重发**，读不出白名单才去掉字段 —— 用户的选择
+ * 最多退一档，不至于因为推错一个档位就整次请求失败。没有档位需求的请求不产生额外请求。
  *
  * 本任务**不**做：账号增删改（`./accounts`）、额度读取（`./quota`）、网页登录（`./login`）、
  * 套餐过滤与费用估算（第 2 期）。
@@ -39,7 +40,7 @@ import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { parseCatalog } from "./catalog";
-import { effortsFor } from "./efforts";
+import { allowedEffortsIn, effortsFor, nearestAllowedEffort } from "./efforts";
 import { classifyOpenDesignFailure, openDesignLlmError } from "./failures";
 import {
   DEFAULT_BASE_URL,
@@ -281,8 +282,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       // 目录是建议性的：拉不到也应该能解析模型身份，让请求走到 provider 再报错。
       entry = undefined;
     }
-    // 目录声明优先，其次模型族兜底（Open Design 的目录**从不**公布档位 —— 不兜底就永远
-    // 没有思考强度可选，用户报障原话）。
+    // 目录声明优先，其次逐模型实测表 / 模型族兜底（Open Design 的目录**从不**公布档位 ——
+    // 不兜底就永远没有思考强度可选，用户报障原话）。
     const efforts = effortsFor(model, entry?.efforts);
     return {
       provider,
@@ -406,11 +407,12 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     const response = await this.#post(config, options, key, effort);
     if (!response.ok) {
       const body = await readErrorBody(response);
-      // 兜底：网关不认这个档位字段（400 + 点名 reasoning_effort）时，去掉它重发一次。
-      // 声明档位靠的是模型族推断（`./efforts`），推断错的代价不该是整次请求失败 ——
-      // 用户的档位选择退化为「厂商默认」，但回答照常拿到。
+      // 兜底：网关不认这个档位（400 + 点名 reasoning_effort）时按它念出的白名单**降一档**重发；
+      // 白名单读不出来（或没有更弱的选项）才去掉字段。声明档位靠的是实测表 / 模型族推断，
+      // 推断错的代价不该是整次请求失败 —— 最多退一档，回答照常拿到。
       if (response.status === 400 && effort !== undefined && mentionsEffortField(body)) {
-        const retry = await this.#post(config, options, key, undefined);
+        const fallback = nearestAllowedEffort(effort, allowedEffortsIn(body));
+        const retry = await this.#post(config, options, key, fallback === effort ? undefined : fallback);
         if (!retry.ok) throw new OpenDesignStreamFailure(retry.status, await readErrorBody(retry));
         yield* runStream(
           decodeStream(retry.body),

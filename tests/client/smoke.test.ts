@@ -22,7 +22,6 @@ import {
   registerSharedSurfaces,
   resetSeams,
   selectPanel,
-  SETTINGS_PANEL_ID,
   sidebarVendor,
   sidebarVendorSeeded,
   startSharedState,
@@ -161,14 +160,12 @@ it("两个 profile 行各调一次 apply：页面与各插槽条目都只注册�
   const sidebar = host.registered.filter((item) => item.slot === "sidebar.footer.action");
   const panels = host.registered.filter((item) => item.slot === "main");
   expect(sidebar).toHaveLength(1);
-  // 主栏两条：用量仪表盘 + 「转到设置」打开的设置页（同一份页面组件的另一个实例）。
-  expect(panels).toHaveLength(2);
+  // 主栏只剩一条：用量仪表盘（「转到设置」面板已按用户要求去掉，2026-10-18）。
+  expect(panels).toHaveLength(1);
   expect(sidebar[0]!.entry).toMatchObject({ id: "llm-account-quota", order: 1, locale: "settings.llm-account" });
   // `main` 用 key（不是 id）：抄错会让面板永远打不开。
   expect(panels[0]!.entry).toMatchObject({ key: DASHBOARD_PANEL_ID, locale: "settings.llm-account" });
   expect(panels[0]!.entry["id"]).toBeUndefined();
-  expect(panels[1]!.entry).toMatchObject({ key: SETTINGS_PANEL_ID, locale: "settings.llm-account" });
-  expect(panels[1]!.entry["id"]).toBeUndefined();
 });
 
 it("usage 远程面两个行只 $mount 一次（插件级共享，不随页面开闭起落）", () => {

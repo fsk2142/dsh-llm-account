@@ -207,21 +207,28 @@ function fakeHost(options: { rows?: RowSeed[]; configured?: Record<string, boole
 }
 
 /** 挂载面板并排空异步。 */
-async function mountPanel(host: FakeHost): Promise<{ tree(): unknown }> {
+async function mountPanel(host: FakeHost): Promise<{ tree(): unknown; save(): Promise<void> }> {
   const mini = await runtime();
   const { useWebSearchPanel } = await import("../../src/client/web-search-panel");
-  const mounted = mini.mount(() => useWebSearchPanel(host.ctx, translator()));
+  // 保存按钮已并入设置页底部那一个：这里直接拿 hook 交出来的 `save`（容器用的同一条路径）。
+  const saveRef: { current: (() => Promise<void>) | undefined } = { current: undefined };
+  const mounted = mini.mount(() => useWebSearchPanel(host.ctx, translator(), { saveRef }));
   await settleSim(mini);
-  return { tree: () => mounted.tree() };
+  return {
+    tree: () => mounted.tree(),
+    save: async () => {
+      await saveRef.current?.();
+      await settleSim(mini);
+    },
+  };
 }
 
 /** 走一遍「点选 + 点保存」并排空。 */
-async function chooseAndSave(panel: { tree(): unknown }, choice: string): Promise<void> {
+async function chooseAndSave(panel: { tree(): unknown; save(): Promise<void> }, choice: string): Promise<void> {
   const mini = await runtime();
   fireSim(findSim(panel.tree(), "data-web-search-radio", choice), "onChange");
   await settleSim(mini);
-  fireSim(findSim(panel.tree(), "data-web-search-save"), "onClick");
-  await settleSim(mini);
+  await panel.save();
 }
 
 /** 某个行名上的写入。 */
@@ -277,8 +284,7 @@ it("第三方：地址合法 + 填了 Key → 写凭据、切到本插件 provid
   });
   fireSim(findSim(panel.tree(), "data-web-search-key"), "onChange", { target: { value: "sk-1" } });
   await settleSim(mini);
-  fireSim(findSim(panel.tree(), "data-web-search-save"), "onClick");
-  await settleSim(mini);
+  await panel.save();
 
   const ours = writesTo(host, "llm-account-web-search");
   expect(ours).toHaveLength(1);
@@ -354,8 +360,7 @@ it("凭据服务：属性访问抛错时回落到 ctx.get(\"remote.credentials\"
   });
   fireSim(findSim(panel.tree(), "data-web-search-key"), "onChange", { target: { value: "sk-get" } });
   await settleSim(mini);
-  fireSim(findSim(panel.tree(), "data-web-search-save"), "onClick");
-  await settleSim(mini);
+  await panel.save();
 
   expect(host.credentialWrites).toEqual([{ ref: "LLM_ACCOUNT_SEARCH_KEY", value: "sk-get" }]);
   expect(writesTo(host, "web")).toHaveLength(1);

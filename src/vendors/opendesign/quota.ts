@@ -57,10 +57,22 @@ export interface OpenDesignQuotaDeps {
   ref: () => string | undefined;
   /** 解析该 ref 的**控制面**密钥（凭据服务 / 环境变量的注入点）。 */
   resolveControlKey: (ref: string) => Promise<string | undefined>;
-  /** 该账号的工作区 id（条目 `workspaceId` 优先，其次顶层 `workspaceId`）。 */
-  workspaceIdOf: (ref: string) => string | undefined;
+  /**
+   * 该账号的工作区 id（条目 `workspaceId` 优先，其次顶层 `workspaceId`）。
+   *
+   * 允许异步：网页登录的产物**不带**工作区（`~/.amr/config.json` 只有两把密钥与 user），
+   * 装配层会在缺省时问一次 `vela team-projects list` 兜底。
+   */
+  workspaceIdOf: (ref: string) => string | undefined | Promise<string | undefined>;
   /** 注入的 `fetch`（生产传全局 `fetch`）。 */
   fetchImpl: typeof fetch;
+  /**
+   * 账单摘要的第二来源（生产传 `vela billing summary --format json`）。
+   *
+   * 实测：控制面的 `GET /billing/summary` 对登录产物里的两把密钥都回 **403**，而同一份数据
+   * vela CLI 能拿到 —— 没有这条回退，套餐与换算率在真机上永远是空的（用户报障「套餐信息也没有」）。
+   */
+  summaryFallback?: () => Promise<unknown | undefined>;
   /**
    * vela 周期额度查询（`billing preflight --workspace-id <id> --format json` 的注入点）。
    * 缺省表示本机没有可用的 vela：这时**不**查询，也不记失败（用户没配 workspaceId 时本来就
@@ -85,9 +97,22 @@ function stringValue(value: unknown): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
-/** 读取有限数字（缺失或非数字一律 `undefined`，不倒成 0）。 */
+/**
+ * 读取有限数字（缺失或非数字一律 `undefined`，不倒成 0）。
+ *
+ * **也认数字字符串**：`vela billing preflight` 的 `usedCredits` / `limitCredits` 是
+ * `"906"` / `"50000"` 这种字符串（2026-10-18 实测），只认 `number` 会让窗口只剩重置时间、
+ * 没有任何数字 —— 界面上就是「有额度条但没有额度信息」。
+ * @param value - 端点给的值（数字或数字字符串）。
+ * @returns 有限数字，或 `undefined`。
+ */
 function numberValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /** 错误对象到一行文案；非 Error 原样转字符串。 */
@@ -120,10 +145,12 @@ function epochMillis(value: unknown): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-/** 已知时长（秒）→ 窗口键；5 小时与 7 天是厂商公布的两种周期。 */
+/** 已知时长（秒）→ 窗口键；5 小时与 7 天是厂商在发的两种，30/31 天留给未来的月度窗口。 */
 const DURATION_KEYS: Readonly<Record<number, string>> = {
   18_000: "fiveHour",
   604_800: "weekly",
+  2_592_000: "monthly",
+  2_678_400: "monthly",
 };
 
 /**
@@ -239,15 +266,52 @@ function creditsPerUsdOf(summary: unknown): number | undefined {
 }
 
 /**
+ * 官方公布的**月度上限**（美元）：`open-design.ai/model-credits` 的 Plan 表
+ * （Go $120 / Plus $180 / Pro $480 / Max $900）。
+ *
+ * 为什么需要它：这个厂商的 `billing preflight` 只发 5 小时与 7 天两个窗口，**没有月度窗口**，
+ * 但套餐卡上确实有「每月最多 $X」。月度的**用量**在接口里读不到（控制面 403、CLI 也不给），
+ * 所以这里只补上限，`used` 留空 —— 宁可显示「共 $120 / 已用 —」，也不编一个数字。
+ */
+const MONTHLY_MAX_USD: Readonly<Record<string, number>> = {
+  go: 120,
+  plus: 180,
+  pro: 480,
+  max: 900,
+};
+
+/**
+ * 补一行月度上限（厂商没发月度窗口时）。
+ * @param plan - 账单摘要里的套餐。
+ * @param windows - 已归一化的窗口（已有月度窗口就不补）。
+ * @returns 月度窗口，或 `undefined`（套餐认不出 / 已有月度窗口）。
+ */
+function monthlyWindowOf(plan: QuotaPlan | undefined, windows: readonly QuotaWindow[]): QuotaWindow | undefined {
+  if (windows.some((window) => window.key === "monthly")) return undefined;
+  const tier = plan?.id.trim().toLowerCase();
+  const cap = tier === undefined || tier === "" ? undefined : MONTHLY_MAX_USD[tier];
+  if (cap === undefined) return undefined;
+  // 月度窗口按**订阅周期**重置：摘要里有本期结束时刻就用它（没有就留空，不编日期）。
+  return {
+    key: "monthly",
+    unit: "usd",
+    cap,
+    ...(plan?.periodEnd === undefined ? {} : { resetAt: plan.periodEnd }),
+  };
+}
+
+/**
  * 把两个来源的负载归一化成一次额度读数。纯函数：不做 I/O、不缓存。
  * @param parts - 账单摘要、preflight 负载与已记名的失败项。
- * @returns 归一化读数；窗口顺序 = preflight 给的顺序。
+ * @returns 归一化读数；窗口顺序 = preflight 给的顺序（补的月度窗口排最后）。
  */
 export function toQuotaSnapshot(parts: OpenDesignQuotaParts): QuotaSnapshot {
   const creditsPerUsd = creditsPerUsdOf(parts.summary);
   const plan = planOf(parts.summary);
+  const windows = windowsOf(parts.preflight, creditsPerUsd);
+  const monthly = monthlyWindowOf(plan, windows);
   return {
-    windows: windowsOf(parts.preflight, creditsPerUsd),
+    windows: monthly === undefined ? windows : [...windows, monthly],
     ...(plan === undefined ? {} : { plan }),
     failures: [...parts.failures],
   };
@@ -314,12 +378,25 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
       }
       const failures: string[] = [];
       const read = await getSummary(key);
-      const summary = read.payload;
+      let summary = read.payload;
+      let readProblem = read.problem;
+      if (summary === undefined && deps.summaryFallback !== undefined) {
+        // 控制面拒绝（401/403）或不可达时的第二来源：本机 vela 自己的登录态。
+        try {
+          const fallback = await deps.summaryFallback();
+          if (fallback !== undefined) {
+            summary = fallback;
+            readProblem = undefined;
+          }
+        } catch (error) {
+          readProblem = `${readProblem ?? "没有返回数据"}；vela 回退也失败（${messageOf(error)}）`;
+        }
+      }
       if (summary === undefined) {
-        failures.push(`账单摘要读取失败（${read.problem ?? "没有返回数据"}）：套餐信息与额度换算单位暂时缺失`);
+        failures.push(`账单摘要读取失败（${readProblem ?? "没有返回数据"}）：套餐信息与额度换算单位暂时缺失`);
       }
       let preflight: unknown;
-      const workspaceId = ref === undefined ? undefined : normalizeKey(deps.workspaceIdOf(ref));
+      const workspaceId = ref === undefined ? undefined : normalizeKey(await deps.workspaceIdOf(ref));
       if (workspaceId !== undefined && deps.preflight !== undefined) {
         try {
           const value = await deps.preflight(workspaceId);

@@ -88,9 +88,8 @@ export function apply(ctx: unknown): void {
   // （`lib/client.js` 的 `applyClientSurfaces`），不随设置页开闭起落 —— 侧边栏卡片与中栏
   // 面板是独立的 React 根，设置页关掉不该带走它们的数据源。幂等：两行各调一次无副作用。
   startSharedState(seamContext, VENDORS);
-  // 设置页组件工厂：`settings.section` 的页面与「转到设置」打开的主栏面板是**同一份**组件
-  // （同一个工厂造两个实例，各自一个 React 根）—— 用户在用量面板里点「转到设置」看到的
-  // 就是设置里那套账号管理，不是另一套精简版。
+  // 设置页组件工厂：`settings.section` 用它在设置里渲染账号管理页（唯一的使用方；
+  // 2026-10-18 用户要求去掉用量面板的「转到设置」跳转，主栏面板不再注册）。
   const pageComponent = (t: (key: string) => string): unknown =>
     createConnectedPage({
       entries: VENDORS,
@@ -99,16 +98,16 @@ export function apply(ctx: unknown): void {
     });
   applyShell(ctx, {
     copy: { zh: COPY.zh, en: COPY.en },
+    // 设置页（`settings.section`）用这一份；「转到设置」面板已按用户要求去掉。
     pageComponent,
     // 侧边栏卡片与中栏面板：常驻注册一次（守卫在 shell 里），门控在组件里按已存储的开关做。
-    // 页面工厂一并透传，「转到设置」面板（SETTINGS_PANEL_ID）才会被注册。
-    sharedSurfaces: (context, t, pageComponentFromShell) =>
+    // 2026-10-18 起不再注册「转到设置」面板（用户要求去掉那个跳转），所以也不传页面工厂。
+    sharedSurfaces: (context, t) =>
       registerSharedSurfaces({
         ctx: context as ClientSeamContext,
         entries: VENDORS,
         t,
         localeNs: PAGE_LOCALE_NS,
-        ...(pageComponentFromShell === undefined ? {} : { pageComponent: pageComponentFromShell }),
       }),
   });
 }

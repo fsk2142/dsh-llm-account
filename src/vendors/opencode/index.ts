@@ -165,6 +165,8 @@ export const Config: PluginConfigSchema = z.object(
      * 上限 120 分钟（再长用量基本就是过期的，反而误导）。整数是因为 UI 用「分钟」步进输入框。
      */
     quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
+    /** 侧边栏轮播间隔（分钟）：多厂商都开启时，卡片轮流显示各家的当前账号额度。 */
+    sidebarRotateMinutes: z.number().step(1).min(1).max(60).default(1),
     baseURL: z.string().default(DEFAULT_BASE_URL),
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),

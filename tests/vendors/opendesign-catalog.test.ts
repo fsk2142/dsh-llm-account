@@ -8,7 +8,13 @@
 import { describe, expect, it } from "vitest";
 
 import { parseCatalog } from "../../src/vendors/opendesign/catalog";
-import { effortsFor, familyEfforts } from "../../src/vendors/opendesign/efforts";
+import {
+  MEASURED_EFFORTS,
+  allowedEffortsIn,
+  effortsFor,
+  familyEfforts,
+  nearestAllowedEffort,
+} from "../../src/vendors/opendesign/efforts";
 
 describe("parseCatalog：显示名", () => {
   it("负载没有 name 时用官方名规则（不再把原始 slug 当展示名）", () => {
@@ -44,25 +50,75 @@ describe("effortsFor：思考强度", () => {
     expect(effortsFor("claude-sonnet-4-5", ["low", "max"])).toEqual(["low", "max"]);
   });
 
-  it("目录没声明时按模型族兜底（这是选择器能出现的唯一来源）", () => {
-    expect(effortsFor("claude-sonnet-4-5-20250929")).toEqual(["low", "medium", "high"]);
-    expect(effortsFor("anthropic/claude-opus-4-1")).toEqual(["low", "medium", "high"]);
-    expect(effortsFor("gpt-5.1")).toEqual(["low", "medium", "high"]);
-    expect(effortsFor("gpt-6-astra")).toEqual(["low", "medium", "high"]);
-    expect(effortsFor("gemini-2.5-pro")).toEqual(["low", "medium", "high"]);
-    expect(effortsFor("grok-4.5")).toEqual(["low", "medium", "high"]);
+  it("DeepSeek 按**官方四档**声明：off / low / high / max（用户确认的口径）", () => {
+    // 网关实际还接受 none/minimal/medium/xhigh/ultra（别名摊平到上游四档），但界面只摆官方四档。
+    for (const model of ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash", "deepseek-v4-flash-vision-exp"]) {
+      expect(effortsFor(model)).toEqual(["off", "low", "high", "max"]);
+    }
+    // 大小写与空白不该让实测表失配（目录 id 一直小写，但别指望）。
+    expect(effortsFor("  DeepSeek-V4-Pro  ")).toEqual(MEASURED_EFFORTS["deepseek-v4-pro"]);
   });
 
-  it("更粗的族只给两档（这几家的网关通常不认 medium）", () => {
-    expect(effortsFor("deepseek-v4-pro")).toEqual(["low", "high"]);
-    expect(effortsFor("glm-5")).toEqual(["low", "high"]);
-    expect(effortsFor("kimi-k3")).toEqual(["low", "high"]);
-    expect(effortsFor("qwen3-max")).toEqual(["low", "high"]);
+  it("实测的逐模型差异照抄：GLM 三档、Kimi 没有 max", () => {
+    expect(effortsFor("glm-5.3-flash")).toEqual(["low", "high", "max"]);
+    expect(effortsFor("glm-5.3-flashx")).toEqual(["low", "high", "max"]);
+    expect(effortsFor("kimi-k2.7-code")).toEqual(["low", "high"]);
+  });
+
+  it("目录没声明时按模型族兜底（含 max，这是选择器能出现的唯一来源）", () => {
+    expect(effortsFor("claude-sonnet-4-5-20250929")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(effortsFor("anthropic/claude-opus-4-1")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(effortsFor("gpt-5.1")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // 未实测的族：保守集（有 max，但不声称 none/minimal/ultra）。
+    expect(effortsFor("gemini-2.5-pro")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(effortsFor("grok-4.5")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(effortsFor("qwen3-max")).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   it("认不出的模型**不声明**档位（猜一组只会换来 400）", () => {
     expect(familyEfforts("some-random-model")).toEqual([]);
     expect(effortsFor("some-random-model")).toEqual([]);
     expect(effortsFor("some-random-model", [])).toEqual([]);
+  });
+});
+
+describe("网关白名单的两种口吻都能读（降一档重发靠它）", () => {
+  it("`use one of a, b, c`（invalid_request_error）", () => {
+    const body = {
+      error: {
+        message:
+          "[code=invalid_request_error] reasoning effort is unsupported for glm-5.3-flash; use one of low, high, max",
+      },
+    };
+    expect(allowedEffortsIn(body)).toEqual(["low", "high", "max"]);
+  });
+
+  it("`expected one of \"a\"|\"b\"`（upstream_error）", () => {
+    const body = {
+      error: {
+        message:
+          '[code=upstream_error] reasoning_effort: Invalid option: expected one of \"max\"|\"xhigh\"|\"high\"|\"low\"',
+      },
+    };
+    expect(allowedEffortsIn(body)).toEqual(["max", "xhigh", "high", "low"]);
+  });
+
+  it("正文里没有白名单 / 不是档位词 → 空（调用方退回「去掉字段」）", () => {
+    expect(allowedEffortsIn({ error: { message: "reasoning_effort is not supported" } })).toEqual([]);
+    expect(allowedEffortsIn("boom")).toEqual([]);
+    expect(allowedEffortsIn(undefined)).toEqual([]);
+  });
+
+  it("降一档挑「不高于所选、且被允许」的最强项", () => {
+    expect(nearestAllowedEffort("max", ["low", "high", "max"])).toBe("max");
+    // `ultra` 比 `max` 弱一档（实测顺序 none…xhigh, ultra, max）：降档只能退到 high。
+    expect(nearestAllowedEffort("ultra", ["low", "high", "max"])).toBe("high");
+    expect(nearestAllowedEffort("max", ["none", "minimal", "low", "medium", "high", "xhigh"])).toBe("xhigh");
+    expect(nearestAllowedEffort("low", ["medium", "high"])).toBe("medium");
+    expect(nearestAllowedEffort("low", [])).toBeUndefined();
+    // `off` 与 `none` 是同一档：网关只认 `none` 时降成它，不会升成 max。
+    expect(nearestAllowedEffort("off", ["none", "low", "high", "max"])).toBe("none");
+    // 自定义档位 id（不在强弱表里）：按最强可用项处理。
+    expect(nearestAllowedEffort("enterprise", ["low", "high"])).toBe("high");
   });
 });

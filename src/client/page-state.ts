@@ -412,6 +412,24 @@ export function sidebarVendorOf(
 }
 
 /**
+ * 侧边栏卡片要**轮播**的厂商清单（按标签页顺序，只含开启的）。
+ *
+ * 2026-10-18 用户要求：侧边栏不要只显示一家 —— 所有开启的厂商各自的「当前使用」账号额度
+ * 轮流显示，切换间隔按分钟在设置里配。只有一个开启时，行为与单家完全一致（不轮播）。
+ * @param entries - 注册表里的厂商声明（已按页面顺序排列）。
+ * @param snapshots - 各厂商的设置文档。
+ * @returns 厂商 id 列表；一家都没开时为空数组。
+ */
+export function sidebarVendorsOf(
+  entries: readonly VendorEntry[],
+  snapshots: Readonly<Record<string, VendorSnapshot>>,
+): string[] {
+  return entries
+    .filter((entry) => sidebarQuotaEnabled(snapshots[entry.ns]?.value))
+    .map((entry) => entry.providerId);
+}
+
+/**
  * 该厂商要渲染哪些专属卡片，顺序即规格 §8 的卡片顺序（账户卡片 → 模型卡片）。
  *
  * 单独成函数：`index.ts` 的接线不参与单测（Ruling 22），而「厂商不支持的卡片不渲染」是计划

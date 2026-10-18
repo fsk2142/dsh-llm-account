@@ -49,6 +49,8 @@ export interface PageShellProps {
    * 页面外壳只负责放在厂商主体之后。
    */
   webSearch?: ReactNode;
+  /** 网页搜索卡片有未保存的改动（与厂商字段共用底部那一个「保存」）。 */
+  webSearchDirty?: boolean;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */
   saving?: boolean;
 }
@@ -184,7 +186,7 @@ function vendorBody(props: PageShellProps, entry: VendorEntry): ReactNode {
     null,
     ...cardGroupsOf(entry).map((group) => cardGroupElement(props, entry, group)),
     extras === undefined ? null : extras,
-    isDirty(props.state, entry.ns) ? saveBar(props, entry) : null,
+    isDirty(props.state, entry.ns) || props.webSearchDirty === true ? saveBar(props, entry) : null,
   );
 }
 

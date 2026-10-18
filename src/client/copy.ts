@@ -63,6 +63,8 @@ export type CopyKey =
   | "field.showSidebarQuota.hint"
   | "field.quotaRefreshMinutes"
   | "field.quotaRefreshMinutes.hint"
+  | "field.sidebarRotateMinutes"
+  | "field.sidebarRotateMinutes.hint"
   | "field.apiBase"
   | "field.apiBase.hint"
   | "field.baseURL"
@@ -115,6 +117,7 @@ export type CopyKey =
   | "account.liveBy"
   | "account.quotaMissing"
   | "quota.used"
+  | "quota.capOnly"
   | "quota.usedOf"
   | "quota.usedPercent"
   | "quota.remaining"
@@ -225,8 +228,6 @@ export type CopyKey =
   | "dashboard.title"
   | "dashboard.close"
   | "dashboard.refresh"
-  | "dashboard.openSettings"
-  | "dashboard.back"
   | "dashboard.accounts"
   | "dashboard.noData"
   | "dashboard.unknown"
@@ -354,7 +355,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.showSidebarQuota": "侧边栏额度卡片",
     "field.showSidebarQuota.hint": "开启后侧边栏底部显示额度卡片；关闭时不发起任何后台用量查询。",
     "field.quotaRefreshMinutes": "用量刷新间隔（分钟）",
-    "field.quotaRefreshMinutes.hint": "侧边栏卡片刷新用量数据的间隔；标签页隐藏时暂停刷新，连续的刷新失败会自动放慢。",
+    "field.quotaRefreshMinutes.hint": "侧边栏卡片与设置页读取用量数据的间隔（设置页缓存也按它失效）；标签页隐藏时暂停刷新，连续失败会自动放慢。",
+    "field.sidebarRotateMinutes": "侧边栏轮播间隔（分钟）",
+    "field.sidebarRotateMinutes.hint": "多家厂商都打开侧边栏额度时，卡片每隔这么久换一家显示（按标签页顺序，只显示各家当前使用的账号）。",
     "field.apiBase": "API 基地址",
     "field.apiBase.hint": "留空使用默认地址。",
     "field.baseURL": "服务地址",
@@ -422,6 +425,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.window.weekly": "每周",
     "quota.window.monthly": "每月",
     "quota.window.monthlyCredits": "月度额度",
+    "quota.capOnly": "上限 {cap}",
     "quota.window.plan": "套餐",
     "quota.window.unknown": "额度",
     "quota.planMonthly": "每月 {amount}",
@@ -517,8 +521,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "dashboard.title": "账号与用量",
     "dashboard.close": "关闭",
     "dashboard.refresh": "刷新",
-    "dashboard.openSettings": "转到设置",
-    "dashboard.back": "返回用量面板",
     "dashboard.accounts": "账号",
     "dashboard.noData": "还没有可显示的用量数据。",
     "dashboard.unknown": "未知",
@@ -575,7 +577,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "webSearch.key.unreadable": "读不到密钥状态（凭据服务不可用）。",
     "webSearch.key.unavailable": "凭据服务不可用，无法写入密钥。",
     "webSearch.deepseek.hint": "密钥在宿主自带的「网页搜索」卡片里填写；这里只负责把搜索来源切过去。",
-    "webSearch.save": "保存",
+    "webSearch.save": "保存搜索设置",
     "webSearch.saving": "保存中…",
     "webSearch.saveHint": "保存后立即生效；只写入本插件自己的设置行。",
     "webSearch.failure": "保存失败",
@@ -641,7 +643,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.showSidebarQuota": "Sidebar quota card",
     "field.showSidebarQuota.hint": "Shows a quota card at the bottom of the sidebar; while off, no background usage request is made.",
     "field.quotaRefreshMinutes": "Usage refresh interval (minutes)",
-    "field.quotaRefreshMinutes.hint": "How often the sidebar card refreshes usage data; paused while the tab is hidden, and failures are slowed down automatically.",
+    "field.quotaRefreshMinutes.hint": "How often the sidebar card and the settings page read usage data (the settings cache expires on the same schedule); paused while the tab is hidden, and failures are slowed down automatically.",
+    "field.sidebarRotateMinutes": "Sidebar rotation interval (minutes)",
+    "field.sidebarRotateMinutes.hint": "When several providers show quota in the sidebar, the card switches provider every this many minutes (tab order, current account of each).",
     "field.apiBase": "API base URL",
     "field.apiBase.hint": "Leave blank for the default endpoint.",
     "field.baseURL": "Service URL",
@@ -709,6 +713,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.window.weekly": "Weekly",
     "quota.window.monthly": "Monthly",
     "quota.window.monthlyCredits": "Monthly credits",
+    "quota.capOnly": "Cap {cap}",
     "quota.window.plan": "Plan",
     "quota.window.unknown": "Quota",
     "quota.planMonthly": "{amount} per month",
@@ -804,8 +809,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "dashboard.title": "Accounts & usage",
     "dashboard.close": "Close",
     "dashboard.refresh": "Refresh",
-    "dashboard.openSettings": "Open settings",
-    "dashboard.back": "Back to the usage panel",
     "dashboard.accounts": "Accounts",
     "dashboard.noData": "No usage data to show yet.",
     "dashboard.unknown": "Unknown",
@@ -862,7 +865,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "webSearch.key.unreadable": "Key status unavailable (credential service unreachable).",
     "webSearch.key.unavailable": "The credential service is unavailable, so the key could not be written.",
     "webSearch.deepseek.hint": "The key goes in the host's own \"Web search\" card; this card only switches the search source.",
-    "webSearch.save": "Save",
+    "webSearch.save": "Save web search",
     "webSearch.saving": "Saving…",
     "webSearch.saveHint": "Takes effect immediately; only writes this plugin's own settings row.",
     "webSearch.failure": "Save failed",

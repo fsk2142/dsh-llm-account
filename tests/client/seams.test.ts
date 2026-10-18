@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   canSelectPanel,
-  createSettingsPanelView,
   describeVendorSnapshots,
   dispatchAccountAction,
   ensureUsageRemote,
@@ -17,6 +16,7 @@ import {
   noteSidebarSnapshots,
   onUsageReady,
   quotaRefreshMs,
+  sidebarRotateMs,
   readAccounts,
   readStatus,
   readStatusDetail,
@@ -35,14 +35,12 @@ import {
   subscribeSidebarVendor,
   usageNamespace,
   DASHBOARD_PANEL_ID,
-  SETTINGS_PANEL_ID,
   type ClientSeamContext,
   type RemoteSettings,
 } from "../../src/client/seams";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type UsageNamespace } from "../../src/client/usage-contract";
 import type { VendorCapabilities } from "../../src/core/adapter";
 import { VENDORS } from "../../src/client/shell";
-import type { StubElement } from "../support/react-stub";
 
 /** Command Code 的能力矩阵（测试夹具：页面据此降级）。 */
 const CAPABILITIES: VendorCapabilities = {
@@ -469,66 +467,6 @@ it("中栏面板注册用 key 而不是 id（旧插件的 main 插槽形状）",
   expect(registered[0]!.component).toBe("Panel");
 });
 
-// —— 「转到设置」：主栏设置页面板（2026-10-18 用户要求） ——
-
-/** 展平元素树（react 替身的形状：children 可能是单个、数组或没有）。 */
-function flatElements(node: unknown): StubElement[] {
-  if (node === null || node === undefined || typeof node !== "object") return [];
-  if (Array.isArray(node)) return node.flatMap((child) => flatElements(child));
-  const element = node as StubElement;
-  if (!("props" in element) || !("type" in element)) return [];
-  return [element, ...flatElements(element.props.children)];
-}
-
-it("createSettingsPanelView：返回栏 + 页面组件，返回按钮把意图报出去", () => {
-  // 页面组件用纯函数桩（本组件自身无 Hook，桩让它可被遍历）。
-  const page = (): StubElement => ({ type: "div", props: { "data-stub-page": "true" }, key: null });
-  const onBack = vi.fn();
-  const tree = createSettingsPanelView({ t: (key) => key, pageComponent: () => page, onBack })();
-
-  const elements = flatElements(tree);
-  // 页面组件被原样渲染进来（同一份工厂产物，不是另一套精简页）。
-  expect(elements.some((element) => element.type === page)).toBe(true);
-  // 外壳类名注册在案（样式契约逐棵树验类名）。
-  expect(elements[0]!.props["className"]).toContain("dsl-settings-panel");
-  // 返回栏：文案键是 dashboard.back，点击 → onBack（由注册方接 selectPanel）。
-  const back = elements.find((element) => element.props["data-settings-back"] === "true");
-  expect(back, "返回按钮").toBeDefined();
-  expect(back!.type).toBe("button");
-  expect(flatElements(back).some((element) => element.props.children === "dashboard.back")).toBe(true);
-  (back!.props["onClick"] as () => void)();
-  expect(onBack).toHaveBeenCalledTimes(1);
-});
-
-it("registerSharedSurfaces：给了页面工厂才注册「转到设置」面板（同样用 key 不用 id）", () => {
-  const registered: { slot: string; entry: Record<string, unknown>; component: unknown }[] = [];
-  const slots = {
-    inject: (_name: string, callback: () => unknown) => callback(),
-    register: (entry: Record<string, unknown>, component: unknown) => {
-      registered.push({ slot: String(entry["name"]), entry, component });
-      return undefined;
-    },
-  };
-  const ctx: ClientSeamContext = {
-    inject: (_names, callback) => callback({ slots }),
-    slots,
-  };
-  const base = { ctx, entries: VENDORS, t: (key: string) => key, localeNs: "settings.llm-account" };
-  /** 只看 main 插槽的条目（侧边栏走另一个插槽，这里不关心）。 */
-  const mainKeys = (): unknown[] => registered.filter((item) => item.slot === "main").map((item) => item.entry["key"]);
-
-  // 没有页面工厂（测试、或没有页面实现的调用方）：只注册仪表盘一条。
-  registerSharedSurfaces(base);
-  expect(mainKeys()).toEqual([DASHBOARD_PANEL_ID]);
-
-  // 给了页面工厂：多一条设置页面板，key 而不是 id。
-  registerSharedSurfaces({ ...base, pageComponent: () => "Page" });
-  expect(mainKeys()).toEqual([DASHBOARD_PANEL_ID, DASHBOARD_PANEL_ID, SETTINGS_PANEL_ID]);
-  const settings = registered.filter((item) => item.slot === "main").at(-1)!;
-  expect(settings.entry).toMatchObject({ name: "main", key: SETTINGS_PANEL_ID, locale: "settings.llm-account" });
-  expect(settings.entry["id"]).toBeUndefined();
-  expect(settings.entry["order"]).toBeUndefined();
-});
 
 it("侧边栏卡片注册失败不把客户端带走（与旧插件同样只留一行错误）", () => {
   const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -835,4 +773,31 @@ it("startSharedState：远程面与设置镜像都就位（apply 期引导，幂
   listeners[0]!();
   await vi.waitFor(() => expect(sidebarVendor()).toBe("commandcode"));
   expect(mounts).toBe(1); // 远程面没有重挂
+});
+
+it("sidebarRotateMs：轮播间隔按分钟换算，缺省 1 分钟，夹在 [1, 60] 分钟", () => {
+  expect(sidebarRotateMs(undefined)).toBe(60_000);
+  expect(sidebarRotateMs("nope")).toBe(60_000);
+  expect(sidebarRotateMs(0)).toBe(60_000);
+  expect(sidebarRotateMs(3)).toBe(3 * 60_000);
+  expect(sidebarRotateMs(120)).toBe(60 * 60_000); // 上限 1 小时
+});
+
+it("registerSharedSurfaces：只注册仪表盘一条主栏面板（「转到设置」面板已去掉）", () => {
+  const registered: { slot: string; entry: Record<string, unknown> }[] = [];
+  const slots = {
+    inject: (_name: string, callback: () => unknown) => callback(),
+    register: (entry: Record<string, unknown>) => {
+      registered.push({ slot: String(entry["name"]), entry });
+      return undefined;
+    },
+  };
+  const ctx = { slots, inject: (_names: string[], callback: (value: unknown) => unknown) => callback({ slots }) } as unknown as ClientSeamContext;
+  registerSharedSurfaces({ ctx, entries: VENDORS, t: (key: string) => key, localeNs: "settings.llm-account" });
+
+  const main = registered.filter((item) => item.slot === "main");
+  expect(main).toHaveLength(1);
+  expect(main[0]!.entry).toMatchObject({ name: "main", key: DASHBOARD_PANEL_ID, locale: "settings.llm-account" });
+  expect(main[0]!.entry["id"]).toBeUndefined();
+  expect(main[0]!.entry["order"]).toBeUndefined();
 });

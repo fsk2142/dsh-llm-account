@@ -316,12 +316,20 @@ function blockedReasonOf(
  * @param t - 取词函数。
  * @returns 卡片元素树。
  */
-export function useWebSearchPanel(ctx: ClientSeamContext, t: (key: string) => string): ReactElement {
+export function useWebSearchPanel(
+  ctx: ClientSeamContext,
+  t: (key: string) => string,
+  controls?: {
+    /** 把内部 `save()` 交给页面容器（设置页底部那一个「保存」按钮调用它）。 */
+    saveRef?: { current: (() => Promise<void>) | undefined };
+    /** 有无未保存改动（页面容器据此决定是否显示保存条）。 */
+    onDirty?: (dirty: boolean) => void;
+  },
+): ReactElement {
   const [read, setRead] = useState<PanelRead | undefined>(undefined);
   const [choiceDraft, setChoiceDraft] = useState<WebSearchChoice | undefined>(undefined);
   const [fieldDraft, setFieldDraft] = useState<Partial<WebSearchCustomDraft>>({});
   const [keyDraft, setKeyDraft] = useState("");
-  const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -363,9 +371,14 @@ export function useWebSearchPanel(ctx: ClientSeamContext, t: (key: string) => st
 
   const choice = choiceDraft ?? choiceOf(view);
   const custom: WebSearchCustomDraft = { ...view.custom, ...fieldDraft };
+  // 有改动才显示「保存搜索设置」：否则设置页里会同时挂着两个「保存」按钮
+  // （厂商表单的保存条 + 这张卡的），用户会以为重复了（2026-10-18 报障）。
+  const dirty =
+    (choiceDraft !== undefined && choiceDraft !== choiceOf(view)) ||
+    Object.keys(fieldDraft).length > 0 ||
+    keyDraft.trim() !== "";
 
   const save = async (): Promise<void> => {
-    setSaving(true);
     setNotice(undefined);
     setError(undefined);
     try {
@@ -423,9 +436,15 @@ export function useWebSearchPanel(ctx: ClientSeamContext, t: (key: string) => st
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
-      setSaving(false);
     }
   };
+
+  // 把保存动作与「脏」状态交给页面容器：设置页只有一个「保存」按钮，
+  // 它同时保存厂商字段与这张卡（2026-10-18 用户要求去掉重复的保存按钮）。
+  if (controls?.saveRef !== undefined) controls.saveRef.current = save;
+  useEffect(() => {
+    controls?.onDirty?.(dirty);
+  }, [dirty]);
 
   return createElement(WebSearchCard, {
     t,
@@ -437,7 +456,6 @@ export function useWebSearchPanel(ctx: ClientSeamContext, t: (key: string) => st
     customKey: view.customKey,
     credentialsAvailable: view.credentialsAvailable,
     ...(view.ours === undefined ? { problem: t("webSearch.rowMissing") } : {}),
-    saving,
     ...(notice === undefined ? {} : { notice }),
     ...(error === undefined ? {} : { error }),
     keyDraft,

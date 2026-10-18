@@ -8,7 +8,7 @@
 import type { QuotaPlanSummary, QuotaUnit, QuotaWindow } from "./usage-contract";
 
 /** 一个窗口的读数形状：决定用哪种写法呈现。 */
-export type QuotaShape = "used-cap" | "percent" | "used" | "unlimited" | "missing";
+export type QuotaShape = "used-cap" | "percent" | "used" | "cap" | "unlimited" | "missing";
 
 /**
  * 读数里的数字：最多两位小数，整数的尾巴不留 0。
@@ -55,6 +55,7 @@ export type QuotaReading =
   | { shape: "used-cap"; used: number; cap: number }
   | { shape: "percent"; percent: number }
   | { shape: "used"; used: number }
+  | { shape: "cap"; cap: number }
   | { shape: "unlimited" }
   | { shape: "missing" };
 
@@ -73,6 +74,9 @@ export function quotaReading(window: QuotaWindow): QuotaReading {
   if (used !== undefined && cap !== undefined) return { shape: "used-cap", used, cap };
   if (percent !== undefined) return { shape: "percent", percent };
   if (used !== undefined) return { shape: "used", used };
+  // 只有上限：厂商公布了「每月最多 $120」，但用量不对外（Open Design 的月度就是这样）。
+  // 这种读数照样有价值（用户问的正是「月额度是多少」），不能当缺数据丢掉。
+  if (cap !== undefined) return { shape: "cap", cap };
   return { shape: "missing" };
 }
 
@@ -126,6 +130,8 @@ export function quotaWindowText(t: (key: string) => string, window: QuotaWindow)
       return t("quota.usedPercent").replace("{percent}", formatNumber(reading.percent));
     case "used":
       return t("quota.used").replace("{used}", quotaAmount(reading.used, window.unit));
+    case "cap":
+      return t("quota.capOnly").replace("{cap}", quotaAmount(reading.cap, window.unit));
     case "unlimited":
       return t("quota.unlimited");
     case "missing":

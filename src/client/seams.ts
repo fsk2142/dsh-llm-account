@@ -23,7 +23,6 @@ import { AccountsPanel } from "./accounts-panel";
 import { dictionaryOf } from "./copy";
 import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
-import { BackIcon } from "./icons";
 import { closeLoginWindow, openLoginWindow, pointLoginWindowAt, type LoginWindowHandle } from "./login-window";
 import { SidebarCard } from "./sidebar-card";
 import { useWebSearchPanel } from "./web-search-panel";
@@ -41,6 +40,7 @@ import {
   setActionField,
   setField,
   sidebarVendorOf,
+  sidebarVendorsOf,
   toggleExpanded,
   vendorCardKinds,
   type AccountAction,
@@ -1215,7 +1215,12 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
     // Hook 必须落在本容器这一个挂载根上（Ruling 22；子元素里的 Hook 过不了迷你夹具）。
     // 无条件挂载：读取/凭据/写回的每种失败面板内部都有人话出口，缺席接缝不该让整块
     // 设置页少一张卡（那看起来像功能没装）。
-    const webSearch = useWebSearchPanel(ctx, t);
+    const webSearchSave = useRef<(() => Promise<void>) | undefined>(undefined);
+    const [webSearchDirty, setWebSearchDirty] = useState(false);
+    const webSearch = useWebSearchPanel(ctx, t, {
+      saveRef: webSearchSave,
+      onDirty: setWebSearchDirty,
+    });
 
     return PageShell({
       state,
@@ -1223,10 +1228,13 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       t,
       accounts,
       mergeTabs: true,
+      webSearchDirty,
       saving: savingNs === state.activeNs,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
       onSave: (ns) => {
+        // 一个「保存」同时落两处：网页搜索卡片（独立设置行）与当前厂商字段。
+        void webSearchSave.current?.();
         const fields = dirtyFields(state, ns);
         if (fields.length === 0) return;
         setSavingNs(ns);
@@ -1603,6 +1611,28 @@ export function quotaRefreshMs(value: unknown): number {
   return clamped * 60_000;
 }
 
+/** 侧边栏轮播的默认间隔（毫秒）：1 分钟。 */
+export const SIDEBAR_ROTATE_MS = 60_000;
+
+/**
+ * 侧边栏轮播间隔（毫秒），由设置字段 `sidebarRotateMinutes`（分钟）换算而来。
+ *
+ * 缺省/非法值 1 分钟，夹在 `[1, 60]` 分钟之间：轮播是「看一眼别家」，比刷新间隔更短才有意义，
+ * 但低于 1 分钟只会让人眼花（且每切一次都要读一次状态）。
+ * @param value - 设置文档里的 `sidebarRotateMinutes`（不可信，按 `unknown` 处理）。
+ * @returns 轮播间隔（毫秒）。
+ */
+export function sidebarRotateMs(value: unknown): number {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() !== ""
+        ? Number(value)
+        : Number.NaN;
+  const minutes = Number.isFinite(parsed) ? parsed : SIDEBAR_ROTATE_MS / 60_000;
+  return Math.max(1, Math.min(60, minutes)) * 60_000;
+}
+
 /**
  * 造侧边栏卡片控制器。
  * @param deps - 注册/注销、一次读取与轮询间隔。
@@ -1674,18 +1704,6 @@ export function createSidebarCardController(deps: {
 /** 中栏仪表盘的面板 id（`layout.selectPanel` 用它打开/关闭）。 */
 export const DASHBOARD_PANEL_ID = "llm-account-dashboard";
 
-/**
- * 设置页在主栏插槽里的 key（「转到设置」按钮的目标）。
- *
- * 为什么把设置页也注册进 `main`：宿主**没有**「打开设置对话框」的插件接缝 —— 设置对话框的
- * 开关住在 ui-settings-general 的模块级 store 里（`ctx.slots.inject("sidebar.settings", …)`
- * 里构造，未注册为 cordis 服务），`ctx.layout` 只有 `selectPanel` / `toggleSidebar` /
- * `openRightbar` / `closeRightbar`（app.asar 实测，2026-10-18）。而 `main` 插槽的 keyed
- * 面板是宿主**明文支持**的扩展点（`selectPanel(id)` 按 key 选面板；Plugins 页与任务管理器
- * 都是这么做的）。所以「转到设置」= 在主栏打开同一份设置页组件，带一条返回栏。
- */
-export const SETTINGS_PANEL_ID = "llm-account-settings";
-
 /** 侧边栏卡片在插槽里的注册参数。 */
 export const SIDEBAR_CARD_ID = "llm-account-quota";
 
@@ -1716,9 +1734,17 @@ export function createSidebarCardView(options: {
 }): () => ReactElement {
   const { ctx, entries, t } = options;
   return function ConnectedSidebarCard(): ReactElement {
-    const [vendor, setVendor] = useState<string | undefined>(() => sidebarVendor());
-    /** 设置值变化时重建控制器，让新的刷新间隔立即生效（不必等旧 timer 到期）。 */
-    const [settingsRevision, setSettingsRevision] = useState(0);
+    /** 所有开启的厂商（顺序即标签页顺序）：卡片按 `turn` 轮播它们。 */
+    const [vendors, setVendors] = useState<string[]>(() => sidebarVendorList());
+    const [turn, setTurn] = useState(0);
+    const vendor = vendors.length === 0 ? undefined : vendors[turn % vendors.length];
+    /**
+     * 设置值变化时**重渲染**（让 `refreshKey` 重新计算），从而按新间隔重建控制器。
+     *
+     * 这里只要 setter：值本身不参与渲染，依赖用 `refreshKey` 的取值而不是修订号 ——
+     * 见下面控制器 effect 的注释。
+     */
+    const [, setSettingsRevision] = useState(0);
     // 一份合并的视图状态：要显示的状态 + 最近一次读的失败 + 是否在显示旧数据。
     // 合成一个 state（而不是三个）是为了让「失败时保留上一份好数据」在一次 setState 里
     // 原子完成 —— 三个各自 set 的中间态会闪一下「有数据但没标过期」。
@@ -1726,6 +1752,8 @@ export function createSidebarCardView(options: {
     // 渲染期间不重读的两个可变值（引用：不触发渲染，只在读取/排程时被读）。
     const inFlight = useRef(false);
     const failures = useRef(0);
+    /** 连续跳过「这一家没有已配置账号」的次数：一轮之内全都没账号时停在最后一家，不空转。 */
+    const skips = useRef(0);
 
     /**
      * 读一次状态。`manual` 为真时（用户点「刷新」）无视页面可见性 —— 手动要的就是立刻问；
@@ -1773,6 +1801,17 @@ export function createSidebarCardView(options: {
           setView({ status: next, failure: raw, stale: false });
           return;
         }
+        // 这一家一个已配置账号都没有：轮播直接跳到下一家，不把「未配置」摆给用户看
+        // （2026-10-18 用户要求）。一轮都跳完还找不到，就停在最后一家显示空态。
+        const configured = next.accounts.some(
+          (account) => typeof account === "object" && account !== null && account.configured === true,
+        );
+        if (!configured && vendors.length > 1 && skips.current < vendors.length - 1) {
+          skips.current += 1;
+          setTurn((current) => current + 1);
+          return;
+        }
+        skips.current = 0;
         failures.current = 0;
         // 写回设置页的读数缓存：同一份 `status()` 读数，让「侧边栏开着」时打开设置直接吃最新的那份。
         // 与设置页同一条纪律：只有**完整**的读数进缓存（见 completeReading）。
@@ -1782,7 +1821,7 @@ export function createSidebarCardView(options: {
     };
 
     // 订阅开关存储：设置页里保存（或外部改动设置文档）时，这里随之开关。
-    useEffect(() => subscribeSidebarVendor(setVendor), []);
+    useEffect(() => subscribeSidebarVendors(setVendors), []);
     useEffect(
       () =>
         subscribeSidebarSettings(() => {
@@ -1790,6 +1829,16 @@ export function createSidebarCardView(options: {
         }),
       [],
     );
+
+    // 轮播：每隔 `sidebarRotateMinutes` 分钟切到下一家。只有一家时完全不排定时器（行为不变）。
+    const rotateMs = sidebarRotateMs(sidebarVendorSettings()?.["sidebarRotateMinutes"]);
+    /** 两个轮询间隔的取值指纹：只有它们变了才需要重建控制器（读一次新的间隔）。 */
+    const refreshKey = `${quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"])}:${rotateMs}`;
+    useEffect(() => {
+      if (vendors.length <= 1) return;
+      const timer = setInterval(() => setTurn((current) => current + 1), rotateMs);
+      return () => clearInterval(timer);
+    }, [vendors.join(","), rotateMs]);
 
     // 冷启动兜底：设置页从未打开过时存储是冷的，卡片自己读一次已存储的开关
     // （一次设置读取，不是用量查询；读不到就保持关闭，绝不轮询）。
@@ -1842,7 +1891,9 @@ export function createSidebarCardView(options: {
         if (typeof current?.removeEventListener === "function") current.removeEventListener("visibilitychange", onVisible);
         controller.dispose();
       };
-    }, [vendor, settingsRevision]);
+      // 依赖用**间隔的取值**而不是设置的修订号：宿主每次重读设置都会给出新对象，
+      // 用修订号会让「打开设置页」白读一次状态（用户看到的「点设置就自己刷新」）。
+    }, [vendor, refreshKey]);
 
     if (vendor === undefined) return null as unknown as ReactElement;
     return SidebarCard({
@@ -1980,73 +2031,13 @@ export function createDashboardView(options: {
       vendors: entries.map((entry) => ({ label: t(entry.labelKey), status: statuses[entry.providerId] })),
       onClose: () => options.onClose(),
       onRefresh: () => load(),
-      // 「转到设置」：面板里看到哪个账号有问题，直接去设置里管它（换密钥/移除/改模型）。
-      // 宿主有 `layout.selectPanel` 才给这个按钮（探针只探不发）：渲染一个点了没反应的
-      // 按钮，比不渲染更糟。
-      ...(canSelectPanel(ctx)
-        ? {
-            onOpenSettings: () => {
-              selectPanel(ctx, SETTINGS_PANEL_ID);
-            },
-          }
-        : {}),
       failure: problem,
     });
   };
 }
 
 /**
- * 造**主栏设置页容器组件**：「转到设置」按钮打开的那块面板。
- *
- * 宿主没有「打开设置对话框」的插件接缝（考证见 {@link SETTINGS_PANEL_ID}），所以这条路径把
- * **同一份设置页组件**注册进 `main` 插槽：用户在用量面板里看到哪个账号有问题，点「转到设置」
- * 就地管它（换密钥 / 移除 / 改模型），顶上留一条返回栏回用量面板。
- *
- * 返回而不是关闭面板（`selectPanel(null)`）：用户是从仪表盘来的，送回仪表盘他才不用再点一次
- * 侧边栏卡片；`null` 会把他留在空主栏上。
- *
- * 页面组件由调用方构造好再传进来（`index.ts` 用宿主绑定的 `t` 造）—— 与 `registerPage` 同一条
- * 分工：本层不 import 页面层，页面工厂从外面进来。本组件自身是**纯 props → 元素树**（无 Hook），
- * 单测里用一个纯函数桩当页面就能覆盖返回栏与返回动作。
- * @param options - 取词函数、页面组件工厂与返回动作。
- * @returns 一个 React 函数组件。
- */
-export function createSettingsPanelView(options: {
-  t: (key: string) => string;
-  pageComponent: (t: (key: string) => string) => unknown;
-  onBack: () => void;
-}): () => ReactElement {
-  const { t, pageComponent, onBack } = options;
-  // 工厂只调一次：插槽里的条目是常驻的，元素类型跨渲染复用同一个。
-  const page = pageComponent(t);
-  return function ConnectedSettingsPanel(): ReactElement {
-    return createElement(
-      "div",
-      { "data-card": "settings-panel", className: CSS_CLASS.settingsPanel },
-      createElement(
-        "header",
-        { className: CSS_CLASS.settingsBack },
-        createElement(
-          "button",
-          {
-            type: "button",
-            "data-settings-back": "true",
-            "aria-label": t("dashboard.back"),
-            title: t("dashboard.back"),
-            className: CSS_CLASS.buttonGhost,
-            onClick: () => onBack(),
-          },
-          createElement(BackIcon, null),
-          createElement("span", null, t("dashboard.back")),
-        ),
-      ),
-      createElement(page),
-    );
-  };
-}
-
-/**
- * 把侧边栏卡片、中栏面板与主栏设置页注册进各自的插槽 —— **常驻、无条件**。
+ * 把侧边栏卡片与中栏面板注册进各自的插槽 —— **常驻、无条件**。
  *
  * 形状逐字对齐旧插件（`lib/client.js:9321-9341`）：`main` 用 `ctx.slots` + `key`，
  * `sidebar.footer.action` 用 `ctx.inject(["layout"], …)` + `id`/`order`，两处都 try/catch
@@ -2059,8 +2050,7 @@ export function createSettingsPanelView(options: {
  *
  * **幂等由调用方保证**：`applyShell` 的模块级守卫（与页面同一个）确保两个 profile 行各调
  * 一次 `apply` 也只注册一份；直接调用本函数（测试）每次都会注册。
- * @param options - 上下文、厂商声明、取词函数、文案命名空间与可选的设置页组件工厂
- *   （给了才注册「转到设置」面板，见 {@link createSettingsPanelView}）。
+ * @param options - 上下文、厂商声明、取词函数与文案命名空间。
  * @returns 撤销函数（插槽注册不可撤，见上；保留形状供调用方在 effect 里登记）。
  */
 export function registerSharedSurfaces(options: {
@@ -2068,7 +2058,6 @@ export function registerSharedSurfaces(options: {
   entries: readonly VendorEntry[];
   t: (key: string) => string;
   localeNs: string;
-  pageComponent?: (t: (key: string) => string) => unknown;
 }): () => void {
   const { ctx, entries, t, localeNs } = options;
   const disposeSidebar = registerSidebarCard(ctx, {
@@ -2096,26 +2085,9 @@ export function registerSharedSurfaces(options: {
       },
     }),
   });
-  // 「转到设置」的目标面板：拿得到页面工厂才注册（测试与没有页面实现的调用方不传）。
-  const disposeSettings =
-    options.pageComponent === undefined
-      ? () => undefined
-      : registerPanelCard(ctx, {
-          key: SETTINGS_PANEL_ID,
-          locale: localeNs,
-          component: createSettingsPanelView({
-            t,
-            pageComponent: options.pageComponent,
-            onBack: () => {
-              // 送回仪表盘而不是关闭主栏：用户是从那里来的（见 createSettingsPanelView 的说明）。
-              selectPanel(ctx, DASHBOARD_PANEL_ID);
-            },
-          }),
-        });
   return () => {
     disposeSidebar();
     disposePanel();
-    disposeSettings();
   };
 }
 
@@ -2137,8 +2109,17 @@ export function registerSharedSurfaces(options: {
  */
 export const STATUS_READING_TTL_MS = 60_000;
 export const CATALOG_READING_TTL_MS = 300_000;
+/**
+ * 状态读数的新鲜期：**跟随用户设置的「用量刷新间隔」**。
+ *
+ * 2026-10-18 用户报障「刷新频率到底有没有用？我每次点设置它都自己刷一遍」。事实是旧的
+ * TTL 写死 60 秒、和设置里的 `quotaRefreshMinutes`（默认 1 分钟）无关，改设置只影响侧边栏
+ * 轮询。现在缓存新鲜期就是那个设置值：设 10 分钟，10 分钟内重开设置直接吃缓存，不再重打
+ * 网络；设 1 分钟，1 分钟后才重读。
+ */
+let statusReadingTtlMs = STATUS_READING_TTL_MS;
 /** 状态读数：只存**成功**的（读失败照旧每次重试 —— 缓存一次瞬时故障会把它假装成事实）。 */
-const statusReadings = new ReadingCache<VendorUsageStatus>(STATUS_READING_TTL_MS);
+const statusReadings = new ReadingCache<VendorUsageStatus>(() => statusReadingTtlMs);
 /** 模型目录：只存完整成功的（`failures` 为空）；部分失败与失败都留给下次重读。 */
 const catalogReadings = new ReadingCache<CatalogModelsResult>(CATALOG_READING_TTL_MS);
 
@@ -2255,6 +2236,9 @@ export function usageRemoteProblem(ctx: ClientSeamContext): string | undefined {
 /** 侧边栏卡片该显示哪一家（providerId）；没有开启的厂商时为 `undefined`。 */
 let sidebarVendorValue: string | undefined;
 
+/** 侧边栏要**轮播**的厂商清单（按标签页顺序，只含开启的；见 `sidebarVendorsOf`）。 */
+let sidebarVendorsValue: string[] = [];
+
 /** 当前侧边栏厂商的设置文档值（轮询间隔等设置类控件从这里取，见 `quotaRefreshMs`）。 */
 let sidebarVendorSettingsValue: Record<string, unknown> | undefined;
 
@@ -2279,6 +2263,22 @@ export function sidebarVendorSettings(): Record<string, unknown> | undefined {
 /** 存储是否已 seed（有过一次非空读取）。冷启动兜底只在未 seed 时读一次。 */
 export function sidebarVendorSeeded(): boolean {
   return sidebarVendorSeededValue;
+}
+
+/** 当前要轮播的厂商清单（空数组 = 一家都没开）。 */
+export function sidebarVendorList(): string[] {
+  return sidebarVendorsValue;
+}
+
+/** 「轮播清单」的监听者。 */
+const sidebarVendorsListeners = new Set<(vendors: string[]) => void>();
+
+/** 订阅「轮播清单」变化（开关或厂商集合变了）。 */
+export function subscribeSidebarVendors(listener: (vendors: string[]) => void): () => void {
+  sidebarVendorsListeners.add(listener);
+  return () => {
+    sidebarVendorsListeners.delete(listener);
+  };
 }
 
 /** 订阅开关存储变化。 */
@@ -2311,13 +2311,22 @@ export function noteSidebarSnapshots(entries: readonly VendorEntry[], snapshots:
   for (const snapshot of snapshots) map[snapshot.ns] = snapshot;
   const entry = sidebarVendorOf(entries, map);
   const vendor = entry?.providerId;
+  // 轮播清单：所有开启的厂商（顺序即标签页顺序）。只有一家时卡片行为与从前完全一致。
+  const nextVendors = sidebarVendorsOf(entries, map);
+  const vendorsChanged =
+    nextVendors.length !== sidebarVendorsValue.length ||
+    nextVendors.some((item, index) => item !== sidebarVendorsValue[index]);
+  sidebarVendorsValue = nextVendors;
   sidebarVendorSeededValue = true;
   // 始终用最新快照刷新设置值：厂商没变但轮询间隔等设置改了也要即时生效（不能因为
   // `vendor === sidebarVendorValue` 提前返回就漏掉这次更新）。
   const nextSettings = entry === undefined ? undefined : map[entry.ns]?.value;
   const settingsChanged = nextSettings !== sidebarVendorSettingsValue;
   sidebarVendorSettingsValue = nextSettings;
+  // 设置页缓存的新鲜期跟着「用量刷新间隔」走（同一家：第一家开启的厂商）。
+  statusReadingTtlMs = quotaRefreshMs(nextSettings?.["quotaRefreshMinutes"]);
   if (settingsChanged) for (const listener of [...sidebarSettingsListeners]) listener();
+  if (vendorsChanged) for (const listener of [...sidebarVendorsListeners]) listener(nextVendors);
   if (vendor === sidebarVendorValue) return;
   sidebarVendorValue = vendor;
   for (const listener of [...sidebarVendorListeners]) listener(vendor);

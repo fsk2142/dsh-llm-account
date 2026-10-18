@@ -95,8 +95,9 @@ describe("client plugin skeleton", () => {
     // Three registrations: the settings page, the usage dashboard, and the
     // settings panel the dashboard's「转到设置」button opens (same page component,
     // a second `main` entry keyed differently).
-    expect(harness.register).toHaveBeenCalledTimes(3);
-    expect(harness.registrations).toHaveLength(3);
+    // 2026-10-18 起只有两条：侧边栏卡片 + 用量仪表盘（「转到设置」面板已去掉）。
+    expect(harness.register).toHaveBeenCalledTimes(2);
+    expect(harness.registrations).toHaveLength(2);
     const registration = harness.registrations[0]!;
     expect(registration.name).toBe("settings.section");
     expect(registration.id).toBe("llm-account");
@@ -105,9 +106,6 @@ describe("client plugin skeleton", () => {
     const panel = harness.registrations[1]!;
     expect(panel.name).toBe("main");
     expect(panel.key).toBe("llm-account-dashboard");
-    const settingsPanel = harness.registrations[2]!;
-    expect(settingsPanel.name).toBe("main");
-    expect(settingsPanel.key).toBe("llm-account-settings");
     // Legacy call-site shape: `label` binds the locale namespace, `inject` is the
     // `hooks`-mapping factory the page reads its data through.
     expect(registration.label).toBeTypeOf("function");
@@ -117,8 +115,8 @@ describe("client plugin skeleton", () => {
 
     // Only the first instance reached the slots: the guards sit BEFORE
     // `slots.inject`, so the second instance never touches them at all.
-    // Three slot injections: `settings.section` + two `main` panels.
-    expect(harness.inject).toHaveBeenCalledTimes(3);
+    // 两条插槽注入：`settings.section` + `main` 的用量面板（「转到设置」面板已去掉）。
+    expect(harness.inject).toHaveBeenCalledTimes(2);
     expect(harness.inject).toHaveBeenCalledWith("settings.section", expect.any(Function));
     expect(harness.inject).toHaveBeenCalledWith("main", expect.any(Function));
 

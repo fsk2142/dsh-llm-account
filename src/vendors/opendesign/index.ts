@@ -73,7 +73,7 @@ import { DEFAULT_BASE_URL } from "./protocol";
 import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { SwitchingController } from "../switching";
-import { VELA_PREFLIGHT_TIMEOUT_MS, createOpenDesignLogin, findVelaBinary } from "./login";
+import { VELA_PREFLIGHT_TIMEOUT_MS, createOpenDesignLogin, discoverWorkspaceId, findVelaBinary } from "./login";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opendesign`）。 */
 export const name = "llm-opendesign";
@@ -146,6 +146,8 @@ export const Config: PluginConfigSchema = z.object(
     showSidebarQuota: z.boolean().default(false),
     /** 侧边栏额度卡片的刷新间隔（分钟）；缺省 1、下限 1、上限 120（与另两行同一档）。 */
     quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
+    /** 侧边栏轮播间隔（分钟）：多厂商都开启时，卡片轮流显示各家的当前账号额度。 */
+    sidebarRotateMinutes: z.number().step(1).min(1).max(60).default(1),
     /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */
     workspaceId: z.string().default(""),
     /** 推理网关基地址（Chat Completions）。 */
@@ -229,6 +231,36 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     automaticSwitch: true,
   };
 
+  /** 工作区发现的失败重试间隔（毫秒）：成功永久缓存，失败一分钟内不再问 vela。 */
+  const WORKSPACE_DISCOVERY_RETRY_MS = 60_000;
+  /**
+   * 进程内的「发现到的工作区」缓存。
+   *
+   * 网页登录的产物**不带工作区**（本机实测 `~/.amr/config.json` 只有两把密钥与 user），
+   * 而周期额度必须有它。所以读额度时缺省就问一次 `vela team-projects list`；成功一次就写回
+   * 顶层设置并常驻，失败只缓存一分钟（用户可能刚装好 vela）。
+   */
+  let discoveredWorkspace: { value: string | undefined; at: number } | undefined;
+
+  /**
+   * 取某账号的工作区：条目/顶层设置优先，缺省时用 vela 兜底发现并写回。
+   * @param candidate - 账号 ref。
+   * @returns 工作区 id，或 `undefined`（本机没有 vela / 没登录）。
+   */
+  const workspaceFor = async (candidate: string): Promise<string | undefined> => {
+    const stored = opendesignWorkspaceId(document(), candidate);
+    if (stored !== undefined) return stored;
+    if (discoveredWorkspace?.value !== undefined) return discoveredWorkspace.value;
+    if (discoveredWorkspace !== undefined && Date.now() - discoveredWorkspace.at < WORKSPACE_DISCOVERY_RETRY_MS) {
+      return undefined;
+    }
+    const found = await discoverWorkspaceId();
+    discoveredWorkspace = { value: found, at: Date.now() };
+    // 写回顶层：下一次读（含重启后）不必再问 vela；`fillTopLevelWorkspace` 只补空、不覆盖。
+    if (found !== undefined) await fillTopLevelWorkspace(found);
+    return found;
+  };
+
   /** 额度端口：每次读数都用当时的配置；`snapshot(ref)` 可读指定账号（切换策略用）。 */
   const quota: QuotaPort = {
     async snapshot(accountRef?: string) {
@@ -246,8 +278,10 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
           if (control !== undefined) return control;
           return resolveAccountKey(ctx, credentials, candidate);
         },
-        workspaceIdOf: (candidate) => opendesignWorkspaceId(document(), candidate),
+        workspaceIdOf: (candidate) => workspaceFor(candidate),
         fetchImpl: fetch,
+        // 控制面 403 时的第二来源：本机 vela 的登录态（真机实测：HTTP 被拒、CLI 能读）。
+        summaryFallback: velaSummary,
         walletBase,
         preflight: velaPreflight,
       }).snapshot();
@@ -263,26 +297,55 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     warn,
   });
 
+  /**
+   * 把发现到的工作区补进**顶层**字段（账号条目，读不到时才写这里）。
+   *
+   * 只补空：用户已经填过（顶层或条目里）就不动 —— 覆盖别人显式配好的值比缺一个 id 更糟。
+   * 失败只记一条警告：这是登录收尾的附加动作，失败不该把登录判成失败。
+   * @param workspaceId - 发现到的工作区 id。
+   */
+  const fillTopLevelWorkspace = async (workspaceId: string): Promise<void> => {
+    if (normalizeKey(document().workspaceId) !== undefined) return;
+    try {
+      const snapshot = await settings.describe(OPENDESIGN_SETTINGS_NS);
+      const stored = snapshot.value.workspaceId;
+      if (typeof stored === "string" && stored.trim() !== "") return;
+      await settings.mutate(
+        OPENDESIGN_SETTINGS_NS,
+        [{ op: "set", path: ["workspaceId"], value: workspaceId }],
+        snapshot.revision,
+      );
+    } catch (error) {
+      warn(
+        `dsh-llm-account: could not store the discovered Open Design workspace id (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+  };
+
   // 网页登录：vela 设备授权。成功后把 profile 里的三样东西交给装配层落库
   // （同 ref/同标签换密钥，否则新增账号；控制面密钥与工作区跟着新条目走）。
   const login = createOpenDesignLogin({
     storeKey: async (input) => {
+      // 登录产物通常只有两把密钥、**没有工作区**（本机实测）。没有工作区就没有周期额度，
+      // 所以这里问一次 vela（`team-projects list`）兜底；问不到就照旧按缺省处理。
+      const workspaceId = input.workspaceId ?? (await discoverWorkspaceId());
       const views = await accounts.list();
       const existing = views.find((view) => view.ref === input.ref) ?? views.find((view) => view.label === input.label);
       if (existing !== undefined) {
-        // 同账号重新登录：刷新推理密钥；控制面密钥如果这次拿到了也一起刷新
-        // （工作区没有端口方法可改，留给用户在设置里手改 —— 不静默丢弃）。
+        // 同账号重新登录：刷新推理密钥；控制面密钥如果这次拿到了也一起刷新。
         await credentials.set(existing.ref, input.key);
         if (input.controlKey !== undefined) {
           await credentials.set(opendesignControlRef(document(), existing.ref), input.controlKey);
         }
+        // 工作区没有端口方法可改，但顶层字段是现成的回退：条目没配时它就生效。
+        if (workspaceId !== undefined) await fillTopLevelWorkspace(workspaceId);
         return;
       }
       await accounts.add({
         label: input.label,
         key: input.key,
         ...(input.controlKey === undefined ? {} : { controlKey: input.controlKey }),
-        ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
+        ...(workspaceId === undefined ? {} : { workspaceId }),
       });
     },
   });
@@ -586,6 +649,36 @@ async function velaPreflight(workspaceId: string): Promise<unknown> {
     // 输出不是 JSON 时给一句准确的（JSON.parse 抛 SyntaxError，消息对用户没有意义）。
     if (error instanceof SyntaxError) throw new Error("vela billing preflight 的输出不是 JSON");
     throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * vela 的账单摘要（`vela billing summary --format json`）：套餐、换算率与订阅周期。
+ *
+ * 为什么需要：控制面的 `GET /billing/summary` 在本机对 runtimeKey / controlKey 都回 403，
+ * 而同一份数据 CLI 能拿到。没有这条回退，界面上的套餐行永远是空的（用户报障「套餐信息也没有」）。
+ * 失败一律读作「没有数据」：这是**附加**来源，不能把额度读取整块拖垮。
+ * @returns 摘要负载；找不到 vela / 非零退出 / 输出不是 JSON 时为 `undefined`。
+ */
+async function velaSummary(): Promise<unknown | undefined> {
+  const vela = findVelaBinary();
+  if (vela === undefined) return undefined;
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(vela, ["billing", "summary", "--format", "json"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  } catch {
+    return undefined;
+  }
+  const timer = setTimeout(() => child.kill(), VELA_PREFLIGHT_TIMEOUT_MS);
+  try {
+    const [stdout, code] = await Promise.all([readStream(child.stdout), waitForExit(child)]);
+    if (code !== 0) return undefined;
+    const parsed: unknown = JSON.parse(stdout);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   } finally {
     clearTimeout(timer);
   }

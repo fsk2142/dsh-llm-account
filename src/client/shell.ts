@@ -92,6 +92,13 @@ export const VENDORS: readonly VendorEntry[] = [
             // 而不是空白或 undefined（用户没配过就该看到与旧插件一致的 1 分钟体验）。
             fallback: 1,
           },
+          {
+            key: "sidebarRotateMinutes",
+            kind: "number",
+            labelKey: "field.sidebarRotateMinutes",
+            hintKey: "field.sidebarRotateMinutes.hint",
+            fallback: 1,
+          },
         ],
       },
       {
@@ -159,6 +166,13 @@ export const VENDORS: readonly VendorEntry[] = [
             // 而不是空白或 undefined（用户没配过就该看到与旧插件一致的 1 分钟体验）。
             fallback: 1,
           },
+          {
+            key: "sidebarRotateMinutes",
+            kind: "number",
+            labelKey: "field.sidebarRotateMinutes",
+            hintKey: "field.sidebarRotateMinutes.hint",
+            fallback: 1,
+          },
           // **刻意不声明 `usageDisplay`**（自动/常驻/关闭）：那个三模式开关属于参考插件的
           // **会话内用量胶囊**，而胶囊是本期声明不做的东西（`vendors/opencode/index.ts`
           // 模块头的非目标清单）。在页面上放一个没有任何代码读取的开关，就是把「看起来
@@ -212,6 +226,13 @@ export const VENDORS: readonly VendorEntry[] = [
             labelKey: "field.quotaRefreshMinutes",
             hintKey: "field.quotaRefreshMinutes.hint",
             // 与 Config 的 `default(1)` 对齐（见 commandcode 条目同款注释）。
+            fallback: 1,
+          },
+          {
+            key: "sidebarRotateMinutes",
+            kind: "number",
+            labelKey: "field.sidebarRotateMinutes",
+            hintKey: "field.sidebarRotateMinutes.hint",
             fallback: 1,
           },
           // 顶层工作区：账号条目没配 `workspaceId` 时的回退（vela 周期额度查询用）。
@@ -377,16 +398,8 @@ export interface ApplyShellOptions {
    * 条件注册一旦开启就撤不下来，所以门控放在组件里按**已存储**的开关做（旧插件
    * `CommandCodeFooterEntry` 的同一条判定）。两行各调一次 `apply` 也只注册一份。
    *
-   * 第三个参数是**页面组件工厂**（`options.pageComponent` 原样透传）：用量面板的「转到设置」
-   * 要把同一份设置页组件注册进 `main` 插槽（`seams.ts` `SETTINGS_PANEL_ID`）。工厂由本层
-   * 转发而不是让 `index.ts` 直接调 `registerSharedSurfaces`，是为了让「注册一次」的守卫与
-   * 文案绑定仍留在本层。
    */
-  sharedSurfaces?: (
-    context: ClientShell,
-    t: (key: string) => string,
-    pageComponent?: (t: (key: string) => string) => unknown,
-  ) => void;
+  sharedSurfaces?: (context: ClientShell, t: (key: string) => string) => void;
 }
 
 /**
@@ -443,8 +456,7 @@ function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOpt
   if (sharedSurfacesRegistered) return;
   sharedSurfacesRegistered = true;
   try {
-    // 页面工厂原样透传：用量面板的「转到设置」要在主栏打开同一份设置页组件。
-    options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS), options.pageComponent);
+    options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS));
   } catch (error) {
     // 与页面注册同样的处置：一次注册失败不该把整个客户端带走。
     console.error("[dsh-llm-account] could not register the sidebar card and the usage panel:", error);

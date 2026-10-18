@@ -39,7 +39,6 @@ function propsOf(overrides: Partial<WebSearchCardProps> = {}): WebSearchCardProp
     custom: CUSTOM,
     customKey: { ref: "LLM_ACCOUNT_SEARCH_KEY", configured: false },
     credentialsAvailable: true,
-    saving: false,
     keyDraft: "",
     onChoose: () => undefined,
     onCustomField: () => undefined,
@@ -158,15 +157,8 @@ it("交互：点 radio / 改字段 / 改 Key / 保存都走对应回调", () => 
   expect(onCustomField).toHaveBeenCalledWith("method", "POST");
   fireSim(findSim(tree, "data-web-search-key"), "onChange", { target: { value: "sk-new" } });
   expect(onKeyDraft).toHaveBeenCalledWith("sk-new");
-  fireSim(findSim(tree, "data-web-search-save"), "onClick");
-  expect(onSave).toHaveBeenCalledTimes(1);
-});
-
-it("保存中：按钮禁用并显示 saving 文案", () => {
-  const tree = WebSearchCard(propsOf({ saving: true }));
-  const button = findSim(tree, "data-web-search-save");
-  expect(button?.props.disabled).toBe(true);
-  expect(textsOfSim(tree)).toContain("webSearch.saving");
+  // 这张卡不再有自己的保存按钮：统一由设置页底部那个「保存」触发（2026-10-18 用户要求）。
+  expect(elementsOfSim(tree).some((element) => element.props["data-web-search-save"] !== undefined)).toBe(false);
 });
 
 it("problem / notice / error 三行只在给值时出现", () => {
