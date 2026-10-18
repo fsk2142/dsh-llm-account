@@ -1689,8 +1689,11 @@ export function createSidebarCardView(options: {
         }
         if (next.failures.length > 0) {
           failures.current += 1;
-          const failure = next.failures[0] ?? t("usage.failed");
-          setView((current) => ({ status: current.status, failure, stale: current.status !== undefined }));
+          const raw = next.failures[0] ?? t("usage.failed");
+          const failure = next.failures.some((item) => /timeout/i.test(item)) ? t("usage.quotaTimeout") : raw;
+          // 单个账号的额度读取失败不应该把整张卡片的账号信息清空：状态仍然可用，
+          // 失败只作为附加提示；否则侧边栏只剩一个「LLM 账号」标题。
+          setView({ status: next, failure, stale: false });
           return;
         }
         failures.current = 0;

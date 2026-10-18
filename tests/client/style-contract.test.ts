@@ -225,30 +225,31 @@ it("账号行是两段结构：身份块与动作在身份行里，额度条在�
   expect(elementsOfSim(head).some((element) => element.props["data-quota-window"] !== undefined)).toBe(false);
 });
 
-it("额度条：按**已用**百分比算（用得越多越糟），没报百分比时按 used/cap 推", () => {
-  const bar = (
+it("额度环：中心显示剩余百分比，绿色代表剩余充足，没数据不补 0", () => {
+  const ring = (
     window: { key: string; used?: number; cap?: number; percent?: number; exceeded?: boolean },
-  ): { level: unknown; width: unknown } | undefined => {
+  ): { level: unknown; remaining: unknown } | undefined => {
     const tree = AccountCard(accountProps({ status: statusOf([account({ ref: "work", quota: { windows: [window], failures: [] } })]) }));
-    const fill = elementsOfSim(tree).find((element) => element.props["data-quota-level"] !== undefined);
-    if (fill === undefined) return undefined;
-    return { level: fill.props["data-quota-level"], width: (fill.props.style as { width: unknown }).width };
+    const wrapper = elementsOfSim(tree).find((element) => element.props["data-quota-ring"] !== undefined);
+    if (wrapper === undefined) return undefined;
+    return {
+      level: wrapper.props["data-quota-ring-level"],
+      remaining: wrapper.props["data-quota-ring-remaining"],
+    };
   };
 
-  // 单位是 0–100：20% 的条就是 20% 宽（不是「永远是满格绿」）。
-  expect(bar({ key: "w", percent: 20 })).toEqual({ level: "ok", width: "20%" });
-  expect(bar({ key: "w", percent: 50 })).toEqual({ level: "warn", width: "50%" });
-  expect(bar({ key: "w", percent: 85 })).toEqual({ level: "error", width: "85%" });
-  // 厂商自己说超出了（opencode 的 rate-limited，配着 percent: 100）→ 红。
-  expect(bar({ key: "w", percent: 100, exceeded: true })).toEqual({ level: "error", width: "100%" });
-  // used/cap 型（Command Code）：算得出比例就画条，5/35 → 14%。
-  expect(bar({ key: "w", used: 5, cap: 35 })).toEqual({ level: "ok", width: "14%" });
-  // 什么数都没有 → 不画条（不是补一条 0%）。
-  expect(bar({ key: "w" })).toBeUndefined();
-  // cap 为 0 的除零不算：宁可没有条。
-  expect(bar({ key: "w", used: 0, cap: 0 })).toBeUndefined();
-  // 越界的值夹在 0–100：条不会溢出卡片。
-  expect(bar({ key: "w", percent: 120 })).toEqual({ level: "error", width: "100%" });
+  // percent 是已用百分比：20% 已用 = 80% 剩余。
+  expect(ring({ key: "w", percent: 20 })).toEqual({ level: "ok", remaining: 80 });
+  expect(ring({ key: "w", percent: 50 })).toEqual({ level: "ok", remaining: 50 });
+  expect(ring({ key: "w", percent: 85 })).toEqual({ level: "error", remaining: 15 });
+  expect(ring({ key: "w", percent: 100, exceeded: true })).toEqual({ level: "error", remaining: 0 });
+  // used/cap 型：5/35 → 已用 14%，剩余 86%。
+  expect(ring({ key: "w", used: 5, cap: 35 })).toEqual({ level: "ok", remaining: 86 });
+  // 什么数都没有 → 灰色空环，不补 0。
+  expect(ring({ key: "w" })).toEqual({ level: "missing", remaining: undefined });
+  expect(ring({ key: "w", used: 0, cap: 0 })).toEqual({ level: "missing", remaining: undefined });
+  // 越界值夹在 0–100。
+  expect(ring({ key: "w", percent: 120 })).toEqual({ level: "error", remaining: 0 });
 });
 
 // —— 真实容器 ————————

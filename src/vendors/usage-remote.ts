@@ -472,7 +472,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
 }
 
 /** 单个账号额度读取的超时（毫秒）；一个账号卡住不能拖住整页状态。 */
-const QUOTA_READ_TIMEOUT_MS = 4_000;
+const QUOTA_READ_TIMEOUT_MS = 8_000;
 
 /**
  * 带超时的额度读取。

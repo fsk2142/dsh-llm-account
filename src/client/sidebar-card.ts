@@ -17,9 +17,10 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS, cls } from "./css";
 import { RefreshIcon, UsageIcon } from "./icons";
-import { quotaMeter, quotaShape, quotaWindowLabel, quotaWindowText } from "./quota";
+import { quotaShape } from "./quota";
+import { QuotaRing } from "./quota-ring";
 import { relativeTime } from "./time";
-import type { AccountUsageStatus, QuotaWindow, SwitchNotice, VendorUsageStatus } from "./usage-contract";
+import type { AccountUsageStatus, SwitchNotice, VendorUsageStatus } from "./usage-contract";
 
 /** 卡片属性。 */
 export interface SidebarCardProps {
@@ -233,47 +234,16 @@ function effectiveQuota(props: SidebarCardProps, row: AccountUsageStatus | undef
   return [
     createElement(
       "div",
-      { key: "meters", className: CSS_CLASS.meters },
-      ...(quota.windows ?? []).map((window) => meterRow(t, window)),
+      { key: "rings", className: CSS_CLASS.ringRow },
+      ...(quota.windows ?? []).map((window) =>
+        createElement(
+          "div",
+          { key: window.key, "data-sidebar-window": window.key, "data-sidebar-window-shape": quotaShape(window) },
+          QuotaRing({ t, window }),
+        ),
+      ),
     ),
   ];
 }
 
-/** 一个窗口的紧凑读数（与账户卡片同一套形状，列数由侧边栏样式压成一列）。 */
-function meterRow(t: (key: string) => string, window: QuotaWindow): ReactElement {
-  const shape = quotaShape(window);
-  const meter = quotaMeter(window);
-  return createElement(
-    "div",
-    {
-      key: window.key,
-      "data-sidebar-window": window.key,
-      "data-sidebar-window-shape": shape,
-      className: CSS_CLASS.quotaRow,
-    },
-    createElement(
-      "div",
-      { className: CSS_CLASS.meterHead },
-      createElement("span", { className: CSS_CLASS.meterLabel }, quotaWindowLabel(t, window.key)),
-      createElement(
-        "span",
-        { "data-sidebar-window-value": window.key, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },
-        quotaWindowText(t, window),
-      ),
-      meter === undefined
-        ? null
-        : createElement(
-            "small",
-            { key: "remaining", "data-sidebar-window-remaining": 100 - meter.percent, className: CSS_CLASS.quotaHint },
-            t("quota.remaining").replace("{percent}", String(100 - meter.percent)),
-          ),
-    ),
-    meter === undefined
-      ? null
-      : createElement(
-          "span",
-          { key: "bar", "data-quota-percent": meter.percent, className: CSS_CLASS.quotaTrack },
-          createElement("span", { "data-quota-level": meter.level, className: CSS_CLASS.quotaFill, style: { width: `${meter.percent}%` } }),
-        ),
-  );
-}
+/** 一个窗口的紧凑读数（已由 {@link QuotaRing} 统一渲染）。 */

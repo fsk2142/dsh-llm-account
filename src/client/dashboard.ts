@@ -15,7 +15,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { CSS_CLASS } from "./css";
 import { rejectionText } from "./copy";
 import { CloseIcon, RefreshIcon } from "./icons";
-import { quotaMeter, quotaShape, quotaWindowLabel, quotaWindowText } from "./quota";
+import { QuotaRing } from "./quota-ring";
 import { relativeTime } from "./time";
 import type { AccountUsageStatus, QuotaWindow, SwitchRecord, VendorUsageStatus } from "./usage-contract";
 
@@ -215,37 +215,12 @@ function accountBlock(props: DashboardProps, account: AccountUsageStatus): React
   );
 }
 
-/** 一个额度窗口。 */
+/** 一个额度窗口（圆环）。 */
 function windowBlock(t: (key: string) => string, window: QuotaWindow): ReactNode {
-  const shape = quotaShape(window);
-  const meter = quotaMeter(window);
   return createElement(
     "div",
-    { key: window.key, "data-dashboard-window": window.key, "data-dashboard-window-shape": shape, className: CSS_CLASS.quotaRow },
-    createElement(
-      "div",
-      { className: CSS_CLASS.meterHead },
-      createElement("span", { className: CSS_CLASS.meterLabel }, window.key === "" ? t("dashboard.unknown") : quotaWindowLabel(t, window.key)),
-      createElement(
-        "span",
-        { "data-dashboard-window-value": window.key, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },
-        quotaWindowText(t, window),
-      ),
-      meter === undefined
-        ? null
-        : createElement(
-            "small",
-            { key: "remaining", "data-dashboard-window-remaining": 100 - meter.percent, className: CSS_CLASS.quotaHint },
-            t("quota.remaining").replace("{percent}", String(100 - meter.percent)),
-          ),
-    ),
-    meter === undefined
-      ? null
-      : createElement(
-          "span",
-          { key: "bar", "data-quota-percent": meter.percent, className: CSS_CLASS.quotaTrack },
-          createElement("span", { "data-quota-level": meter.level, className: CSS_CLASS.quotaFill, style: { width: `${meter.percent}%` } }),
-        ),
+    { key: window.key, "data-dashboard-window": window.key, className: CSS_CLASS.ring },
+    QuotaRing({ t, window }),
   );
 }
 

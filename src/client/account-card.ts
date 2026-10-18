@@ -25,8 +25,9 @@ import { companyLabelOf, groupModels } from "../core/model-groups";
 import { rejectionText } from "./copy";
 import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon } from "./icons";
 import type { AccountAction } from "./page-state";
-import { quotaMeter, quotaShape, quotaWindowDetail, quotaWindowLabel, quotaWindowText } from "./quota";
-import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaSummary, QuotaWindow, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
+import { quotaWindowDetail, quotaWindowLabel } from "./quota";
+import { QuotaRing } from "./quota-ring";
+import type { AccountUsageStatus, CatalogModel, ModelRule, QuotaSummary, VendorCapabilities, VendorUsageStatus } from "./usage-contract";
 
 /** 登录状态面（由页面从远程 `loginStatus` 取得）。 */
 export interface LoginView {
@@ -490,59 +491,25 @@ function menuButtons(props: AccountCardProps, account: AccountUsageStatus): Reac
 function quotaBars(props: AccountCardProps, quota: QuotaSummary): ReactNode[] {
   // `windows` 在 QuotaSummary 里是必填字段，但线上同样可能缺或为 null：当「没有窗口」处理，
   // 而不是让 `.map` 抛在渲染路径上。
-  return (quota.windows ?? []).map((window) => quotaBar(props, window));
+  return [
+    createElement(
+      "div",
+      { key: "rings", className: CSS_CLASS.ringRow },
+      ...(quota.windows ?? []).map((window) =>
+        createElement(
+          "div",
+          { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.ring },
+          QuotaRing({ t: props.t, window }),
+        ),
+      ),
+    ),
+  ];
 }
 
 /**
  * 一个额度窗口。
- *
- * 条宽与颜色的依据是**已用百分比**（契约写明 `percent` 是「已用百分比」，厂商的
- * `rate-limited` 也配着 `percent: 100`）。所以：用得越多越糟 —— 这不是审美选择，
- * 是单位的方向。两处历史错误都修在这里：
- * - 曾经按 0–1 处理（阈值永远判成健康、条宽乘 100 永远画满）；
- * - 曾经把「少用」当危险（方向反了，等于把健康标成红、把耗尽标成绿）。
+ * 圆环由 `quota-ring.ts` 统一渲染：中心是剩余百分比，绿色代表额度充足。
  */
-function quotaBar(props: AccountCardProps, window: QuotaWindow): ReactNode {
-  const meter = quotaMeter(window);
-  return createElement(
-    "div",
-    { key: window.key, "data-quota-window": window.key, className: CSS_CLASS.quotaRow },
-    createElement(
-      "div",
-      { className: CSS_CLASS.meterHead },
-      createElement("span", { className: CSS_CLASS.meterLabel }, quotaWindowLabel(props.t, window.key)),
-      quotaText(props, window),
-      meter === undefined
-        ? null
-        : createElement(
-            "small",
-            { key: "remaining", "data-quota-remaining": 100 - meter.percent, className: CSS_CLASS.quotaHint },
-            props.t("quota.remaining").replace("{percent}", String(100 - meter.percent)),
-          ),
-    ),
-    meter === undefined
-      ? null
-      : createElement(
-          "span",
-          { key: "bar", "data-quota-percent": meter.percent, className: CSS_CLASS.quotaTrack },
-          createElement("span", {
-            "data-quota-level": meter.level,
-            className: CSS_CLASS.quotaFill,
-            style: { width: `${meter.percent}%` },
-          }),
-        ),
-  );
-}
-
-/** 一个窗口的读数文案：缺失与真的 0 必须区分开（规则在 `quota.ts`，三张卡片共用一份）。 */
-function quotaText(props: AccountCardProps, window: QuotaWindow): ReactNode {
-  const shape = quotaShape(window);
-  return createElement(
-    "span",
-    { "data-quota-value": shape, className: shape === "missing" ? CSS_CLASS.quotaMissing : CSS_CLASS.quotaValue },
-    quotaWindowText(props.t, window),
-  );
-}
 
 /** 展开后的完整报告：窗口明细与失败项，一块内嵌面板（等宽、可断行）。 */
 function reportBlock(props: AccountCardProps, account: AccountUsageStatus): ReactNode {

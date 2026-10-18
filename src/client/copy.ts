@@ -168,6 +168,7 @@ export type CopyKey =
   | "sidebar.open"
   | "sidebar.noRequest"
   | "usage.failed"
+  | "usage.quotaTimeout"
   | "usage.remoteUnavailable"
   | "usage.stale"
   | "usage.refresh"
@@ -367,6 +368,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.open": "打开用量面板",
     "sidebar.noRequest": "还没有请求经过这个账号。",
     "usage.failed": "用量读取失败",
+    "usage.quotaTimeout": "部分账号额度读取超时，已显示其他账号的数据。",
     "usage.remoteUnavailable": "用量远程面还没挂上",
     "usage.stale": "上次数据",
     "usage.refresh": "刷新",
@@ -561,6 +563,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.open": "Open the usage panel",
     "sidebar.noRequest": "No request has used this account yet.",
     "usage.failed": "Usage read failed",
+    "usage.quotaTimeout": "Some accounts timed out while reading quota; other accounts are shown.",
     "usage.remoteUnavailable": "Usage remote is not mounted",
     "usage.stale": "Last data",
     "usage.refresh": "Refresh",
