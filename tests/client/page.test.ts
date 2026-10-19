@@ -415,3 +415,58 @@ it("侧边栏卡片开关在页面上是未勾选状态（默认关闭）", () =
   const input = elementsOf(toggle).find((element) => element.props["data-field-input"] === "showSidebarQuota")!;
   expect(input.props.checked).toBe(false);
 });
+
+/** 渲染一次页面外壳，可传额外 props（用于 `models` 字段的目录）。 */
+function renderWith(extra: Record<string, unknown>, t = dictionaryOf("en")): StubElement {
+  return PageShell({
+    state: createPageState(VENDORS, SNAPSHOTS),
+    entries: VENDORS,
+    t,
+    onSelectTab: () => undefined,
+    onSetField: () => undefined,
+    onSave: () => undefined,
+    ...extra,
+  } as never);
+}
+
+it("models 字段渲染成勾选框（用户 2026-10-19：填名字不方便）", () => {
+  const tree = renderWith({
+    catalogs: {
+      "llm-commandcode": [
+        { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+        { id: "kimi-k3", name: "Kimi K3" },
+      ],
+    },
+  });
+  const boxes = elementsOf(tree).filter((element) =>
+    String(element.props["data-field-model"] ?? "").startsWith("autoFallbackModels:"),
+  );
+  expect(boxes.map((element) => element.props["data-field-model"])).toEqual([
+    "autoFallbackModels:deepseek-v4.1-flash",
+    "autoFallbackModels:kimi-k3",
+  ]);
+  // 标签用模型名，不是裸 id。
+  expect(textOf(tree).join(" ")).toContain("DeepSeek V4.1 Flash");
+});
+
+it("勾选一个模型时写回字符串数组", () => {
+  const calls: { key: string; value: unknown }[] = [];
+  const tree = renderWith(
+    {
+      catalogs: { "llm-commandcode": [{ id: "deepseek-v4.1-flash" }, { id: "kimi-k3" }] },
+      onSetField: (_ns: string, key: string, value: unknown) => calls.push({ key, value }),
+    },
+  );
+  const box = elementsOf(tree).find(
+    (element) => element.props["data-field-model"] === "autoFallbackModels:kimi-k3",
+  )!;
+  expect(box).toBeDefined();
+  (box.props.onChange as (event: unknown) => void)({ target: { checked: true } });
+  expect(calls).toEqual([{ key: "autoFallbackModels", value: ["kimi-k3"] }]);
+});
+
+it("目录还没读到时退回输入框（至少还能手填）", () => {
+  const tree = renderWith({});
+  const input = elementsOf(tree).find((element) => element.props["data-field-input"] === "autoFallbackModels");
+  expect(input).toBeDefined();
+});

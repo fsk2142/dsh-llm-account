@@ -40,6 +40,13 @@ export interface PageShellProps {
    * 字段卡片**之前**，与规格 §8 的卡片顺序一致）。
    */
   renderVendorCards?: (ns: string) => ReactNode;
+  /**
+   * 每家的模型目录（键是命名空间）：models 类型的字段要靠它渲染勾选框。
+   *
+   * 目录是**厂商级**资源，容器已经为模型卡片读过一次（modelCatalogs），这里复用同一份，
+   * 不为设置页多发一次请求。缺省或还没读到时，models 字段退回「纯输入」形态。
+   */
+  catalogs?: Readonly<Record<string, readonly { id: string; name?: string }[]>>;
   /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
   mergeTabs?: boolean;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */
@@ -302,19 +309,55 @@ function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftFie
     });
   }
   if (spec.kind === "models") {
-    // 逗号分隔（全角逗号也认：中文输入法下很常见）。写库前清洗成字符串数组 ——
-    // 空串与纯空白一律丢弃，否则 `[""]` 会被当成「非空白名单」把候选全挡掉。
-    const current = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-    const parse = (raw: string): string[] =>
-      [...new Set(raw.split(/[,，\n]/u).map((item) => item.trim()).filter((item) => item !== ""))];
-    return createElement("input", {
-      "data-field-input": spec.key,
-      type: "text",
-      value: current.join(", "),
-      placeholder: props.t("field.autoFallbackModels.placeholder"),
-      onChange: (event: { target?: { value?: string } }) => change(parse(event.target?.value ?? "")),
-    });
+    // **勾选框**（用户 2026-10-19：「填名字不太方便」）。
+    //
+    // 候选取自该家的模型目录（容器为模型卡片已经读过一次，这里复用同一份，不额外请求）。
+    // 目录还没读到时退回一个朴素输入框 —— 而不是空白：用户至少还能手填，不至于没法配。
+    const selected = new Set(
+      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [],
+    );
+    const catalog = props.catalogs?.[entry.ns];
+    const options = (catalog ?? []).filter((model) => typeof model.id === "string" && model.id !== "");
+    // 已选但不在目录里的（目录没读到 / 模型被厂商下架）：也渲染一行，否则用户看不到自己配过什么。
+    const missing = [...selected].filter((id) => !options.some((model) => model.id === id));
+    if (options.length === 0 && missing.length === 0) {
+      return createElement("input", {
+        "data-field-input": spec.key,
+        type: "text",
+        value: [...selected].join(", "),
+        placeholder: props.t("field.autoFallbackModels.placeholder"),
+        onChange: (event: { target?: { value?: string } }) =>
+          change(
+            [...new Set((event.target?.value ?? "").split(/[,，\n]/u).map((item) => item.trim()).filter((item) => item !== ""))],
+          ),
+      });
+    }
+    const row = (id: string, label: string): ReactElement =>
+      createElement(
+        "label",
+        { key: id, className: CSS_CLASS.field },
+        createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", { className: CSS_CLASS.mono }, label)),
+        createElement("input", {
+          type: "checkbox",
+          className: CSS_CLASS.toggle,
+          "data-field-model": `${spec.key}:${id}`,
+          checked: selected.has(id),
+          onChange: (event: { target?: { checked?: boolean } }) => {
+            const next = new Set(selected);
+            if (event.target?.checked === true) next.add(id);
+            else next.delete(id);
+            change([...next]);
+          },
+        }),
+      );
+    return createElement(
+      "div",
+      { "data-field-models": spec.key, className: CSS_CLASS.modelGroup },
+      ...options.map((model) => row(model.id, model.name ?? model.id)),
+      ...missing.map((id) => row(id, id)),
+    );
   }
+
   return undefined;
 }
 

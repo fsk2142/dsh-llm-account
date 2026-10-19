@@ -1525,6 +1525,17 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       loginStarting,
       loginError: loginErrors,
     });
+    // 设置页里 `models` 类型的字段要勾选框：把已读到的目录按**命名空间**整理一份。
+    //
+    // 为什么按 ns 而不是 providerId：字段挂在 vendor 的 settings 上，而字段控件拿到的
+    // `entry.ns` 是命名空间（opencode 的 providerId 是 `dsh-opencode-go`、ns 是
+    // `llm-opencode-go`），用错了那个字段就永远是空的。
+    const catalogsForSettings: Record<string, readonly { id: string; name?: string }[]> = {};
+    for (const entry of availableEntries) {
+      const catalog = modelCatalogs[entry.providerId];
+      if (catalog !== undefined) catalogsForSettings[entry.ns] = catalog.models;
+    }
+
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
     // 统计**全在账号下面**（用户 2026-10-19：「只在每个账号下面统计本身的用量」）：
     // 页面上不再有跨账号的用量卡片，所以这里不再往 `PageShell` 传 `usage`。
@@ -1532,6 +1543,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       state,
       entries,
       t,
+      // models 类型的字段要勾选框：目录复用模型卡片那一份，不额外请求。
+      catalogs: catalogsForSettings,
       accounts,
       mergeTabs: true,
       saving: savingNs === state.activeNs,
