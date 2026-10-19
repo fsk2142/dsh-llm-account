@@ -11,6 +11,7 @@
  */
 import type { CardGroupSpec, FieldSpec, VendorEntry } from "./registry";
 import type { DiscoveryProblem } from "./seams";
+import type { VendorUsageStatus } from "./usage-contract";
 
 /** 宿主设置命名空间的一份快照：值 + 修订号（保存时要用它做并发围栏）。 */
 export interface VendorSnapshot {
@@ -360,6 +361,19 @@ export function fieldsOf(state: PageState, entry: VendorEntry): DraftField[] {
 export const SIDEBAR_TOGGLE_KEY = "showSidebarQuota";
 
 /**
+ * 侧边栏**轮播清单**的字段名（`vendor:ref` 键；空数组 = 全部账号）。
+ *
+ * 2026-10-19 用户要求：「自己选择轮播哪些账号进行显示，默认为所有账号轮播」。
+ *
+ * 为什么用「空 = 全部」而不是「默认时把全部账号写进文档」：账号是会变的（新增/删除/
+ * 换密钥），把当时的清单冻结进文档意味着新加的账号默认不显示 —— 与「默认为所有账号」
+ * 正好相反。空数组表达的是「不限制」，新账号自然就进来了。
+ *
+ * 存 `vendor:ref`（与 `accountOrder` 同一套键）：同一个 ref 在两家可能重名。
+ */
+export const SIDEBAR_ACCOUNTS_KEY = "sidebarAccounts";
+
+/**
  * 清洗一个模型 id 列表。
  *
  * **丢弃空串与纯空白**（全局约束）：`[""]` 会被当作「非空白名单」，让所有模型从选择器里消失 ——
@@ -392,7 +406,57 @@ export function normalizeModels(value: unknown): string[] {
  * @returns 是否开启（只有显式 `true` 才算）。
  */
 export function sidebarQuotaEnabled(storedValue: Record<string, unknown> | undefined): boolean {
-  return storedValue?.[SIDEBAR_TOGGLE_KEY] === true;
+  if (storedValue === undefined) return false;
+  // 新清单：显式给了数组就是权威答案（空数组 = 明确「不显示任何账号」）。
+  if (Array.isArray(storedValue[SIDEBAR_ACCOUNTS_KEY])) return storedValue[SIDEBAR_ACCOUNTS_KEY].length > 0;
+  // 旧开关：只在没有新字段时兜底（向后兼容，用户的旧配置不会因为升级就丢功能）。
+  return storedValue[SIDEBAR_TOGGLE_KEY] === true;
+}
+
+/**
+ * 轮播清单里显式勾中的账号键（`vendor:ref`）。
+ *
+ * **跨厂商合并**：三份设置文档各自存一份完整清单（与 `accountOrder` 同一个模式），这里取
+ * 并集 —— 用户在任意一家标签页里改的都是同一件事（「侧边栏显示哪些账号」）。
+ *
+ * 返回空数组有两种含义，调用方必须用 {@link sidebarSelectionConfigured} 区分：
+ * 未配置 = 全部账号（默认）；配置成空 = 一个都不要。
+ * @param values - 各厂商的设置文档值（按命名空间）。
+ * @returns 去重后的 `vendor:ref` 键（保持首次出现顺序）。
+ */
+export function sidebarAccountKeysOf(values: Readonly<Record<string, unknown>>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of Object.values(values)) {
+    if (value === null || typeof value !== "object") continue;
+    const raw = (value as Record<string, unknown>)[SIDEBAR_ACCOUNTS_KEY];
+    if (!Array.isArray(raw)) continue;
+    for (const item of raw) {
+      if (typeof item !== "string") continue;
+      const key = item.trim();
+      if (!key.includes(":")) continue;
+      const [vendor, ...rest] = key.split(":");
+      const ref = rest.join(":");
+      if (vendor === "" || vendor === undefined || ref === "") continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+
+/**
+ * 轮播清单**是否被显式配置过**（三份文档里至少有一份带这个字段）。
+ * @param values - 各厂商的设置文档值。
+ * @returns 是否配置过。
+ */
+export function sidebarSelectionConfigured(values: Readonly<Record<string, unknown>>): boolean {
+  for (const value of Object.values(values)) {
+    if (value === null || typeof value !== "object") continue;
+    if (Array.isArray((value as Record<string, unknown>)[SIDEBAR_ACCOUNTS_KEY])) return true;
+  }
+  return false;
 }
 
 /**
@@ -427,6 +491,81 @@ export function sidebarVendorsOf(
   return entries
     .filter((entry) => sidebarQuotaEnabled(snapshots[entry.ns]?.value))
     .map((entry) => entry.providerId);
+}
+
+/**
+ * 一次轮播目标：一个 (厂商, 账号) 对。
+ */
+export interface SidebarTarget {
+  vendor: string;
+  ref: string;
+}
+
+/**
+ * 由「各厂商读数」算出**轮播目标清单**（纯函数，可完整单测）。
+ *
+ * 2026-10-19 用户要求：「自己选择轮播哪些账号进行显示，默认为所有账号轮播」。
+ *
+ * 规则：
+ * 1. 按 `vendors` 给的顺序（= 标签页顺序）逐家展开，家内按读数里的账号顺序；
+ * 2. 只要**已配置**的账号（没密钥的账号显示出来也只是一条空额度）；
+ * 3. 有勾选清单时只收勾中的（键是 `vendor:ref`）；勾选为空表示「全部」（默认）；
+ * 4. 某一家还没有读数（`undefined`）时跳过 —— 它读到之后会被自动补进来。
+ *
+ * @param vendors - 要参与轮播的厂商 id（按标签页顺序）。
+ * @param statuses - 各厂商的读数（键是厂商 id）。
+ * @param selection - 勾选状态：`keys` 是 `vendor:ref`，`configured` 表示用户是否显式配置过。
+ * @returns 轮播目标清单。
+ */
+export function sidebarTargetsOf(
+  vendors: readonly string[],
+  statuses: Readonly<Record<string, VendorUsageStatus | undefined>>,
+  selection: { keys: readonly string[]; configured: boolean },
+): SidebarTarget[] {
+  const targets: SidebarTarget[] = [];
+  for (const vendor of vendors) {
+    const status = statuses[vendor];
+    if (status === undefined) continue;
+    const accounts = Array.isArray(status.accounts) ? status.accounts : [];
+    for (const account of accounts) {
+      // 渲染不了的坏行与非已配置账号都跳过（前者让渲染崩，后者没有额度可看）。
+      if (typeof account !== "object" || account === null) continue;
+      if (account.configured !== true) continue;
+      if (!sidebarIncludesAccount(selection.configured, selection.keys, vendor, account.ref)) continue;
+      targets.push({ vendor, ref: account.ref });
+    }
+  }
+  return targets;
+}
+
+/**
+ * 一个账号键（`vendor:ref`）在不在勾选清单里。
+ *
+ * 「没配置过」= 全部账号轮播（用户要的默认）；「配置成空数组」= 一个都不要。
+ * @param configured - 用户是否显式配置过。
+ * @param keys - 勾中的键。
+ * @param vendor - 厂商 id。
+ * @param ref - 账号 ref。
+ * @returns 是否参与轮播。
+ */
+export function sidebarIncludesAccount(
+  configured: boolean,
+  keys: readonly string[],
+  vendor: string,
+  ref: string,
+): boolean {
+  if (!configured) return true;
+  return keys.includes(accountOrderKey(vendor, ref));
+}
+
+/**
+ * 一个账号在勾选清单里的键。
+ * @param vendor - 厂商 id。
+ * @param ref - 账号 ref。
+ * @returns `vendor:ref`。
+ */
+export function accountOrderKey(vendor: string, ref: string): string {
+  return `${vendor}:${ref}`;
 }
 
 /**

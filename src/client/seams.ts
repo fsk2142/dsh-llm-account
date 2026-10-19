@@ -39,6 +39,9 @@ import {
   selectTab,
   setActionField,
   setField,
+  sidebarAccountKeysOf,
+  sidebarSelectionConfigured as selectionConfiguredIn,
+  sidebarTargetsOf,
   sidebarVendorOf,
   sidebarVendorsOf,
   toggleExpanded,
@@ -47,8 +50,7 @@ import {
   type ModelEdit,
   type PageState,
   type VendorSnapshot,
-} from "./page-state";
-import type { LoginView } from "./account-card";
+} from "./page-state";import type { LoginView } from "./account-card";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
@@ -2044,10 +2046,10 @@ export function createSidebarCardView(options: {
 }): () => ReactElement {
   const { ctx, entries, t } = options;
   return function ConnectedSidebarCard(): ReactElement {
-    /** 所有开启的厂商（顺序即标签页顺序）：卡片按 `turn` 轮播它们。 */
+    /** 所有开启的厂商（顺序即标签页顺序）。 */
     const [vendors, setVendors] = useState<string[]>(() => sidebarVendorList());
+    /** 轮播进度：对「账号清单长度」取模。 */
     const [turn, setTurn] = useState(0);
-    const vendor = vendors.length === 0 ? undefined : vendors[turn % vendors.length];
     /**
      * 设置值变化时**重渲染**（让 `refreshKey` 重新计算），从而按新间隔重建控制器。
      *
@@ -2062,8 +2064,41 @@ export function createSidebarCardView(options: {
     // 渲染期间不重读的两个可变值（引用：不触发渲染，只在读取/排程时被读）。
     const inFlight = useRef(false);
     const failures = useRef(0);
-    /** 连续跳过「这一家没有已配置账号」的次数：一轮之内全都没账号时停在最后一家，不空转。 */
-    const skips = useRef(0);
+    /** 组件是否还挂着（异步回调据此丢弃过期的 setState）。 */
+    const aliveRef = useRef(true);
+    useEffect(
+      () => () => {
+        aliveRef.current = false;
+      },
+      [],
+    );
+    /**
+     * 各厂商的最新读数：**建清单**用（`sidebarTargetsOf` 从这里展开）。
+     *
+     * 与 `view` 的分工：`view` 是「当前该显示什么」（只有一家、一次读数）；这里是
+     * 「各家的账号表现在长什么样」（用于算出轮播清单）。
+     */
+    const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
+    /**
+     * 轮播清单的勾选：`keys` 是 `vendor:ref`，`configured` 表示用户是否显式配置过。
+     * 未配置 = 全部账号轮播（用户 2026-10-19 要的默认）。
+     */
+    const [selection, setSelection] = useState(() => ({
+      keys: sidebarAccountKeys(),
+      configured: sidebarSelectionConfigured(),
+    }));
+
+    /**
+     * 轮播清单：**渲染期直接算**，不放进 state。
+     *
+     * 为什么不像第一版那样 `setTargets(...)` 到 state 里：那样会形成
+     * 「清单变 → setState → 重渲染 → 清单的键又变 → 再 setState」的回环，`turn` 每次都被
+     * 重置成 0，轮播永远停在第一个账号（2026-10-19 实测：卡片上反复出现同一个账号）。
+     * 直接现算就没有状态同步问题；`turn` 的模数变化由下面的 effect 收敛。
+     */
+    const targets = sidebarTargetsOf(vendors, statuses, selection);
+    const target = targets.length === 0 ? undefined : targets[turn % targets.length];
+    const vendor = target?.vendor;
 
     /**
      * 读一次状态。`manual` 为真时（用户点「刷新」）无视页面可见性 —— 手动要的就是立刻问；
@@ -2092,15 +2127,25 @@ export function createSidebarCardView(options: {
         }));
         return;
       }
+      // 清单里勾选的账号可能落在这个厂商之外，但一次 `status(厂商)` 就带回**该家全部账号**
+      // 的额度，所以每拍只需要读「当前目标所在的那一家」。
+      //
+      // 清单还没建好时（`vendor` 是 `undefined`）退回第一家：那次读会带回它的账号表，
+      // 清单随之建立 —— 否则轮询会在这里直接返回，永远建不起清单（死锁）。
+      const readVendor = vendor ?? vendors[0];
+      if (readVendor === undefined) return;
       inFlight.current = true;
-      void readStatusDetail(usage, vendor ?? "").then(({ status: next, problem }) => {
+      void readStatusDetail(usage, readVendor).then(({ status: next, problem }) => {
         inFlight.current = false;
+        if (!aliveRef.current) return;
         if (next === undefined) {
           // 读口调用失败：同样记成失败（附宿主原文），而不是假装「还没有请求」。
           failures.current += 1;
           setView((current) => ({ status: current.status, failure: problem ?? t("usage.failed"), stale: current.status !== undefined }));
           return;
         }
+        // 这次读数同时刷新「该家的账号表」——清单据此重建（账号增减都能跟上）。
+        setStatuses((current) => ({ ...current, [readVendor]: next }));
         if (next.failures.length > 0) {
           failures.current += 1;
           // 原文直接交给卡片（`failureText` 在渲染处翻人话，原文留在 data 属性上）：
@@ -2111,27 +2156,24 @@ export function createSidebarCardView(options: {
           setView({ status: next, failure: raw, stale: false });
           return;
         }
-        // 这一家一个已配置账号都没有：轮播直接跳到下一家，不把「未配置」摆给用户看
-        // （2026-10-18 用户要求）。一轮都跳完还找不到，就停在最后一家显示空态。
-        const configured = next.accounts.some(
-          (account) => typeof account === "object" && account !== null && account.configured === true,
-        );
-        if (!configured && vendors.length > 1 && skips.current < vendors.length - 1) {
-          skips.current += 1;
-          setTurn((current) => current + 1);
-          return;
-        }
-        skips.current = 0;
         failures.current = 0;
         // 写回设置页的读数缓存：同一份 `status()` 读数，让「侧边栏开着」时打开设置直接吃最新的那份。
         // 与设置页同一条纪律：只有**完整**的读数进缓存（见 completeReading）。
-        if (vendor !== undefined && completeReading(next)) statusReadings.put(vendor, next);
+        if (completeReading(next)) statusReadings.put(readVendor, next);
         setView({ status: next, stale: false });
       });
     };
 
     // 订阅开关存储：设置页里保存（或外部改动设置文档）时，这里随之开关。
     useEffect(() => subscribeSidebarVendors(setVendors), []);
+    // 轮播清单的勾选：用户改了勾选就重渲染（清单随之重建）。
+    useEffect(
+      () =>
+        subscribeSidebarVendors(() => {
+          setSelection({ keys: sidebarAccountKeys(), configured: sidebarSelectionConfigured() });
+        }),
+      [],
+    );
     useEffect(
       () =>
         subscribeSidebarSettings(() => {
@@ -2140,15 +2182,50 @@ export function createSidebarCardView(options: {
       [],
     );
 
-    // 轮播：每隔 `sidebarRotateMinutes` 分钟切到下一家。只有一家时完全不排定时器（行为不变）。
+    /**
+     * **建清单**：各开启的家读一次（每家一次，读到的账号表进 `statuses`）。
+     *
+     * 账号级轮播必须知道「有哪些账号」，而账号表住在 `status()` 里 —— 这是唯一需要
+     * 「读所有家」的时刻。之后每拍只重读清单里那些账号所在的**一家**。
+     *
+     * 读完的读数同时喂给 `statuses`，`sidebarTargetsOf` 据此算出清单。
+     */
+    useEffect(() => {
+      if (vendors.length === 0) return;
+      const usage = usageNamespace(ctx);
+      if (usage === undefined) return;
+      let cancelled = false;
+      for (const name of vendors) {
+        void readStatusDetail(usage, name).then(({ status }) => {
+          if (cancelled || status === undefined) return;
+          setStatuses((current) => ({ ...current, [name]: status }));
+          if (completeReading(status)) statusReadings.put(name, status);
+        });
+      }
+      return () => {
+        cancelled = true;
+      };
+      // 只跟厂商清单走：账号增减由每拍的读数自然刷新（`read` 会更新 `statuses`）。
+    }, [vendors.join(",")]);
+
+    // 清单变了（账号增减/勾选变化）就**收敛 `turn`**：取模即可，不必清零 ——
+    // 清零会在「清单键抖动」时把轮播钉在第一个账号上（修过两次的老坑）。
+    const targetsKey = targets.map((item) => `${item.vendor}:${item.ref}`).join(",");
+    useEffect(() => {
+      setTurn((current) => (targets.length === 0 ? 0 : current % targets.length));
+      // 依赖用清单指纹：账号/勾选/厂商任一变化才收敛。
+    }, [targetsKey]);
+
+    // 轮播：每隔 `sidebarRotateMinutes` 分钟切到**下一个账号**（账号级，2026-10-19 用户要求）。
+    // 只有一个目标时完全不排定时器（行为不变，也不空转）。
     const rotateMs = sidebarRotateMs(sidebarVendorSettings()?.["sidebarRotateMinutes"]);
     /** 两个轮询间隔的取值指纹：只有它们变了才需要重建控制器（读一次新的间隔）。 */
     const refreshKey = `${quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"])}:${rotateMs}`;
     useEffect(() => {
-      if (vendors.length <= 1) return;
+      if (targets.length <= 1) return;
       const timer = setInterval(() => setTurn((current) => current + 1), rotateMs);
       return () => clearInterval(timer);
-    }, [vendors.join(","), rotateMs]);
+    }, [targetsKey, rotateMs]);
 
     // 冷启动兜底：设置页从未打开过时存储是冷的，卡片自己读一次已存储的开关
     // （一次设置读取，不是用量查询；读不到就保持关闭，绝不轮询）。
@@ -2165,7 +2242,9 @@ export function createSidebarCardView(options: {
 
     useEffect(() => {
       // 关闭：停轮询、撤监听、清数据（旧插件同一分支：`if (!visible) return null`）。
-      if (vendor === undefined) {
+      // 判定用 `vendors.length`（而不是 `vendor`）：清单还没建好时 `vendor` 是 `undefined`，
+      // 用它当条件会让轮询永远不启动，于是清单永远建不起来（死锁）。
+      if (vendors.length === 0) {
         setView({ stale: false });
         return;
       }
@@ -2203,12 +2282,17 @@ export function createSidebarCardView(options: {
       };
       // 依赖用**间隔的取值**而不是设置的修订号：宿主每次重读设置都会给出新对象，
       // 用修订号会让「打开设置页」白读一次状态（用户看到的「点设置就自己刷新」）。
-    }, [vendor, refreshKey]);
+      // 依赖里也带 `vendor`：轮播换到别家时要重建控制器去读那一家的额度。
+    }, [vendors.join(","), vendor, refreshKey]);
 
-    if (vendor === undefined) return null as unknown as ReactElement;
+    // 渲染条件看**是否有开启的厂商**，不看清单是否非空 —— 清单要读一次 status 才建起来，
+    // 用清单当条件会死锁：卡片不渲染 → 轮询不启动 → 永远不读 → 清单永远空 → 永远空白。
+    if (vendors.length === 0) return null as unknown as ReactElement;
+    // 卡片显示的是**轮播到的那一个账号**（账号级）；清单还没建好时先显示这家当前使用的账号。
     return SidebarCard({
       t,
       status: view.status,
+      ...(target === undefined ? {} : { accountRef: target.ref }),
       ...(view.failure === undefined ? {} : { failure: view.failure }),
       ...(view.stale ? { stale: true } : {}),
       // 整张卡片点下去就打开用量面板（2026-10-19 用户要求：去掉卡片上那个「打开用量面板」
@@ -2605,6 +2689,16 @@ let sidebarVendorValue: string | undefined;
 /** 侧边栏要**轮播**的厂商清单（按标签页顺序，只含开启的；见 `sidebarVendorsOf`）。 */
 let sidebarVendorsValue: string[] = [];
 
+/**
+ * 轮播清单里显式勾中的账号键（`vendor:ref`；见 `sidebarAccountKeysOf`）。
+ *
+ * 空数组 + {@link sidebarSelectionConfiguredValue} 为 `false` = 「全部账号轮播」（默认）。
+ */
+let sidebarAccountKeysValue: string[] = [];
+
+/** 轮播清单是否被显式配置过（区分「没配 = 全部」与「配成空 = 一个都不要」）。 */
+let sidebarSelectionConfiguredValue = false;
+
 /** 当前侧边栏厂商的设置文档值（轮询间隔等设置类控件从这里取，见 `quotaRefreshMs`）。 */
 let sidebarVendorSettingsValue: Record<string, unknown> | undefined;
 
@@ -2634,6 +2728,16 @@ export function sidebarVendorSeeded(): boolean {
 /** 当前要轮播的厂商清单（空数组 = 一家都没开）。 */
 export function sidebarVendorList(): string[] {
   return sidebarVendorsValue;
+}
+
+/** 轮播清单里勾中的账号键（空 + 未配置 = 全部账号）。 */
+export function sidebarAccountKeys(): string[] {
+  return sidebarAccountKeysValue;
+}
+
+/** 轮播清单是否被显式配置过。 */
+export function sidebarSelectionConfigured(): boolean {
+  return sidebarSelectionConfiguredValue;
 }
 
 /** 「轮播清单」的监听者。 */
@@ -2691,8 +2795,19 @@ export function noteSidebarSnapshots(entries: readonly VendorEntry[], snapshots:
   // 设置页缓存的新鲜期跟着「用量刷新间隔」走（同一家：第一家开启的厂商）。
   statusReadingTtlMs = quotaRefreshMs(nextSettings?.["quotaRefreshMinutes"]);
   if (settingsChanged) for (const listener of [...sidebarSettingsListeners]) listener();
+  // 账号级轮播清单（跨厂商并集）：空 + 未配置 = 全部账号（用户要的默认）。
+  const values: Record<string, unknown> = {};
+  for (const snapshot of snapshots) values[snapshot.ns] = snapshot.value;
+  const nextKeys = sidebarAccountKeysOf(values);
+  const nextConfigured = selectionConfiguredIn(values);
+  const selectionChanged =
+    nextConfigured !== sidebarSelectionConfiguredValue ||
+    nextKeys.length !== sidebarAccountKeysValue.length ||
+    nextKeys.some((item, index) => item !== sidebarAccountKeysValue[index]);
+  sidebarAccountKeysValue = nextKeys;
+  sidebarSelectionConfiguredValue = nextConfigured;
   // 轮播清单变化必须通知 —— 且必须在下面那行 `return` **之前**（2026-10-19 修）。
-  if (vendorsChanged) for (const listener of [...sidebarVendorsListeners]) listener(nextVendors);
+  if (vendorsChanged || selectionChanged) for (const listener of [...sidebarVendorsListeners]) listener(nextVendors);
   if (vendor === sidebarVendorValue) return;
   sidebarVendorValue = vendor;
   for (const listener of [...sidebarVendorListeners]) listener(vendor);
@@ -2777,6 +2892,12 @@ export function resetSeams(): void {
   sharedUsage = undefined;
   usageReadyListeners.clear();
   sidebarVendorValue = undefined;
+  // 轮播相关的三份模块级状态也必须复位，否则上一条用例里「开了哪几家」「勾了哪些账号」
+  // 会漏到下一条（实测：单独跑能过、连跑就失败 —— 典型的跨用例污染）。
+  sidebarVendorsValue = [];
+  sidebarAccountKeysValue = [];
+  sidebarSelectionConfiguredValue = false;
+  sidebarVendorsListeners.clear();
   sidebarVendorSettingsValue = undefined;
   sidebarVendorSeededValue = false;
   sidebarVendorListeners.clear();

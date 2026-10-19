@@ -25,6 +25,8 @@ import type {
 } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
+import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/model-fallback";
+import { noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
@@ -157,6 +159,15 @@ export interface CommandCodeAdapterDeps {
    * 端口实现必须不阻塞、不抛错（见 `core/usage-port`）。
    */
   usage?: UsagePort;
+  /**
+   * **限额时换模型**的候选提供者（可选；用户 2026-10-19 要求）。
+   *
+   * 只在所有账号都被限额拒绝之后被调用一次（失败路径），所以可以是异步的：候选清单要读
+   * 各家的模型目录，而目录是网络资源。缺省 = 不换模型（旧行为）。
+   */
+  fallbackCandidates?: () => readonly ModelFallbackCandidate[] | undefined;
+  /** 真找到并换了模型时通知装配层（日志/遥测）。 */
+  onModelFallback?: (from: { provider: string; model: string }, to: ModelFallbackCandidate) => void;
 }
 
 /** 填默认值；`0`/负数/NaN 一律回落到默认值，避免把坏配置变成「立即超时」。 */
@@ -264,6 +275,8 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const raw = this.#deps.config();
     const entries = await this.#catalog(resolveConfig(raw));
     const visible = selectVisible(entries, normalizeVisibility(raw));
+    // 把目录交给跨厂商注册表：限额换模型时走缓存，不再现打网络。
+    noteCatalogModels(provider, visible.map((entry) => entry.id));
     return visible.map((entry) => ({
       provider,
       id: entry.id,
@@ -333,6 +346,8 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const config = resolveConfig(this.#deps.config());
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
+    /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
+    let swappedOnce = false;
 
     for (;;) {
       const aborted = options.signal?.aborted === true;
@@ -340,7 +355,20 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
 
       const ref = this.#deps.rotation.pick({ model: options.model, tried });
       if (ref === undefined) {
-        // 没有可选账号：把最后一次失败原样抛出，否则说明一条可用凭据都没有。
+        // 换模型的机会：所有账号都被**拒绝**了（继续换账号已无意义，换同名模型往往还能服务）。
+        //
+        // 只在「确实有账号被拒绝」时才尝试 —— `lastFailure === undefined` 意味着一条凭据都
+        // 没解析到（`MISSING_CREDENTIAL`），那种情况换模型毫无意义，而且查候选要读各家目录
+        // （会发额外请求）。先抛确定性的失败，别为一次注定失败的请求去打网络。
+        if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
+          const swapped = this.#fallbackModel(options);
+          if (swapped !== undefined && swapped.model !== options.model) {
+            swappedOnce = true;
+            options = { ...options, model: swapped.model };
+            tried.clear();
+            continue;
+          }
+        }
         if (lastFailure !== undefined) throw lastFailure.thrown;
         throw new LlmError(
           `llm-commandcode: no Command Code account is available for model "${options.model}"; add an account or store its API key`,
@@ -592,6 +620,28 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
     }
     const payload: unknown = await response.json();
     return parseCatalog(payload).entries;
+  }
+
+  /**
+   * 限额换模型的判定（用户 2026-10-19：「遇到账号限额的时候自动切换到同等类型的模型」）。
+   *
+   * 只在所有账号都被**拒绝**之后调用：那时继续换账号已无意义，换一个同名模型往往还能服务。
+   * 判定全在 `core/model-fallback`（纯函数、已单测）：
+   * - 只认**同名**（去掉厂商前缀/大小写/分隔符后相等），不猜档位 —— 限额是要省钱，不是悄悄
+   *   把用户降到更弱的模型；
+   * - 排除 DeepSeek 官方直连；
+   * - 找不到同名就返回 `undefined`（停手，让调用方抛原来的失败）。
+   * @param options - 当前请求。
+   * @returns 替代目标；不该/不能换时为 `undefined`。
+   */
+  #fallbackModel(options: GenerateOptions): ModelFallbackCandidate | undefined {
+    const candidates = this.#deps.fallbackCandidates?.();
+    if (candidates === undefined || candidates.length === 0) return undefined;
+    // 只允许**同 provider 内**换：adapter 不能替别家发请求（`options.provider` 由路由决定）。
+    const picked = pickFallbackModel({ provider: options.provider, model: options.model }, candidates);
+    if (picked === undefined) return undefined;
+    this.#deps.onModelFallback?.({ provider: options.provider, model: options.model }, picked);
+    return picked;
   }
 
   /**

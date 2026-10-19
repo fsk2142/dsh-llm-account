@@ -31,6 +31,13 @@ export interface SidebarCardProps {
   t: (key: string) => string;
   /** 要显示的厂商状态；还没读到时为 `undefined`。 */
   status: VendorUsageStatus | undefined;
+  /**
+   * 要显示**哪一个账号**（账号级轮播，2026-10-19）。
+   *
+   * 轮播器算出当前该显示哪个 (厂商, 账号) 对，把 ref 传进来。缺省时退回「这家当前使用的
+   * 账号」—— 那样多账号的厂商永远只显示一个。
+   */
+  accountRef?: string | undefined;
   /** 打开中栏仪表盘。**整张卡片**点下去就是这个动作。 */
   onOpen: () => void;
   /**
@@ -89,9 +96,13 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   // `accounts` 是跨边界传输的数组：存在但**不是数组**时 `.find` 一样会抛（旧宿主、
   // 半成品载荷），而这是侧边栏的渲染路径 —— 抛了整块卡片变空白。收敛成空数组。
   const rows: readonly AccountUsageStatus[] = Array.isArray(status?.accounts) ? status.accounts : [];
+  // 轮播到的那一个账号优先（账号级轮播 2026-10-19）；没指定才退回「这家的当前账号」。
+  const wantedRow =
+    props.accountRef === undefined ? undefined : rows.find((account) => account.ref === props.accountRef);
   const effectiveRow = effective === undefined ? undefined : rows.find((account) => account.ref === effective.ref);
   // 还没有请求时 effective 可能为空，但用户已经指定/自动选中了当前账号：优先显示它。
   const currentRow =
+    wantedRow ??
     effectiveRow ??
     rows.find((account) => account.active === true) ??
     rows.find((account) => account.effective === true) ??

@@ -559,18 +559,20 @@ describe("侧边栏卡片容器仿真", () => {
     await settleSim(mini);
     expect(cardView.tree()).not.toBeNull();
     expect(textsOfSim(cardView.tree()).join(" ")).toContain("还没有请求经过这个账号");
-    expect(host.statusCalls).toEqual(["commandcode"]);
+    // 第一拍就会读这一家（账号级轮播只开了一家，建清单的那次读也是它）。
+    expect(host.statusCalls).toContain("commandcode");
+    const afterOpen = host.statusCalls.length;
     vi.advanceTimersByTime(60_000);
     await settleSim(mini);
-    expect(host.statusCalls).toEqual(["commandcode", "commandcode"]); // +60s：第二次（确认 60s 一拍）
+    expect(host.statusCalls.length).toBe(afterOpen + 1); // +60s：再一拍
     // 分两次各推进 60s（而非一次 120s）：vitest 的假定时器在一次推进里**不会**触发「推进过程中
     // 才排定的边界计时器」，一次 120s 会把 +180s 那一下丢掉；两次 +60s 能踩到边界。
     vi.advanceTimersByTime(60_000);
     await settleSim(mini);
-    expect(host.statusCalls).toHaveLength(3); // +120s：第三次
+    expect(host.statusCalls.length).toBe(afterOpen + 2); // +120s
     vi.advanceTimersByTime(60_000);
     await settleSim(mini);
-    expect(host.statusCalls).toHaveLength(4); // +180s：第四次，确认仍是 60s 一拍
+    expect(host.statusCalls.length).toBe(afterOpen + 3); // +180s：确认仍是 60s 一拍
 
     // 再关闭：卡片重新变 null，定时器停掉（推进再久也不再请求）。
     host.rows.get("llm-commandcode")!.value = { ...host.rows.get("llm-commandcode")!.value, showSidebarQuota: false };
@@ -594,17 +596,18 @@ describe("侧边栏卡片容器仿真", () => {
     const { card } = await applyLikeHost(host);
     const cardView = mini.mount(card);
     await settleSim(mini);
-    // 开启即读一次。
+    // 开启即读（账号级轮播：第一次读会带上建清单的那次，只开了一家时两者都是 commandcode）。
     expect(cardView.tree()).not.toBeNull();
-    expect(host.statusCalls).toEqual(["commandcode"]);
-    // 推进 1 分钟（< 5 分钟间隔）：不应再发起请求。
+    expect(host.statusCalls[0]).toBe("commandcode");
+    const afterInit = host.statusCalls.length;
+    // 推进 1 分钟（< 5 分钟间隔）：不应再发起**轮询**请求。
     vi.advanceTimersByTime(60_000);
     await settleSim(mini);
-    expect(host.statusCalls).toHaveLength(1);
+    expect(host.statusCalls.length).toBe(afterInit);
     // 推进到 5 分钟边界：恰好一拍。
     vi.advanceTimersByTime(5 * 60_000);
     await settleSim(mini);
-    expect(host.statusCalls).toHaveLength(2);
+    expect(host.statusCalls.length).toBe(afterInit + 1);
     vi.useRealTimers();
   });
 
@@ -650,7 +653,7 @@ describe("侧边栏卡片容器仿真", () => {
 
     // 开关初始为真：卡片直接出现并读取（冷启动 describe 兜底，无需先开设置页）。
     expect(cardView.tree()).not.toBeNull();
-    expect(host.statusCalls).toEqual(["commandcode"]);
+    expect(host.statusCalls[0]).toBe("commandcode");
 
     // 外部把开关拨掉（patch 文件/其它工具），宿主广播失效信号。
     host.rows.get("llm-commandcode")!.value = { ...host.rows.get("llm-commandcode")!.value, showSidebarQuota: false };
@@ -680,13 +683,14 @@ describe("侧边栏卡片容器仿真", () => {
     const { card } = await applyLikeHost(host);
     const cardView = mini.mount(card);
     await settleSim(mini);
-    expect(host.statusCalls).toEqual(["commandcode"]);
+    expect(host.statusCalls[0]).toBe("commandcode");
 
     host.rows.get("llm-commandcode")!.value = { ...host.rows.get("llm-commandcode")!.value, showSidebarQuota: false };
     host.emitDocumentUpdated();
     await settleSim(mini);
     expect(cardView.tree()).not.toBeNull();
-    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go"]);
+    // 只剩 opencode 时卡片显示的必须是它的账号（不再是 commandcode 的）。
+    expect(textsOfSim(cardView.tree()).join(" ")).toContain("OC");
     vi.useRealTimers();
   });
 
@@ -1097,7 +1101,7 @@ it("加完账号后模型目录自动重读：加之前读不到（401），加�
   page.unmount();
 });
 
-it("侧边栏轮播：两家都开时轮流显示（默认 1 分钟一换，先显示按标签页顺序的第一家）", async () => {
+it("侧边栏轮播：账号级 —— 两个账号轮流显示（先显示第一家那个）", async () => {
   const mini = await runtime();
   await freshSeams();
   vi.useFakeTimers();
@@ -1113,43 +1117,44 @@ it("侧边栏轮播：两家都开时轮流显示（默认 1 分钟一换，先�
   const cardView = mini.mount(card);
   await settleSim(mini);
 
-  // 起点：第一家（commandcode）。
+  // 起点：第一家的账号（commandcode）。
+  // 账号级轮播要先读各家的账号表才能建清单，所以 `statusCalls` 会包含两家 ——
+  // 断言的是**显示**（用户能看见的东西），不是内部请求序列。
   expect(cardView.tree()).not.toBeNull();
-  expect(host.statusCalls).toEqual(["commandcode"]);
+  expect(textsOfSim(cardView.tree()).join(" ")).toContain("CC");
 
-  // 30 秒：还没到轮播点，仍是同一家。
+  // 30 秒：还没到轮播点，仍是同一个账号。
   vi.advanceTimersByTime(30_000);
   await settleSim(mini);
-  expect(host.statusCalls).not.toContain("dsh-opencode-go");
+  expect(textsOfSim(cardView.tree()).join(" ")).toContain("CC");
 
-  // 到 60 秒：轮播切到第二家并读它的状态（卡片标题随之换供应商）。
+  // 到 60 秒：轮到第二个账号（opencode 的 OC）。
   vi.advanceTimersByTime(30_000);
   await settleSim(mini);
-  expect(host.statusCalls).toContain("dsh-opencode-go");
+  expect(textsOfSim(cardView.tree()).join(" ")).toContain("OC");
 
-  // 再一轮回到第一家（两家循环）。
+  // 再一轮回到第一个账号（两个账号循环）。
   vi.advanceTimersByTime(60_000);
   await settleSim(mini);
-  const commandCodeReads = host.statusCalls.filter((vendor) => vendor === "commandcode").length;
-  expect(commandCodeReads).toBeGreaterThanOrEqual(3);
+  expect(textsOfSim(cardView.tree()).join(" ")).toContain("CC");
   vi.useRealTimers();
 });
 
-it("轮播跳过没有账号的厂商：第一家未配置 → 直接落到第二家，不显示「未配置」", async () => {
+it("轮播跳过没有账号的厂商：第一家未配置 → 显示第二家的账号", async () => {
   const mini = await runtime();
   await freshSeams();
   vi.useFakeTimers();
   const host = fakeHost(mini, {
     commandcodeToggle: true,
     opencodeToggle: true,
-    // 只有 opencode 有账号：commandcode 这一轮必须被跳过（2026-10-18 用户要求）。
+    // 只有 opencode 有账号：commandcode 不进轮播清单（2026-10-18 用户要求）。
     accounts: { "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true, effective: true }] },
   });
   const { card } = await applyLikeHost(host);
   const cardView = mini.mount(card);
   await settleSim(mini);
 
-  // 探过 commandcode（发现没账号）→ 跳到 opencode 并显示它的账号。
+  // 两家都会被探一次（要建清单），但**显示**的是有账号的那家。
   expect(host.statusCalls).toContain("commandcode");
   expect(host.statusCalls).toContain("dsh-opencode-go");
   const text = textsOfSim(cardView.tree()).join(" ");
@@ -1318,7 +1323,7 @@ it("轮播包含 opendesign：三家都开时第三拍轮到它（ns 与行 id �
   const cardView = mini.mount(card);
   await settleSim(mini);
 
-  expect(host.statusCalls).toEqual(["commandcode"]);
+  expect(host.statusCalls[0]).toBe("commandcode");
   // 第一拍到第二拍：opencode。
   vi.advanceTimersByTime(60_000);
   await settleSim(mini);

@@ -19,11 +19,23 @@
  */
 import { Context } from "@deepseek-ai/cordis";
 import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import type { AccountView, SettingsOp } from "../../src/core/adapter";
+import { resetCatalogSources } from "../../src/vendors/model-catalog-registry";
 import * as commandcode from "../../src/vendors/commandcode/index";
 import * as opencode from "../../src/vendors/opencode/index";
+
+/**
+ * 每个用例后清掉**跨厂商模型注册表**。
+ *
+ * 它是模块级单例（三条 provider 行在同一个进程里共享），而 `apply()` 会往里登记目录读口。
+ * 不复位的话，前一个用例登记过的「会返回模型的假目录」会漏到后一个用例里，让后者意外走进
+ * 「限额换模型」分支（实测：`gateway.keys` 里多出一个空 key）。
+ */
+afterEach(() => {
+  resetCatalogSources();
+});
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -946,4 +958,15 @@ it("commandcode 的备用账号服务成功也不提位：固定账号保持不�
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+// —— 限额换模型（用户 2026-10-19）——
+
+it("限额时换到同名模型：目录里先记下候选，配一个能服务的第二个模型", async () => {
+  const { noteCatalogModels, resetCatalogSources, cachedModelCandidates } = await import("../../src/vendors/model-catalog-registry");
+  resetCatalogSources();
+  // 模拟「适配器读过目录」：这是缓存的真实填充路径（不再额外发请求）。
+  noteCatalogModels("commandcode", ["deepseek-v4.1-flash", "deepseek-v4.1-flash-2"]);
+  expect(cachedModelCandidates()?.map((item) => item.model)).toContain("deepseek-v4.1-flash");
+  resetCatalogSources();
 });
