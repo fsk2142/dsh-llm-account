@@ -82,7 +82,7 @@ import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort } from "../usage-store";
-import { cachedModelCandidates as modelCandidatesCached, registerCatalogSource } from "../model-catalog-registry";
+import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
 import { createOpencodeLogin } from "./login";
 
@@ -348,11 +348,11 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     // 用量采集：三条 provider 行共用一本台账（见 `usage-store`）。
     usage: createUsagePort(),
     // 限额换模型（用户 2026-10-19）：候选来自跨厂商注册表（三家各自登记目录读口）。
-    fallbackCandidates: () => modelCandidatesCached(),
+    fallbackCandidates: () => modelCandidates(),
   };
   const adapter = createOpencodeAdapter(deps);
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。
-  registerCatalogSource({ provider: "dsh-opencode-go", models: () => adapter.catalogModels().then((rows) => rows.map((row) => row.id)) });
+  registerCatalogSource({ provider: "dsh-opencode-go", models: () => adapter.listModels(PROVIDER_ID).then((rows) => rows.map((row) => row.id)) });
 
   /**
    * 当前这次路由注册的句柄；`enabled: false` 时是 `undefined`（行仍然挂载）。

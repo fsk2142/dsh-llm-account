@@ -847,7 +847,9 @@ function commandCodeQuotaGateway(): { fetchImpl: typeof fetch; keys: string[] } 
   const fetchImpl = (async (_input: unknown, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
     const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
-    keys.push(key);
+    // 只记**生成**请求：目录端点（`/models`）本来就不带密钥，把它记进来会让
+    // 「第二个账号有没有被联系」这条断言混进一次空 key（2026-10-19 修）。
+    if (key !== "") keys.push(key);
     return new Response(
       JSON.stringify({ error: { code: "RATE_LIMITED", rateLimit: { window: "fiveHour", reset: Math.floor(Date.now() / 1000) + 3600 } } }),
       { status: 429, headers: { "content-type": "application/json" } },
@@ -923,7 +925,8 @@ it("commandcode 的备用账号服务成功也不提位：固定账号保持不�
   vi.stubGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
     const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
-    keys.push(key);
+    // 同上：目录请求不带密钥，不算「联系了某个账号」。
+    if (key !== "") keys.push(key);
     if (key === "key-default") {
       return new Response(
         JSON.stringify({ error: { code: "RATE_LIMITED", rateLimit: { window: "fiveHour", reset: Math.floor(Date.now() / 1000) + 3600 } } }),

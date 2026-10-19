@@ -160,7 +160,12 @@ export interface OpenDesignAdapterDeps {
    * 候选清单要读各家的模型目录，而目录是网络资源。
    * 缺省 = 不换模型（旧行为）。
    */
-  fallbackCandidates?: () => readonly ModelFallbackCandidate[] | undefined;
+  /**
+   * 候选清单（**用户可选范围内**的模型；见 model-catalog-registry）。
+   *
+   * 可以返回 promise：缓存缺失时要读一次目录才答得上来。只在限额失败后调用一次。
+   */
+  fallbackCandidates?: () => readonly ModelFallbackCandidate[] | undefined | Promise<readonly ModelFallbackCandidate[]>;
   /** 真找到并换了模型时通知装配层（日志/遥测）。 */
   onModelFallback?: (from: { provider: string; model: string }, to: ModelFallbackCandidate) => void;
 }
@@ -369,7 +374,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         // 只在「确实有账号被拒绝」时才尝试 —— `lastFailure === undefined` 意味着一条凭据都
         // 没解析到，那种情况换模型毫无意义，而且查候选要读各家目录（会发额外请求）。
         if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
-          const swapped = this.#fallbackModel(options);
+          const swapped = await this.#fallbackModel(options);
           if (swapped !== undefined && swapped.model !== options.model) {
             swappedOnce = true;
             options = { ...options, model: swapped.model };
@@ -677,8 +682,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param options - 当前请求。
    * @returns 替代目标；不该/不能换时为 `undefined`。
    */
-  #fallbackModel(options: GenerateOptions): ModelFallbackCandidate | undefined {
-    const candidates = this.#deps.fallbackCandidates?.();
+  async #fallbackModel(options: GenerateOptions): Promise<ModelFallbackCandidate | undefined> {
+    const candidates = await this.#deps.fallbackCandidates?.();
     if (candidates === undefined || candidates.length === 0) return undefined;
     // 只允许**同 provider 内**换：adapter 不能替别家发请求（`options.provider` 由路由决定）。
     // 跨厂商的换模型需要上层编排，见 `core/model-fallback` 的模块注释。

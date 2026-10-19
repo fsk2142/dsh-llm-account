@@ -17,7 +17,13 @@
 export interface CatalogSource {
   /** provider 路由 id（`commandcode` / `dsh-opencode-go` / `opendesign`）。 */
   provider: string;
-  /** 读该家的模型 id 列表。 */
+  /**
+   * 读该家的模型 id 列表。
+   *
+   * 必须返回**用户可选范围内**的模型（宿主模型选择器里能选到的那些）—— 换模型只能在用户
+   * 已经允许的模型之间换，否则会切到一个他明确关掉的模型上
+   * （2026-10-19 用户要求「根据当前的可选模型配置切换模型名单」）。
+   */
   models: () => Promise<readonly string[]>;
 }
 
