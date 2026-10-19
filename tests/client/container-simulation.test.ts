@@ -1260,3 +1260,42 @@ it("用量块渲染抛错时只坏它自己：账号行与整页设置仍在（�
     errors.mockRestore();
   }
 });
+
+it("usageReport 以 `{ ok, value }` 信封返回时也能读到（宿主的真实形状）", async () => {
+  // 2026-10-19 真实报障：`TypeError: Cannot read properties of undefined (reading ''find'')`
+  // —— 宿主的远程读口一律返回信封，之前把整个信封当成报表存下来，`report.accounts` 是
+  // undefined，账号行渲染时 `.find` 就炸了。这条钉住「信封要解包」。
+  const mini = await runtime();
+  await freshSeams();
+  const host = fakeHost(mini, {
+    accounts: { commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }] },
+    usageReport: () => ({ ok: true, value: reportFor("cc-1") }),
+  });
+  const page = mini.mount(await pageContainer(host));
+  await settleSim(mini);
+
+  const block = find(page.tree(), "data-usage-account", "cc-1");
+  expect(textsOfSim(block).join(" ")).toContain("4.6K");
+  // 页面本体完全正常（没有走到失败面板/行内报错）。
+  expect(findSim(page.tree(), "data-render-error")).toBeUndefined();
+  expect(findSim(page.tree(), "data-render-error-inline")).toBeUndefined();
+});
+
+it("usageReport 返回空值或坏形状时不崩：只是少显示用量块", async () => {
+  for (const payload of [undefined, null, {}, { accounts: "nope" }, { accounts: null, total: null }, 42, "text"]) {
+    const mini = await runtime();
+    await freshSeams();
+    const host = fakeHost(mini, {
+      accounts: { commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }] },
+      usageReport: () => payload,
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+
+    // 页面与账号行都在；用量块不出现（没有数据就什么都不画）。
+    expect(findSim(page.tree(), "data-page", "llm-account")).toBeDefined();
+    expect(findSim(page.tree(), "data-account", "cc-1")).toBeDefined();
+    expect(findSim(page.tree(), "data-render-error")).toBeUndefined();
+    expect(findSim(page.tree(), "data-render-error-inline")).toBeUndefined();
+  }
+});

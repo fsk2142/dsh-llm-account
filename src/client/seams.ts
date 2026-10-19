@@ -768,6 +768,55 @@ const LOGIN_UNKNOWN: LoginView = { state: "idle" };
  */
 const USAGE_REPORT_WINDOW: UsageWindowView = "all";
 
+/**
+ * 把远程读回来的载荷整理成**一定能安全渲染**的报表。
+ *
+ * 两道保险，缺一不可：
+ * 1. 载荷可能不是对象（宿主 resolve 成 `undefined` / `null`）：给一份空报表，别把
+ *    `undefined` 塞进 `usageReport` —— 渲染层每个账号都要 `usageReport.accounts.find(...)`，
+ *    一次 `.find of undefined` 就是整页崩（2026-10-19 真实报障）。
+ * 2. `accounts` 不是数组时同样归零：边界校验器（`usage-contract`）在**远程描述符**那一侧会
+ *    挡掉坏形状并抛错，但那条路径只在宿主真的走 typert 网关时生效；客户端本地替身、
+ *    旧宿主、以及「信封里包着一个半成品」的情况都得在这里兜住。
+ * @param value - 远程调用解包后的载荷。
+ * @returns 可安全渲染的报表；没有数据时为 `undefined`（不画用量块）。
+ */
+function reportOf(value: UsageReportView | undefined): UsageReportView | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const accounts = Array.isArray(value.accounts) ? value.accounts : [];
+  const total = typeof value.total === "object" && value.total !== null ? value.total : undefined;
+  if (total === undefined || typeof total.bucket !== "object" || total.bucket === null) {
+    // 总账缺失：账号明细仍然可用（界面上只用得到 `accounts`），补一个空总账。
+    return {
+      accounts,
+      total: {
+        window: USAGE_REPORT_WINDOW,
+        bucket: {
+          period: USAGE_REPORT_WINDOW,
+          since: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          requests: 0,
+          ok: 0,
+          failed: 0,
+        },
+        byVendor: [],
+      },
+    };
+  }
+  return {
+    accounts,
+    total: {
+      window: total.window ?? USAGE_REPORT_WINDOW,
+      bucket: total.bucket,
+      byVendor: Array.isArray(total.byVendor) ? total.byVendor : [],
+      ...(typeof total.lastAt === "number" && Number.isFinite(total.lastAt) ? { lastAt: total.lastAt } : {}),
+    },
+  };
+}
+
 /** 造**容器组件**：持有页面状态、订阅宿主推送与共享远程面、把回调接上，然后渲染 `PageShell`。
  *
  * 这是本层唯一使用 Hook 的地方，刻意做得极薄：所有判定都在 `page-state.ts` / `dispatchAccountAction`
@@ -1276,15 +1325,20 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
             setUsageReport(undefined);
             return;
           }
-          void api.usageReport(USAGE_REPORT_WINDOW).then(
-            (report) => {
+          // **必须走 `remoteValueDetailed`**：宿主的远程读口一律以 `{ ok, value }` 信封返回
+          // （实测见 `unwrapRemote` 的注释）。把信封直接当报表存下来的后果是
+          // `report.accounts` 为 `undefined`，账号行渲染时 `.find` 抛 TypeError ——
+          // 2026-10-19 的真实报障。这里也顺便拿到了「调用失败」的可读原因。
+          void remoteValueDetailed<UsageReportView>(callRemote(() => api.usageReport?.(USAGE_REPORT_WINDOW))).then(
+            (detail) => {
               if (!alive) return;
-              setUsageReport(report);
+              if (!detail.ok) {
+                setUsageStatsProblem(detail.problem);
+                return;
+              }
+              // 载荷可能缺席（宿主 resolve 成空值）：当作「没有数据」，不是「读取失败」。
+              setUsageReport(reportOf(detail.value));
               setUsageStatsProblem(undefined);
-            },
-            (error: unknown) => {
-              if (!alive) return;
-              setUsageStatsProblem(error instanceof Error ? error.message : String(error));
             },
           );
         } catch (error) {
@@ -1334,7 +1388,12 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           `${t("usage.readFailed")}：${usageStatsProblem}`,
         );
       }
-      const row = usageReport?.accounts.find((entry) => entry.vendor === vendor && entry.account === ref);
+      // 防御性读：`reportOf` 已经保证 `accounts` 是数组，但这是一条**每 30 秒都会重跑**的
+      // 渲染路径，任何一处 `.find of undefined` 都会让整页消失（2026-10-19 报了两次）。
+      // 宁可少显示一个用量块，也不要让账号行崩。
+      const accounts = usageReport?.accounts;
+      if (!Array.isArray(accounts)) return undefined;
+      const row = accounts.find((entry) => entry?.vendor === vendor && entry?.account === ref);
       if (row === undefined) return undefined;
       // 这一小块自己再套一层边界：用量是**每 30 秒重渲染一次**的东西，它出问题不该
       // 连累账号行、额度条与整页设置（2026-10-19 报障「每次用量刷新设置页就没了」）。

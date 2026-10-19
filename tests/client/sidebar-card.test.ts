@@ -253,3 +253,13 @@ it("开关只读已存储的设置文档：草稿把开关拨开也不算", () =
   const stored = createPageState(VENDORS, [{ ns: "llm-commandcode", row: "llm-commandcode", value: { showSidebarQuota: true }, revision: 1 }]);
   expect(sidebarVendorOf(VENDORS, stored.snapshots)?.ns).toBe("llm-commandcode");
 });
+
+it("accounts 不是数组时也不崩（跨边界的半成品载荷）", () => {
+  // 与上一条同类：`status.accounts` 存在但不是数组时，旧写法的 `.find` 一样会抛，
+  // 而这是侧边栏的渲染路径 —— 抛了整块卡片变空白。收敛成空数组后走的是空态文案。
+  for (const bad of [null, undefined, {}, "nope", 42]) {
+    const status = statusOf({ accounts: bad as never });
+    expect(() => renderCard(status)).not.toThrow();
+    expect(textsOf(renderCard(status)).join(" ")).toContain("还没有请求经过这个账号");
+  }
+});

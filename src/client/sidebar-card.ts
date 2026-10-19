@@ -58,13 +58,16 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   // 模式）。所以这里把 `null` 一律收敛成「没有生效账号」，并把收敛后的值递给标注区，
   // 全卡片只有这一处读它。
   const effective = status?.effective ?? undefined;
-  const effectiveRow = effective === undefined ? undefined : status?.accounts.find((account) => account.ref === effective.ref);
+  // `accounts` 是跨边界传输的数组：`status.accounts` 存在但**不是数组**时（旧宿主、半成品
+  // 载荷）`.find` 一样会抛 —— 而这是侧边栏的渲染路径，抛了整块卡片变空白。收敛成空数组。
+  const rows: readonly AccountUsageStatus[] = Array.isArray(status?.accounts) ? status.accounts : [];
+  const effectiveRow = effective === undefined ? undefined : rows.find((account) => account.ref === effective.ref);
   // 还没有请求时 effective 可能为空，但用户已经指定/自动选中了当前账号：优先显示它。
   const currentRow =
     effectiveRow ??
-    status?.accounts.find((account) => account.active === true) ??
-    status?.accounts.find((account) => account.effective === true) ??
-    status?.accounts.find((account) => account.configured === true);
+    rows.find((account) => account.active === true) ??
+    rows.find((account) => account.effective === true) ??
+    rows.find((account) => account.configured === true);
   const hasData = status !== undefined && currentRow !== undefined;
 
   return createElement(
