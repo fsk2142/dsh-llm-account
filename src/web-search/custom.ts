@@ -10,7 +10,7 @@
  * - 结果不裁剪：宿主 seam 会按 `request.maxResults` 截断并置 `truncated`。
  * @module dsh-llm-account/src/web-search/custom
  */
-import { WebError } from "@deepseek-ai/dsh-web";
+import { WebError } from "./web-error";
 import type { WebSearchResult, WebSearchSource } from "@deepseek-ai/dsh-web";
 
 import { abortedError, firstString, isAbortError, isRecord, throwIfAborted } from "./util";

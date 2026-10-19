@@ -8,7 +8,7 @@
  * 「跟随模型账号」的字面含义就是跟着 `agent-default-model` 走，而不是自己再存一份。
  * @module dsh-llm-account/src/web-search/provider
  */
-import { WebError } from "@deepseek-ai/dsh-web";
+import { WebError } from "./web-error";
 import type { WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
 
 import { DEFAULT_API_BASE, protocolEndpoint } from "../vendors/commandcode/protocol";

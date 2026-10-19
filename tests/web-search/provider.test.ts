@@ -2,7 +2,7 @@
  * `llm-account-web` provider：路由/可用性判定与两条搜索路径的分派。
  * @module dsh-llm-account/tests/web-search/provider
  */
-import { WebError } from "@deepseek-ai/dsh-web";
+import { WebError } from "../../src/web-search/web-error";
 import { expect, it } from "vitest";
 
 import {

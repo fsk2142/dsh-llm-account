@@ -5,7 +5,7 @@
  * `support.ts` 会进客户端 bundle，其余文件都只在服务端使用，保持依赖窄。
  * @module dsh-llm-account/src/web-search/util
  */
-import { WebError } from "@deepseek-ai/dsh-web";
+import { WebError } from "./web-error";
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
 export function isRecord(value: unknown): value is Record<string, unknown> {

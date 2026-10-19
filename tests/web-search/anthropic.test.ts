@@ -2,7 +2,7 @@
  * 账号网关原生搜索（Anthropic Messages + `web_search_20250305`）的请求组装与解析。
  * @module dsh-llm-account/tests/web-search/anthropic
  */
-import { WebError } from "@deepseek-ai/dsh-web";
+import { WebError } from "../../src/web-search/web-error";
 import { expect, it } from "vitest";
 
 import {

@@ -12,7 +12,7 @@
  * @module dsh-llm-account/src/web-search/anthropic
  */
 import { attributionHeaders } from "@deepseek-ai/dsh-llm";
-import { WebError } from "@deepseek-ai/dsh-web";
+import { WebError } from "./web-error";
 import type { WebSearchResult, WebSearchSource } from "@deepseek-ai/dsh-web";
 
 import { IDENTITY_ENCODING_HEADER } from "../vendors/commandcode/protocol";

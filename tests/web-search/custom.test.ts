@@ -2,7 +2,7 @@
  * 第三方搜索接口（通用自定义）的请求组装与响应映射。
  * @module dsh-llm-account/tests/web-search/custom
  */
-import { WebError } from "@deepseek-ai/dsh-web";
+import { WebError } from "../../src/web-search/web-error";
 import { expect, it } from "vitest";
 
 import {
