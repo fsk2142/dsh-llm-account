@@ -15,14 +15,24 @@ import type { UsagePort, UsageSample } from "../core/usage-port";
 /** 单例台账。 */
 let sharedLedger: UsageLedger | undefined;
 
+/** 覆盖数据目录的环境变量名。 */
+export const USAGE_DIR_ENV = "DSH_LLM_ACCOUNT_USAGE_DIR";
+
 /**
  * 用量数据的根目录。
  *
  * 放 `~/.dsh/llm-account/usage`：与宿主其它插件的用户级状态同处一地（`~/.dsh`），
  * 但用插件自己的子目录，不与宿主的 `cache/` `logs/` 混在一起。
+ *
+ * **环境变量优先**（{@link USAGE_DIR_ENV}）：测试跑 `apply()` 时会走到这里，而 `apply()` 造
+ * 的采集端口**就是生产端口** —— 没有这个开关，整套测试会把假记录（`m1` 模型、`PREFERRED_REF`
+ * 账号）写进用户真实台账。2026-10-19 实测：831 条记录里 638 条是测试垃圾，把「总量」抬成
+ * 一个纯属虚构的数。`vitest.config.ts` 的 setup 文件把它指到临时目录。
  * @returns 目录路径。
  */
 export function defaultUsageRoot(): string {
+  const override = process.env[USAGE_DIR_ENV];
+  if (typeof override === "string" && override.trim() !== "") return override;
   return join(homedir(), ".dsh", "llm-account", USAGE_DIR_NAME);
 }
 

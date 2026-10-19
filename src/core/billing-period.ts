@@ -134,3 +134,68 @@ export function remainingOf(period: BillingPeriod, now: number): number | undefi
   }
   return Math.max(0, period.end - now);
 }
+
+/**
+ * 把一个时刻按**日历月**前移/后移（月末夹取：1/31 的前一月是 12/31，不会溢出到 3 月）。
+ * @param at - 基准时刻。
+ * @param months - 偏移月数（可负）。
+ * @returns 平移后的时刻。
+ */
+function addMonths(at: number, months: number): number {
+  const date = new Date(at);
+  const day = date.getDate();
+  const target = new Date(at);
+  // 先设成 1 号再改月，避免 1/31 → 2/31 自动溢出到 3 月。
+  target.setDate(1);
+  target.setMonth(target.getMonth() + months);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(day, lastDay));
+  return target.getTime();
+}
+
+/**
+ * **套餐周期**：锚在订阅本期的边界（`periodEnd`，可选 `periodStart`）。
+ *
+ * 为什么单独一种：用户 2026-10-19 明确要求「按照套餐的有效期进行统计」。订阅是**按月续费**
+ * 的，它的边界只由厂商给的日期决定 —— 既不是自然月（9 月 20 日订阅，周期就是 20 日到 20 日），
+ * 也不是额度里最细的那一档（5 小时窗口只说明「最近五小时用了多少」）。
+ *
+ * `periodStart` 缺失时由 `periodEnd` 往前推一个日历月（厂商通常只公布终点）。两种情况下
+ * 起点都属于「按周期推断」，而终点是权威的 —— 界面因此显示成「按厂商重置时间」。
+ * @param periodEnd - 套餐本期结束时刻（epoch 毫秒）。
+ * @param at - 要归属的时刻。
+ * @param periodStart - 套餐本期开始时刻（可选；厂商公布时比推算更准）。
+ * @returns 该时刻所在的套餐周期；`periodEnd` 不可用时为 `undefined`。
+ */
+export function planPeriodAt(periodEnd: number, at: number, periodStart?: number): BillingPeriod | undefined {
+  if (!Number.isFinite(periodEnd) || periodEnd <= 0 || !Number.isFinite(at)) return undefined;
+  // 1) 厂商自己给了本期起点：直接用它，不做任何推算。
+  if (periodStart !== undefined && Number.isFinite(periodStart) && periodStart > 0 && periodStart < periodEnd) {
+    const inside = at >= periodStart && at < periodEnd;
+    // 落在本期外（上一期的记录）：按起止长度平移，最多回溯 24 期。
+    const length = periodEnd - periodStart;
+    if (!inside && at < periodStart) {
+      const steps = Math.ceil((periodStart - at) / length);
+      if (steps <= 24) {
+        const start = periodStart - steps * length;
+        return { kind: "month", key: periodKeyOf("month", start), start, end: start + length, fromResetAt: true };
+      }
+    }
+    return { kind: "month", key: periodKeyOf("month", periodStart), start: periodStart, end: periodEnd, fromResetAt: true };
+  }
+  // 2) 只有终点：从「本期」往回找（`at` 可能落在好几个周期之前）。
+  let end = periodEnd;
+  for (let guard = 0; guard < 24; guard += 1) {
+    const start = addMonths(end, -1);
+    if (at >= start && at < end) {
+      return { kind: "month", key: periodKeyOf("month", start), start, end, fromResetAt: true };
+    }
+    if (at < start) {
+      end = start;
+      continue;
+    }
+    // `at >= end`：本期已经结束（厂商还没报新的 periodEnd）→ 用现在这一档兜住。
+    return { kind: "month", key: periodKeyOf("month", start), start, end, fromResetAt: true };
+  }
+  return undefined;
+}

@@ -255,6 +255,10 @@ function planOf(summary: unknown): QuotaPlan | undefined {
   if (status !== undefined) plan.status = status;
   const periodEnd = epochMillis(pick(["subscriptionCurrentPeriodEnd", "currentPeriodEnd", "periodEnd", "renewsAt"]));
   if (periodEnd !== undefined) plan.periodEnd = periodEnd;
+  // 本期**起点**：线上真的给（2026-10-19 实测 `subscriptionCurrentPeriodStart`），
+  // 有它就不必用「往前一个日历月」去推 —— 两个日期都是厂商自己的账期边界。
+  const periodStart = epochMillis(pick(["subscriptionCurrentPeriodStart", "currentPeriodStart", "periodStart"]));
+  if (periodStart !== undefined) plan.periodStart = periodStart;
   return plan;
 }
 
@@ -281,7 +285,30 @@ const MONTHLY_MAX_USD: Readonly<Record<string, number>> = {
 };
 
 /**
- * 补一行月度上限（厂商没发月度窗口时）。
+ * 摘要里**钱包**的消耗（`totalConsumedUsd` / `todayConsumedUsd`）。
+ *
+ * 2026-10-19 实测：订阅套餐用户这里是 **0.0000**（`usageCount` 已有 1080 次请求）——
+ * 套餐用量走的是 credit 窗口（5 小时 50000 / 周 150000），不扣钱包。所以它**不能**当
+ * 「本套餐周期用了多少」：那样月度条会永远显示「已用 $0」，比显示「—」更误导。
+ *
+ * 保留这一读只为「钱包余额」那类显示（本期尚未接），**不**用来填月度窗口的 `used`。
+ * @param summary - `/billing/summary` 或 vela summary 的负载。
+ * @returns 钱包消耗（美元）；缺失时 `undefined`。
+ */
+export function walletConsumedUsdOf(summary: unknown): number | undefined {
+  const record = payloadRecord(summary);
+  if (record === undefined) return undefined;
+  return numberValue(record.totalConsumedUsd) ?? numberValue(record.periodConsumedUsd);
+}
+
+/**
+ * 补一行月度窗口（**只有上限**）。
+ *
+ * 为什么 `used` 留空：这个厂商的订阅额度按 credit 窗口记账（5 小时 / 周），接口**不给**
+ * 月度用量；钱包消耗（{@link walletConsumedUsdOf}）对订阅用户恒为 0。两个候选数都是错的
+ * 口径，所以宁可显示「共 $120 / 已用 —」—— 与「额度缺失不倒成 0」同一条纪律。
+ *
+ * 「这一期到底用了多少」由**账号下面的用量块**回答（它按套餐有效期聚合我们自己的台账）。
  * @param plan - 账单摘要里的套餐。
  * @param windows - 已归一化的窗口（已有月度窗口就不补）。
  * @returns 月度窗口，或 `undefined`（套餐认不出 / 已有月度窗口）。

@@ -234,3 +234,23 @@ it("状态还没到时给出占位说明；关闭与刷新按钮把意图报出�
   expect(props.onRefresh).toHaveBeenCalledTimes(1);
 });
 
+
+it("每个账号下面也画用量块（用户 2026-10-19：用量面板中还没有这个统计）", () => {
+  const marker = { type: "div", props: { "data-usage-account": "a" }, key: null } as unknown as StubElement;
+  const calls: { vendor: string; ref: string }[] = [];
+  const { tree } = render({
+    usageOf: (vendor, ref) => {
+      calls.push({ vendor, ref });
+      return ref === "a" ? marker : undefined;
+    },
+  });
+  // 容器给了 usageOf 的账号才画（返回 undefined 的不占位）。
+  expect(calls).toEqual([{ vendor: "commandcode", ref: "a" }]);
+  const block = elementsOf(tree).find((element) => element.props["data-usage-account"] === "a");
+  expect(block).toBeDefined();
+});
+
+it("没有 usageOf 时不画用量块（旧调用方不受影响）", () => {
+  const { tree } = render();
+  expect(elementsOf(tree).some((element) => element.props["data-usage-account"] !== undefined)).toBe(false);
+});

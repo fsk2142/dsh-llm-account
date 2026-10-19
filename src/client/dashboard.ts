@@ -31,7 +31,7 @@ export interface DashboardProps {
   /** 状态；还没读到时为 `undefined`。 */
   status: VendorUsageStatus | undefined;
   /** 多供应商视图；缺省时按单 status 渲染（兼容既有调用）。 */
-  vendors?: readonly { label: string; status?: VendorUsageStatus }[];
+  vendors?: readonly { label: string; status?: VendorUsageStatus; vendor?: string }[];
   /** 关闭面板。 */
   onClose: () => void;
   /** 手动刷新（可选）。 */
@@ -43,6 +43,14 @@ export interface DashboardProps {
   failure?: string;
   /** 当前显示的是上一次成功读到的数据（失败时保留），不是刚刚读到的。 */
   stale?: boolean;
+  /**
+   * 每账号的用量块（容器按 `vendor + ref` 提供）。
+   *
+   * 用户 2026-10-19：「还有一点就是用量面板中还没有这个统计」—— 设置页的账号行有了，
+   * 中栏这个面板也必须一致（同一份数据、同一份渲染），否则打开面板看到的是两套东西。
+   * 返回 `undefined` 表示这一行暂时没有读数（不占位）。
+   */
+  usageOf?: (vendor: string, ref: string) => ReactNode;
 }
 
 /**
@@ -124,7 +132,9 @@ export function Dashboard(props: DashboardProps): ReactElement {
           createElement("h3", { key: "accounts-title" }, t("dashboard.accounts")),
           // **平铺**：所有厂商的账号在一份列表里，供应商是账号名后的徽标而不是分组标题
           // （2026-10-18 用户要求）。单 status 的旧调用路径同样走这里。
-          ...accountEntries(props).map((entry) => accountBlock(props, entry.account, entry.status, entry.label)),
+          ...accountEntries(props).map((entry) =>
+            accountBlock(props, entry.account, entry.status, entry.label, entry.vendor),
+          ),
           ...vendorFailureNotes(props),
         ]),
   );
@@ -135,6 +145,8 @@ interface AccountEntry {
   account: AccountUsageStatus;
   status: VendorUsageStatus | undefined;
   label: string;
+  /** 该账号所属厂商的 id（用量块按它 + ref 取读数）。 */
+  vendor: string;
 }
 
 /**
@@ -145,16 +157,16 @@ interface AccountEntry {
  */
 function accountEntries(props: DashboardProps): AccountEntry[] {
   const entries: AccountEntry[] = [];
-  const collect = (label: string, vendorStatus: VendorUsageStatus | undefined): void => {
+  const collect = (vendor: string, label: string, vendorStatus: VendorUsageStatus | undefined): void => {
     for (const account of vendorStatus?.accounts ?? []) {
       // 线上 `accounts` 可能含渲染不了的行（null / 非对象）：结构校验只查「是不是数组」，
       // 渲染路径必须自己挑出能画的行 —— 一行画不了不该让整块仪表盘崩。
       if (typeof account !== "object" || account === null) continue;
-      entries.push({ account, status: vendorStatus, label });
+      entries.push({ account, status: vendorStatus, label, vendor });
     }
   };
-  if (props.vendors === undefined) collect("", props.status);
-  else for (const vendor of props.vendors) collect(vendor.label, vendor.status);
+  if (props.vendors === undefined) collect(props.status?.vendor ?? "", "", props.status);
+  else for (const vendor of props.vendors) collect(vendor.vendor ?? vendor.status?.vendor ?? "", vendor.label, vendor.status);
   return entries;
 }
 
@@ -205,6 +217,7 @@ function accountBlock(
   account: AccountUsageStatus,
   status: VendorUsageStatus | undefined = props.status,
   label = "",
+  vendor = props.status?.vendor ?? "",
 ): ReactNode {
   const { t } = props;
   const effective = account.effective;
@@ -293,6 +306,9 @@ function accountBlock(
         windowBlock(t, window),
       ),
     ),
+    // 该账号的用量：与设置页账号行**同一份渲染**（`AccountUsageBlock`），紧贴额度条下方。
+    // 用户 2026-10-19：「用量面板中还没有这个统计」—— 两个界面给同一份数据，不该只做一个。
+    props.usageOf?.(vendor, account.ref) ?? null,
   );
 }
 

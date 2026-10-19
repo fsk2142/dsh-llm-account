@@ -12,5 +12,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    // 用量台账指到临时目录：装配测试会真的跑 `apply()`（生产采集端口 → 真实数据目录），
+    // 不隔离就会把假记录写进用户台账（见 `tests/setup-usage-dir.ts`）。
+    setupFiles: ["tests/setup-usage-dir.ts"],
   },
 });

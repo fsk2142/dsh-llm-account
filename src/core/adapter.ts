@@ -173,6 +173,13 @@ export interface QuotaPlan {
   monthlyCredits?: number;
   /** 本期结束时刻（epoch 毫秒）。 */
   periodEnd?: number;
+  /**
+   * 本期**开始**时刻（epoch 毫秒）。
+   *
+   * 厂商真的公布时才有（Open Design 的 `subscriptionCurrentPeriodStart`，2026-10-19 实测）。
+   * 有它，统计的账期就是厂商的两个真实边界；没有则由 `periodEnd` 往前推一个日历月。
+   */
+  periodStart?: number;
 }
 
 /** 归一化后的额度读数；部分端点失败不拖垮整体，失败项列在 `failures` 里。 */

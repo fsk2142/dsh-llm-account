@@ -10,7 +10,7 @@
  * 「最近 N 天我一共用了多少」。两者各有各的比率与成本，分别算。
  * @module dsh-llm-account/src/core/usage-report
  */
-import { periodAt, periodKindOf, type BillingPeriod } from "./billing-period";
+import { periodAt, periodKindOf, planPeriodAt, type BillingPeriod } from "./billing-period";
 import { officialPriceOf, vendorPriceOf } from "./pricing";
 import { aggregateUsage, withinWindow, windowStart, type UsageBucket, type UsageRecord, type UsageWindow } from "./usage-stats";
 
@@ -74,6 +74,16 @@ export interface UsageQuery {
   /** 每账号该档窗口的重置时间（epoch 毫秒），用于把周期锚到厂商的真实边界。 */
   resetAtOf?: (vendor: string, account: string) => number | undefined;
   /**
+   * 每账号**套餐本期结束**的时刻（epoch 毫秒）。
+   *
+   * 优先级最高：用户 2026-10-19 要求「按照套餐的有效期进行统计」。订阅按月续费，它的边界
+   * 只由厂商公布的 `periodEnd` 决定 —— 比额度窗口里最细的那一档（5 小时）更贴近「这一期
+   * 花了多少」。缺失时退回额度窗口粒度（{@link UsageQuery.periodWindowOf}）。
+   */
+  planPeriodEndOf?: (vendor: string, account: string) => number | undefined;
+  /** 每账号**套餐本期开始**的时刻（epoch 毫秒）；厂商公布了才给（比推算准）。 */
+  planPeriodStartOf?: (vendor: string, account: string) => number | undefined;
+  /**
    * 每账号该档窗口的**已用美元金额**（厂商权威口径）。
    *
    * 只在窗口的 `unit === "usd"` 时有值 —— 那是厂商按美元记账的事实；百分比口径的窗口
@@ -108,11 +118,17 @@ export function buildUsageReport(query: UsageQuery): { accounts: AccountUsage[];
 
   const accounts: AccountUsage[] = [];
   for (const group of groups.values()) {
-    // 周期粒度：优先用调用方给的窗口 key，缺省按月。
+    // 周期边界的优先级（用户 2026-10-19：「按照套餐的有效期进行统计」）：
+    // 1. 套餐本期结束时刻（厂商按订阅周期记账，最贴近「这一期花了多少」）；
+    // 2. 额度窗口最细那一档 + 它的 resetAt（厂商没说套餐时）；
+    // 3. 自然周期（两者都没有）。
+    const planEnd = query.planPeriodEndOf?.(group.vendor, group.account);
+    const planStart = query.planPeriodStartOf?.(group.vendor, group.account);
     const windowKey = query.periodWindowOf?.(group.vendor, group.account);
     const kind = periodKindOf(windowKey ?? "monthly");
     const resetAt = query.resetAtOf?.(group.vendor, group.account);
-    const period = periodAt(kind, now, resetAt);
+    const period =
+      (planEnd === undefined ? undefined : planPeriodAt(planEnd, now, planStart)) ?? periodAt(kind, now, resetAt);
     // 周期内：只取落在 [start, end) 的记录。
     const inPeriod = group.items.filter(
       (record) => record.at >= period.start && (period.end === undefined || record.at < period.end),

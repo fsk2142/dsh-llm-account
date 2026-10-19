@@ -526,6 +526,10 @@ export class LlmAccountUsageService extends TypertRemoteService {
     }
     // 当前各账号的额度窗口：用来定位周期（失败就让报表退回自然周期）。
     const windows = new Map<string, { windowKey?: string; resetAt?: number }>();
+    /** 每账号的**套餐本期结束**时刻（用户要求「按套餐有效期统计」，优先级最高）。 */
+    const planEnds = new Map<string, number>();
+    /** 每账号的套餐本期开始时刻（厂商公布了才填）。 */
+    const planStarts = new Map<string, number>();
     /** 每账号的**权威已用金额**（只来自 `unit === "usd"` 的窗口）。 */
     const spent = new Map<string, { amount: number; window: string }>();
     for (const vendor of this.vendorDeps.keys()) {
@@ -542,6 +546,11 @@ export class LlmAccountUsageService extends TypertRemoteService {
             ...(finest === undefined ? {} : { windowKey: finest.key }),
             ...(finest?.resetAt === undefined ? {} : { resetAt: finest.resetAt }),
           });
+          // 套餐本期结束时刻：**优先于**额度窗口粒度（用户 2026-10-19 的要求）。
+          const periodEnd = account.quota?.plan?.periodEnd;
+          if (periodEnd !== undefined) planEnds.set(key, periodEnd);
+          const periodStart = account.quota?.plan?.periodStart;
+          if (periodStart !== undefined) planStarts.set(key, periodStart);
           // 权威金额：优先最细的那档；它没给美元就退到别的美元窗口。
           const usd = ranked.find((window) => window.unit === "usd" && window.used !== undefined);
           if (usd?.used !== undefined) spent.set(key, { amount: usd.used, window: usd.key });
@@ -556,6 +565,8 @@ export class LlmAccountUsageService extends TypertRemoteService {
       now,
       periodWindowOf: (vendor, account) => windows.get(`${vendor}\u0000${account}`)?.windowKey,
       resetAtOf: (vendor, account) => windows.get(`${vendor}\u0000${account}`)?.resetAt,
+      planPeriodEndOf: (vendor, account) => planEnds.get(`${vendor}\u0000${account}`),
+      planPeriodStartOf: (vendor, account) => planStarts.get(`${vendor}\u0000${account}`),
       spentOf: (vendor, account) => spent.get(`${vendor}\u0000${account}`),
     });
   }

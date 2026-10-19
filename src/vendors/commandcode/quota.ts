@@ -286,6 +286,10 @@ function planOf(subscriptions: unknown, credits: unknown): QuotaPlan | undefined
   }
   const periodEnd = subscription === undefined ? undefined : epochMillis(subscription.currentPeriodEnd);
   if (periodEnd !== undefined) plan.periodEnd = periodEnd;
+  // 本期起点同样可能公布（与 Open Design 的 `subscriptionCurrentPeriodStart` 同名同义）：
+  // 有它，统计的账期就是厂商自己的两个边界（用户 2026-10-19：「按套餐有效期统计」）。
+  const periodStart = subscription === undefined ? undefined : epochMillis(subscription.currentPeriodStart);
+  if (periodStart !== undefined) plan.periodStart = periodStart;
   return plan;
 }
 

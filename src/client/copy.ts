@@ -161,6 +161,7 @@ export type CopyKey =
   | "usage.perAccount"
   | "usage.total"
   | "usage.empty"
+  | "usage.emptyAccount"
   | "usage.loading"
   | "usage.readFailed"
   | "usage.remaining"
@@ -450,6 +451,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.perAccount": "按账号（各自记账周期）",
     "usage.total": "合计（当前窗口）",
     "usage.empty": "还没有用量记录。发一次请求后这里就会出现数字。",
+    "usage.emptyAccount": "这个账号还没有用量记录。发一次请求后这里就会出现统计。",
     "usage.loading": "正在读取用量…",
     "usage.readFailed": "用量读取失败",
     "usage.remaining": "本周期还剩",
@@ -727,6 +729,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.perAccount": "Per account (own billing period)",
     "usage.total": "Total (current window)",
     "usage.empty": "No usage recorded yet. Send a request and the numbers appear here.",
+    "usage.emptyAccount": "No usage recorded for this account yet. Send one request and its stats appear here.",
     "usage.loading": "Reading usage…",
     "usage.readFailed": "Could not read usage",
     "usage.remaining": "Left this period",

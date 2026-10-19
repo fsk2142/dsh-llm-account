@@ -1394,7 +1394,18 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       const accounts = usageReport?.accounts;
       if (!Array.isArray(accounts)) return undefined;
       const row = accounts.find((entry) => entry?.vendor === vendor && entry?.account === ref);
-      if (row === undefined) return undefined;
+      if (row === undefined) {
+        // 报表已经读到了、但这个账号还没有任何记录：**说一句**，不要静默什么都不画。
+        // 2026-10-19 报障「commandcode 还没有用量显示」的真相就在这里 —— 台账里确实没有它
+        // 的记录（那个账号自本轮上线以来没发过请求），而空白让人以为是坏了。
+        // `usageReport === undefined`（还没读到 / 宿主不支持）时不画：那不是「没有用量」。
+        if (usageReport === undefined) return undefined;
+        return createElement(
+          "small",
+          { "data-usage-empty": ref, className: CSS_CLASS.note },
+          t("usage.emptyAccount"),
+        );
+      }
       // 这一小块自己再套一层边界：用量是**每 30 秒重渲染一次**的东西，它出问题不该
       // 连累账号行、额度条与整页设置（2026-10-19 报障「每次用量刷新设置页就没了」）。
       //
@@ -2302,6 +2313,17 @@ export function createDashboardView(options: {
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
     /** 读不到数据时的原因（远程面没挂上 / 读口报错）；`undefined` = 没失败。 */
     const [problem, setProblem] = useState<string | undefined>(undefined);
+    /**
+     * 用量报表（每账号自己的账期）。
+     *
+     * 用户 2026-10-19：「用量面板中还没有这个统计」。与设置页**同一份数据、同一份渲染**，
+     * 所以这里也只存报表，渲染交给 `AccountUsageBlock`。
+     *
+     * **不设定时器**：面板是用户打开的、带显式刷新按钮的视图。给它挂 30 秒轮询会让一个
+     * 打开着的面板在后台不停读状态与台账 —— 而「面板静默」是侧边栏那条开关纪律的一部分
+     * （关掉卡片就不该再有任何请求）。要新数字，点刷新。
+     */
+    const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
 
     const load = (): void => {
       const usage = usageNamespace(ctx);
@@ -2327,6 +2349,15 @@ export function createDashboardView(options: {
         setStatuses(nextStatuses);
         setProblem(problems[0]);
       });
+      // 用量报表（与设置页同一个读口、同一条解信封纪律）。
+      if (usage.usageReport !== undefined) {
+        void remoteValueDetailed<UsageReportView>(callRemote(() => usage.usageReport?.(USAGE_REPORT_WINDOW))).then(
+          (detail) => {
+            if (!detail.ok) return;
+            setUsageReport(reportOf(detail.value));
+          },
+        );
+      }
     };
 
     useEffect(() => {
@@ -2340,13 +2371,30 @@ export function createDashboardView(options: {
     if (entries.length === 0) {
       return createElement("p", { "data-dashboard-empty": "true", className: CSS_CLASS.empty }, t("dashboard.noData")) as ReactElement;
     }
+    // 每账号的用量块：渲染成元素（交给 React），抛错落在面板自己的边界里。
+    const usageOf = (vendor: string, ref: string): ReactNode => {
+      const accounts = usageReport?.accounts;
+      if (!Array.isArray(accounts)) return undefined;
+      const row = accounts.find((entry) => entry?.vendor === vendor && entry?.account === ref);
+      if (row === undefined) return undefined;
+      return createElement(
+        RenderBoundary,
+        { variant: "inline", title: t("usage.title"), retryLabel: t("models.retry") },
+        createElement(AccountUsageBlock, { t, entry: row }),
+      );
+    };
     return Dashboard({
       t,
       status: statuses[entries[0]!.providerId],
-      vendors: entries.map((entry) => ({ label: t(entry.labelKey), status: statuses[entry.providerId] })),
+      vendors: entries.map((entry) => ({
+        label: t(entry.labelKey),
+        vendor: entry.providerId,
+        status: statuses[entry.providerId],
+      })),
       onClose: () => options.onClose(),
       onRefresh: () => load(),
       failure: problem,
+      usageOf,
     });
   };
 }

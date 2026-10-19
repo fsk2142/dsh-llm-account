@@ -163,6 +163,8 @@ export interface QuotaPlanSummary {
   status?: string;
   monthlyCredits?: number;
   periodEnd?: number;
+  /** 本期开始时刻（厂商公布时才有；统计的账期边界用它）。 */
+  periodStart?: number;
 }
 
 /** 一条额度摘要。字段一律**原样**搬运：读数里没有的字段不许补 0。 */

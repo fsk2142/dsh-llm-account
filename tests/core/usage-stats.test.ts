@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { periodAt, periodKindOf } from "../../src/core/billing-period";
+import { periodAt, periodKindOf, planPeriodAt } from "../../src/core/billing-period";
 import { DEEPSEEK_OFFICIAL_PRICES, lookupPrice, officialPriceOf, vendorPriceOf } from "../../src/core/pricing";
 import { buildUsageReport } from "../../src/core/usage-report";
 import {
@@ -198,6 +198,90 @@ describe("记账周期", () => {
     const at = new Date(2026, 9, 21, 10, 0, 0).getTime();
     const period = periodAt("week", at);
     expect(new Date(period.start).getDay()).toBe(1);
+  });
+});
+
+describe("套餐周期：按订阅有效期统计（用户 2026-10-19 的要求）", () => {
+  // 本机实测的 Open Design 账期：2026-10-18 10:21 → 2026-11-18 10:21（北京时间 18:21）。
+  const periodStart = new Date(2026, 9, 18, 18, 21, 12).getTime();
+  const periodEnd = new Date(2026, 10, 18, 18, 21, 12).getTime();
+
+  it("两个边界都来自厂商时直接用它们，不做推算", () => {
+    const at = new Date(2026, 9, 19, 15, 0, 0).getTime();
+    const period = planPeriodAt(periodEnd, at, periodStart);
+    expect(period).toBeDefined();
+    expect(period!.start).toBe(periodStart);
+    expect(period!.end).toBe(periodEnd);
+    expect(period!.fromResetAt).toBe(true);
+    expect(period!.kind).toBe("month");
+  });
+
+  it("只公布终点时由终点回推一个日历月，月末不溢出", () => {
+    // 11-30 往前一个月是 10-30（不是 10-31）。
+    const end = new Date(2026, 10, 30, 10, 0, 0).getTime();
+    const period = planPeriodAt(end, new Date(2026, 10, 29, 10, 0, 0).getTime());
+    expect(period!.start).toBe(new Date(2026, 9, 30, 10, 0, 0).getTime());
+    // 3-31 往前一个月是 2-28（2026 不是闰年），不是 3-3。
+    const marchEnd = new Date(2026, 2, 31, 0, 0, 0).getTime();
+    const feb = planPeriodAt(marchEnd, new Date(2026, 2, 15, 0, 0, 0).getTime());
+    expect(new Date(feb!.start).getMonth()).toBe(1);
+  });
+
+  it("落在上一期的记录按账期长度平移，仍归到那个周期", () => {
+    // 本期 10-18 → 11-18；9-25 属于上一期（9-18 → 10-18）。
+    const at = new Date(2026, 8, 25, 12, 0, 0).getTime();
+    const period = planPeriodAt(periodEnd, at, periodStart);
+    expect(period).toBeDefined();
+    expect(period!.start).toBeLessThanOrEqual(at);
+    expect(period!.end!).toBeGreaterThan(at);
+    // 上下界都落在 9-18 → 10-18 那一期。
+    expect(new Date(period!.start).getMonth()).toBe(8);
+    expect(new Date(period!.end!).getMonth()).toBe(9);
+  });
+
+  it("周期标识可读且按账期起点给", () => {
+    const at = new Date(2026, 9, 19, 15, 0, 0).getTime();
+    expect(planPeriodAt(periodEnd, at, periodStart)!.key).toBe("2026-10");
+  });
+
+  it("终点不可用时返回 undefined（让调用方退回额度窗口粒度）", () => {
+    const at = Date.now();
+    expect(planPeriodAt(0, at)).toBeUndefined();
+    expect(planPeriodAt(Number.NaN, at)).toBeUndefined();
+    expect(planPeriodAt(-1, at)).toBeUndefined();
+  });
+
+  it("报表优先用套餐账期，而不是额度窗口最细的那一档", () => {
+    const now = new Date(2026, 9, 19, 15, 0, 0).getTime();
+    // 一条**在 5 小时窗口之外、但仍在套餐账期内**的记录（6 小时前）。
+    // 按 5 小时粒度它不计入本周期；按套餐账期（10-18 → 11-18）它要计入。
+    const at = now - 6 * 3_600_000;
+    const records = [record({ at, inputTokens: 1_000_000 })];
+    const withPlan = buildUsageReport({
+      records,
+      window: "all",
+      now,
+      // 额度窗口给的是 5 小时 + 它的 resetAt（会把周期切成 5 小时）。
+      periodWindowOf: () => "fiveHour",
+      resetAtOf: () => now + 3 * 3_600_000,
+      // 套餐账期给的是 10-18 → 11-18。
+      planPeriodEndOf: () => periodEnd,
+      planPeriodStartOf: () => periodStart,
+    });
+    expect(withPlan.accounts[0]!.period.kind).toBe("month");
+    expect(withPlan.accounts[0]!.period.start).toBe(periodStart);
+    expect(withPlan.accounts[0]!.bucket.requests).toBe(1);
+
+    // 没有套餐信息时退回额度窗口粒度（同一批记录因此落在 5 小时周期外）。
+    const withoutPlan = buildUsageReport({
+      records,
+      window: "all",
+      now,
+      periodWindowOf: () => "fiveHour",
+      resetAtOf: () => now + 3 * 3_600_000,
+    });
+    expect(withoutPlan.accounts[0]!.period.kind).toBe("five-hour");
+    expect(withoutPlan.accounts[0]!.bucket.requests).toBe(0);
   });
 });
 
