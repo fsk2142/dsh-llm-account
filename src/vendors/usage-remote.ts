@@ -50,6 +50,35 @@ import type { UsageRecord } from "../core/usage-stats";
 import { sharedUsageLedger } from "./usage-store";
 
 /**
+ * 由窗口算出读台账的下界。
+ *
+ * 为什么不是只按窗口：报表同时给「账号本周期」与「当前窗口」两套聚合，而周期可能比窗口
+ * 更长（例如窗口选「今日」、账号周期是按月的），所以下界要取两者更早的那个 —— 否则周期
+ * 那半边会缺数据。
+ * @param window - 时间窗口。
+ * @param now - 现在。
+ * @returns 读范围。
+ */
+function readRangeFor(window: UsageWindowView, now: number): { since?: number } {
+  const day = 86_400_000;
+  // 周期最长按月：留 40 天余量，既覆盖最长的周期聚合，又不必读 120 天。
+  const periodFloor = now - 40 * day;
+  const windowFloor = windowStartOf(window, now);
+  return { since: windowFloor === undefined ? periodFloor : Math.min(windowFloor, periodFloor) };
+}
+
+/** 窗口起点（`all` 无下界）。 */
+function windowStartOf(window: UsageWindowView, now: number): number | undefined {
+  if (window === "all") return undefined;
+  if (window === "today") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return start.getTime();
+  }
+  return now - (window === "7d" ? 7 : 30) * 86_400_000;
+}
+
+/**
  * 额度窗口的「精细度」排序：数字越小越细。
  *
  * 用来挑出「本周期」该按哪一档算：5 小时窗口比周/月更能反映最近用了多少。
@@ -488,7 +517,9 @@ export class LlmAccountUsageService extends TypertRemoteService {
     const now = Date.now();
     let records: UsageRecord[] = [];
     try {
-      records = await sharedUsageLedger().read();
+      // 按窗口给下界：`today` 只需读今天那一个文件（120 → 1），这是最常见的路径；
+      // `all` 什么都不传（保留期内的全读）。期间还要读周期聚合，所以下界取两者更早者。
+      records = await sharedUsageLedger().read(readRangeFor(window, now));
     } catch (error) {
       // 台账读失败（磁盘权限、文件损坏）：给一份空报表 + 一行 warn，而不是让页面崩。
       console.warn("[dsh-llm-account] could not read the usage ledger:", error);
@@ -527,6 +558,16 @@ export class LlmAccountUsageService extends TypertRemoteService {
       resetAtOf: (vendor, account) => windows.get(`${vendor}\u0000${account}`)?.resetAt,
       spentOf: (vendor, account) => spent.get(`${vendor}\u0000${account}`),
     });
+  }
+
+  /**
+   * 清空用量台账。
+   *
+   * 只清内容、不删文件（见 `usage-ledger` 的 `clear`）：删文件的破坏性更大，而
+   * 「清空」的语义已经达成。二次确认在客户端做 —— 宿主侧不该替用户决定。
+   */
+  async usageClear(): Promise<void> {
+    await sharedUsageLedger().clear();
   }
 
   /** 取一家厂商的读口；没登记过就吵出来（静默返回空结果会伪装成「没有账号」）。 */

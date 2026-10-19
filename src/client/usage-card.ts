@@ -48,6 +48,13 @@ export interface UsageCardProps {
   loading?: boolean;
   /** 把 ref 翻成可读的账号名（容器给；缺省原样显示）。 */
   labelOf?: (vendor: string, account: string) => string;
+  /**
+   * 清空台账。
+   *
+   * 二次确认由**容器**用 `confirm()` 做（卡片是纯组件，不自己弹窗）；不传就没有这个
+   * 入口 —— 没有记录的空白页面上摆一个「清空」按钮毫无意义。
+   */
+  onClear?: () => void;
 }
 
 /** 千分位（数字是给人看的，别让人自己数位数）。 */
@@ -143,25 +150,22 @@ export function UsageCard(props: UsageCardProps): ReactElement {
   const { t, accounts, total } = props;
   const labelOf = props.labelOf ?? ((_vendor: string, account: string): string => account);
 
-  const windowTabs = createElement(
-    "div",
-    { "data-usage-windows": "true", className: CSS_CLASS.usageWindows },
-    ...WINDOWS.map((entry) =>
-      createElement(
-        "button",
-        {
-          key: entry.key,
-          type: "button",
-          "data-usage-window": entry.key,
-          "aria-pressed": props.window === entry.key,
-          className:
-            props.window === entry.key
-              ? `${CSS_CLASS.buttonGhost} ${CSS_CLASS.usageWindowActive}`
-              : CSS_CLASS.buttonGhost,
-          onClick: () => props.onWindow?.(entry.key),
-        },
-        t(entry.copy),
-      ),
+  /** 窗口按钮（含选中态）。抽成数组，好在同一个动作组里和「清空」并排。 */
+  const windowButtons: ReactElement[] = WINDOWS.map((entry) =>
+    createElement(
+      "button",
+      {
+        key: entry.key,
+        type: "button",
+        "data-usage-window": entry.key,
+        "aria-pressed": props.window === entry.key,
+        className:
+          props.window === entry.key
+            ? `${CSS_CLASS.buttonGhost} ${CSS_CLASS.usageWindowActive}`
+            : CSS_CLASS.buttonGhost,
+        onClick: () => props.onWindow?.(entry.key),
+      },
+      t(entry.copy),
     ),
   );
 
@@ -169,7 +173,27 @@ export function UsageCard(props: UsageCardProps): ReactElement {
     "header",
     { className: CSS_CLASS.usageHead },
     createElement("h2", null, t("usage.title")),
-    windowTabs,
+    createElement(
+      "div",
+      { "data-usage-windows": "true", className: CSS_CLASS.usageWindows },
+      ...windowButtons,
+      // 「清空」只在确实有记录、且容器给了动作时渲染。
+      ...(props.onClear === undefined || total.bucket.requests === 0
+        ? []
+        : [
+            createElement(
+              "button",
+              {
+                key: "clear",
+                type: "button",
+                "data-usage-clear": "true",
+                className: CSS_CLASS.buttonGhost,
+                onClick: () => props.onClear?.(),
+              },
+              t("usage.clear"),
+            ),
+          ]),
+    ),
   );
 
   // 失败的提示优先（「读不到」与「没有数据」是两件事）。

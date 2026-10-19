@@ -7,12 +7,12 @@
  * 2. **失败也要记**。成功率的分母是「尝试过的请求」；只记成功会让成功率永远是 100%。
  * 3. **落盘要能自愈**。文件损坏/半截写入时丢弃坏行、保留好行，绝不让统计把插件带崩。
  *
- * 存储形态：JSON Lines，一行一条 {@link UsageRecord}。追加写、按天切分，读的时候
- * 只读最近需要的文件。
+ * 存储形态：JSON Lines，一天一个文件（`usage-YYYY-MM-DD.jsonl`）。读取时**按文件名
+ * 预筛**——选「今日」只读今天那一个文件，不必把 120 天全扫一遍。
  * @module dsh-llm-account/src/core/usage-ledger
  */
-import { appendFile, mkdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import type { RequestOutcome, UsageRecord } from "./usage-stats";
 
@@ -21,6 +21,19 @@ function fileNameOf(at: number): string {
   const date = new Date(at);
   const pad = (value: number): string => String(value).padStart(2, "0");
   return `usage-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}.jsonl`;
+}
+
+/**
+ * 从文件名取出它覆盖的那一天起点（本地时区，与 {@link fileNameOf} 一致）。
+ * @param name - 文件名。
+ * @returns 当天零点（epoch 毫秒）；名字不合规时为 `undefined`。
+ */
+function dayOfFile(name: string): number | undefined {
+  const match = /^usage-(\d{4})-(\d{2})-(\d{2})\.jsonl$/u.exec(name);
+  if (match === null) return undefined;
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day), 0, 0, 0, 0);
+  return Number.isNaN(date.getTime()) ? undefined : date.getTime();
 }
 
 /** 保留多少天的历史文件（超出不读、也不删 —— 删除是用户的决定）。 */
@@ -40,12 +53,24 @@ export interface RecordInput {
   failureKind?: string;
 }
 
+/** 读台账时的范围（都可选；省略即全部保留期）。 */
+export interface ReadRange {
+  /** 只要这个时刻之后（含）的记录。 */
+  since?: number | undefined;
+  /** 只要这个时刻之前（含）的记录。 */
+  until?: number | undefined;
+}
+
 /** 台账句柄。 */
 export interface UsageLedger {
   /** 记一条（异步落盘；返回的 promise 不需要 await，await 只用于测试）。 */
   record(input: RecordInput): Promise<void>;
-  /** 读全部记录（按时间升序）。 */
-  read(): Promise<UsageRecord[]>;
+  /**
+   * 读记录（按时间升序）。
+   *
+   * @param range - 时间范围；给了 `since` 就会跳过更早的**文件**（不是读进来再过滤）。
+   */
+  read(range?: ReadRange): Promise<UsageRecord[]>;
   /** 清空台账（用户显式操作；文件保留为空文件而不是删除）。 */
   clear(): Promise<void>;
 }
@@ -87,6 +112,64 @@ function parseLine(line: string): UsageRecord | undefined {
   const failureKind = row["failureKind"];
   if (typeof failureKind === "string" && failureKind !== "") record.failureKind = failureKind;
   return record;
+}
+
+/**
+ * 读台账里的记录。
+ *
+ * 先按**文件名**筛掉不可能有命中的日期，再解析剩下的文件 —— 这是「切到今日」这条
+ * 最常见路径上唯一值得做的优化：从 120 个文件降到 1 个。
+ * @param directory - 存放目录。
+ * @param now - 时钟（测试注入）。
+ * @param range - 时间范围。
+ * @returns 记录（按时间升序）。
+ */
+async function readRecords(directory: string, now: () => number, range: ReadRange = {}): Promise<UsageRecord[]> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return [];
+  }
+  const retentionCutoff = now() - USAGE_RETENTION_DAYS * 86_400_000;
+  const since = range.since === undefined ? retentionCutoff : Math.max(range.since, retentionCutoff);
+  const until = range.until;
+  const dayStartOf = (at: number): number => {
+    const date = new Date(at);
+    date.setHours(0, 0, 0, 0);
+    return date.getTime();
+  };
+  const firstDay = dayStartOf(since);
+  const lastDay = until === undefined ? undefined : dayStartOf(until);
+  const files = names
+    .filter((name) => dayOfFile(name) !== undefined)
+    .filter((name) => {
+      const day = dayOfFile(name)!;
+      // 该文件覆盖 [day, day+1)；与 [firstDay, lastDay+1) 有交集才读。
+      if (day < firstDay) return false;
+      if (lastDay !== undefined && day > lastDay) return false;
+      return true;
+    })
+    .sort()
+    .slice(-USAGE_RETENTION_DAYS);
+  const records: UsageRecord[] = [];
+  for (const name of files) {
+    let text: string;
+    try {
+      text = await readFile(join(directory, name), "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      const record = parseLine(line);
+      if (record === undefined) continue;
+      if (record.at < since) continue;
+      if (until !== undefined && record.at > until) continue;
+      records.push(record);
+    }
+  }
+  records.sort((left, right) => left.at - right.at);
+  return records;
 }
 
 /**
@@ -136,43 +219,15 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
       await writeChain;
     },
 
-    async read(): Promise<UsageRecord[]> {
+    async read(range?: ReadRange): Promise<UsageRecord[]> {
       await ensureDirectory().catch(() => undefined);
-      const { readdir } = await import("node:fs/promises");
-      let names: string[];
-      try {
-        names = await readdir(directory);
-      } catch {
-        return [];
-      }
-      const cutoff = now() - USAGE_RETENTION_DAYS * 86_400_000;
-      const files = names
-        .filter((name) => /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u.test(name))
-        .sort()
-        .slice(-USAGE_RETENTION_DAYS);
-      const records: UsageRecord[] = [];
-      for (const name of files) {
-        let text: string;
-        try {
-          text = await readFile(join(directory, name), "utf8");
-        } catch {
-          continue;
-        }
-        for (const line of text.split("\n")) {
-          const record = parseLine(line);
-          // 只读窗口内的：更老的文件仍然保留，但统计不读（省时间）。
-          if (record !== undefined && record.at >= cutoff) records.push(record);
-        }
-      }
-      records.sort((left, right) => left.at - right.at);
-      return records;
+      return readRecords(directory, now, range ?? {});
     },
 
     async clear(): Promise<void> {
       // 保留文件、清空内容：避免「删文件」这类破坏性操作，也避免和并发写撞上。
       writeChain = writeChain.then(async () => {
         await ensureDirectory();
-        const { writeFile } = await import("node:fs/promises");
         await writeFile(pathOf(now()), "", "utf8");
       });
       await writeChain;
@@ -190,5 +245,5 @@ export function usageDirectoryOf(dataRoot: string): string {
 
 /** 确保目录存在（导出给装配层在启动时调用一次）。 */
 export async function ensureUsageDirectory(directory: string): Promise<void> {
-  await mkdir(dirname(join(directory, "x")), { recursive: true });
+  await mkdir(directory, { recursive: true });
 }

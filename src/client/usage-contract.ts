@@ -80,6 +80,8 @@ export const USAGE_METHODS = [
   "loginCancel",
   // 用量统计（跨厂商：每账号自身周期 + 总账）
   "usageReport",
+  // 清空用量台账（用户显式操作，页面会先二次确认）
+  "usageClear",
 ] as const;
 
 /** 一个方法名。 */
@@ -574,6 +576,7 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     // 用量统计：**跨厂商**的一份报表（总账 + 每账号周期）。不带 vendor 参数，
     // 因为它读的是一本共享台账（见 `vendors/usage-store`）。
     makeDescriptor("usageReport", "UsageReport", parseUsageReport, [WINDOW_PARAM]),
+    makeDescriptor("usageClear", "Void", parseVoid, []),
   ];
 }
 
@@ -586,6 +589,8 @@ export interface UsageNamespace {
    * 可选：老版本宿主侧没实现它时，页面不该因此崩 —— 卡片整体不渲染即可。
    */
   usageReport?(window: UsageWindowView): Promise<UsageReportView>;
+  /** 清空用量台账（不可撤销；页面负责二次确认）。 */
+  usageClear?(): Promise<void>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   models?(vendor: string): Promise<CatalogModelsResult>;

@@ -197,3 +197,53 @@ it("窗口按钮带上当前选中态，点它回调窗口键", () => {
   (buttons[1]!.props.onClick as () => void)();
   expect(calls).toEqual(["7d"]);
 });
+
+it("有记录且给了动作时才渲染「清空」；点了回调它", () => {
+  const calls: number[] = [];
+  const withRecords = render({}, { onClear: () => calls.push(1) });
+  const clear = elementsOf(withRecords).find((element) => element.props["data-usage-clear"] !== undefined)!;
+  expect(clear).toBeDefined();
+  (clear.props.onClick as () => void)();
+  expect(calls).toEqual([1]);
+
+  // 没给动作 → 不渲染（纯组件不自作主张弹确认框）。
+  expect(elementsOf(render()).some((element) => element.props["data-usage-clear"] !== undefined)).toBe(false);
+
+  // 没有记录 → 也不渲染（空页面上摆个清空按钮毫无意义）。
+  const empty = bucketOf({ requests: 0, ok: 0, failed: 0 });
+  const emptyTree = render({ accounts: [], total: { window: "today", bucket: empty, byVendor: [] } }, { onClear: () => calls.push(2) });
+  expect(elementsOf(emptyTree).some((element) => element.props["data-usage-clear"] !== undefined)).toBe(false);
+});
+
+it("配额没给美元时账号节不画「本周期已花」那一行", () => {
+  const tree = render();
+  expect(elementsOf(tree).some((element) => element.props["data-usage-row"] === "spent")).toBe(false);
+});
+
+it("额度给了美元金额时账号节显示「本周期已花」", () => {
+  const tree = render({
+    accounts: [
+      {
+        vendor: "commandcode",
+        account: "a",
+        period: { kind: "five-hour", key: "k", start: 0, fromResetAt: true },
+        bucket: bucketOf(),
+        windowed: bucketOf(),
+        spent: 3.2,
+        spentWindow: "fiveHour",
+      },
+    ],
+  });
+  const spentRow = elementsOf(tree).find((element) => element.props["data-usage-row"] === "spent")!;
+  expect(spentRow).toBeDefined();
+  expect(textsOf(spentRow).join(" ")).toContain("$3.20");
+});
+
+it("总账给出最近一次请求时间时显示成相对时间", () => {
+  const at = Date.now() - 120_000;
+  const tree = render({ total: { window: "today", bucket: bucketOf(), byVendor: [], lastAt: at } });
+  const lastRow = elementsOf(tree).find((element) => element.props["data-usage-row"] === "last-at")!;
+  expect(lastRow).toBeDefined();
+  const time = elementsOf(lastRow).find((element) => element.props["data-usage-last-at"] !== undefined)!;
+  expect(time.props.dateTime).toBe(new Date(at).toISOString());
+});

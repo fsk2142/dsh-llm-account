@@ -144,6 +144,8 @@ export type CopyKey =
   | "usage.spent"
   | "usage.spentWindow"
   | "usage.lastAt"
+  | "usage.clear"
+  | "usage.clearConfirm"
   | "usage.officialCost"
   | "usage.priceUnknown"
   | "usage.period"
@@ -477,6 +479,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.spent": "本周期已花",
     "usage.spentWindow": "{window} 窗口已用",
     "usage.lastAt": "最近一次请求",
+    "usage.clear": "清空",
+    "usage.clearConfirm": "清空全部用量记录？此操作不可撤销。",
     "usage.officialCost": "≈ 按 DeepSeek 官方价",
     "usage.priceUnknown": "未公开",
     "usage.period": "本周期",
@@ -798,6 +802,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.spent": "Spent this period",
     "usage.spentWindow": "{window} window used",
     "usage.lastAt": "Last request",
+    "usage.clear": "Clear",
+    "usage.clearConfirm": "Clear all usage records? This cannot be undone.",
     "usage.officialCost": "≈ at DeepSeek list price",
     "usage.priceUnknown": "not published",
     "usage.period": "This period",

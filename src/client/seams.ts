@@ -1326,6 +1326,23 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
     const [usageStatsProblem, setUsageStatsProblem] = useState<string | undefined>(undefined);
     const [usageLoading, setUsageLoading] = useState(true);
+    /**
+     * 清单刷新计数：**读一次**用。
+     *
+     * 为什么不依赖「请求完成」事件：客户端没有可订阅的回合结束事件（宿主侧
+     * `session/event` 只在 host 插件上下文里可用），所以做不到「发完立刻刷新」。
+     * 退一步用「停留期间定时重读」：设置页会开着好一会儿，30 秒一次足够让数字跟上，
+     * 又不会像 1 秒轮询那样白烧 IO。页面不可见时不读（与侧边栏同一条纪律）。
+     */
+    const [usageTick, setUsageTick] = useState(0);
+    useEffect(() => {
+      const timer = setInterval(() => {
+        const dom = domDocument();
+        if (dom?.visibilityState === "hidden") return;
+        setUsageTick((current) => current + 1);
+      }, 30_000);
+      return () => clearInterval(timer);
+    }, []);
     useEffect(() => {
       let alive = true;
       const api = usageNamespace(ctx);
@@ -1354,7 +1371,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       return () => {
         alive = false;
       };
-    }, [usageWindow, accountRevision]);
+    }, [usageWindow, accountRevision, usageTick]);
     const usageCard =
       usageReport === undefined && usageStatsProblem === undefined && !usageLoading
         ? undefined
@@ -1378,6 +1395,16 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
               byVendor: [],
             },
             onWindow: setUsageWindow,
+            // 清空：先二次确认（不可撤销），成功后立即重读。
+            onClear: () => {
+              // `confirm` 只在浏览器里有；没有它的环境（测试/非浏览器宿主）一律按「不确认」，
+              // 免得一个不可撤销的操作在没有确认框的地方被触发。
+              const ask = (globalThis as { confirm?: (message: string) => boolean }).confirm;
+              if (typeof ask !== "function" || ask.call(globalThis, t("usage.clearConfirm")) !== true) return;
+              const api = usageNamespace(ctx);
+              if (api?.usageClear === undefined) return;
+              void api.usageClear().then(() => setUsageTick((current) => current + 1));
+            },
             ...(usageStatsProblem === undefined ? {} : { failure: usageStatsProblem }),
             ...(usageLoading ? { loading: true } : {}),
             labelOf: (vendor, account) => accountLabelOf(statuses[vendor]?.accounts ?? [], account),

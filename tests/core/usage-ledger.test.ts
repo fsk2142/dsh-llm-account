@@ -91,3 +91,36 @@ it("目录不存在时读回空数组（不是抛错）", async () => {
   const ledger = createUsageLedger(join(tmpdir(), "dsh-usage-does-not-exist-xyz"), () => Date.now());
   expect(await ledger.read()).toEqual([]);
 });
+
+it("按 since 预筛文件：跨天的记录只读命中的那几个文件", async () => {
+  const directory = await tempDirectory();
+  // 三天各写一条（用固定「现在」= 第三天）。
+  const day1 = new Date(2026, 9, 17, 12, 0, 0).getTime();
+  const day2 = new Date(2026, 9, 18, 12, 0, 0).getTime();
+  const day3 = new Date(2026, 9, 19, 12, 0, 0).getTime();
+  const ledger = createUsageLedger(directory, () => day3);
+  await ledger.record({ vendor: "v", account: "d1", at: day1, outcome: "success" });
+  await ledger.record({ vendor: "v", account: "d2", at: day2, outcome: "success" });
+  await ledger.record({ vendor: "v", account: "d3", at: day3, outcome: "success" });
+
+  // 全部：三条都在（保留期内）。
+  expect((await ledger.read()).map((record) => record.account)).toEqual(["d1", "d2", "d3"]);
+  // 从第二天零点起：只剩 d2、d3（d1 的文件被文件名筛掉）。
+  const fromDay2 = new Date(2026, 9, 18, 0, 0, 0).getTime();
+  expect((await ledger.read({ since: fromDay2 })).map((record) => record.account)).toEqual(["d2", "d3"]);
+  // 只要第三天：只剩 d3。
+  const fromDay3 = new Date(2026, 9, 19, 0, 0, 0).getTime();
+  expect((await ledger.read({ since: fromDay3 })).map((record) => record.account)).toEqual(["d3"]);
+});
+
+it("until 也参与预筛（区间查询不会读到更晚的文件）", async () => {
+  const directory = await tempDirectory();
+  const day1 = new Date(2026, 9, 17, 12, 0, 0).getTime();
+  const day3 = new Date(2026, 9, 19, 12, 0, 0).getTime();
+  const ledger = createUsageLedger(directory, () => day3);
+  await ledger.record({ vendor: "v", account: "d1", at: day1, outcome: "success" });
+  await ledger.record({ vendor: "v", account: "d3", at: day3, outcome: "success" });
+
+  const untilDay2 = new Date(2026, 9, 18, 23, 59, 0).getTime();
+  expect((await ledger.read({ until: untilDay2 })).map((record) => record.account)).toEqual(["d1"]);
+});
