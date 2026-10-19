@@ -32,7 +32,8 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fix:desktop-cookies": "node scripts/clear-desktop-auth-cookies.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
