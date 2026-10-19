@@ -1354,3 +1354,37 @@ it("侧边栏跟随 lastUsed：报表给了最近一次的账号就用它（不�
   expect(text).toContain("OD");
   expect(text).not.toContain("CC");
 });
+
+it("重新打开侧边栏时首帧就显示上次那家（不再先闪 commandcode）", async () => {
+  // 用户 2026-10-19：「为什么每次默认打开就是显示 commandcode 而不是上一次的缓存」。
+  // 根因：`lastUsed` 的 useState 初值是 undefined，要等一次异步 usageReport 才回来，
+  // 于是首帧只能显示清单第一个（commandcode），随后才跳过去。
+  // 现在初值取自模块级缓存，重新挂载时首帧就是上次那家。
+  const mini = await runtime();
+  await freshSeams();
+  const host = fakeHost(mini, {
+    commandcodeToggle: true,
+    accounts: {
+      commandcode: [{ ref: "cc-1", label: "CC", configured: true, active: true }],
+      opendesign: [{ ref: "od-1", label: "OD", configured: true, active: true }],
+    },
+    usageReport: () => ({
+      ...reportFor("cc-1"),
+      lastUsed: { vendor: "opendesign", account: "od-1", model: "deepseek-v4.1-flash", at: Date.now() },
+    }),
+  });
+  const { card } = await applyLikeHost(host);
+
+  // 第一次挂载：读回 lastUsed 并写进模块级缓存。
+  const first = mini.mount(card);
+  await settleSim(mini);
+  expect(textsOfSim(first.tree()).join(" ")).toContain("OD");
+  first.unmount();
+
+  // 重新挂载（模拟刷新页面 / 面板切换）：**不用等异步读**，首帧就该是 OD。
+  const second = mini.mount(card);
+  const firstFrame = textsOfSim(second.tree()).join(" ");
+  expect(firstFrame).toContain("OD");
+  expect(firstFrame).not.toContain("CC");
+  second.unmount();
+});

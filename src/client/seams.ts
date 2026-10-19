@@ -2042,7 +2042,14 @@ export function createSidebarCardView(options: {
     // 一份合并的视图状态：要显示的状态 + 最近一次读的失败 + 是否在显示旧数据。
     // 合成一个 state（而不是三个）是为了让「失败时保留上一份好数据」在一次 setState 里
     // 原子完成 —— 三个各自 set 的中间态会闪一下「有数据但没标过期」。
-    const [view, setView] = useState<{ status?: VendorUsageStatus; failure?: string; stale: boolean }>({ stale: false });
+    // 初值取缓存里**当前那家**的读数：statuses 只管清单，真正渲染的是 iew.status。
+    // 两者都要有缓存，首帧才不会空白（2026-10-19：lastUsed 与 statuses 都加了缓存，
+    // 但首帧仍显示「还没有请求」—— 漏的就是这一个）。
+    const [view, setView] = useState<{ status?: VendorUsageStatus; failure?: string; stale: boolean }>(() => {
+      const target0 = sidebarCurrentTarget(sidebarTargetsOf(sidebarVendorList(), sidebarStatuses(), { keys: sidebarAccountKeys(), configured: sidebarSelectionConfigured() }), sidebarLastUsed());
+      const cached = target0 === undefined ? undefined : sidebarStatuses()[target0.vendor];
+      return cached === undefined ? { stale: false } : { status: cached, stale: true };
+    });
     // 渲染期间不重读的两个可变值（引用：不触发渲染，只在读取/排程时被读）。
     const inFlight = useRef(false);
     const failures = useRef(0);
@@ -2060,15 +2067,19 @@ export function createSidebarCardView(options: {
      * 与 `view` 的分工：`view` 是「当前该显示什么」（只有一家、一次读数）；这里是
      * 「各家的账号表现在长什么样」（用于算出轮播清单）。
      */
-    const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
+    // 初值同样取模块级缓存：statuses 也是异步读回来的，没有它首帧连账号列表都没有，
+    // 只能显示「还没有请求」——比显示错账号更让人困惑。
+    const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>(() => sidebarStatuses());
     /**
      * **最近一次请求**是哪个账号（侧边栏跟随当前会话）。
      *
      * 从用量报表的 `lastUsed` 来（宿主侧从台账算好）。它比轮播更贴近用户预期：
      * 用户在一个会话里发消息，侧边栏就该显示那个会话正在用的账号。
      */
+    // 初值取**模块级缓存**：侧边栏重新挂载（刷新页面 / 面板切换）时首帧就能显示上次那家，
+    // 而不是先闪一下清单第一个（commandcode）再跳过去（2026-10-19 报障）。
     const [lastUsed, setLastUsed] = useState<{ vendor: string; account: string; model: string; at: number } | undefined>(
-      undefined,
+      () => sidebarLastUsed(),
     );
     /**
      * 轮播清单的勾选：`keys` 是 `vendor:ref`，`configured` 表示用户是否显式配置过。
@@ -2143,7 +2154,12 @@ export function createSidebarCardView(options: {
           return;
         }
         // 这次读数同时刷新「该家的账号表」——清单据此重建（账号增减都能跟上）。
-        setStatuses((current) => ({ ...current, [readVendor]: next }));
+        setStatuses((current) => {
+          const merged = { ...current, [readVendor]: next };
+          // 写穿缓存：下一次挂载的首帧要用它（见 sidebarStatuses）。
+          noteSidebarStatuses(merged);
+          return merged;
+        });
         if (next.failures.length > 0) {
           failures.current += 1;
           // 原文直接交给卡片（`failureText` 在渲染处翻人话，原文留在 data 属性上）：
@@ -2195,6 +2211,8 @@ export function createSidebarCardView(options: {
           if (!live || !detail.ok) return;
           const report = reportOf(detail.value);
           setLastUsed(report?.lastUsed);
+          // 同时写进模块级缓存：下一次挂载的首帧要用它（见 sidebarLastUsed）。
+          noteLastUsed(report?.lastUsed);
         },
       );
       return () => {
@@ -2220,7 +2238,11 @@ export function createSidebarCardView(options: {
       for (const name of vendors) {
         void readStatusDetail(usage, name).then(({ status }) => {
           if (cancelled || status === undefined) return;
-          setStatuses((current) => ({ ...current, [name]: status }));
+          setStatuses((current) => {
+            const merged = { ...current, [name]: status };
+            noteSidebarStatuses(merged);
+            return merged;
+          });
           if (completeReading(status)) statusReadings.put(name, status);
         });
       }
@@ -2710,6 +2732,61 @@ let sidebarAccountKeysValue: string[] = [];
 /** 轮播清单是否被显式配置过（区分「没配 = 全部」与「配成空 = 一个都不要」）。 */
 let sidebarSelectionConfiguredValue = false;
 
+/**
+ * **上一次读到的「最近一次请求的账号」**（模块级，跨挂载保留）。
+ *
+ * 为什么需要：侧边栏每次打开（面板重挂、刷新页面、面板切换）都会重新挂载组件，而
+ * `lastUsed` 要等一次异步 `usageReport` 才回来。没有这份缓存时**首帧**只能显示清单
+ * 第一个（commandcode），随后才跳到真正在用的那家 —— 用户看到的就是「每次默认都是
+ * commandcode」（2026-10-19 报障）。
+ *
+ * 与其它侧边栏模块级状态同一条纪律：同步可读，复位只给测试用。
+ */
+/**
+ * **上一次读到的各厂商读数**（模块级，跨挂载保留）。
+ *
+ * 与 {@link lastUsedValue} 同一个理由：侧边栏重新挂载时首帧什么都还没有，
+ * 只能显示「还没有请求」——连账号名都出不来。缓存上一次的读数让它首帧就有内容。
+ */
+let statusesValue: Record<string, VendorUsageStatus | undefined> = {};
+
+/**
+ * 上一次读到的各厂商读数（**同步**；从没读过时为空对象）。
+ * @returns 缓存的读数（键是厂商 id）。
+ */
+export function sidebarStatuses(): Record<string, VendorUsageStatus | undefined> {
+  return statusesValue;
+}
+
+/**
+ * 记下一次各厂商读数（每次轮询/补读回来后调用）。
+ * @param value - 新的读数映射。
+ */
+export function noteSidebarStatuses(value: Record<string, VendorUsageStatus | undefined>): void {
+  statusesValue = { ...value };
+}
+
+let lastUsedValue: { vendor: string; account: string; model: string; at: number } | undefined;
+
+/**
+ * 上一次读到的「最近一次请求的账号」（**同步**；没有时为 `undefined`）。
+ *
+ * 组件用它作 `useState` 的初值，于是首帧就显示上次那家，不会先闪一下清单第一个。
+ * @returns 缓存的读数。
+ */
+export function sidebarLastUsed(): { vendor: string; account: string; model: string; at: number } | undefined {
+  return lastUsedValue;
+}
+
+/**
+ * 记下一次「最近一次请求的账号」（读回来后调用）。
+ * @param value - 新的读数；`undefined` 表示这次没读到（保留旧值更好：首帧仍然有东西可显示）。
+ */
+export function noteLastUsed(value: { vendor: string; account: string; model: string; at: number } | undefined): void {
+  if (value !== undefined) lastUsedValue = value;
+}
+
+
 /** 当前侧边栏厂商的设置文档值（轮询间隔等设置类控件从这里取，见 `quotaRefreshMs`）。 */
 let sidebarVendorSettingsValue: Record<string, unknown> | undefined;
 
@@ -2909,6 +2986,9 @@ export function resetSeams(): void {
   sidebarVendorsValue = [];
   sidebarAccountKeysValue = [];
   sidebarSelectionConfiguredValue = false;
+  // 首帧缓存也要复位：不复位会让上一条用例的「最近使用」漏到下一条（实测会误导断言）。
+  lastUsedValue = undefined;
+  statusesValue = {};
   sidebarVendorsListeners.clear();
   sidebarVendorSettingsValue = undefined;
   sidebarVendorSeededValue = false;
