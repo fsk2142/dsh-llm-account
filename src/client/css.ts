@@ -582,10 +582,24 @@ export const PAGE_CSS = `
 .dsl-marks { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px;
   color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
 
-/* ═══ 中栏仪表盘 ═══ */
+/* ═══ 中栏仪表盘 ═══
+ *
+ * **必须能滚动**（用户 2026-10-19：「打开用量面板后无法滚动下滑」）：面板内容随账号数无限
+ * 增长（每个账号一段额度 + 用量块），而中栏高度是固定的。给容器高度上限并让它自己滚 ——
+ * 否则内容被裁掉、又没有滚动条，后面的账号根本看不到。
+ *
+ * 收缩的必要条件：默认 min-height 是 auto，会撑破父容器，于是 overflow 永远不生效 ——
+ * 这是「加了 overflow 也不能滚」最常见的原因。 */
 .dsl-dashboard { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box;
   max-width: 760px; padding: 16px 20px 32px; color: var(--dsw-alias-label-primary);
-  font-size: 14px; line-height: 22px; }
+  font-size: 14px; line-height: 22px;
+  max-height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--dsw-alias-border-l3) transparent; }
+.dsl-dashboard::-webkit-scrollbar { width: 10px; }
+.dsl-dashboard::-webkit-scrollbar-track { background: transparent; }
+.dsl-dashboard::-webkit-scrollbar-thumb { border-radius: 999px; border: 3px solid transparent;
+  background-clip: content-box; background-color: var(--dsw-alias-border-l3); }
+.dsl-dashboard::-webkit-scrollbar-thumb:hover { background-color: var(--dsw-alias-label-tertiary); }
 .dsl-dashboard > header { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .dsl-dashboard > header > h2 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 16px;
   font-weight: 500; line-height: 24px; }

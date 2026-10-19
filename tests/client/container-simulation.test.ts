@@ -1326,3 +1326,31 @@ it("opendesign 也参与侧边栏（旧版只开 commandcode 时它永远不显�
   expect(cardView.tree()).not.toBeNull();
   vi.useRealTimers();
 });
+
+it("侧边栏跟随 lastUsed：报表给了最近一次的账号就用它（不再固定清单第一个）", async () => {
+  // 用户 2026-10-19 报障：「侧边栏一直固定是 commandcode」。
+  // 根因：`reportOf` 重建报表对象时**丢了 `lastUsed`**，客户端永远拿不到，
+  // 于是每次都退回清单第一个。这条测试从远程读数一路断言到卡片显示。
+  const mini = await runtime();
+  await freshSeams();
+  const host = fakeHost(mini, {
+    commandcodeToggle: true,
+    accounts: {
+      commandcode: [{ ref: "cc-1", label: "CC", configured: true, active: true }],
+      opendesign: [{ ref: "od-1", label: "OD", configured: true, active: true }],
+    },
+    usageReport: () => ({
+      ...reportFor("cc-1"),
+      // 关键：最近一次请求是 opendesign 的 od-1，且**刚刚**（一定新鲜）。
+      lastUsed: { vendor: "opendesign", account: "od-1", model: "deepseek-v4.1-flash", at: Date.now() },
+    }),
+  });
+  const { card } = await applyLikeHost(host);
+  const cardView = mini.mount(card);
+  await settleSim(mini);
+
+  const text = textsOfSim(cardView.tree()).join(" ");
+  // 显示的是 opendesign 的账号，不是清单第一个（commandcode 的 CC）。
+  expect(text).toContain("OD");
+  expect(text).not.toContain("CC");
+});

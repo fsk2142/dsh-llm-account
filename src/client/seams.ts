@@ -793,6 +793,7 @@ function reportOf(value: UsageReportView | undefined): UsageReportView | undefin
     // 总账缺失：账号明细仍然可用（界面上只用得到 `accounts`），补一个空总账。
     return {
       accounts,
+      ...(value.lastUsed === undefined ? {} : { lastUsed: value.lastUsed }),
       total: {
         window: USAGE_REPORT_WINDOW,
         bucket: {
@@ -818,6 +819,10 @@ function reportOf(value: UsageReportView | undefined): UsageReportView | undefin
       byVendor: Array.isArray(total.byVendor) ? total.byVendor : [],
       ...(typeof total.lastAt === "number" && Number.isFinite(total.lastAt) ? { lastAt: total.lastAt } : {}),
     },
+    // **必须原样带上**：这个函数会重建对象，漏掉一个字段就等于把它抹掉。
+    // 曾经漏了 lastUsed —— 客户端永远拿不到「最近一次请求的账号」，侧边栏因此
+    // 一直显示清单第一个（commandcode），opendesign 永远出不来（2026-10-19 报障）。
+    ...(value.lastUsed === undefined ? {} : { lastUsed: value.lastUsed }),
   };
 }
 
