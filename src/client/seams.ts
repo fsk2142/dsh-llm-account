@@ -1345,31 +1345,46 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     }, []);
     useEffect(() => {
       let alive = true;
-      const api = usageNamespace(ctx);
-      if (api?.usageReport === undefined) {
-        // 宿主侧没提供这个接口（旧版本）：不渲染卡片，也不报错。
-        setUsageLoading(false);
-        setUsageReport(undefined);
-        return () => {
-          alive = false;
-        };
-      }
-      setUsageLoading(true);
-      void api.usageReport(usageWindow).then(
-        (report) => {
-          if (!alive) return;
-          setUsageReport(report);
-          setUsageStatsProblem(undefined);
+      const load = (): void => {
+        if (!alive) return;
+        const api = usageNamespace(ctx);
+        if (api === undefined) {
+          // 远程面**还没挂上**（`usageNamespace` 走懒挂载：挂载完成才有命名空间）。
+          // 保持 loading，等下面的 `onUsageReady` 在挂载完成时再调一次 —— 否则卡片
+          // 会永久不出现（首次渲染几乎总是早于挂载完成）。
+          setUsageLoading(true);
+          return;
+        }
+        if (api.usageReport === undefined) {
+          // 命名空间在、但没有这个方法：宿主版本太旧或本次发布没带它。这时**确定**没有，
+          // 收起 loading 且不渲染卡片（不是「还在等」）。
           setUsageLoading(false);
-        },
-        (error: unknown) => {
-          if (!alive) return;
-          setUsageStatsProblem(error instanceof Error ? error.message : String(error));
-          setUsageLoading(false);
-        },
-      );
+          setUsageReport(undefined);
+          return;
+        }
+        setUsageLoading(true);
+        void api.usageReport(usageWindow).then(
+          (report) => {
+            if (!alive) return;
+            setUsageReport(report);
+            setUsageStatsProblem(undefined);
+            setUsageLoading(false);
+          },
+          (error: unknown) => {
+            if (!alive) return;
+            setUsageStatsProblem(error instanceof Error ? error.message : String(error));
+            setUsageLoading(false);
+          },
+        );
+      };
+      load();
+      // 远程面挂载完成时补读一次（与侧边栏卡片、仪表盘同一条纪律）。
+      const offReady = onUsageReady(ctx, (namespace) => {
+        if (namespace !== undefined) load();
+      });
       return () => {
         alive = false;
+        offReady();
       };
     }, [usageWindow, accountRevision, usageTick]);
     const usageCard =

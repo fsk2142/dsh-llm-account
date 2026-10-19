@@ -348,6 +348,10 @@ export function UsageCard(props: UsageCardProps): ReactElement {
       ? createElement("p", { "data-usage-empty": "true", className: CSS_CLASS.note }, t("usage.empty"))
       : null;
 
+  // 加载中**不画数据区**：否则会先闪一屏全 0 的指标卡，看起来像「用量就是 0」，
+  // 等真实数字到了再跳一次 —— 那比只显示「正在读取」更让人怀疑数据。
+  const showData = props.loading !== true;
+
   return createElement(
     "section",
     { "data-card": "usage", className: CSS_CLASS.card },
@@ -355,15 +359,19 @@ export function UsageCard(props: UsageCardProps): ReactElement {
     failure,
     loading,
     empty,
-    accounts.length === 0
-      ? null
-      : createElement(
-          "div",
-          { className: CSS_CLASS.usageGroup },
-          createElement("h3", null, t("usage.perAccount")),
-          ...perAccount,
-        ),
-    total.bucket.requests === 0 && accounts.length > 0 ? null : totalSection,
+    ...(showData
+      ? [
+          accounts.length === 0
+            ? null
+            : createElement(
+                "div",
+                { key: "accounts", className: CSS_CLASS.usageGroup },
+                createElement("h3", null, t("usage.perAccount")),
+                ...perAccount,
+              ),
+          total.bucket.requests === 0 && accounts.length > 0 ? null : totalSection,
+        ]
+      : []),
   );
 }
 
