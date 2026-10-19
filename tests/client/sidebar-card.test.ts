@@ -10,6 +10,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import { dictionaryOf } from "../../src/client/copy";
 import { createPageState, sidebarQuotaEnabled, sidebarVendorOf } from "../../src/client/page-state";
+import { quotaResetDateText } from "../../src/client/quota";
 import { createSidebarCardController } from "../../src/client/seams";
 import { SidebarCard } from "../../src/client/sidebar-card";
 import { VENDORS } from "../../src/client/shell";
@@ -299,4 +300,48 @@ it("accounts 不是数组时也不崩（跨边界的半成品载荷）", () => {
     expect(() => renderCard(status)).not.toThrow();
     expect(textsOf(renderCard(status)).join(" ")).toContain("还没有请求经过这个账号");
   }
+});
+
+it("重置时间用日期格式，不再写「今天/明天」", () => {
+  // 用户 2026-10-19：「小时那个也用日期表示，不用明天这种」。两行上下并排时相对说法对不齐。
+  const now = new Date(2026, 9, 19, 15, 0, 0);
+  const laterToday = new Date(2026, 9, 19, 20, 0, 0).getTime();
+  const nextWeek = new Date(2026, 9, 25, 10, 0, 0).getTime();
+  // 同一天：不是「今天 20:00」，而是「10-19 20:00」。
+  expect(quotaResetDateText(laterToday, now.getTime())).toBe("10-19 20:00");
+  expect(quotaResetDateText(nextWeek, now.getTime())).toBe("10-25 10:00");
+  // 跨年要带年份，否则 `01-05` 会被误读为已经过去。
+  const nextYear = new Date(2027, 0, 5, 8, 30, 0).getTime();
+  expect(quotaResetDateText(nextYear, now.getTime())).toBe("2027-01-05 08:30");
+  // 缺失/非法一律 undefined（不猜成现在）。
+  expect(quotaResetDateText(undefined, now.getTime())).toBeUndefined();
+  expect(quotaResetDateText(0, now.getTime())).toBeUndefined();
+});
+
+it("两条进度条共享同一套列宽（对齐：grid 定义在外层容器上）", () => {
+  const tree = renderCard(
+    statusOf({
+      effective: { ref: "a", at: 1 },
+      accounts: [
+        row("a", {
+          label: "A",
+          effective: true,
+          quota: {
+            windows: [
+              { key: "5h", percent: 20, resetAt: Date.now() + 3_600_000 },
+              { key: "weekly", percent: 50, resetAt: Date.now() + 86_400_000 },
+            ],
+            failures: [],
+          },
+        }),
+      ],
+    }),
+  );
+  // 外层有一个 grid 容器，两行都在它里面（列宽因此共享）。
+  const container = elementsOf(tree).find((element) => element.props["data-sidebar-windows"] === "true");
+  expect(container).toBeDefined();
+  const rowsInContainer = elementsOf(container!).filter(
+    (element) => element.props["data-sidebar-row"] !== undefined,
+  );
+  expect(rowsInContainer.map((element) => element.props["data-sidebar-row"])).toEqual(["primary", "secondary"]);
 });

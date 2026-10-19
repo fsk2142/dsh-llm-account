@@ -549,26 +549,26 @@ export const PAGE_CSS = `
   text-wrap: nowrap; }
 /* 额度行：**一条一行**，「标签 — 进度条 — 重置时间」横向三样（用户 2026-10-19 定稿）。
  *
- * 为什么不再并排：侧边栏只有两百多像素宽，并排后档位名要截断、重置时间完全放不下。
- * 横排一条一行既塞得下三样，也贴合「还剩多少 + 什么时候恢复」的阅读顺序。 */
-.dsl-sidebar-row-primary { display: flex; flex-direction: row; width: 100%; }
-.dsl-sidebar-row-secondary { display: flex; flex-direction: row; width: 100%; }
-/* 三列：标签固定宽度（「5 小时」「每周」），条吃掉剩余空间，重置时间靠右不被压缩。 */
-.dsl-sidebar-window { display: grid; grid-template-columns: auto minmax(40px, 1fr) auto;
-  align-items: center; gap: 8px; width: 100%; min-width: 0; }
+ * **对齐的关键**：列宽必须定义在**外层容器**上，不能每个行各写一套 —— 每一行是独立网格时，
+ * 「5 小时」与「每周」标签宽度不同，后两列的起点就会错开（用户报障「对齐一下两个进度条」）。
+ * 现在容器定义一次三列，每行用 display: contents 把子元素直接交给外层网格。 */
+.dsl-sidebar-row-primary,
+.dsl-sidebar-row-secondary { display: contents; }
+.dsl-sidebar-windows { display: grid; grid-template-columns: max-content minmax(40px, 1fr) max-content;
+  align-items: center; gap: 6px 8px; width: 100%; min-width: 0; }
+.dsl-sidebar-window { display: contents; }
 .dsl-sidebar-window-head { display: contents; }
 .dsl-sidebar-window-label { font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary);
   text-wrap: nowrap; }
-/* 重置时间：**两行都有**（用户要求第二行也显示）。等宽数字，短日期不抖。 */
-.dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
+/* 重置时间：两行都有。等宽数字 + 固定不换行，两行的右边界因此对齐。 */
+.dsl-sidebar-window-reset { font-size: 10px; line-height: 14px; justify-self: end;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
-/* 百分比数值不再单独一行：条已经表达了比例（见 sidebarMeter 的说明）。留着这条
- * 规则是为了兼容旧的 data-sidebar-window-value（万一别处还渲染它）。 */
+/* 百分比数值不再单独一行：条已经表达了比例（见 sidebarMeter 的说明）。 */
 .dsl-sidebar-window-value { display: none; }
 .dsl-sidebar-window[data-sidebar-window-level="error"] .dsl-sidebar-window-track {
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, var(--dsw-alias-border-l1)); }
 .dsl-sidebar-window-track { display: block; overflow: hidden; height: 6px; border-radius: 999px;
-  background: var(--dsw-alias-border-l1); min-width: 0; }
+  background: var(--dsw-alias-border-l1); min-width: 0; width: 100%; }
 .dsl-sidebar-foot { display: flex; flex-direction: row; gap: 8px; }
 .dsl-sidebar-foot > button { flex: 1 1 auto; }
 .dsl-sidebar .dsl-empty { padding: 10px; font-size: 12px; line-height: 18px; }
@@ -739,6 +739,7 @@ export const CSS_CLASS = {
   save: "dsl-save",
   sidebar: "dsl-sidebar",
   sidebarButton: "dsl-sidebar-button",
+  sidebarWindows: "dsl-sidebar-windows",
   sidebarRowPrimary: "dsl-sidebar-row-primary",
   sidebarRowSecondary: "dsl-sidebar-row-secondary",
   sidebarWindow: "dsl-sidebar-window",

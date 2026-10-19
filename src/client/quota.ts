@@ -208,6 +208,31 @@ export function quotaResetText(t: (key: string) => string, window: QuotaWindow):
 }
 
 /**
+ * 重置时刻的**日期**文案（侧边栏用）：`10-19 20:00`。
+ *
+ * 为什么与 {@link quotaResetText} 分开：那个用「今天 / 明天」这种相对说法（设置页与账号
+ * 卡片里读起来自然），但侧边栏两行上下并排时，「明天 20:00」与「10-25 10:00」混在一起
+ * 既不对齐也不好比较（用户 2026-10-19：「小时那个也用日期表示，不用明天这种」）。
+ * 统一成绝对日期后两行格式一致、宽窄稳定。
+ *
+ * 跨年时带上年份 —— 否则 `01-05` 会让人以为已经过去。
+ * @param at - 重置时刻（epoch 毫秒）。
+ * @param now - 现在（判断是否需要年份；缺省 `Date.now()`）。
+ * @returns `MM-DD HH:mm`（同年）或 `YYYY-MM-DD HH:mm`（跨年）；时刻不可用时 `undefined`。
+ */
+export function quotaResetDateText(at: number | undefined, now: number = Date.now()): string | undefined {
+  if (at === undefined || !Number.isFinite(at) || at <= 0) return undefined;
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  return sameYear ? `${month}-${day} ${time}` : `${date.getFullYear()}-${month}-${day} ${time}`;
+}
+
+/**
  * 套餐行的文案：`套餐 GOAT · 每月 $70.00 · 本期至 2026-11-14`。
  *
  * 三块独立存在、缺一就不出现：名称（表里没有时退回标识原文）、状态（`active` 是常态，

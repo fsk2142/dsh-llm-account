@@ -23,7 +23,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { CSS_CLASS, cls } from "./css";
 import { failureText } from "./failure-text";
 import { UsageIcon } from "./icons";
-import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaResetText, quotaWindowLabel } from "./quota";
+import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaResetDateText, quotaWindowLabel } from "./quota";
 import type { AccountUsageStatus, QuotaWindow, VendorUsageStatus } from "./usage-contract";
 
 /** 卡片属性。 */
@@ -194,17 +194,25 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
   // 一档都认不出来（旧宿主只给无键窗口）：用第一个能读的，不留空白。
   const rows = shown.length > 0 ? shown : windows.filter((item) => item.unlimited !== true).slice(0, 1);
   if (rows.length === 0) return [];
-  return rows.map((window, index) =>
+  // **外层网格**：三列定义在容器上，两行共享同一套列宽 —— 这是两条进度条对齐的前提
+  // （每行各写一套网格时，标签宽度不同会让后两列错开）。
+  return [
     createElement(
       "div",
-      {
-        key: window.key,
-        "data-sidebar-row": index === 0 ? "primary" : "secondary",
-        className: CSS_CLASS.sidebarRowPrimary,
-      },
-      sidebarMeter(t, window),
+      { key: "windows", "data-sidebar-windows": "true", className: CSS_CLASS.sidebarWindows },
+      ...rows.map((window, index) =>
+        createElement(
+          "div",
+          {
+            key: window.key,
+            "data-sidebar-row": index === 0 ? "primary" : "secondary",
+            className: CSS_CLASS.sidebarRowPrimary,
+          },
+          sidebarMeter(t, window),
+        ),
+      ),
     ),
-  );
+  ];
 }
 /**
  * 一档窗口的一行读数：**标签 — 进度条 — 重置时间**（横向三样，用户 2026-10-19 定稿）。
@@ -224,7 +232,9 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
   const unlimited = window.unlimited === true;
   const reading = quotaReading(window);
   const level = unlimited ? "unlimited" : remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
-  const reset = quotaResetText(t, window) ?? t("quota.resetUnknown");
+  // 日期格式（`10-19 20:00`）而不是「今天/明天」：两行上下并排时相对说法对不齐，
+  // 也不好比较（用户 2026-10-19：「小时那个也用日期表示，不用明天这种」）。
+  const reset = quotaResetDateText(window.resetAt) ?? t("quota.resetUnknown");
   const bar =
     meter === undefined || unlimited
       ? null
