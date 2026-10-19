@@ -51,8 +51,8 @@ import {
   type ModelEdit,
   type PageState,
   type VendorSnapshot,
-} from "./page-state";import type { LoginView } from "./account-card";
-import { isLastUsedFresh } from "../core/last-used";
+} from "./page-state";
+import type { LoginView } from "./account-card";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
@@ -2304,8 +2304,6 @@ export function createSidebarCardView(options: {
       t,
       status: view.status,
       ...(target === undefined ? {} : { accountRef: target.ref }),
-      // 是否在跟随「最近一次请求」（而不是轮播）—— 卡片据此标一句，措辞要诚实。
-      ...(lastUsed !== undefined && isLastUsedFresh(lastUsed.at, Date.now()) ? { following: true } : {}),
       ...(view.failure === undefined ? {} : { failure: view.failure }),
       ...(view.stale ? { stale: true } : {}),
       // 整张卡片点下去就打开用量面板（2026-10-19 用户要求：去掉卡片上那个「打开用量面板」

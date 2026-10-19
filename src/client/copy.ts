@@ -240,7 +240,6 @@ export type CopyKey =
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
-  | "sidebar.following"
   | "sidebar.noRequest"
   | "usage.failed"
   | "usage.failure.timeout"
@@ -525,7 +524,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "点击打开用量面板",
-    "sidebar.following": "跟随最近一次请求",
     "sidebar.noRequest": "还没有请求经过这个账号。",
     "usage.failed": "用量读取失败",
     "usage.failure.timeout": "读取超时",
@@ -805,7 +803,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Click to open the usage panel",
-    "sidebar.following": "Following the last request",
     "sidebar.noRequest": "No request has used this account yet.",
     "usage.failed": "Usage read failed",
     "usage.failure.timeout": "Timed out",
