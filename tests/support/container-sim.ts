@@ -127,13 +127,29 @@ export function installMiniReact(): MiniReact {
     return hook.value as { current: V };
   };
 
+  /**
+   * 渲染一轮，并校验 **Hook 数量与上一次渲染一致**。
+   *
+   * 这是 React #310（"Rendered more/fewer hooks than during the previous render"）的
+   * 等价检查。真机上它的表现是整棵子树被丢弃、页面一片空白；本夹具此前不比对数量，
+   * 于是「Hook 写在提前 return 之后」这类缺陷在测试里完全看不出来
+   * （2026-10-19 真实报障：设置条目在、点进去什么都没有）。
+   */
   const renderOnce = (instance: SimInstance): void => {
+    const previous = instance.hooks.length;
     instance.cursor = 0;
     rendering = instance;
     try {
       instance.tree = instance.component();
     } finally {
       rendering = undefined;
+    }
+    // 首次渲染没有「上一次」，不比对。之后每次都必须与上一次相同。
+    if (previous > 0 && instance.hooks.length !== previous) {
+      throw new Error(
+        `mini-react: rendered ${instance.hooks.length} hooks but the previous render used ${previous} — ` +
+          "a hook is being called after an early return (React error #310)",
+      );
     }
   };
 

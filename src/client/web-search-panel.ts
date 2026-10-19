@@ -287,6 +287,32 @@ function choiceOf(view: PanelView): WebSearchChoice {
   return mode;
 }
 
+/**
+ * 「有没有未保存改动」——纯函数，供 Hook 在任何提前 return 之前算出一个稳定的布尔值。
+ *
+ * 为什么单独抽出来：这份判定原先写在 `read === undefined` 的提前 return 之后，于是
+ * 读数到达前后参与渲染的 Hook 数量不同（React #310，设置页整块空白）。
+ * @param read - 已读到的面板状态。
+ * @param choiceDraft - 用户点选的来源（未点选为 `undefined`）。
+ * @param fieldDraft - 第三方来源的字段草稿。
+ * @param keyDraft - 第三方 Key 输入框的内容。
+ * @returns 有改动时为 `true`。
+ */
+function isDirtyDraft(
+  read: PanelRead,
+  choiceDraft: WebSearchChoice | undefined,
+  fieldDraft: Partial<WebSearchCustomDraft>,
+  keyDraft: string,
+): boolean {
+  const view = read.view;
+  if (view === undefined) return false;
+  return (
+    (choiceDraft !== undefined && choiceDraft !== choiceOf(view)) ||
+    Object.keys(fieldDraft).length > 0 ||
+    keyDraft.trim() !== ""
+  );
+}
+
 /** 切到某个来源的前提没满足时，给出人话原因；`undefined` = 可以切。 */
 function blockedReasonOf(
   selected: WebSearchChoice,
@@ -346,6 +372,17 @@ export function useWebSearchPanel(
     // 读取」变成死循环（refresh 自己读 ctx，行为上仍然跟着 ctx 走）。
   }, [ctx]);
 
+  // —— 所有 Hook 必须在任何提前 return 之前调用（React 的 Hook 顺序契约）——
+  //
+  // 这里曾经把 `onDirty` 的 effect 写在 `read === undefined` 的早退之后：首次渲染走早退，
+  // 数据到达后走完整路径，两次渲染的 Hook 数量不同，React 抛 #310，整个设置页变成空白
+  // （2026-10-19 用户报障：条目在、点进去什么都没有）。
+  // 现在把「是否脏」算成与早退无关的表达式：没有读数时不可保存、也不脏。
+  const dirtyNow = read === undefined ? false : isDirtyDraft(read, choiceDraft, fieldDraft, keyDraft);
+  useEffect(() => {
+    controls?.onDirty?.(dirtyNow);
+  }, [dirtyNow]);
+
   const titleRow = (): ReactElement => createElement("h2", null, t("webSearch.title"));
   if (read === undefined) {
     return createElement(
@@ -371,12 +408,6 @@ export function useWebSearchPanel(
 
   const choice = choiceDraft ?? choiceOf(view);
   const custom: WebSearchCustomDraft = { ...view.custom, ...fieldDraft };
-  // 有改动才显示「保存搜索设置」：否则设置页里会同时挂着两个「保存」按钮
-  // （厂商表单的保存条 + 这张卡的），用户会以为重复了（2026-10-18 报障）。
-  const dirty =
-    (choiceDraft !== undefined && choiceDraft !== choiceOf(view)) ||
-    Object.keys(fieldDraft).length > 0 ||
-    keyDraft.trim() !== "";
 
   const save = async (): Promise<void> => {
     setNotice(undefined);
@@ -439,12 +470,9 @@ export function useWebSearchPanel(
     }
   };
 
-  // 把保存动作与「脏」状态交给页面容器：设置页只有一个「保存」按钮，
-  // 它同时保存厂商字段与这张卡（2026-10-18 用户要求去掉重复的保存按钮）。
+  // 把保存动作交给页面容器（唯一的「保存」按钮会调用它）。这里赋值而不是登记 Hook，
+  // 放在早退之后是安全的 —— `saveRef` 是普通的可变容器。
   if (controls?.saveRef !== undefined) controls.saveRef.current = save;
-  useEffect(() => {
-    controls?.onDirty?.(dirty);
-  }, [dirty]);
 
   return createElement(WebSearchCard, {
     t,
