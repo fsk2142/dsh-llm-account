@@ -56,3 +56,30 @@ export function useState(): never {
 export function useEffect(): never {
   return hooksAreNotAvailable("useEffect");
 }
+
+/** 见 {@link hooksAreNotAvailable}。 */
+export function useRef(): never {
+  return hooksAreNotAvailable("useRef");
+}
+
+/**
+ * 错误边界用的类组件基类。
+ *
+ * 这是替身里唯一的「有状态」形状，且**不参与 Hook 纪律**：它不是被测组件，而是
+ * `Component` 的真实语义（React 里错误边界只能是类组件）。测试不会实例化它，
+ * 只要求 `Component` 这个名字可以被 import —— 生产产物里它来自宿主提供的真 React。
+ */
+export class Component<P = Record<string, unknown>, S = Record<string, unknown>> {
+  props: P;
+  state: S;
+
+  constructor(props: P) {
+    this.props = props;
+    this.state = {} as S;
+  }
+}
+
+/** 错误边界的静态方法在真实 React 里是约定；替身只提供类型占位。 */
+export function getDerivedStateFromError(): never {
+  return hooksAreNotAvailable("getDerivedStateFromError");
+}

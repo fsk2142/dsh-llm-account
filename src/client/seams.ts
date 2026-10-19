@@ -84,11 +84,23 @@ export interface ClientSeamContext {
   layout?: { selectPanel?(panel: string | null): unknown };
 }
 
-/** 取 `ctx.remote`；形状不认识时返回 `undefined`（调用方一律按「远程不可用」降级）。 */
+/**
+ * 取 `ctx.remote`；形状不认识时返回 `undefined`（调用方一律按「远程不可用」降级）。
+ *
+ * **永不抛错**：宿主上下文是活对象，`ctx.remote` 可能是个 getter，在服务未就绪、插件被
+ * 卸载或实现变更时直接抛。这个函数被渲染路径与 effect 大量调用，任何一次抛出都会变成
+ * 「页面空白」或未处理异常，而它的语义本来就是「拿不到就降级」。
+ * @param ctx - 客户端上下文。
+ * @returns 远程服务面，或 `undefined`。
+ */
 export function remoteOf(ctx: ClientSeamContext): RemoteService | undefined {
-  const remote = ctx.remote;
-  if (typeof remote !== "object" || remote === null) return undefined;
-  return remote as RemoteService;
+  try {
+    const remote = ctx?.remote;
+    if (typeof remote !== "object" || remote === null) return undefined;
+    return remote as RemoteService;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -269,8 +281,10 @@ function describeShape(value: unknown): string {
 
 /** 本包在客户端读到的服务（诊断用：说明哪些接缝到位了）。 */
 function describeInject(ctx: ClientSeamContext): string {
-  const remote = ctx.remote;
-  if (typeof remote !== "object" || remote === null) return "no ctx.remote at all";
+  // 走 `remoteOf`：它是唯一允许碰 `ctx.remote` 的地方（那里永不抛错）。
+  // 这个函数只用于「为什么读不到」的诊断串，绝不能成为新的故障点。
+  const remote = remoteOf(ctx);
+  if (remote === undefined) return "no ctx.remote at all";
   return `ctx.remote keys [${Object.keys(remote as Record<string, unknown>).join(", ")}]`;
 }
 
@@ -302,8 +316,15 @@ function namespaceRowsOf(described: unknown): NamespaceRow[] | undefined {
 export function subscribeCredentials(ctx: ClientSeamContext, listener: () => void): () => void {
   const remote = remoteOf(ctx);
   if (remote?.$on === undefined || typeof remote.$on !== "function") return () => undefined;
-  const off = remote.$on("credentials/reference-updated", () => listener());
-  return typeof off === "function" ? off : () => undefined;
+  // `$on` 由宿主实现，可能因为事件通道未就绪而抛；订阅失败只意味着「不会自动刷新」，
+  // 不该把整页带走 —— 所以这里降级成空订阅，而不是让异常传进 effect。
+  try {
+    const off = remote.$on("credentials/reference-updated", () => listener());
+    return typeof off === "function" ? off : () => undefined;
+  } catch (error) {
+    console.warn("[dsh-llm-account] could not subscribe to credential updates:", error);
+    return () => undefined;
+  }
 }
 
 /**
@@ -739,6 +760,55 @@ const LOGIN_UNKNOWN: LoginView = { state: "idle" };
  * @returns 一个 React 函数组件。
  */
 export function createConnectedPage(options: ConnectedPageOptions): () => ReactElement {
+  const component = createConnectedPageBody(options);
+  // 把容器包进一层渲染兜底。
+  //
+  // 为什么必须有：`PageShell` 的 try/catch 只覆盖 `pageBody()`，而容器的 Hook 初始化、
+  // `useWebSearchPanel` 以及进入 `PageShell` 之前的全部求值都在它之外。那里一抛错，
+  // React 丢弃整棵子树 —— 用户看到的就是「设置里有条目，点进去一片空白」，控制台之外
+  // 没有任何线索。
+  //
+  // 为什么这里用 try/catch 就够：返回的函数**就是**注册给宿主的组件，React 调用它的
+  // 身体来渲染；`useState` 等 Hook 也是在这段身体里执行的，所以同步异常在这里就能接住，
+  // 然后换成一块可读的错误面板（真实 React 与测试的迷你运行时同一条路径）。
+  return () => renderWithBoundary(component);
+}
+
+/**
+ * 同步渲染兜底：容器自身抛错时返回可读面板，而不是让异常穿到宿主。
+ * @param component - 容器本体。
+ * @returns 页面树或错误面板。
+ */
+function renderWithBoundary(component: () => ReactElement): ReactElement {
+  try {
+    return component();
+  } catch (error) {
+    console.error("[dsh-llm-account] the settings page crashed while rendering:", error);
+    return renderBoundaryPanel(error);
+  }
+}
+
+/**
+ * 渲染失败时的可读面板（与 `PageShell` 的兜底同形）。
+ *
+ * 设置条目在、点进去空白，是「渲染期抛错」的典型症状 —— React 丢弃整棵子树，控制台
+ * 之外没有任何线索。把异常原文印在页面上，用户能直接把它贴回来。
+ * @param error - 捕获到的异常。
+ * @returns 错误面板元素。
+ */
+function renderBoundaryPanel(error: unknown): ReactElement {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  return createElement(
+    "div",
+    { "data-page": "llm-account", "data-render-error": "true", className: CSS_CLASS.root },
+    createElement("h1", null, "LLM 账号"),
+    createElement("p", { className: CSS_CLASS.intro }, "页面渲染失败，请把下面这段信息反馈给插件作者。"),
+    createElement("pre", { className: CSS_CLASS.diagnostic }, `render failed: ${detail}`),
+  );
+}
+
+/** 容器本体（Hook + 组装）；由 {@link createConnectedPage} 包进错误边界。 */
+function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElement {
   const { entries, ctx } = options;
   const t = options.t ?? dictionaryOf("zh");
 
@@ -833,15 +903,31 @@ export function createConnectedPage(options: ConnectedPageOptions): () => ReactE
       const guarded = (discovery: VendorDiscovery): void => {
         if (alive) adopt(discovery);
       };
-      void discoverVendors(ctx, entries).then(guarded);
-      const off = subscribeCredentials(ctx, () => setState((current) => noteCredentialChange(current)));
+      void discoverVendors(ctx, entries)
+        .then(guarded)
+        .catch((error: unknown) => {
+          console.warn("[dsh-llm-account] could not read the vendor snapshots:", error);
+        });
+      // 订阅类调用也要各自兜住：effect 里抛出的是**未处理异常**（try/catch 在渲染期之外
+      // 接不到），一处失败会让整页看起来「没有数据」，而混在 React 的清理链里极难定位。
+      let off: () => void = () => undefined;
+      try {
+        off = subscribeCredentials(ctx, () => setState((current) => noteCredentialChange(current)));
+      } catch (error) {
+        console.warn("[dsh-llm-account] could not subscribe to credential updates:", error);
+      }
       // 远程面在挂载完成后才可用；挂载前卡片按「数据不可用」显示。
       // 只订阅、不 dispose：它的生命周期属于插件，不属于这个页面。
-      const offUsage = onUsageReady(ctx, (namespace, problem) => {
-        if (!alive) return;
-        setUsage(namespace);
-        setUsageProblem(problem);
-      });
+      let offUsage: () => void = () => undefined;
+      try {
+        offUsage = onUsageReady(ctx, (namespace, problem) => {
+          if (!alive) return;
+          setUsage(namespace);
+          setUsageProblem(problem);
+        });
+      } catch (error) {
+        console.warn("[dsh-llm-account] could not watch the usage remote:", error);
+      }
       return () => {
         alive = false;
         off();
@@ -2200,7 +2286,9 @@ const usageReadyListeners = new Set<UsageReadyListener>();
 /** 造一个不带 `effect` 的委托上下文：重挂不能挂在某一行（可能已卸载）的作用域上。 */
 function detachedContext(ctx: ClientSeamContext): ClientSeamContext {
   return {
-    remote: ctx.remote,
+    // 用 `remoteOf` 读一次并保存快照：`ctx.remote` 是活 getter，直接转发会把「什么时候读」
+    // 变成调用方的事，也可能在服务未就绪时抛。
+    remote: remoteOf(ctx),
     inject: (names, callback) => ctx.inject?.(names, callback),
   };
 }

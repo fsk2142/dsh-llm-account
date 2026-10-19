@@ -227,7 +227,13 @@ export interface SimElement {
   readonly key: string | null;
 }
 
-/** 展开一个节点：函数组件就地调用（被测卡片都是纯函数，Ruling 22），元素按 children 摊平。 */
+/**
+ * 展开一个节点：函数组件就地调用（被测卡片都是纯函数，Ruling 22），元素按 children 摊平。
+ *
+ * 类组件（错误边界）也在这里被实例化：先 `new`、再 `render()`。真 React 的语义是
+ * 「子组件抛错 → `getDerivedStateFromError` → 渲染错误面板」，仿真按同一顺序做一遍，
+ * 这样「页面渲染期抛错」在测试里是真的可观测的（此前只测到容器同步求值那一层）。
+ */
 export function expandSim(node: unknown, depth = 0): unknown[] {
   if (node === null || node === undefined || typeof node !== "object") return [node];
   if (depth > 20) throw new Error("mini-react: the element tree is deeper than 20 levels");
@@ -235,6 +241,25 @@ export function expandSim(node: unknown, depth = 0): unknown[] {
   const element = node as SimElement;
   if (!("props" in element) || !("type" in element)) return [];
   if (typeof element.type === "function") {
+    const type = element.type as unknown as {
+      prototype?: { render?: unknown };
+      getDerivedStateFromError?: (error: unknown) => Record<string, unknown>;
+      /** 迷你运行时在挂载根组件时打上的标记（见 `mount`）：已渲染过的根不再重复求值。 */
+      __simRendered?: boolean;
+    };
+    // 类组件：React 里只能用类写错误边界。实例化 → render；抛错则走派生状态 → 再 render。
+    if (type.prototype?.render !== undefined && type.getDerivedStateFromError !== undefined) {
+      const instance = new (element.type as new (props: Record<string, unknown>) => {
+        state: Record<string, unknown>;
+        render(): unknown;
+      })(element.props);
+      try {
+        return expandSim(instance.render(), depth + 1);
+      } catch (error) {
+        instance.state = { ...instance.state, ...type.getDerivedStateFromError(error) };
+        return expandSim(instance.render(), depth + 1);
+      }
+    }
     // 纯函数组件：以 props 直接调用（真实 React 也在这里创建子树）。
     return expandSim((element.type as (props: Record<string, unknown>) => unknown)(element.props), depth + 1);
   }

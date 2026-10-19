@@ -55,4 +55,18 @@ declare module "react" {
 
   /** 创建可变引用（`useRef(false)` / `useRef(0)` 这类用法）。 */
   export function useRef<Value>(initial: Value): MutableRefObject<Value>;
+
+  /**
+   * 类组件基类（错误边界只能用类组件写，React 没有函数式等价物）。
+   *
+   * 只声明本项目用到的那一小块：`props` / `state` / `render` / `componentDidCatch` /
+   * 静态 `getDerivedStateFromError`。真实 React 的 `Component` 是这些成员的超集。
+   */
+  export class Component<Props = Record<string, unknown>, State = Record<string, unknown>> {
+    props: Props;
+    state: State;
+    constructor(props: Props);
+    render(): ReactNode;
+    componentDidCatch?(error: unknown, info?: unknown): void;
+  }
 }

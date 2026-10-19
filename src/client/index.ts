@@ -84,10 +84,20 @@ export const inject = ["slots", "locale", "remote", "remote.settings"];
 export function apply(ctx: unknown): void {
   console.debug("[dsh-llm-account] client bundle loaded");
   const seamContext = ctx as ClientSeamContext;
+  // 每一步单独兜住：`apply` 里任何一处抛错都会让宿主把整个客户端包判为「激活失败」，
+  // 表现就是设置里**什么都没有**、而控制台只有一行。分开捕获后，失败的那一步会被
+  // 指名道姓地打出来，其余步骤照常完成（设置页还在，只是少了某个界面）。
+  const guarded = (step: string, run: () => void): void => {
+    try {
+      run();
+    } catch (error) {
+      console.error(`[dsh-llm-account] ${step} failed:`, error);
+    }
+  };
   // 插件级共享状态：usage 远程面单例 + 侧边栏开关的设置镜像。旧插件把这两样都挂在 apply 期
   // （`lib/client.js` 的 `applyClientSurfaces`），不随设置页开闭起落 —— 侧边栏卡片与中栏
   // 面板是独立的 React 根，设置页关掉不该带走它们的数据源。幂等：两行各调一次无副作用。
-  startSharedState(seamContext, VENDORS);
+  guarded("shared state (usage remote + settings mirror)", () => startSharedState(seamContext, VENDORS));
   // 设置页组件工厂：`settings.section` 用它在设置里渲染账号管理页（唯一的使用方；
   // 2026-10-18 用户要求去掉用量面板的「转到设置」跳转，主栏面板不再注册）。
   const pageComponent = (t: (key: string) => string): unknown =>
@@ -96,19 +106,21 @@ export function apply(ctx: unknown): void {
       ctx: seamContext,
       t,
     });
-  applyShell(ctx, {
-    copy: { zh: COPY.zh, en: COPY.en },
-    // 设置页（`settings.section`）用这一份；「转到设置」面板已按用户要求去掉。
-    pageComponent,
-    // 侧边栏卡片与中栏面板：常驻注册一次（守卫在 shell 里），门控在组件里按已存储的开关做。
-    // 2026-10-18 起不再注册「转到设置」面板（用户要求去掉那个跳转），所以也不传页面工厂。
-    sharedSurfaces: (context, t) =>
-      registerSharedSurfaces({
-        ctx: context as ClientSeamContext,
-        entries: VENDORS,
-        t,
-        localeNs: PAGE_LOCALE_NS,
-      }),
-  });
+  guarded("shell registration (settings section + sidebar card + dashboard)", () =>
+    applyShell(ctx, {
+      copy: { zh: COPY.zh, en: COPY.en },
+      // 设置页（`settings.section`）用这一份；「转到设置」面板已按用户要求去掉。
+      pageComponent,
+      // 侧边栏卡片与中栏面板：常驻注册一次（守卫在 shell 里），门控在组件里按已存储的开关做。
+      // 2026-10-18 起不再注册「转到设置」面板（用户要求去掉那个跳转），所以也不传页面工厂。
+      sharedSurfaces: (context, t) =>
+        registerSharedSurfaces({
+          ctx: context as ClientSeamContext,
+          entries: VENDORS,
+          t,
+          localeNs: PAGE_LOCALE_NS,
+        }),
+    }),
+  );
 }
 

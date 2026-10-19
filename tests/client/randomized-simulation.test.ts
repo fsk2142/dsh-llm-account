@@ -34,6 +34,7 @@ vi.mock("react", async () => {
     useState: mini.useState,
     useEffect: mini.useEffect,
     useRef: mini.useRef,
+    Component: stub.Component,
     __mini: mini,
   };
 });

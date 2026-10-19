@@ -50,6 +50,8 @@ vi.mock("react", async () => {
     useState: mini.useState,
     useEffect: mini.useEffect,
     useRef: mini.useRef,
+    // 错误边界是类组件（React 里没有函数式等价物），仿真必须提供基类。
+    Component: stub.Component,
     // 测试侧要驱动这个运行时（挂载、排空、复位）。
     __mini: mini,
   };
@@ -124,6 +126,38 @@ function click(tree: unknown, marker: string, value?: string, event: unknown = {
 // —— 仿真 1：设置页容器 ————————
 
 describe("设置页容器仿真", () => {
+  it("宿主上下文读 remote 就抛错时，页面照常渲染（不再是空白，也不抛未处理异常）", async () => {
+    // 症状：设置里有我们的条目，点进去什么都没有。根因之一是容器/发现路径直接读
+    // `ctx.remote`，而宿主 getter 在服务未就绪时会抛 —— 异常穿到 effect 里就是未处理拒绝，
+    // 页面只剩空白。现在所有读取都走 `remoteOf`（永不抛错），于是降级成正常的空态。
+    const mini = await runtime();
+    const ctor = await import("../../src/client/seams");
+    const page = ctor.createConnectedPage({
+      entries: [],
+      ctx: {
+        get remote(): never {
+          throw new Error("boom from the host remote");
+        },
+        get inject(): never {
+          throw new Error("boom from the host remote");
+        },
+      } as never,
+      t: (key: string) => key,
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let text: string;
+    try {
+      text = textsOfSim(mini.mount(page).tree()).join(" ");
+    } finally {
+      errors.mockRestore();
+      warnings.mockRestore();
+    }
+    // 页面树被渲染出来了（而不是错误面板，也不是空白）。
+    expect(text).toContain("title");
+    expect(text).not.toContain("页面渲染失败");
+  });
+
   it("字段编辑 → 保存 → 写的是命中的行名；opencode 写行 id 而不是命名空间", async () => {
     const mini = await runtime();
     await freshSeams();
