@@ -547,22 +547,33 @@ export const PAGE_CSS = `
 .dsl-sidebar-head { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; }
 .dsl-sidebar-head > h3 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   text-wrap: nowrap; }
-/* 一行三档（5 小时 / 每周 / 每月）：等宽三列，窄了自动折行。
-   每列只有「名称 / 剩余百分比 / 细条」三行 —— 完整读数在点开的面板里。 */
-.dsl-sidebar-windows { display: grid; grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
-  gap: 6px 8px; width: 100%; }
-.dsl-sidebar-window { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.dsl-sidebar-window-label { font-size: 10px; line-height: 14px; color: var(--dsw-alias-label-tertiary);
+/* 两行额度（2026-10-19 用户定的版式）：
+   第一行 5 小时独占整行（带重置时间），第二行周 + 月并排两列。
+   并排三列时每档只剩五六十像素、档位名要截断、重置时间完全放不下，所以拆成两行。 */
+.dsl-sidebar-row-primary { display: flex; flex-direction: row; width: 100%; }
+.dsl-sidebar-row-secondary { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 8px; width: 100%; }
+.dsl-sidebar-window { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.dsl-sidebar-window-head { display: flex; flex-direction: row; align-items: baseline;
+  justify-content: space-between; gap: 6px; min-width: 0; }
+.dsl-sidebar-window-label { font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-tertiary);
   overflow: hidden; text-overflow: ellipsis; text-wrap: nowrap; }
-.dsl-sidebar-window-value { font-size: 13px; line-height: 18px; font-weight: 600;
+/* 重置时间：第一行才有（半行宽的周/月放不下，也不常看）。 */
+.dsl-sidebar-window-reset { flex: none; font-size: 10px; line-height: 14px;
+  color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
+.dsl-sidebar-window-value { font-size: 14px; line-height: 19px; font-weight: 600;
   font-variant-numeric: tabular-nums; color: var(--dsw-alias-state-success-primary); }
+/* 第二行两列：数字小一档，好让两列看起来是一组。 */
+.dsl-sidebar-window[data-sidebar-density="compact"] .dsl-sidebar-window-value { font-size: 13px;
+  line-height: 18px; }
 .dsl-sidebar-window[data-sidebar-window-level="error"] .dsl-sidebar-window-value {
   color: var(--dsw-alias-state-error-primary); }
 .dsl-sidebar-window[data-sidebar-window-level="missing"] .dsl-sidebar-window-value,
 .dsl-sidebar-window[data-sidebar-window-level="unlimited"] .dsl-sidebar-window-value {
   color: var(--dsw-alias-label-tertiary); font-weight: 400; }
-.dsl-sidebar-window-track { display: block; overflow: hidden; height: 4px; border-radius: 999px;
+.dsl-sidebar-window-track { display: block; overflow: hidden; height: 5px; border-radius: 999px;
   background: var(--dsw-alias-border-l1); }
+.dsl-sidebar-window[data-sidebar-density="compact"] .dsl-sidebar-window-track { height: 4px; }
 .dsl-sidebar-foot { display: flex; flex-direction: row; gap: 8px; }
 .dsl-sidebar-foot > button { flex: 1 1 auto; }
 .dsl-sidebar .dsl-empty { padding: 10px; font-size: 12px; line-height: 18px; }
@@ -719,9 +730,12 @@ export const CSS_CLASS = {
   save: "dsl-save",
   sidebar: "dsl-sidebar",
   sidebarButton: "dsl-sidebar-button",
-  sidebarWindows: "dsl-sidebar-windows",
+  sidebarRowPrimary: "dsl-sidebar-row-primary",
+  sidebarRowSecondary: "dsl-sidebar-row-secondary",
   sidebarWindow: "dsl-sidebar-window",
+  sidebarWindowHead: "dsl-sidebar-window-head",
   sidebarWindowLabel: "dsl-sidebar-window-label",
+  sidebarWindowReset: "dsl-sidebar-window-reset",
   sidebarWindowValue: "dsl-sidebar-window-value",
   sidebarWindowTrack: "dsl-sidebar-window-track",
   sidebarShell: "dsl-sidebar-shell",

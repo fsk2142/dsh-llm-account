@@ -23,7 +23,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { CSS_CLASS, cls } from "./css";
 import { failureText } from "./failure-text";
 import { UsageIcon } from "./icons";
-import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaWindowLabel } from "./quota";
+import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaResetText, quotaWindowLabel } from "./quota";
 import type { AccountUsageStatus, QuotaWindow, VendorUsageStatus } from "./usage-contract";
 
 /** 卡片属性。 */
@@ -127,8 +127,8 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
       ),
       ...(hasData
         ? [
-            // 一行三档：5 小时 / 每周 / 每月。
-            quotaRow(props, currentRow),
+            // 两行：第一行 5 小时（带重置时间），第二行周 + 月。
+            ...quotaRows(props, currentRow),
           ]
         : [
             // 没有可显示的数据：失败时说失败（附上一次数据标记），什么都没发生过时才说
@@ -161,42 +161,67 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
 }
 
 /**
- * 一行三档的额度概览（5 小时 / 每周 / 每月）。
+ * 两行额度概览（2026-10-19 用户定的版式）。
  *
- * 版面为什么是「一列一档」而不是三条完整的 {@link QuotaBar}：侧边栏只有两百多像素宽，
- * 三条「标签 + 读数 + 条 + 重置时间」五行结构排下来会把整块侧边栏撑满。这里只保留
- * **最该一眼看到的三样**：档位名、剩余百分比、一条细条。全量读数（已用/共、重置时间）
- * 在点开的面板里。
+ * - **第一行**：5 小时档，独占一整行 —— 它是最细的一档，也是自动切换真正盯着的那个，
+ *   所以带上重置时间（「2 小时后重置」比一个百分比更能说明「还能撑多久」）；
+ * - **第二行**：每周与每月并排两列 —— 它们变化慢，看的是「这一周/这一月用了多少」。
+ *
+ * 为什么不三档并排（上一版）：并排时每档只剩五六十像素，档位名要截断、重置时间完全放不下。
+ * 拆成两行后第一行有整行宽度，可以把重置时间挂上去。
  * @param props - 卡片属性。
  * @param row - 当前账号。
- * @returns 一行元素。
+ * @returns 要追加的两行元素。
  */
-function quotaRow(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode {
+function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode[] {
   const { t } = props;
   const vendor = props.status?.vendor ?? "";
   const windows = row?.quota?.windows?.length ? row.quota.windows : fallbackQuotaWindows(vendor);
-  const shown = ROW_KINDS.map((entry) => windowOfKind(windows, entry.kind)).filter(
-    (window): window is QuotaWindow => window !== undefined,
-  );
-  // 一档都没有（旧宿主只给一个无键窗口）：退回列表里第一个能读的那一档，别让整行空白。
-  const fallback = shown.length > 0 ? shown : windows.filter((window) => window.unlimited !== true).slice(0, 1);
-  return createElement(
-    "div",
-    { key: "bars", "data-sidebar-windows": "true", className: CSS_CLASS.sidebarWindows },
-    ...fallback.map((window) => sidebarMeter(t, window)),
-  );
+  const fiveHour = windowOfKind(windows, "five-hour");
+  const week = windowOfKind(windows, "week");
+  const month = windowOfKind(windows, "month");
+  const rest = [week, month].filter((window): window is QuotaWindow => window !== undefined);
+  // 一档都认不出来（旧宿主只给无键窗口）：把第一个能读的当成主档，别让整块空白。
+  const primary = fiveHour ?? windows.find((window) => window.unlimited !== true) ?? windows[0];
+  return [
+    // 第一行：主档（通常是 5 小时），带重置时间。
+    ...(primary === undefined
+      ? []
+      : [
+          createElement(
+            "div",
+            { key: "primary", "data-sidebar-row": "primary", className: CSS_CLASS.sidebarRowPrimary },
+            sidebarMeter(t, primary, "wide"),
+          ),
+        ]),
+    // 第二行：周 + 月并排（缺一档就独占一行）。
+    ...(rest.length === 0
+      ? []
+      : [
+          createElement(
+            "div",
+            { key: "rest", "data-sidebar-row": "secondary", className: CSS_CLASS.sidebarRowSecondary },
+            ...rest.map((window) => sidebarMeter(t, window, "compact")),
+          ),
+        ]),
+  ];
 }
 
 /**
- * 一档窗口的一列：名称 + 剩余百分比 + 细条。
+ * 一档窗口的一块读数。
  *
- * 剩余百分比沿用 {@link QuotaBar} 的口径（绿色部分 = 还剩多少），但**没人读的窗口**
- * 显示破折号而不是 0%（缺失 ≠ 用光）。
+ * 两种密度：
+ * - `wide`（第一行）：档位名 + 重置时间在一行，下面「剩余百分比 + 细条」；
+ * - `compact`（第二行两列）：档位名、剩余百分比、细条三行，**不带重置时间** ——
+ *   半行宽度放不下，而周/月的重置时间本来也不常看。
+ *
+ * 剩余百分比沿用 {@link QuotaBar} 的口径（绿色 = 还剩多少）；**缺失显示破折号**，不是 0%。
  * @param t - 取词。
  * @param window - 该档窗口。
- * @returns 一列元素。
+ * @param density - 版式密度。
+ * @returns 一块元素。
  */
-function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactElement {
+function sidebarMeter(t: (key: string) => string, window: QuotaWindow, density: "wide" | "compact"): ReactElement {
   const meter = quotaMeter(window);
   const remaining = meter === undefined ? undefined : Math.max(0, Math.min(100, 100 - meter.percent));
   // 「不限」是端点给的事实，与「读不到」不是一回事。
@@ -204,6 +229,16 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
   const reading = quotaReading(window);
   const text = unlimited ? t("quota.unlimited") : remaining === undefined ? "—" : `${remaining}%`;
   const level = unlimited ? "unlimited" : remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
+  const reset = density === "wide" ? quotaResetText(t, window) : undefined;
+  const bar =
+    meter === undefined || unlimited
+      ? null
+      : createElement("span", {
+          "data-quota-bar-fill": window.key,
+          "data-level": level,
+          className: CSS_CLASS.quotaBarFill,
+          style: { width: `${remaining}%` },
+        });
   return createElement(
     "div",
     {
@@ -211,22 +246,26 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
       "data-sidebar-window": window.key,
       "data-sidebar-window-shape": reading.shape,
       "data-sidebar-window-level": level,
+      "data-sidebar-density": density,
       className: CSS_CLASS.sidebarWindow,
     },
-    createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
-    createElement("span", { className: CSS_CLASS.sidebarWindowValue }, text),
+    // 档位名 + （第一行才有的）重置时间。
     createElement(
-      "span",
-      { className: CSS_CLASS.sidebarWindowTrack },
-      meter === undefined || unlimited
-        ? null
-        : createElement("span", {
-            "data-quota-bar-fill": window.key,
-            "data-level": level,
-            className: CSS_CLASS.quotaBarFill,
-            style: { width: `${remaining}%` },
-          }),
+      "div",
+      { className: CSS_CLASS.sidebarWindowHead },
+      createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
+      ...(reset === undefined
+        ? []
+        : [
+            createElement(
+              "small",
+              { key: "reset", "data-sidebar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.sidebarWindowReset },
+              reset,
+            ),
+          ]),
     ),
+    createElement("span", { className: CSS_CLASS.sidebarWindowValue }, text),
+    createElement("span", { className: CSS_CLASS.sidebarWindowTrack }, bar),
   );
 }
 
