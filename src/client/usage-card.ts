@@ -85,37 +85,99 @@ function row(key: string, label: string, value: ReactNode, attribute: string): R
 }
 
 /**
+ * 一张**指标卡**：大数字 + 标签 + 可选的小字补充。
+ *
+ * 为什么值得单独做：原来所有指标平铺成「标签 …… 数值」的九行列表，成功率、命中率、
+ * 金额这些**该一眼看到的数**沉在列表里，读起来像调试输出。指标卡把它们提到顶部，
+ * 细节行留在下面 —— 先看结论，需要时再看构成。
+ * @param props - 取词与数值。
+ * @returns 指标卡。
+ */
+function metric(props: {
+  key: string;
+  label: string;
+  value: string;
+  attribute: string;
+  hint?: string | undefined;
+  tone?: "plain" | "ok" | "warn" | "muted";
+}): ReactElement {
+  return createElement(
+    "div",
+    {
+      key: props.key,
+      "data-usage-metric": props.attribute,
+      "data-tone": props.tone ?? "plain",
+      className: CSS_CLASS.usageMetric,
+    },
+    createElement("span", { className: CSS_CLASS.usageMetricValue }, props.value),
+    createElement("span", { className: CSS_CLASS.usageMetricLabel }, props.label),
+    ...(props.hint === undefined
+      ? []
+      : [createElement("small", { key: "hint", className: CSS_CLASS.usageMetricHint }, props.hint)]),
+  );
+}
+
+/** 成功率/命中率的健康色：好→绿、一般→黄、差→红；缺失→灰。 */
+function rateTone(rate: number | undefined): "ok" | "warn" | "muted" {
+  if (rate === undefined) return "muted";
+  if (rate >= 0.9) return "ok";
+  return "warn";
+}
+
+/**
  * 一个桶的数值区（账号行与总账共用同一份渲染，避免两处口径分叉）。
- * @param props - 取词、桶、是否显示周期说明。
+ *
+ * 分两层：上面是**指标卡**（请求数 / 成功率 / 命中率 / 花费），下面是**明细行**
+ * （token 四分项与计价）。这样重要数字第一眼可见，构成仍可核对。
+ * @param t - 取词。
+ * @param bucket - 聚合桶。
  * @returns 元素列表。
  */
 function bucketRows(t: (key: string) => string, bucket: UsageBucketView): ReactElement[] {
-  const rows: ReactElement[] = [
-    row(
-      "requests",
-      t("usage.requests"),
-      t("usage.requestsValue")
-        .replace("{total}", grouped(bucket.requests))
-        .replace("{ok}", grouped(bucket.ok))
-        .replace("{failed}", grouped(bucket.failed)),
-      "requests",
+  const tokens = bucket.inputTokens + bucket.outputTokens + bucket.cacheReadTokens + bucket.cacheWriteTokens;
+  return [
+    createElement(
+      "div",
+      { key: "metrics", "data-usage-metrics": "true", className: CSS_CLASS.usageMetrics },
+      metric({
+        key: "requests",
+        attribute: "requests",
+        label: t("usage.requests"),
+        value: grouped(bucket.requests),
+        hint: `${t("usage.okShort")} ${grouped(bucket.ok)} · ${t("usage.failedShort")} ${grouped(bucket.failed)}`,
+      }),
+      metric({
+        key: "success",
+        attribute: "success-rate",
+        label: t("usage.successRate"),
+        value: percent(bucket.successRate),
+        tone: rateTone(bucket.successRate),
+      }),
+      metric({
+        key: "cache",
+        attribute: "cache-hit-rate",
+        label: t("usage.cacheHitRate"),
+        value: percent(bucket.cacheHitRate),
+        tone: rateTone(bucket.cacheHitRate),
+      }),
+      metric({
+        key: "tokens",
+        attribute: "tokens",
+        label: t("usage.tokens"),
+        value: grouped(tokens),
+      }),
     ),
-    row("success", t("usage.successRate"), percent(bucket.successRate), "success-rate"),
-    row("cache", t("usage.cacheHitRate"), percent(bucket.cacheHitRate), "cache-hit-rate"),
-    row(
-      "tokens",
-      t("usage.tokens"),
-      `${grouped(bucket.inputTokens + bucket.outputTokens + bucket.cacheReadTokens + bucket.cacheWriteTokens)}`,
-      "tokens",
-    ),
-    // 明细：四个分项各占一行，避免「总量对不上」的疑问。
+    // 明细：token 四分项与计价留在下面，避免「总量对不上」的疑问。
     row("input", t("usage.input"), grouped(bucket.inputTokens), "input"),
     row("output", t("usage.output"), grouped(bucket.outputTokens), "output"),
     row("cache-read", t("usage.cacheRead"), grouped(bucket.cacheReadTokens), "cache-read"),
     row("cache-write", t("usage.cacheWrite"), grouped(bucket.cacheWriteTokens), "cache-write"),
-  ];
-  // 厂商计价：没公开就照实说，不显示 $0.00。
-  rows.push(
+  ].concat(costRows(t, bucket));
+}
+
+/** 计价两行：厂商价 + 官方折算（小字）。 */
+function costRows(t: (key: string) => string, bucket: UsageBucketView): ReactElement[] {
+  return [
     createElement(
       "div",
       { key: "cost", "data-usage-row": "vendor-cost", className: CSS_CLASS.usageRow },
@@ -126,7 +188,6 @@ function bucketRows(t: (key: string) => string, bucket: UsageBucketView): ReactE
         money(bucket.vendorCost, t("usage.priceUnknown")),
       ),
     ),
-    // 官方价折算：**小字**跟在厂商价后面（用户要求「出个小字约等于官方多少价值」）。
     createElement(
       "div",
       { key: "official", "data-usage-row": "official-cost", className: CSS_CLASS.usageRow },
@@ -137,8 +198,7 @@ function bucketRows(t: (key: string) => string, bucket: UsageBucketView): ReactE
         `${t("usage.officialCost")} ${money(bucket.officialCost, "—")}`,
       ),
     ),
-  );
-  return rows;
+  ];
 }
 
 /**

@@ -22,6 +22,14 @@
  * @module dsh-llm-account/src/client/css
  */
 
+/**
+ * 本包在 npm 上的名字。
+ *
+ * 用它而不是手写 `"@dsh-llm-account"`：插件市场与宿主的诊断工具都按**包名**找人
+ * （`data-plugin="<包名>"`），写错一个前缀就让「这个样式是谁注入的」查不到。
+ */
+const PACKAGE_NAME = "dsh-llm-account";
+
 /** 本包样式表的 id（`<style data-plugin-css="…">` 的值，注入幂等的依据）。 */
 export const PAGE_CSS_ID = "@dsh-llm-account/page.css";
 
@@ -88,6 +96,11 @@ export const PAGE_CSS = `
 .dsl-card > summary::-webkit-details-marker { display: none; }
 .dsl-card > summary > svg { flex: none; color: var(--dsw-alias-label-tertiary); }
 .dsl-card[open] > summary > svg { transform: rotate(180deg); }
+/* 可收起卡片的标题行：标题占满，当前状态缩到右端（收起时也能读到关键信息）。 */
+.dsl-card-summary-title { flex: 1 1 auto; min-width: 0; }
+.dsl-card-summary > small { flex: none; margin: 0; text-align: right; }
+/* 收起状态下不显示正文的额外间距（details 自动隐藏，这里只补布局）。 */
+.dsl-card[open] > summary { margin-bottom: 2px; }
 .dsl-model-summary-title { font-size: 15px; font-weight: 600; line-height: 24px; }
 .dsl-model-vendor-group { display: flex; flex-direction: column; gap: 4px; padding-top: 8px;
   border-top: .5px solid var(--dsw-alias-border-l1); }
@@ -426,6 +439,20 @@ export const PAGE_CSS = `
 .dsl-usage-hint { color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
 .dsl-usage-split { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px;
   padding-top: 6px; border-top: .5px solid var(--dsw-alias-border-l1); }
+/* 指标卡：四张小卡横排，窄容器自动折行（设置页可能很窄）。 */
+.dsl-usage-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px;
+  margin: 2px 0 8px; }
+.dsl-usage-metric { display: flex; flex-direction: column; gap: 1px; box-sizing: border-box; padding: 7px 9px;
+  border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-l1); min-width: 0; }
+.dsl-usage-metric-value { font-size: 17px; font-weight: 600; line-height: 24px; letter-spacing: normal;
+  font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary); }
+.dsl-usage-metric-label { font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-tertiary); }
+.dsl-usage-metric-hint { font-size: 10px; line-height: 14px; color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums; }
+.dsl-usage-metric[data-tone="ok"] .dsl-usage-metric-value { color: var(--dsw-alias-state-success-primary); }
+.dsl-usage-metric[data-tone="warn"] .dsl-usage-metric-value { color: var(--dsw-alias-state-warn-primary); }
+.dsl-usage-metric[data-tone="muted"] .dsl-usage-metric-value { color: var(--dsw-alias-label-tertiary); }
 .dsl-quota-bar-list { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .dsl-quota-bar { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
 .dsl-quota-bar-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -570,6 +597,8 @@ export const CSS_CLASS = {
   addChooser: "dsl-add-chooser",
   addSummary: "dsl-add-summary",
   orderSummary: "dsl-order-summary",
+  cardSummary: "dsl-card-summary",
+  cardSummaryTitle: "dsl-card-summary-title",
   modelSummary: "dsl-model-summary",
   modelSummaryTitle: "dsl-model-summary-title",
   modelGroup: "dsl-model-group",
@@ -645,6 +674,11 @@ export const CSS_CLASS = {
   usageMuted: "dsl-usage-muted",
   usageHint: "dsl-usage-hint",
   usageSplit: "dsl-usage-split",
+  usageMetrics: "dsl-usage-metrics",
+  usageMetric: "dsl-usage-metric",
+  usageMetricValue: "dsl-usage-metric-value",
+  usageMetricLabel: "dsl-usage-metric-label",
+  usageMetricHint: "dsl-usage-metric-hint",
   ring: "dsl-ring",
   ringChart: "dsl-ring-chart",
   ringSvg: "dsl-ring-svg",
@@ -701,7 +735,7 @@ export function injectPluginCss(id: string, css: string): () => void {
   }
   if (typeof dom.createElement !== "function") return () => undefined;
   const tag = dom.createElement("style");
-  tag.setAttribute("data-plugin", "@dsh-llm-account");
+  tag.setAttribute("data-plugin", PACKAGE_NAME);
   tag.setAttribute("data-plugin-css", id);
   tag.textContent = css;
   dom.head.appendChild(tag);

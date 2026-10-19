@@ -132,6 +132,8 @@ export type CopyKey =
   | "usage.window.30d"
   | "usage.window.all"
   | "usage.requests"
+  | "usage.okShort"
+  | "usage.failedShort"
   | "usage.requestsValue"
   | "usage.successRate"
   | "usage.tokens"
@@ -290,6 +292,7 @@ export type CopyKey =
   | "webSearch.option.custom.hint"
   | "webSearch.effective"
   | "webSearch.effective.none"
+  | "webSearch.summary.none"
   | "webSearch.route"
   | "webSearch.supported"
   | "webSearch.unsupported"
@@ -467,6 +470,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.window.30d": "近 30 天",
     "usage.window.all": "全部",
     "usage.requests": "请求",
+    "usage.okShort": "成功",
+    "usage.failedShort": "失败",
     "usage.requestsValue": "{total} 次（成功 {ok} · 失败 {failed}）",
     "usage.successRate": "成功率",
     "usage.tokens": "Token",
@@ -618,6 +623,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "webSearch.option.custom.hint": "通用自定义：填写接口地址与密钥，适配 Tavily、Serper 等常见形态。",
     "webSearch.effective": "当前生效：{provider}",
     "webSearch.effective.none": "宿主还没有设置搜索来源（未选择任何提供方）。",
+    "webSearch.summary.none": "未设置",
     "webSearch.route": "当前默认模型：{vendor} 的 {model}",
     "webSearch.supported": "该账号网关支持原生联网搜索。",
     "webSearch.unsupported": "该账号网关不支持原生搜索",
@@ -790,6 +796,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.window.30d": "Last 30 days",
     "usage.window.all": "All",
     "usage.requests": "Requests",
+    "usage.okShort": "ok",
+    "usage.failedShort": "failed",
     "usage.requestsValue": "{total} (ok {ok} · failed {failed})",
     "usage.successRate": "Success rate",
     "usage.tokens": "Tokens",
@@ -941,6 +949,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "webSearch.option.custom.hint": "Generic custom endpoint: fill in the URL and key; fits common shapes such as Tavily or Serper.",
     "webSearch.effective": "Currently in effect: {provider}",
     "webSearch.effective.none": "The host has no search source configured (no provider selected).",
+    "webSearch.summary.none": "not set",
     "webSearch.route": "Current default model: {model} on {vendor}",
     "webSearch.supported": "This account gateway supports native web search.",
     "webSearch.unsupported": "This account gateway does not support native search",

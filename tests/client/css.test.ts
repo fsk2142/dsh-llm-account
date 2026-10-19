@@ -72,7 +72,8 @@ it("注入形状与旧插件一致：data-plugin + data-plugin-css，且同 id �
   try {
     const removeFirst = injectPluginCss(PAGE_CSS_ID, PAGE_CSS);
     expect(dom.tags).toHaveLength(1);
-    expect(dom.tags[0]!.attrs).toMatchObject({ "data-plugin": "@dsh-llm-account", "data-plugin-css": PAGE_CSS_ID });
+    // `data-plugin` 必须是**真实包名**：宿主与插件市场的诊断都按包名反查注入来源。
+    expect(dom.tags[0]!.attrs).toMatchObject({ "data-plugin": "dsh-llm-account", "data-plugin-css": PAGE_CSS_ID });
     expect(dom.tags[0]!.textContent).toBe(PAGE_CSS);
 
     // 第二次（另一行 apply）：幂等，不重复注入。

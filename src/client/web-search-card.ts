@@ -9,6 +9,7 @@
 import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { CSS_CLASS } from "./css";
+import { ChevronIcon } from "./icons";
 
 /** 三选一。 */
 export type WebSearchChoice = "account" | "deepseek" | "custom";
@@ -284,9 +285,20 @@ export function WebSearchCard(props: WebSearchCardProps): ReactElement {
         ? customDetail(props)
         : deepseekDetail(props);
   return createElement(
-    "section",
+    "details",
     { "data-web-search": "true", className: CSS_CLASS.card },
-    createElement("h2", null, t("webSearch.title")),
+    createElement(
+      "summary",
+      { "data-web-search-summary": "true", className: CSS_CLASS.cardSummary },
+      createElement(ChevronIcon, null),
+      createElement("span", { className: CSS_CLASS.cardSummaryTitle }, t("webSearch.title")),
+      // 收起时也要知道「现在用的是哪个」—— 收起来不能等于藏信息。
+      createElement(
+        "small",
+        { "data-web-search-summary-state": props.effective ?? "none", className: CSS_CLASS.note },
+        t("webSearch.effective").replace("{provider}", props.effective ?? t("webSearch.summary.none")),
+      ),
+    ),
     createElement("p", { "data-card-hint": "true", className: CSS_CLASS.note }, t("webSearch.hint")),
     ...(props.problem === undefined
       ? []

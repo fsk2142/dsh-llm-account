@@ -92,9 +92,42 @@ function render(overrides: Partial<UsageReportView> = {}, extra: Record<string, 
 it("请求数同时给出总数与成功/失败；成功率与命中率按百分比显示", () => {
   const tree = render();
   const texts = textsOf(tree).join(" ");
-  expect(texts).toContain("2 次（成功 1 · 失败 1）");
+  // 指标卡：总数在大数字上，成功/失败是小字补充。
+  expect(texts).toContain("成功 1 · 失败 1");
   expect(texts).toContain("50%"); // 成功率
   expect(texts).toContain("75%"); // 命中率
+  // 四个指标卡都在（账号节与总账节各一组，所以取第一组的前四个）。
+  const metrics = elementsOf(tree).filter((element) => element.props["data-usage-metric"] !== undefined);
+  expect(metrics.slice(0, 4).map((element) => element.props["data-usage-metric"])).toEqual([
+    "requests",
+    "success-rate",
+    "cache-hit-rate",
+    "tokens",
+  ]);
+});
+
+it("成功率与命中率按健康度上色：好→绿、差→黄、缺失→灰", () => {
+  const good = render();
+  const okMetrics = elementsOf(good).filter((element) => element.props["data-usage-metric"] !== undefined);
+  // 50% 成功率、75% 命中率都不到 90% → warn
+  expect(okMetrics[1]!.props["data-tone"]).toBe("warn");
+  expect(okMetrics[2]!.props["data-tone"]).toBe("warn");
+
+  const high = render({
+    accounts: [],
+    total: { window: "today", bucket: bucketOf({ successRate: 0.98, cacheHitRate: 0.95 }), byVendor: [] },
+  });
+  const highMetrics = elementsOf(high).filter((element) => element.props["data-usage-metric"] !== undefined);
+  expect(highMetrics[1]!.props["data-tone"]).toBe("ok");
+  expect(highMetrics[2]!.props["data-tone"]).toBe("ok");
+
+  const missing = render({
+    accounts: [],
+    total: { window: "today", bucket: bucketOf({ successRate: undefined, cacheHitRate: undefined }), byVendor: [] },
+  });
+  const missingMetrics = elementsOf(missing).filter((element) => element.props["data-usage-metric"] !== undefined);
+  expect(missingMetrics[1]!.props["data-tone"]).toBe("muted");
+  expect(missingMetrics[2]!.props["data-tone"]).toBe("muted");
 });
 
 it("四个 token 分项都列出来（总量对不上时可以自己对账）", () => {
@@ -136,10 +169,10 @@ it("缺失的比率/成本显示破折号或「未公开」，绝不显示成 0"
       byVendor: [],
     },
   });
-  // 命中率那一格必须是破折号（缺失 ≠ 0%）。
-  const cacheRow = elementsOf(tree).find((element) => element.props["data-usage-row"] === "cache-hit-rate")!;
-  expect(textsOf(cacheRow).join(" ")).toContain("—");
-  expect(textsOf(cacheRow).join(" ")).not.toContain("%");
+  // 命中率指标卡必须是破折号（缺失 ≠ 0%）。
+  const cacheMetric = elementsOf(tree).find((element) => element.props["data-usage-metric"] === "cache-hit-rate")!;
+  expect(textsOf(cacheMetric).join(" ")).toContain("—");
+  expect(textsOf(cacheMetric).join(" ")).not.toContain("%");
   // 官方价缺失也显示破折号，不是 $0.00。
   const officialRow = elementsOf(tree).find((element) => element.props["data-usage-row"] === "official-cost")!;
   expect(textsOf(officialRow).join(" ")).toContain("—");
