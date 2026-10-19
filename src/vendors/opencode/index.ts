@@ -443,7 +443,9 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     quotaRef: () => selectedRefOf(document()),
     capabilities,
     // 设置页的模型勾选：未过滤的完整目录。
-    models: () => adapter.catalogModels(),
+    // 刷新按钮的落点：**必须 fresh**（绕过目录缓存）。TTL 内点刷新若拿缓存，
+    // 界面上就是「点了没反应」（用户 2026-10-19 报障 opendesign 刷新不起作用）。
+    models: () => adapter.catalogModels(true),
     switchState: () => switching.snapshot(),
     switchNow: () => switching.switchNow(),
     accountOrder: () => {

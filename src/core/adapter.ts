@@ -254,7 +254,12 @@ export interface CatalogModelsResult {
 
 /** 能列出目录的适配器：设置页的模型勾选需要**未过滤**的完整目录。 */
 export interface CatalogModelsPort {
-  catalogModels(): Promise<CatalogModel[]>;
+  /**
+   * 全部目录条目（不受可见性过滤）。
+   * @param fresh - **绕过缓存**重读（刷新按钮必须用它）。TTL 内点刷新若拿缓存，
+   *   界面上就是「点了没反应」。缺省走缓存（模型选择器的常规读）。
+   */
+  catalogModels(fresh?: boolean): Promise<CatalogModel[]>;
 }
 
 /** 一次登录尝试的状态。 */

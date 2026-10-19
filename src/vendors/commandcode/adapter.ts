@@ -312,8 +312,8 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * 有哪些模型」—— 隐藏的模型也要出现在勾选列表里，否则用户没有入口把它重新打开。
    * @returns 目录里的模型 id 与名称。
    */
-  async catalogModels(): Promise<CatalogModel[]> {
-    const entries = await this.#catalog(resolveConfig(this.#deps.config()));
+  async catalogModels(fresh = false): Promise<CatalogModel[]> {
+    const entries = await this.#catalog(resolveConfig(this.#deps.config()), undefined, fresh);
     return entries.map((entry) => ({ id: entry.id, ...(entry.name === "" ? {} : { name: entry.name }) }));
   }
 
@@ -614,9 +614,10 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param signal - 宿主的取消信号（有缓存时不发请求，信号自然用不上）。
    * @returns 目录条目。
    */
-  async #catalog(config: ResolvedConfig, signal?: AbortSignal): Promise<CatalogEntry[]> {
+  async #catalog(config: ResolvedConfig, signal?: AbortSignal, fresh = false): Promise<CatalogEntry[]> {
     const cached = this.#catalogCache;
-    if (cached !== undefined && cached.base === config.apiBase && Date.now() - cached.at <= CATALOG_TTL_MS) {
+    // `fresh` = 绕过缓存重读（刷新按钮）：TTL 内点刷新若拿缓存，界面上就是「点了没反应」。
+    if (!fresh && cached !== undefined && cached.base === config.apiBase && Date.now() - cached.at <= CATALOG_TTL_MS) {
       return cached.entries;
     }
     if (this.#catalogInFlight !== undefined) return this.#catalogInFlight;
