@@ -341,14 +341,55 @@ function parseVoid(): undefined {
 /**
  * 校验用量报表。
  *
- * 只做结构校验（与 `status` 同一条纪律）：数据由本插件自己的宿主侧产生，深校验没有
- * 额外价值；但**必须确认它的形状**，否则页面会在渲染时拿到 `undefined` 而崩。
+ * **必须逐层校验**，不能只看顶层：渲染时会直接解引用 `account.period.kind` /
+ * `bucket.*` / `total.bucket`，任何一层缺失都会在渲染期抛 TypeError —— React 因此
+ * 丢弃整棵子树，表现就是「刷新用量统计时整块内容消失」（2026-10-19 报障）。
+ *
+ * 策略：不认识的行**丢弃**而不是整体报错 —— 少一行明细好过整页消失。
  */
 function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
   if (!isRecord(value) || !isRecord(value.total) || !Array.isArray(value.accounts)) {
     throw boundaryError(endpoint, "expected a usage report with accounts and total");
   }
-  return value as unknown as UsageReportView;
+  const total = value.total;
+  if (!isRecord(total.bucket)) {
+    throw boundaryError(endpoint, "expected total.bucket to be an object");
+  }
+  const accounts = (value.accounts as unknown[]).filter(isAccountUsageRow);
+  const byVendor = Array.isArray(total.byVendor) ? (total.byVendor as unknown[]).filter(isVendorBucketRow) : [];
+  return {
+    accounts,
+    total: {
+      window: isUsageWindow(total.window) ? total.window : "today",
+      bucket: total.bucket as unknown as UsageBucketView,
+      byVendor,
+      ...(typeof total.lastAt === "number" && Number.isFinite(total.lastAt) ? { lastAt: total.lastAt } : {}),
+    },
+  } as UsageReportView;
+}
+
+/** 合法的窗口值。 */
+function isUsageWindow(value: unknown): value is UsageWindowView {
+  return value === "today" || value === "7d" || value === "30d" || value === "all";
+}
+
+/**
+ * 一行账号用量是否**可渲染**：`period` 与 `bucket` 必须在。
+ *
+ * 只查渲染会直接解引用的字段；数字缺失由渲染层兜底（显示破折号），但对象整体缺失
+ * 必须在边界挡掉 —— 那正是「渲染期 TypeError → 整块消失」的来源。
+ */
+function isAccountUsageRow(value: unknown): value is AccountUsageView {
+  if (!isRecord(value)) return false;
+  const period = value.period;
+  if (!isRecord(period) || typeof period.kind !== "string" || typeof period.key !== "string") return false;
+  if (typeof period.start !== "number" || typeof period.fromResetAt !== "boolean") return false;
+  return isRecord(value.bucket);
+}
+
+/** 一家厂商的桶是否可渲染（`byVendor` 的每一行）。 */
+function isVendorBucketRow(value: unknown): value is { vendor: string; bucket: UsageBucketView } {
+  return isRecord(value) && typeof value.vendor === "string" && isRecord(value.bucket);
 }
 
 /** 校验「添加账户」的输入。 */function parseAddAccountInput(value: unknown): AddAccountInput {

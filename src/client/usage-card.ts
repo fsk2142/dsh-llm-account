@@ -217,9 +217,15 @@ export function AccountUsageBlock(props: {
   compact?: boolean;
 }): ReactElement {
   const { t, entry } = props;
-  const periodText = entry.period.fromResetAt
+  // 防御性取数：渲染层**绝不因为一条数据形状不对就抛** —— 一抛就是整棵子树被丢弃，
+  // 表现为「刷新用量统计时整块内容消失」（2026-10-19 报障）。
+  // 边界校验器已挡掉大部分，这里兜住残留（例如校验通过但字段是 null）。
+  const period = entry.period ?? ({} as AccountUsageView["period"]);
+  const kind = typeof period.kind === "string" ? period.kind : "month";
+  const periodText = period.fromResetAt === true
     ? t("usage.periodFromVendor")
-    : t("usage.periodEstimated").replace("{kind}", t(`usage.kind.${entry.period.kind}`));
+    : t("usage.periodEstimated").replace("{kind}", t(`usage.kind.${kind}`));
+  const bucket = entry.bucket ?? ({} as UsageBucketView);
   return createElement(
     "section",
     {
@@ -237,14 +243,14 @@ export function AccountUsageBlock(props: {
       createElement(
         "small",
         {
-          "data-usage-period": entry.period.key,
-          "data-usage-period-source": entry.period.fromResetAt ? "vendor" : "estimated",
+          "data-usage-period": period.key,
+          "data-usage-period-source": period.fromResetAt === true ? "vendor" : "estimated",
           className: CSS_CLASS.usageMuted,
         },
         `${t("usage.period")} · ${periodText}`,
       ),
       // 权威金额跟在周期后面（额度端点按美元记账时才有）。
-      ...(entry.spent === undefined
+      ...(typeof entry.spent !== "number" || !Number.isFinite(entry.spent)
         ? []
         : [
             createElement(
@@ -254,7 +260,7 @@ export function AccountUsageBlock(props: {
             ),
           ]),
     ),
-    ...bucketRows(t, entry.bucket),
+    ...bucketRows(t, bucket),
   );
 }
 
@@ -362,13 +368,15 @@ export function UsageCard(props: UsageCardProps): ReactElement {
           createElement(
             "div",
             { key: "by-vendor", "data-usage-by-vendor": "true", className: CSS_CLASS.usageSplit },
-            ...total.byVendor.map((entry) =>
-              createElement(
+            ...total.byVendor.map((entry) => {
+              // 同上：这条路径也在渲染期，字段缺失不能让它抛。
+              const vendorBucket = entry.bucket ?? ({} as UsageBucketView);
+              return createElement(
                 "span",
                 { key: entry.vendor, "data-usage-vendor-row": entry.vendor, className: CSS_CLASS.usageHint },
-                `${entry.vendor} · ${grouped(entry.bucket.requests)} 次 · ${percent(entry.bucket.cacheHitRate)}`,
-              ),
-            ),
+                `${entry.vendor} · ${grouped(vendorBucket.requests ?? 0)} 次 · ${percent(vendorBucket.cacheHitRate)}`,
+              );
+            }),
           ),
         ]),
   );
