@@ -72,7 +72,7 @@ import type { OpenDesignAccounts } from "./accounts";
 import { DEFAULT_BASE_URL } from "./protocol";
 import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
-import { createUsagePort } from "../usage-store";
+import { createUsagePort, localSpendBetween } from "../usage-store";
 import { SwitchingController } from "../switching";
 import { VELA_PREFLIGHT_TIMEOUT_MS, createOpenDesignLogin, discoverWorkspaceId, findVelaBinary } from "./login";
 
@@ -285,6 +285,9 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         summaryFallback: velaSummary,
         walletBase,
         preflight: velaPreflight,
+        // 月度用量：这家厂商的接口不给（订阅走 credit 窗口，钱包消耗恒 0），问本机台账 ——
+        // 界面会标成「仅本机」（用户 2026-10-19 的两个要求：月度要有数字 + 只统计本机）。
+        localSpend: (from, to) => localSpendBetween({ vendor: "opendesign", account: ref ?? "", from, to }),
       }).snapshot();
     },
   };

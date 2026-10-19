@@ -551,8 +551,18 @@ export class LlmAccountUsageService extends TypertRemoteService {
           if (periodEnd !== undefined) planEnds.set(key, periodEnd);
           const periodStart = account.quota?.plan?.periodStart;
           if (periodStart !== undefined) planStarts.set(key, periodStart);
-          // 权威金额：优先最细的那档；它没给美元就退到别的美元窗口。
-          const usd = ranked.find((window) => window.unit === "usd" && window.used !== undefined);
+          // 权威金额要**跟周期同口径**：旧写法按「最细」挑，于是拿到 5 小时窗口的已用
+          // （$0.16），却配在「本周期」（按套餐是一个月）的标题下 —— 一个月的统计配五小时
+          // 的金额，用户一眼就觉得数是错的（2026-10-19 报障）。
+          // 现在只认**重置时间与套餐账期一致**的美元窗口；没有就留空，让报表用本机口径
+          // （`localSpent`）回答「这台机器这一期用了多少」。
+          const usdWindows = ranked.filter((window) => window.unit === "usd" && window.used !== undefined);
+          const sameAsPlan =
+            periodEnd === undefined
+              ? undefined
+              : usdWindows.find((window) => window.resetAt !== undefined && Math.abs(window.resetAt - periodEnd) < 60_000);
+          // 没有套餐信息时退回最细那一档（那是当时唯一能拿到的口径）。
+          const usd = sameAsPlan ?? (periodEnd === undefined ? usdWindows[0] : undefined);
           if (usd?.used !== undefined) spent.set(key, { amount: usd.used, window: usd.key });
         }
       } catch {

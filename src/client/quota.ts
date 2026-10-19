@@ -121,15 +121,21 @@ export function quotaWindowLabel(t: (key: string) => string, key: string): strin
  */
 export function quotaWindowText(t: (key: string) => string, window: QuotaWindow): string {
   const reading = quotaReading(window);
+  // 本机口径的读数必须自带标注：同一个 `$` 符号既可能是厂商说的（含所有设备），也可能是
+  // 本机台账折合的（只有这台机器）。不标出来，用户跟厂商后台对账必然对不上
+  // （2026-10-19 用户直接问了这一点）。
+  const suffix = window.usedSource === "local" ? `（${t("usage.localOnly")}）` : "";
   switch (reading.shape) {
     case "used-cap":
-      return t("quota.usedOf")
-        .replace("{used}", quotaAmount(reading.used, window.unit))
-        .replace("{cap}", quotaAmount(reading.cap, window.unit));
+      return (
+        t("quota.usedOf")
+          .replace("{used}", quotaAmount(reading.used, window.unit))
+          .replace("{cap}", quotaAmount(reading.cap, window.unit)) + suffix
+      );
     case "percent":
-      return t("quota.usedPercent").replace("{percent}", formatNumber(reading.percent));
+      return t("quota.usedPercent").replace("{percent}", formatNumber(reading.percent)) + suffix;
     case "used":
-      return t("quota.used").replace("{used}", quotaAmount(reading.used, window.unit));
+      return t("quota.used").replace("{used}", quotaAmount(reading.used, window.unit)) + suffix;
     case "cap":
       return t("quota.capOnly").replace("{cap}", quotaAmount(reading.cap, window.unit));
     case "unlimited":

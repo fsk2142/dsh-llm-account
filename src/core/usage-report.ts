@@ -35,6 +35,18 @@ export interface AccountUsage {
   spent?: number;
   /** 该金额来自哪个窗口（显示成「5 小时窗口已用 $3.20」）。 */
   spentWindow?: string;
+  /**
+   * 这个账号在本周期内**本机折合**花了多少（美元，按 DeepSeek 官方价折算我们自己记的 token）。
+   *
+   * 与 {@link spent} 的区别是两套账：
+   * - `spent` = 厂商端点说的（含**所有**客户端/机器的消耗）；
+   * - `localSpent` = 只有**这台机器**上本插件发出去的请求。
+   *
+   * 厂商不公布某个窗口的用量时（Open Design 的月度就是），用它把「本机这一期用了多少」
+   * 显示出来 —— 前提是**明确标成本机口径**（用户 2026-10-19 问的正是这两者会不会混）。
+   * 没有可用价格（厂商不公布单价且模型认不出）时为 `undefined`。
+   */
+  localSpent?: number;
   /** 周期内**最近一次请求**的时刻（epoch 毫秒）；周期内没有记录时缺失。 */
   lastAt?: number;
 }
@@ -149,6 +161,8 @@ export function buildUsageReport(query: UsageQuery): { accounts: AccountUsage[];
       bucket,
       windowed,
       ...(spent === undefined ? {} : { spent: spent.amount, spentWindow: spent.window }),
+      // 本机折合：周期内这些记录的官方价折算。厂商不公布该窗口用量时用它显示本机消耗。
+      ...(bucket.officialCost === undefined ? {} : { localSpent: bucket.officialCost }),
       ...(lastAt === undefined ? {} : { lastAt }),
     });
   }

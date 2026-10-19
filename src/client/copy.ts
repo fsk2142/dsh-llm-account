@@ -150,6 +150,9 @@ export type CopyKey =
   | "usage.clearConfirm"
   | "usage.officialCost"
   | "usage.officialShort"
+  | "usage.localOnly"
+  | "usage.fromVendor"
+  | "usage.localSpent"
   | "usage.priceUnknown"
   | "usage.period"
   | "usage.periodRange"
@@ -442,6 +445,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.clearConfirm": "清空全部用量记录？此操作不可撤销。",
     "usage.officialCost": "≈ 按 DeepSeek 官方价",
     "usage.officialShort": "官方价",
+    "usage.localOnly": "仅本机（不含其他设备）",
+    "usage.fromVendor": "官方账号口径",
+    "usage.localSpent": "本机折合",
     "usage.priceUnknown": "未公开",
     "usage.period": "本周期",
     "usage.periodRange": "账期 {from} – {to}",
@@ -720,6 +726,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.clearConfirm": "Clear all usage records? This cannot be undone.",
     "usage.officialCost": "≈ at DeepSeek list price",
     "usage.officialShort": "list price",
+    "usage.localOnly": "this device only (excludes other devices)",
+    "usage.fromVendor": "vendor account scope",
+    "usage.localSpent": "local equivalent",
     "usage.priceUnknown": "not published",
     "usage.period": "This period",
     "usage.periodRange": "Billing period {from} – {to}",

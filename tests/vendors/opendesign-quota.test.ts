@@ -314,3 +314,85 @@ it("preflight 的数字是字符串（\"906\"/\"50000\"）：照样折算成美�
   expect(snapshot.windows[0]).toMatchObject({ key: "fiveHour", unit: "usd", used: 0.0906, cap: 5 });
   expect(snapshot.windows[1]).toMatchObject({ key: "weekly", unit: "usd", used: 0.0906, cap: 15 });
 });
+
+// —— 2026-10-19：月度用量（接口不给 → 用本机台账，且标成「仅本机」）——
+
+it("月度窗口没有厂商 used 时，用本机台账折合的金额填补并标成本机口径", async () => {
+  // 真机事实：订阅额度走 credit 窗口（5h / 周），接口不给月度用量；钱包消耗恒 0。
+  const fetchImpl = scriptedFetch([
+    () => json({
+      membershipTier: "go",
+      subscriptionStatus: "active",
+      subscriptionCurrentPeriodStart: "2026-10-18T10:21:12.000Z",
+      subscriptionCurrentPeriodEnd: "2026-11-18T10:21:12.000Z",
+    }),
+  ]);
+  const asked: { from: number; to: number }[] = [];
+  const port = createOpenDesignQuota(
+    deps(fetchImpl, {
+      localSpend: async (from, to) => {
+        asked.push({ from, to });
+        return 3.5;
+      },
+    }),
+  );
+  const snapshot = await port.snapshot();
+  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
+  expect(monthly).toBeDefined();
+  expect(monthly.cap).toBe(120);
+  expect(monthly.used).toBe(3.5);
+  // 必须标出来源：这是本机折合，不是官方口径。
+  expect(monthly.usedSource).toBe("local");
+  // 问的区间以账期末为终点、往前一个自然月为起点。
+  expect(asked).toHaveLength(1);
+  expect(asked[0]!.to).toBeGreaterThan(asked[0]!.from);
+});
+
+it("preflight 自己给了月度窗口时，本机数不覆盖它（官方数永远优先）", async () => {
+  const fetchImpl = scriptedFetch([
+    () => json({ creditsPerUsd: 10, membershipTier: "go" }),
+    () => json({ codingPlan: { windows: [{ usedCredits: 500, limitCredits: 1200, durationSeconds: 2_592_000 }] } }),
+  ]);
+  let called = false;
+  const port = createOpenDesignQuota(
+    deps(fetchImpl, {
+      workspaceIdOf: () => "ws-1",
+      preflight: async () => ({ codingPlan: { windows: [{ usedCredits: 500, limitCredits: 1200, durationSeconds: 2_592_000 }] } }),
+      localSpend: async () => {
+        called = true;
+        return 99;
+      },
+    }),
+  );
+  const snapshot = await port.snapshot();
+  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
+  // 厂商给了 used（500/10 = $50），本机数不得盖掉它，也不该被调用。
+  expect(monthly.used).toBe(50);
+  expect(monthly.usedSource).toBeUndefined();
+  expect(called).toBe(false);
+});
+
+it("没有注入 localSpend 时行为不变（月度只有上限）", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "go" })]);
+  const snapshot = await createOpenDesignQuota(deps(fetchImpl)).snapshot();
+  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
+  expect(monthly.cap).toBe(120);
+  expect(monthly.used).toBeUndefined();
+  expect(monthly.usedSource).toBeUndefined();
+});
+
+it("本机台账读失败时保持只有上限，不新增失败项（额度读数本身不受影响）", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "go" })]);
+  const port = createOpenDesignQuota(
+    deps(fetchImpl, {
+      localSpend: async () => {
+        throw new Error("ledger unreadable");
+      },
+    }),
+  );
+  const snapshot = await port.snapshot();
+  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
+  expect(monthly.used).toBeUndefined();
+  // 台账读失败不写成额度读失败：那条失败项说的是「没配 workspaceId」，与台账无关。
+  expect(snapshot.failures.some((item) => item.includes("ledger"))).toBe(false);
+});

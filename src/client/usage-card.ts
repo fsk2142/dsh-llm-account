@@ -190,7 +190,6 @@ export function AccountUsageBlock(props: {
   const cacheHitRate = finite(bucket.cacheHitRate);
   const officialCost = finite(bucket.officialCost);
   const vendorCost = finite(bucket.vendorCost);
-  const spent = finite(entry.spent);
   const lastAt = finite(entry.lastAt);
 
   // 总 token：四个分项相加。任一分项缺失都还是能加（缺失按 0），但**全部**缺失就是没有数据。
@@ -199,14 +198,29 @@ export function AccountUsageBlock(props: {
     ? undefined
     : tokenParts.reduce<number>((sum, part) => sum + (part ?? 0), 0);
 
-  // 花费：厂商按美元记账的权威金额优先；没有它才退回「token × 厂商单价」。
-  // 两者都没有就是「未公开」——不写 $0.00，那会让人以为免费。
-  const cost = spent ?? vendorCost;
-  // 原值留在 data 属性上供排查/测试（`data-usage-spent` = 厂商权威口径，
-  // `data-usage-official` = 官方价折算），界面上只显示格式化后的金额。
+  // 花费有三种口径，**必须分开说**（用户 2026-10-19：「这个用量和消耗的价格是本机的还是
+  // 从官方账号抓取的？」）：
+  // 1. `spent`：厂商端点报的**本周期已用**（含所有客户端/机器用了这个账号的量）；
+  // 2. `localSpent`：**只有这台机器**上本插件记的 token，按官方价折算；
+  // 3. `vendorCost`：厂商公布过逐模型单价时的 token×单价（三家都没有，通常为空）。
+  // 全部缺失才是「未公开」——绝不写 $0.00，那会让人以为免费。
+  const vendorSpent = finite(entry.spent);
+  const localSpent = finite(entry.localSpent);
+  const cost = vendorSpent ?? vendorCost ?? localSpent;
+  // 原值留在 data 属性上供排查/测试，界面上只显示格式化后的金额。
   const costData: Record<string, string | number> = {};
-  if (spent !== undefined) costData["data-usage-spent"] = spent;
+  if (vendorSpent !== undefined) costData["data-usage-spent"] = vendorSpent;
+  if (localSpent !== undefined) costData["data-usage-local-spent"] = localSpent;
   if (officialCost !== undefined) costData["data-usage-official"] = officialCost;
+  // 花费的**口径标签**：有厂商数就标「官方账号」，只有本机数就标「仅本机」。
+  // 没有这个标签，同一个 $ 符号在两台机器上会给出两个不同的数而无人解释得清。
+  const costScope = vendorSpent !== undefined ? "vendor" : localSpent !== undefined ? "local" : undefined;
+  const costHint =
+    costScope === "local"
+      ? t("usage.localOnly")
+      : officialCost === undefined
+        ? undefined
+        : `${t("usage.officialShort")} ≈ ${money(officialCost, "—")}`;
 
   const head = createElement(
     "div",
@@ -257,9 +271,8 @@ export function AccountUsageBlock(props: {
       label: t("usage.cost"),
       value: money(cost, t("usage.priceUnknown")),
       tone: cost === undefined ? "muted" : "plain",
-      // 官方价折算跟在金额下面（用户要求「出个小字约等于官方多少」）。
-      ...(officialCost === undefined ? {} : { hint: `${t("usage.officialShort")} ≈ ${money(officialCost, "—")}` }),
-      data: costData,
+      ...(costHint === undefined ? {} : { hint: costHint }),
+      ...(costScope === undefined ? {} : { data: { ...costData, "data-usage-cost-scope": costScope } }),
     }),
     metric({
       key: "tokens",

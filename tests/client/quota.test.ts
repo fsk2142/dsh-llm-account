@@ -161,3 +161,15 @@ it("进度条：单位是 0–100 的已用百分比，用得越多档位越糟�
   expect(quotaMeter({ key: "w", percent: 120 })).toEqual({ percent: 100, level: "error" });
   expect(quotaMeter({ key: "w", percent: -5 })).toEqual({ percent: 0, level: "ok" });
 });
+
+it("本机口径的窗口读数自带「仅本机」标注（不与官方口径混淆）", () => {
+  const t = dictionaryOf("zh");
+  // 厂商给的：不带标注。
+  expect(quotaWindowText(t, { key: "monthly", used: 3.2, cap: 120, unit: "usd" })).not.toContain("仅本机");
+  // 本机台账折合的：必须标出来，否则用户会拿它跟厂商后台对账。
+  const local = quotaWindowText(t, { key: "monthly", used: 3.2, cap: 120, unit: "usd", usedSource: "local" });
+  expect(local).toContain("$3.20");
+  expect(local).toContain("$120.00");
+  expect(local).toContain("仅本机");
+  expect(local).toContain("不含其他设备");
+});

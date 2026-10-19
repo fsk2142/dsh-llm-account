@@ -83,6 +83,18 @@ export interface OpenDesignQuotaDeps {
   walletBase?: string;
   /** 每个端点的预算（毫秒）；缺省 {@link DEFAULT_QUOTA_TIMEOUT_MS}。 */
   timeoutMs?: number;
+  /**
+   * **本机**在某段时间内折合花了多少（美元）。
+   *
+   * 存在的理由（用户 2026-10-19：「月度用量怎么没有变化」+「能不能只统计本机」）：
+   * 这家厂商的订阅额度按 credit 窗口记账（5 小时 / 周），接口**不给**月度用量，钱包消耗
+   * `totalConsumedUsd` 对订阅用户恒为 0。月度窗口于是只剩一个上限、数字永远不动。
+   * 本机台账知道答案 —— 用它把「这台机器这一期用了多少」填进去，并在窗口上打
+   * `usedSource: "local"`，界面会标成「仅本机」。
+   *
+   * 缺省（没注入）时行为与以前一致：月度窗口只显示上限。
+   */
+  localSpend?: (from: number, to: number) => Promise<number | undefined>;
 }
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
@@ -445,11 +457,71 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
             : "该账号未配置工作区：周期额度需要 workspaceId（网页登录会自动写入，也可在设置里手填）",
         );
       }
-      return toQuotaSnapshot({
+      // 月度用量：接口不给（订阅走 credit 窗口），问本机台账。
+      //
+      // 这一步在 `toQuotaSnapshot` 之后做（那个是纯函数，不该做 I/O）：把本机折合的美元
+      // 填进月度窗口的 `used`，并标 `usedSource: "local"`。用户 2026-10-19 的两个要求
+      // 因此同时满足 —— 月度有数字了，而且明确是**本机**口径。
+      const snapshot = toQuotaSnapshot({
         ...(summary === undefined ? {} : { summary }),
         ...(preflight === undefined ? {} : { preflight }),
         failures,
       });
+      return await withLocalMonthly(snapshot, deps.localSpend);
     },
   };
+}
+
+/**
+ * 给月度窗口补上**本机**已用金额（厂商不公布月度用量时）。
+ *
+ * 只在三种条件下动手，全部满足才改：
+ * 1. 该窗口是 `monthly` 且**没有** `used`（厂商自己给了就不覆盖 —— 官方数永远优先）；
+ * 2. 有 `cap`（没有上限的窗口算不出比例，填了也没意义）；
+ * 3. 注入了 `localSpend`（测试 / 没有台账的场景保持原样）。
+ *
+ * 区间取「账期起点（或往前推一个自然月）到此刻」：月度窗口的重置时间就是账期末，
+ * 用它反推起点，与统计层的套餐账期口径一致。
+ * @param snapshot - 已归一化的读数（纯函数产物）。
+ * @param localSpend - 本机花费查询（缺省时原样返回）。
+ * @returns 补过月度已用的读数。
+ */
+async function withLocalMonthly(
+  snapshot: QuotaSnapshot,
+  localSpend: ((from: number, to: number) => Promise<number | undefined>) | undefined,
+): Promise<QuotaSnapshot> {
+  if (localSpend === undefined) return snapshot;
+  const now = Date.now();
+  const windows: QuotaWindow[] = [];
+  for (const window of snapshot.windows) {
+    const needsLocal = window.key === "monthly" && window.used === undefined && window.cap !== undefined;
+    if (!needsLocal) {
+      windows.push(window);
+      continue;
+    }
+    // 账期起点：重置时间往前推一个自然月；没有重置时间就用最近 30 天。
+    const end = window.resetAt !== undefined && window.resetAt > now ? window.resetAt : now;
+    const from = window.resetAt !== undefined ? addMonthBack(end) : end - 30 * 86_400_000;
+    let used: number | undefined;
+    try {
+      used = await localSpend(from, now);
+    } catch (error) {
+      // 台账读失败不该让整次额度读数失败：保持原样（只有上限）。
+      console.warn("[dsh-llm-account] could not compute the local monthly spend:", error);
+    }
+    windows.push(used === undefined ? window : { ...window, used, usedSource: "local" });
+  }
+  return { ...snapshot, windows };
+}
+
+/** 往前推一个自然月（月末夹取，与 `core/billing-period` 的同一口径）。 */
+function addMonthBack(at: number): number {
+  const date = new Date(at);
+  const day = date.getDate();
+  const target = new Date(at);
+  target.setDate(1);
+  target.setMonth(target.getMonth() - 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(day, lastDay));
+  return target.getTime();
 }

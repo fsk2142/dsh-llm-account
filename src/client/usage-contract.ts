@@ -120,6 +120,13 @@ export interface AccountUsageView {
   spent?: number;
   /** 该金额来自哪个额度窗口。 */
   spentWindow?: string;
+  /**
+   * 本周期内**本机折合**花费（美元，按官方价折算我们自己记的 token）。
+   *
+   * 与 `spent` 是两套账：那个含所有客户端/机器，这个只有这台机器上本插件发出的请求。
+   * 厂商不公布某个窗口用量时（Open Design 的月度），界面标成本机口径显示它。
+   */
+  localSpent?: number;
   /** 本周期内**最近一次请求**的时刻（epoch 毫秒）；周期内没有记录时缺失。 */
   lastAt?: number;
 }
