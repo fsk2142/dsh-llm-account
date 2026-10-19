@@ -250,7 +250,7 @@ it("有记录且给了动作时才渲染「清空」；点了回调它", () => {
 
 it("配额没给美元时账号节不画「本周期已花」那一行", () => {
   const tree = render();
-  expect(elementsOf(tree).some((element) => element.props["data-usage-row"] === "spent")).toBe(false);
+  expect(elementsOf(tree).some((element) => element.props["data-usage-spent"] !== undefined)).toBe(false);
 });
 
 it("额度给了美元金额时账号节显示「本周期已花」", () => {
@@ -267,9 +267,10 @@ it("额度给了美元金额时账号节显示「本周期已花」", () => {
       },
     ],
   });
-  const spentRow = elementsOf(tree).find((element) => element.props["data-usage-row"] === "spent")!;
-  expect(spentRow).toBeDefined();
-  expect(textsOf(spentRow).join(" ")).toContain("$3.20");
+  // 金额渲染在账号节的标题行里（与周期说明并排），不是独立明细行。
+  const spent = elementsOf(tree).find((element) => element.props["data-usage-spent"] !== undefined)!;
+  expect(spent).toBeDefined();
+  expect(textsOf(spent).join(" ")).toContain("$3.20");
 });
 
 it("总账给出最近一次请求时间时显示成相对时间", () => {

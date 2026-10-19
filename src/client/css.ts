@@ -453,6 +453,9 @@ export const PAGE_CSS = `
 .dsl-usage-metric[data-tone="ok"] .dsl-usage-metric-value { color: var(--dsw-alias-state-success-primary); }
 .dsl-usage-metric[data-tone="warn"] .dsl-usage-metric-value { color: var(--dsw-alias-state-warn-primary); }
 .dsl-usage-metric[data-tone="muted"] .dsl-usage-metric-value { color: var(--dsw-alias-label-tertiary); }
+/* 账号行内嵌的用量：无外框（已经在账号卡片里），只靠一条细分隔线与额度分开。 */
+.dsl-usage-inline { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding-top: 6px;
+  border-top: .5px dashed var(--dsw-alias-border-l1); }
 .dsl-quota-bar-list { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .dsl-quota-bar { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
 .dsl-quota-bar-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -679,6 +682,7 @@ export const CSS_CLASS = {
   usageMetricValue: "dsl-usage-metric-value",
   usageMetricLabel: "dsl-usage-metric-label",
   usageMetricHint: "dsl-usage-metric-hint",
+  usageInline: "dsl-usage-inline",
   ring: "dsl-ring",
   ringChart: "dsl-ring-chart",
   ringSvg: "dsl-ring-svg",

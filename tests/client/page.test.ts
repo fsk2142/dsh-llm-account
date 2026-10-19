@@ -311,6 +311,30 @@ it("渲染期抛错时显示错误面板，而不是整页空白", () => {
   expect(textOf(tree).join("\n")).toContain("t() exploded");
 });
 
+it("「集成与显示」与「高级」都默认折叠（原生 details），标题用组名而不是写死的「高级」", () => {
+  const state = createPageState(VENDORS, SNAPSHOTS);
+  const tree = PageShell({
+    state,
+    entries: VENDORS,
+    t: dictionaryOf("zh"),
+    onSelectTab: () => undefined,
+    onSetField: () => undefined,
+    onSave: () => undefined,
+  });
+  const all = elementsOf(tree);
+  for (const group of ["integrations", "advanced"]) {
+    const details = all.find((element) => element.type === "details" && element.props["data-card-group"] === group);
+    expect(details, `${group} 应该是可折叠的 details`).toBeDefined();
+    // 默认收起：不带 open。
+    expect(details!.props.open).toBeUndefined();
+    // 标题用组名（写死「高级」会让两个折叠组同名）。
+    const summary = elementsOf(details).find((element) => element.type === "summary")!;
+    expect(textOf(summary).join(" ")).toContain(COPY.zh[`group.${group}`]);
+  }
+  // 不折叠的组必须还是 section（`privacy` 在快照里声明了）。
+  const privacy = all.find((element) => element.props["data-card-group"] === "privacy");
+  if (privacy !== undefined) expect(privacy.type).toBe("section");
+});
 it("数字字段写回 number（字符串会让宿主按非法值回落）", () => {
   const state = createPageState(VENDORS, SNAPSHOTS);
   const t = dictionaryOf("en");

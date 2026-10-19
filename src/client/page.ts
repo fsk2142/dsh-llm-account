@@ -197,21 +197,32 @@ function vendorBody(props: PageShellProps, entry: VendorEntry): ReactNode {
   );
 }
 
-/** 一组通用字段卡片。`advanced` 组用原生 `<details>`：默认折叠（规格 §8），且不需要状态。 */
+/**
+ * 一组通用字段卡片。
+ *
+ * 「集成与显示」与「高级」都用原生 `<details>` **默认折叠**（用户 2026-10-19 要求前者
+ * 也能收）：这两组都是配置一次就不常动的字段，摊开会让设置页显得很长；账号与额度是
+ * 常用区，保持展开。
+ */
 function cardGroupElement(props: PageShellProps, entry: VendorEntry, group: CardGroupSpec): ReactElement {
   const fields = fieldsOf(props.state, entry).filter((field) => group.fields.some((spec) => spec.key === field.spec.key));
   const heading = createElement("h2", null, props.t(`group.${group.group}`));
   const hint = createElement("p", { "data-card-hint": group.group }, props.t(`group.${group.group}.hint`));
   const body = fields.map((field) => fieldElement(props, entry, field));
 
-  // 高级设置默认折叠：`<details>` 不带 `open`。
-  if (group.group === "advanced") {
+  if (group.group === "advanced" || group.group === "integrations") {
     return createElement(
       "details",
       { key: group.group, "data-card-group": group.group, className: CSS_CLASS.card },
-      createElement("summary", null, createElement(ChevronIcon, null), props.t("advanced")),
-      // 集成显示不再分供应商；只有高级字段仍按厂商区分，所以把「设置对象」放进高级里。
-      props.mergeTabs === true ? settingsTarget(props) : null,
+      createElement(
+        "summary",
+        null,
+        createElement(ChevronIcon, null),
+        // 标题用组名，不再写死「高级」—— 折叠组现在不止一个。
+        props.t(`group.${group.group}`),
+      ),
+      // 「设置对象」只对按厂商区分的字段有意义，所以只挂在高级组里。
+      group.group === "advanced" && props.mergeTabs === true ? settingsTarget(props) : null,
       hint,
       ...body,
     );

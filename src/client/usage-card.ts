@@ -202,6 +202,63 @@ function costRows(t: (key: string) => string, bucket: UsageBucketView): ReactEle
 }
 
 /**
+ * 一个账号的用量区块（**两处共用同一份渲染**）。
+ *
+ * 用在两处：设置页那张「用量统计」卡里的账号列表，以及**账号行自己的额度条下方**
+ * （用户 2026-10-19 要求单个账号的统计放在账号下面）。两处共用一个实现，口径不分叉。
+ * @param props - 取词、账号用量、显示用的标签。
+ * @returns 区块元素。
+ */
+export function AccountUsageBlock(props: {
+  t: (key: string) => string;
+  entry: AccountUsageView;
+  label: string;
+  /** 紧凑模式：账号行内嵌时不要标题行（账号名已经在上面了）。 */
+  compact?: boolean;
+}): ReactElement {
+  const { t, entry } = props;
+  const periodText = entry.period.fromResetAt
+    ? t("usage.periodFromVendor")
+    : t("usage.periodEstimated").replace("{kind}", t(`usage.kind.${entry.period.kind}`));
+  return createElement(
+    "section",
+    {
+      key: `${entry.vendor}\u0000${entry.account}`,
+      "data-usage-account": entry.account,
+      "data-usage-vendor": entry.vendor,
+      "data-usage-compact": props.compact === true ? "true" : undefined,
+      className: props.compact === true ? CSS_CLASS.usageInline : CSS_CLASS.usageBlock,
+    },
+    createElement(
+      "div",
+      { className: CSS_CLASS.usageAccountHead },
+      // 紧凑模式下账号名在上面的标题行里，这里只留周期说明。
+      ...(props.compact === true ? [] : [createElement("strong", { key: "name" }, props.label)]),
+      createElement(
+        "small",
+        {
+          "data-usage-period": entry.period.key,
+          "data-usage-period-source": entry.period.fromResetAt ? "vendor" : "estimated",
+          className: CSS_CLASS.usageMuted,
+        },
+        `${t("usage.period")} · ${periodText}`,
+      ),
+      // 权威金额跟在周期后面（额度端点按美元记账时才有）。
+      ...(entry.spent === undefined
+        ? []
+        : [
+            createElement(
+              "small",
+              { key: "spent", "data-usage-spent": entry.spent, className: CSS_CLASS.usageHint },
+              `${t("usage.spent")} $${entry.spent.toFixed(2)}`,
+            ),
+          ]),
+    ),
+    ...bucketRows(t, entry.bucket),
+  );
+}
+
+/**
  * 用量卡片。
  * @param props - 见 {@link UsageCardProps}。
  * @returns 元素树。
@@ -270,38 +327,11 @@ export function UsageCard(props: UsageCardProps): ReactElement {
 
   // 每账号一节：标题是账号名，副标题是它的记账周期。
   const perAccount = accounts.map((entry) =>
-    createElement(
-      "section",
-      {
-        key: `${entry.vendor}\u0000${entry.account}`,
-        "data-usage-account": entry.account,
-        "data-usage-vendor": entry.vendor,
-        className: CSS_CLASS.usageBlock,
-      },
-      createElement(
-        "div",
-        { className: CSS_CLASS.usageAccountHead },
-        createElement("strong", null, labelOf(entry.vendor, entry.account)),
-        createElement(
-          "small",
-          { "data-usage-period": entry.period.key, "data-usage-period-source": entry.period.fromResetAt ? "vendor" : "estimated", className: CSS_CLASS.usageMuted },
-          `${t("usage.period")} · ${entry.period.fromResetAt ? t("usage.periodFromVendor") : t("usage.periodEstimated").replace("{kind}", t(`usage.kind.${entry.period.kind}`))}`,
-        ),
-      ),
-      ...bucketRows(t, entry.bucket),
-      // 厂商权威金额：额度端点按美元记账时直接给出「本周期花了多少」，
-      // 比 token×单价反推更准。缺失（额度读不到 / 只给百分比）时整行不画。
-      ...(entry.spent === undefined
-        ? []
-        : [
-            row(
-              "spent",
-              t("usage.spent"),
-              `$${entry.spent.toFixed(2)}`,
-              "spent",
-            ),
-          ]),
-    ),
+    AccountUsageBlock({
+      t,
+      entry,
+      label: labelOf(entry.vendor, entry.account),
+    }),
   );
 
   // 总账一节（放在最后，与账号分隔开）。

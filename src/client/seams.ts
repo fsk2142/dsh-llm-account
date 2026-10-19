@@ -54,7 +54,7 @@ import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import type { VendorEntry } from "./registry";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type SwitchRuntimeState, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
-import { UsageCard } from "./usage-card";
+import { AccountUsageBlock, UsageCard } from "./usage-card";
 
 /**
  * 把账号 ref 翻成可读名（用量卡片显示用）。
@@ -1218,7 +1218,93 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       void remoteValue(callRemote(() => usage?.loginCancel(vendor)));
     };
 
+    // —— 用量统计的 state 与读取 ——
+    //
+    // 必须**在 `accountsPanel` 之前**声明：账号行要内嵌各自的用量（用户要求「单个账号的
+    // 统计放在该账号下面」），而构造面板时就要用到 `usageReport`。所有 Hook 仍然集中在
+    // 渲染体顶部，顺序在每次渲染之间不变。
+    const [usageWindow, setUsageWindow] = useState<UsageWindowView>("today");
+    const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
+    const [usageStatsProblem, setUsageStatsProblem] = useState<string | undefined>(undefined);
+    const [usageLoading, setUsageLoading] = useState(true);
+    /**
+     * 定时重读计数：设置页会开着好一会儿，30 秒一次让数字跟上。
+     *
+     * 为什么不是「请求完成就刷新」：客户端没有可订阅的回合结束事件（宿主的
+     * `session/event` 只在 host 插件上下文里可用）。页面不可见时不读（与侧边栏同纪律）。
+     */
+    const [usageTick, setUsageTick] = useState(0);
+    useEffect(() => {
+      const timer = setInterval(() => {
+        const dom = domDocument();
+        if (dom?.visibilityState === "hidden") return;
+        setUsageTick((current) => current + 1);
+      }, 30_000);
+      return () => clearInterval(timer);
+    }, []);
+    useEffect(() => {
+      let alive = true;
+      const load = (): void => {
+        if (!alive) return;
+        const api = usageNamespace(ctx);
+        if (api === undefined) {
+          // 远程面**还没挂上**（`usageNamespace` 走懒挂载：挂载完成才有命名空间）。
+          // 保持 loading，等下面的 `onUsageReady` 在挂载完成时再调一次 —— 否则卡片
+          // 会永久不出现（首次渲染几乎总是早于挂载完成）。
+          setUsageLoading(true);
+          return;
+        }
+        if (api.usageReport === undefined) {
+          // 命名空间在、但没有这个方法：宿主版本太旧或本次发布没带它。这时**确定**没有，
+          // 收起 loading 且不渲染卡片（不是「还在等」）。
+          setUsageLoading(false);
+          setUsageReport(undefined);
+          return;
+        }
+        setUsageLoading(true);
+        void api.usageReport(usageWindow).then(
+          (report) => {
+            if (!alive) return;
+            setUsageReport(report);
+            setUsageStatsProblem(undefined);
+            setUsageLoading(false);
+          },
+          (error: unknown) => {
+            if (!alive) return;
+            setUsageStatsProblem(error instanceof Error ? error.message : String(error));
+            setUsageLoading(false);
+          },
+        );
+      };
+      load();
+      // 远程面挂载完成时补读一次（与侧边栏卡片、仪表盘同一条纪律）。
+      const offReady = onUsageReady(ctx, (namespace) => {
+        if (namespace !== undefined) load();
+      });
+      return () => {
+        alive = false;
+        offReady();
+      };
+    }, [usageWindow, accountRevision, usageTick]);
+    /**
+     * 某个账号的用量块（渲染在它自己的额度条下方）。
+     * @param vendor - 厂商。
+     * @param ref - 账号 ref。
+     * @returns 用量块；没有该账号的读数时为 `undefined`（不占位）。
+     */
+    const accountUsageOf = (vendor: string, ref: string): ReactNode => {
+      const row = usageReport?.accounts.find((entry) => entry.vendor === vendor && entry.account === ref);
+      if (row === undefined) return undefined;
+      return AccountUsageBlock({
+        t,
+        entry: row,
+        label: accountLabelOf(statuses[vendor]?.accounts ?? [], ref),
+        compact: true,
+      });
+    };
+
     const accountsPanel = createElement(AccountsPanel, {
+      usageOf: accountUsageOf,
       t,
       vendors: availableEntries.map((entry) => ({
         entry,
@@ -1321,72 +1407,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       onDirty: setWebSearchDirty,
     });
 
-    // 用量统计：窗口 + 报表。Hook 一律在渲染体最前面（不放在任何 early return 之后）。
-    const [usageWindow, setUsageWindow] = useState<UsageWindowView>("today");
-    const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
-    const [usageStatsProblem, setUsageStatsProblem] = useState<string | undefined>(undefined);
-    const [usageLoading, setUsageLoading] = useState(true);
-    /**
-     * 清单刷新计数：**读一次**用。
-     *
-     * 为什么不依赖「请求完成」事件：客户端没有可订阅的回合结束事件（宿主侧
-     * `session/event` 只在 host 插件上下文里可用），所以做不到「发完立刻刷新」。
-     * 退一步用「停留期间定时重读」：设置页会开着好一会儿，30 秒一次足够让数字跟上，
-     * 又不会像 1 秒轮询那样白烧 IO。页面不可见时不读（与侧边栏同一条纪律）。
-     */
-    const [usageTick, setUsageTick] = useState(0);
-    useEffect(() => {
-      const timer = setInterval(() => {
-        const dom = domDocument();
-        if (dom?.visibilityState === "hidden") return;
-        setUsageTick((current) => current + 1);
-      }, 30_000);
-      return () => clearInterval(timer);
-    }, []);
-    useEffect(() => {
-      let alive = true;
-      const load = (): void => {
-        if (!alive) return;
-        const api = usageNamespace(ctx);
-        if (api === undefined) {
-          // 远程面**还没挂上**（`usageNamespace` 走懒挂载：挂载完成才有命名空间）。
-          // 保持 loading，等下面的 `onUsageReady` 在挂载完成时再调一次 —— 否则卡片
-          // 会永久不出现（首次渲染几乎总是早于挂载完成）。
-          setUsageLoading(true);
-          return;
-        }
-        if (api.usageReport === undefined) {
-          // 命名空间在、但没有这个方法：宿主版本太旧或本次发布没带它。这时**确定**没有，
-          // 收起 loading 且不渲染卡片（不是「还在等」）。
-          setUsageLoading(false);
-          setUsageReport(undefined);
-          return;
-        }
-        setUsageLoading(true);
-        void api.usageReport(usageWindow).then(
-          (report) => {
-            if (!alive) return;
-            setUsageReport(report);
-            setUsageStatsProblem(undefined);
-            setUsageLoading(false);
-          },
-          (error: unknown) => {
-            if (!alive) return;
-            setUsageStatsProblem(error instanceof Error ? error.message : String(error));
-            setUsageLoading(false);
-          },
-        );
-      };
-      load();
-      // 远程面挂载完成时补读一次（与侧边栏卡片、仪表盘同一条纪律）。
-      const offReady = onUsageReady(ctx, (namespace) => {
-        if (namespace !== undefined) load();
-      });
-      return () => {
-        alive = false;
-        offReady();
-      };
-    }, [usageWindow, accountRevision, usageTick]);
     const usageCard =
       usageReport === undefined && usageStatsProblem === undefined && !usageLoading
         ? undefined

@@ -92,6 +92,12 @@ export interface AccountsPanelProps {
   /** 覆盖某个账号可用的模型。 */
   onSetAccountModels?: (vendor: string, ref: string, models: readonly string[]) => void;
   /**
+   * 某个账号的用量统计（渲染在它自己的额度条下方）。
+   *
+   * 返回 `undefined` 表示这一行不画 —— 还没读到数据时不该占一块空白。
+   */
+  usageOf?: (vendor: string, ref: string) => ReactNode;
+  /**
    * 重新读取**一家**的模型目录（按账户刷新的落点）。
    *
    * 2026-10-18 用户要求：「重新获取模型不是刷新所有的，应该是刷新单个账户的」—— 入口从
@@ -376,5 +382,7 @@ function accountPropsFor(props: AccountsPanelProps, group: AccountsPanelVendor):
     ...(props.onSetAccountModels === undefined
       ? {}
       : { onSetAccountModels: (ref: string, models: readonly string[]) => props.onSetAccountModels?.(vendor, ref, models) }),
+    // 该账号自身的用量（容器给）；缺省就不渲染，与其它可选块同一条纪律。
+    ...(props.usageOf === undefined ? {} : { usageOf: (ref: string) => props.usageOf?.(vendor, ref) }),
   };
 }

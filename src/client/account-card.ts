@@ -106,6 +106,14 @@ export interface AccountCardProps {
   /** 覆盖某个账号的模型；同一模型可属于多个账号。 */
   onSetAccountModels?: (ref: string, models: readonly string[]) => void;
   /**
+   * 该账号的用量统计（容器按 ref 提供）。
+   *
+   * 放在**账号行内**（额度条下方）而不是另起一张大卡：用户 2026-10-19 要求「单个账号的
+   * 统计放在该账号下面」—— 额度与用量本来就是同一个账号的两面，分开看要来回找。
+   * 返回 `undefined` 表示这一行不画（还没读到数据）。
+   */
+  usageOf?: (ref: string) => ReactNode;
+  /**
    * 卡片底部的常驻内容（OpenCode 的 `autoSwitch` 开关）。
    *
    * 放在这里而不是让厂商卡片在外面另起一个 `<section>`：那个开关属于这张卡片，
@@ -340,6 +348,8 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
       const windows = quotaOf?.windows?.length ? quotaOf.windows : fallbackQuotaWindows(props.status?.vendor ?? "");
       return [createElement("div", { key: "meters", className: CSS_CLASS.meters }, ...quotaBars(props, windows))];
     })(),
+    // 该账号的用量：紧贴额度条下方（额度是「还剩多少」，用量是「用了多少」，成对读）。
+    props.usageOf?.(account.ref) ?? null,
     editingRename ? renameEditor(props, account) : null,
     editingKey ? keyEditor(props, account) : null,
     accountModelsSection(props, account),
