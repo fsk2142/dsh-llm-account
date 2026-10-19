@@ -142,7 +142,7 @@ it("请求数带成功/失败的小字，成功率按百分比显示", () => {
   const requests = metric(tree, "requests");
   expect(textsOf(requests).join(" ")).toContain("2");
   expect(textsOf(requests).join(" ")).toContain("1 成功 / 1 失败");
-  expect(textsOf(metric(tree, "success-rate")).join(" ")).toContain("50%");
+  // 两位小数精度（用户 2026-10-19 要求）。`1 成功 / 1 失败` = 50.00%。`n  expect(textsOf(metric(tree, "success-rate")).join(" ")).toContain("50.00%");
 });
 
 it("大数字用 K/M/B 收窄（一行要塞四个数）", () => {
@@ -197,7 +197,7 @@ it("核对用的数收在脚下：命中率、缓存读/写、最近一次请求
   const foot = elementsOf(tree).find((element) => element.props["data-usage-foot"] !== undefined)!;
   expect(foot).toBeDefined();
   const footRow = elementsOf(tree).find((element) => element.props.className === "dsl-usage-foot")!;
-  expect(textsOf(footRow).join(" ")).toContain("缓存命中率 75%");
+  expect(textsOf(footRow).join(" ")).toContain("缓存命中率 75.00%");
   expect(textsOf(footRow).join(" ")).toContain("缓存命中 300 · 缓存写入 0");
   expect(textsOf(footRow).join(" ")).toContain("最近一次请求 2 分钟前");
   const last = elementsOf(tree).find((element) => element.props["data-usage-last-at"] !== undefined)!;
@@ -225,4 +225,22 @@ it("账期文案的纯函数：有终点给区间、只有起点给「自…起�
   expect(periodRangeText(t, start, undefined)).toBe("自 2026/10/14 起");
   expect(periodRangeText(t, undefined, undefined)).toBeUndefined();
   expect(periodRangeText(t, "x", null)).toBeUndefined();
+});
+
+it("失败过一次就不能显示成 100%（1131 成功 / 1 失败 应显示 99.91%）", () => {
+  // 用户 2026-10-19 报障：「先失败了一次，但是我看成功率还是 100%」。
+  // 这是整数四舍五入掩盖了失败 —— 现在保留两位小数，差别可见。
+  const tree = render({
+    bucket: bucketOf({ requests: 1132, ok: 1131, failed: 1, successRate: 1131 / 1132 }),
+  });
+  const shown = textsOf(metric(tree, "success-rate")).join(" ");
+  expect(shown).toContain("99.91%");
+  expect(shown).not.toContain("100%");
+});
+
+it("真的全成功时才显示 100%（不写 100.00%）", () => {
+  const tree = render({ bucket: bucketOf({ requests: 10, ok: 10, failed: 0, successRate: 1 }) });
+  const shown = textsOf(metric(tree, "success-rate")).join(" ");
+  expect(shown).toContain("100%");
+  expect(shown).not.toContain("100.00%");
 });

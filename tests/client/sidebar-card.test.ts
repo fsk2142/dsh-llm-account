@@ -80,37 +80,14 @@ it("远程面把可省略字段序列化成 null 时也不崩（渲染路径抛�
   expect(textsOf(tree).join(" ")).not.toContain("null");
 });
 
-it("开启后显示**生效账号**的额度：第一行 5 小时，第二行每周（有几档画几档）", () => {
-  const tree = renderCard(
-    statusOf({
-      pinned: "fixed",
-      effective: { ref: "serving", at: 1_700_000_000_000 },
-      accounts: [
-        row("fixed", { quota: { windows: [{ key: "5h", used: 1, cap: 10 }], failures: [] } }),
-        row("serving", { label: "Serving", effective: true, quota: { plan: { id: "individual-pro", name: "Pro" }, windows: [{ key: "5h", used: 7, cap: 10 }, { key: "weekly", used: 30, cap: 100 }], failures: [] } }),
-      ],
-    }),
-  );
-  const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
-  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly"]);
-  // 数字来自生效账号那一行（7/10 → 剩 30%），不是固定账号的（1/10 → 剩 90%）。
-  expect(textsOf(windows[0]!)).toContain("30%");
-  expect(textsOf(windows[1]!)).toContain("70%");
-  expect(textsOf(tree)).toContain("Serving");
-  // 第一行是主档（5 小时），第二行放其余档。
-  const primary = elementsOf(tree).find((element) => element.props["data-sidebar-row"] === "primary")!;
-  expect(elementsOf(primary).some((element) => element.props["data-sidebar-window"] === "5h")).toBe(true);
-  const secondary = elementsOf(tree).find((element) => element.props["data-sidebar-row"] === "secondary")!;
-  expect(elementsOf(secondary).some((element) => element.props["data-sidebar-window"] === "weekly")).toBe(true);
-});
-
-it("三档齐全：第一行 5 小时，第二行每周 + 每月并排", () => {
+it("只显示 5 小时档 + 重置时间（用户 2026-10-19 定稿：第二行去掉）", () => {
   const resetAt = new Date(2026, 9, 19, 20, 0, 0).getTime();
   const tree = renderCard(
     statusOf({
-      effective: { ref: "a", at: 1 },
+      effective: { ref: "serving", at: 1_700_000_000_000 },
       accounts: [
-        row("a", {
+        row("serving", {
+          label: "Serving",
           effective: true,
           quota: {
             windows: [
@@ -124,22 +101,16 @@ it("三档齐全：第一行 5 小时，第二行每周 + 每月并排", () => {
       ],
     }),
   );
+  // **只有一档**：5 小时。周/月不再出现在侧边栏（去用量面板看）。
   const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
-  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly", "monthly"]);
-  // 第一行只有 5 小时，且**带重置时间**（用户要求「第一行是 5 小时额度带重置时间」）。
-  const primary = elementsOf(tree).find((element) => element.props["data-sidebar-row"] === "primary")!;
-  expect(elementsOf(primary).filter((element) => element.props["data-sidebar-window"] !== undefined)).toHaveLength(1);
-  expect(elementsOf(primary).some((element) => element.props["data-sidebar-reset"] !== undefined)).toBe(true);
-  // 第二行是周 + 月，**不带**重置时间（半行宽放不下，也不常看）。
-  const secondary = elementsOf(tree).find((element) => element.props["data-sidebar-row"] === "secondary")!;
-  expect(elementsOf(secondary).map((element) => element.props["data-sidebar-window"]).filter(Boolean)).toEqual([
-    "weekly",
-    "monthly",
-  ]);
-  expect(elementsOf(secondary).some((element) => element.props["data-sidebar-reset"] !== undefined)).toBe(false);
+  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h"]);
+  // 带重置时间（用户要求「5 小时额度信息和下次重置时间」）。
+  expect(elementsOf(tree).some((element) => element.props["data-sidebar-reset"] !== undefined)).toBe(true);
+  // 不再有第二行。
+  expect(elementsOf(tree).some((element) => element.props["data-sidebar-row"] === "secondary")).toBe(false);
   expect(textsOf(tree).join(" ")).toContain("5 小时");
-  expect(textsOf(tree).join(" ")).toContain("每周");
-  expect(textsOf(tree).join(" ")).toContain("每月");
+  expect(textsOf(tree).join(" ")).not.toContain("每周");
+  expect(textsOf(tree).join(" ")).not.toContain("每月");
 });
 
 it("整张卡片就是一个按钮：点它打开用量面板（不再有单独的按钮）", () => {

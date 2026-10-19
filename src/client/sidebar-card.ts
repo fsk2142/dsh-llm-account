@@ -185,52 +185,32 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
 }
 
 /**
- * 两行额度概览（2026-10-19 用户定的版式）。
+ * 额度概览：**只显示 5 小时档 + 下次重置时间**（用户 2026-10-19 定稿）。
  *
- * - **第一行**：5 小时档，独占一整行 —— 它是最细的一档，也是自动切换真正盯着的那个，
- *   所以带上重置时间（「2 小时后重置」比一个百分比更能说明「还能撑多久」）；
- * - **第二行**：每周与每月并排两列 —— 它们变化慢，看的是「这一周/这一月用了多少」。
+ * 走过的弯路：先试过一行三档（5 小时 / 每周 / 每月并排），窄的时候档位名要截断、重置时间
+ * 完全放不下；又试过两行（第一行 5 小时、第二行周+月）。用户最终确定只要**一档**：
+ * 侧边栏是常驻的窄条，5 小时才是会被自动切换盯着的那个，其余档位去用量面板看。
  *
- * 为什么不三档并排（上一版）：并排时每档只剩五六十像素，档位名要截断、重置时间完全放不下。
- * 拆成两行后第一行有整行宽度，可以把重置时间挂上去。
+ * 找不到 5 小时档时（旧宿主只给无键窗口）退回「第一个能读的窗口」，别让整块空白。
  * @param props - 卡片属性。
  * @param row - 当前账号。
- * @returns 要追加的两行元素。
+ * @returns 要追加的元素。
  */
 function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode[] {
   const { t } = props;
   const vendor = props.status?.vendor ?? "";
   const windows = row?.quota?.windows?.length ? row.quota.windows : fallbackQuotaWindows(vendor);
-  const fiveHour = windowOfKind(windows, "five-hour");
-  const week = windowOfKind(windows, "week");
-  const month = windowOfKind(windows, "month");
-  const rest = [week, month].filter((window): window is QuotaWindow => window !== undefined);
-  // 一档都认不出来（旧宿主只给无键窗口）：把第一个能读的当成主档，别让整块空白。
-  const primary = fiveHour ?? windows.find((window) => window.unlimited !== true) ?? windows[0];
+  const primary = windowOfKind(windows, "five-hour") ?? windows.find((window) => window.unlimited !== true) ?? windows[0];
+  if (primary === undefined) return [];
   return [
-    // 第一行：主档（通常是 5 小时），带重置时间。
-    ...(primary === undefined
-      ? []
-      : [
-          createElement(
-            "div",
-            { key: "primary", "data-sidebar-row": "primary", className: CSS_CLASS.sidebarRowPrimary },
-            sidebarMeter(t, primary, "wide"),
-          ),
-        ]),
-    // 第二行：周 + 月并排（缺一档就独占一行）。
-    ...(rest.length === 0
-      ? []
-      : [
-          createElement(
-            "div",
-            { key: "rest", "data-sidebar-row": "secondary", className: CSS_CLASS.sidebarRowSecondary },
-            ...rest.map((window) => sidebarMeter(t, window, "compact")),
-          ),
-        ]),
+    createElement(
+      "div",
+      { key: "primary", "data-sidebar-row": "primary", className: CSS_CLASS.sidebarRowPrimary },
+      // `wide` = 档位名与重置时间同一行 + 下面「剩余百分比 + 细条」。
+      sidebarMeter(t, primary, "wide"),
+    ),
   ];
 }
-
 /**
  * 一档窗口的一块读数。
  *

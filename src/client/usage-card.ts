@@ -60,10 +60,24 @@ function compact(value: number | undefined): string {
   return `${sign}${Math.round(magnitude)}`;
 }
 
-/** 百分比（0–1 → 「93%」）；`undefined` → 破折号（缺失不是 0%）。 */
+/**
+ * 百分比（0–1 → 「93.45%」），**保留两位小数**。
+ *
+ * 为什么不是四舍五入到整数（用户 2026-10-19：「先失败了一次，但是我看成功率还是 100%」）：
+ * `1131 成功 / 1 失败` 是 99.91%，整数舍入会显示成 100% —— 那是在报告一个**没有失败**的
+ * 假象。两位小数能把这个差别露出来（99.91%）。
+ *
+ * 恰好 1 时仍显示「100%」（不写 100.00%，那是无意义的精度）。
+ * 缺失 → 破折号（缺失不是 0%）。
+ * @param rate - 0–1 的比率。
+ * @returns 展示用文本。
+ */
 function percent(rate: number | undefined): string {
   if (rate === undefined) return "—";
-  return `${Math.round(rate * 100)}%`;
+  const value = Math.round(rate * 10_000) / 100;
+  // 只有**真的**满时才写 100（避免 99.995% 被舍入成 100% 而掩盖一次失败）。
+  if (value >= 100) return rate >= 1 ? "100%" : "99.99%";
+  return `${value.toFixed(2)}%`;
 }
 
 /** 金额：小于 1 分也显示成 `<0.01`，不要显示成 0（那会让人以为是免费）。 */
