@@ -126,6 +126,36 @@ export type CopyKey =
   | "quota.resetTomorrow"
   | "quota.resetAtLong"
   | "quota.resetUnknown"
+  | "usage.title"
+  | "usage.window.today"
+  | "usage.window.7d"
+  | "usage.window.30d"
+  | "usage.window.all"
+  | "usage.requests"
+  | "usage.requestsValue"
+  | "usage.successRate"
+  | "usage.tokens"
+  | "usage.input"
+  | "usage.output"
+  | "usage.cacheRead"
+  | "usage.cacheWrite"
+  | "usage.cacheHitRate"
+  | "usage.vendorCost"
+  | "usage.officialCost"
+  | "usage.priceUnknown"
+  | "usage.period"
+  | "usage.periodFromVendor"
+  | "usage.periodEstimated"
+  | "usage.perAccount"
+  | "usage.total"
+  | "usage.empty"
+  | "usage.loading"
+  | "usage.readFailed"
+  | "usage.remaining"
+  | "usage.kind.five-hour"
+  | "usage.kind.day"
+  | "usage.kind.week"
+  | "usage.kind.month"
   | "quota.resetAt"
   | "quota.window.fiveHour"
   | "quota.window.rolling"
@@ -426,6 +456,36 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.window.monthly": "每月",
     "quota.window.monthlyCredits": "月度额度",
     "quota.capOnly": "上限 {cap}",
+    "usage.title": "用量统计",
+    "usage.window.today": "今日",
+    "usage.window.7d": "近 7 天",
+    "usage.window.30d": "近 30 天",
+    "usage.window.all": "全部",
+    "usage.requests": "请求",
+    "usage.requestsValue": "{total} 次（成功 {ok} · 失败 {failed}）",
+    "usage.successRate": "成功率",
+    "usage.tokens": "Token",
+    "usage.input": "未命中输入",
+    "usage.output": "输出",
+    "usage.cacheRead": "缓存命中",
+    "usage.cacheWrite": "缓存写入",
+    "usage.cacheHitRate": "缓存命中率",
+    "usage.vendorCost": "厂商计价",
+    "usage.officialCost": "≈ 按 DeepSeek 官方价",
+    "usage.priceUnknown": "未公开",
+    "usage.period": "本周期",
+    "usage.periodFromVendor": "按厂商重置时间",
+    "usage.periodEstimated": "按自然{kind}推算",
+    "usage.perAccount": "按账号（各自记账周期）",
+    "usage.total": "合计（当前窗口）",
+    "usage.empty": "还没有用量记录。发一次请求后这里就会出现数字。",
+    "usage.loading": "正在读取用量…",
+    "usage.readFailed": "用量读取失败",
+    "usage.remaining": "本周期还剩",
+    "usage.kind.five-hour": "5 小时",
+    "usage.kind.day": "日",
+    "usage.kind.week": "周",
+    "usage.kind.month": "月",
     "quota.window.plan": "套餐",
     "quota.window.unknown": "额度",
     "quota.planMonthly": "每月 {amount}",
@@ -714,6 +774,36 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.window.monthly": "Monthly",
     "quota.window.monthlyCredits": "Monthly credits",
     "quota.capOnly": "Cap {cap}",
+    "usage.title": "Usage",
+    "usage.window.today": "Today",
+    "usage.window.7d": "Last 7 days",
+    "usage.window.30d": "Last 30 days",
+    "usage.window.all": "All",
+    "usage.requests": "Requests",
+    "usage.requestsValue": "{total} (ok {ok} · failed {failed})",
+    "usage.successRate": "Success rate",
+    "usage.tokens": "Tokens",
+    "usage.input": "Uncached input",
+    "usage.output": "Output",
+    "usage.cacheRead": "Cache read",
+    "usage.cacheWrite": "Cache write",
+    "usage.cacheHitRate": "Cache hit rate",
+    "usage.vendorCost": "Vendor cost",
+    "usage.officialCost": "≈ at DeepSeek list price",
+    "usage.priceUnknown": "not published",
+    "usage.period": "This period",
+    "usage.periodFromVendor": "anchored to the vendor reset",
+    "usage.periodEstimated": "estimated from the natural {kind}",
+    "usage.perAccount": "Per account (own billing period)",
+    "usage.total": "Total (current window)",
+    "usage.empty": "No usage recorded yet. Send a request and the numbers appear here.",
+    "usage.loading": "Reading usage…",
+    "usage.readFailed": "Could not read usage",
+    "usage.remaining": "Left this period",
+    "usage.kind.five-hour": "5 hours",
+    "usage.kind.day": "day",
+    "usage.kind.week": "week",
+    "usage.kind.month": "month",
     "quota.window.plan": "Plan",
     "quota.window.unknown": "Quota",
     "quota.planMonthly": "{amount} per month",

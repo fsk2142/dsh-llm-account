@@ -25,6 +25,7 @@ import type {
 } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
+import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
@@ -149,6 +150,13 @@ export interface CommandCodeAdapterDeps {
   resolveEnvironment?: (name: string) => string | undefined;
   /** 普通对话请求前的切换钩子；辅助调用（compaction/session-title）不调用。 */
   beforeRequest?: (input: { sessionId?: string; purpose?: string }) => Promise<void>;
+  /**
+   * 用量采集端口（可选）。
+   *
+   * 记录点在一次尝试结束处：成功与失败都记 —— 只记成功会让成功率永远是 100%。
+   * 端口实现必须不阻塞、不抛错（见 `core/usage-port`）。
+   */
+  usage?: UsagePort;
 }
 
 /** 填默认值；`0`/负数/NaN 一律回落到默认值，避免把坏配置变成「立即超时」。 */
@@ -363,6 +371,10 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
 
       let emitted = false;
       let totalTokens = 0;
+      // 用量采集：把这次尝试的 usage 逐块累加成四个计数。厂商可能在流里发多次
+      // usage（`message_start` 的输入计数 + `message_delta` 的输出计数），
+      // 所以必须**累加而不是覆盖**。
+      const counts = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
       // 逐次索取上游：**只有** `iterator.next()` 的失败算本次尝试的失败；
       // 消费方在 `yield` 处的中断/抛错原样冒泡，不会被当成厂商失败而重放。
       const iterator = this.#attempt(config, options, key)[Symbol.asyncIterator]();
@@ -382,7 +394,13 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
             break;
           }
           const chunk = step.value;
-          if (chunk.type === "usage") totalTokens += usageTotal(chunk.usage);
+          if (chunk.type === "usage") {
+            totalTokens += usageTotal(chunk.usage);
+            counts.inputTokens += chunk.usage.inputTokens ?? 0;
+            counts.outputTokens += chunk.usage.outputTokens ?? 0;
+            counts.cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
+            counts.cacheWriteTokens += chunk.usage.cacheWriteTokens ?? 0;
+          }
           emitted = true;
           yield chunk;
         }
@@ -396,14 +414,23 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       if (exhausted) {
         // 请求由这个账号**服务完了**：规格 §8.1 第 1 条的「最近成功者」（卡片跟随真实账号）。
         this.#deps.rotation.noteSettled(ref);
+        this.#recordUsage(ref, options.model, "success", counts);
         return;
       }
 
-      if (options.signal?.aborted === true || this.#isAbort(failure)) throw failure;
+      if (options.signal?.aborted === true || this.#isAbort(failure)) {
+        // 用户主动取消：不算厂商失败，也不算成功。仍记一条（token 已经花掉了）。
+        this.#recordUsage(ref, options.model, "failure", counts, "aborted");
+        throw failure;
+      }
       const classified = this.#classify(failure);
-      if (classified === undefined) throw failure; // 请求级拒绝：换账号没有意义
+      if (classified === undefined) {
+        this.#recordUsage(ref, options.model, "failure", counts, "request");
+        throw failure; // 请求级拒绝：换账号没有意义
+      }
       this.#deps.rotation.markRejected(ref, classified.rejection);
       lastFailure = classified;
+      this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
       // 唯一的换账号条件（Task 5 的判定）：已输出 / 已消耗 token / 已中止都不换。
       if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
       if (tried.size >= MAX_TRIED) throw classified.thrown;
@@ -485,6 +512,39 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       ...(environment === undefined ? {} : { environment }),
       ...(authFile === undefined ? {} : { authFile }),
     }).key;
+  }
+
+  /**
+   * 把一次尝试的结果交给用量端口。
+   *
+   * 采集是**旁路**：端口自己保证不抛错，这里再兜一层 —— 统计出问题绝不能让一次本来
+   * 成功的对话变成失败（那样用户会觉得「插件把请求弄坏了」）。
+   * @param account - 服务这次请求的账号 ref。
+   * @param model - 模型 id（缺省为空串，计价会按「未知」处理）。
+   * @param outcome - 成功或失败。
+   * @param counts - 本次累计的四个 token 计数。
+   * @param failureKind - 失败分类（成功时不传）。
+   */
+  #recordUsage(
+    account: string,
+    model: string | undefined,
+    outcome: "success" | "failure",
+    counts: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number },
+    failureKind?: string,
+  ): void {
+    const port = this.#deps.usage ?? NOOP_USAGE_PORT;
+    try {
+      port.record({
+        vendor: "commandcode",
+        account,
+        outcome,
+        ...(model === undefined ? {} : { model }),
+        ...counts,
+        ...(failureKind === undefined ? {} : { failureKind }),
+      });
+    } catch (error) {
+      console.warn("[dsh-llm-account] could not record the usage sample:", error);
+    }
   }
 
   /**

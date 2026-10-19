@@ -62,6 +62,7 @@ import { DEFAULT_API_BASE } from "./protocol";
 import type { CommandCodeProtocol } from "./protocol";
 import { createCommandCodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
+import { createUsagePort } from "../usage-store";
 import { SwitchingController } from "../switching";
 
 /** 插件名（fiber 名与日志前缀；行 id 由 patch 层给定，两者同名）。 */
@@ -248,6 +249,8 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
     authFileFallback: authKeyFromAuthFile,
     beforeRequest: (input) => switching.beforeRequest(input),
+    // 用量采集：三条 provider 行共用一本台账（见 `usage-store`）。
+    usage: createUsagePort(),
   };
   const adapter = createCommandCodeAdapter(deps);
 

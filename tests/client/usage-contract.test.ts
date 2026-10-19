@@ -121,6 +121,8 @@ describe("参数校验器接受真值", () => {
     order: ["commandcode:COMMANDCODE_API_KEY"],
     models: ["gpt-6-luna"],
     settings: { strategy: "order", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true },
+    // 用量报表的窗口参数（`usageReport`）。
+    window: "today",
   };
 
   const seen = new Set<string>();

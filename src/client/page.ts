@@ -51,6 +51,11 @@ export interface PageShellProps {
   webSearch?: ReactNode;
   /** 网页搜索卡片有未保存的改动（与厂商字段共用底部那一个「保存」）。 */
   webSearchDirty?: boolean;
+  /**
+   * 用量统计卡片：**跨厂商**，放在账户/额度之后（用户要求「在额度下方」）。
+   * 与 `webSearch` 同形：由容器渲染，页面只负责摆位置。
+   */
+  usage?: ReactNode;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */
   saving?: boolean;
 }
@@ -98,6 +103,8 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
     props.accounts === undefined ? null : props.accounts,
+    // 用量统计紧跟在账户（含额度条）之后 —— 「额度下方」。
+    props.usage === undefined ? null : props.usage,
     props.mergeTabs === true ? null : tabRow(props),
     active === undefined
       ? createElement(

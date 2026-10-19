@@ -53,7 +53,20 @@ import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import type { VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type CatalogModelsResult, type SwitchRuntimeState, type UsageNamespace, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type SwitchRuntimeState, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
+import { UsageCard } from "./usage-card";
+
+/**
+ * 把账号 ref 翻成可读名（用量卡片显示用）。
+ *
+ * 找不到就原样返回 ref —— 台账里可能留着已经被删掉的账号，显示 ref 比显示空白有用。
+ * @param accounts - 该厂商当前的账号表。
+ * @param ref - 台账里的账号 ref。
+ * @returns 可读标签。
+ */
+function accountLabelOf(accounts: readonly AccountUsageStatus[], ref: string): string {
+  return accounts.find((account) => account.ref === ref)?.label ?? ref;
+}
 
 /** 一个「设置命名空间」在客户端看到的面（`remote.settings`）。 */
 export interface RemoteSettings {
@@ -1308,6 +1321,68 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       onDirty: setWebSearchDirty,
     });
 
+    // 用量统计：窗口 + 报表。Hook 一律在渲染体最前面（不放在任何 early return 之后）。
+    const [usageWindow, setUsageWindow] = useState<UsageWindowView>("today");
+    const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
+    const [usageStatsProblem, setUsageStatsProblem] = useState<string | undefined>(undefined);
+    const [usageLoading, setUsageLoading] = useState(true);
+    useEffect(() => {
+      let alive = true;
+      const api = usageNamespace(ctx);
+      if (api?.usageReport === undefined) {
+        // 宿主侧没提供这个接口（旧版本）：不渲染卡片，也不报错。
+        setUsageLoading(false);
+        setUsageReport(undefined);
+        return () => {
+          alive = false;
+        };
+      }
+      setUsageLoading(true);
+      void api.usageReport(usageWindow).then(
+        (report) => {
+          if (!alive) return;
+          setUsageReport(report);
+          setUsageStatsProblem(undefined);
+          setUsageLoading(false);
+        },
+        (error: unknown) => {
+          if (!alive) return;
+          setUsageStatsProblem(error instanceof Error ? error.message : String(error));
+          setUsageLoading(false);
+        },
+      );
+      return () => {
+        alive = false;
+      };
+    }, [usageWindow, accountRevision]);
+    const usageCard =
+      usageReport === undefined && usageStatsProblem === undefined && !usageLoading
+        ? undefined
+        : UsageCard({
+            t,
+            window: usageWindow,
+            accounts: usageReport?.accounts ?? [],
+            total: usageReport?.total ?? {
+              window: usageWindow,
+              bucket: {
+                period: usageWindow,
+                since: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                requests: 0,
+                ok: 0,
+                failed: 0,
+              },
+              byVendor: [],
+            },
+            onWindow: setUsageWindow,
+            ...(usageStatsProblem === undefined ? {} : { failure: usageStatsProblem }),
+            ...(usageLoading ? { loading: true } : {}),
+            labelOf: (vendor, account) => accountLabelOf(statuses[vendor]?.accounts ?? [], account),
+          });
+
     return PageShell({
       state,
       entries,
@@ -1436,6 +1511,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
               }),
           }),
       webSearch,
+      ...(usageCard === undefined ? {} : { usage: usageCard }),
     });
   };
 }

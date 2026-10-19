@@ -81,6 +81,7 @@ import {
 import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
+import { createUsagePort } from "../usage-store";
 import { SwitchingController } from "../switching";
 import { createOpencodeLogin } from "./login";
 
@@ -343,6 +344,8 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     persistStored: (ref, value) => credentials.set(ref, value),
     promoteServed: promoteServedAccount,
     beforeRequest: (input) => switching.beforeRequest(input),
+    // 用量采集：三条 provider 行共用一本台账（见 `usage-store`）。
+    usage: createUsagePort(),
   };
   const adapter = createOpencodeAdapter(deps);
 

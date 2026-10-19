@@ -78,10 +78,49 @@ export const USAGE_METHODS = [
   "loginBegin",
   "loginStatus",
   "loginCancel",
+  // 用量统计（跨厂商：每账号自身周期 + 总账）
+  "usageReport",
 ] as const;
 
 /** 一个方法名。 */
 export type UsageMethod = (typeof USAGE_METHODS)[number];
+
+// —— 用量统计的传输类型（与 `core/usage-report` 同形，客户端可单独引用） ——
+
+/** 用量窗口。 */
+export type UsageWindowView = "today" | "7d" | "30d" | "all";
+
+/** 一个聚合桶（与 `core/usage-stats` 的 `UsageBucket` 同形）。 */
+export interface UsageBucketView {
+  period: string;
+  since: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  requests: number;
+  ok: number;
+  failed: number;
+  successRate?: number;
+  cacheHitRate?: number;
+  vendorCost?: number;
+  officialCost?: number;
+}
+
+/** 一个账号的用量（与 `core/usage-report` 的 `AccountUsage` 同形）。 */
+export interface AccountUsageView {
+  vendor: string;
+  account: string;
+  period: { kind: string; key: string; start: number; end?: number; fromResetAt: boolean };
+  bucket: UsageBucketView;
+  windowed: UsageBucketView;
+}
+
+/** 一份用量报表。 */
+export interface UsageReportView {
+  accounts: AccountUsageView[];
+  total: { window: UsageWindowView; bucket: UsageBucketView; byVendor: { vendor: string; bucket: UsageBucketView }[] };
+}
 
 /** 一次登录尝试的状态（与宿主侧 `LoginStatus` 同形；`reason` 是稳定文案键）。 */
 export interface LoginStatus {
@@ -287,8 +326,20 @@ function parseVoid(): undefined {
   return undefined;
 }
 
-/** 校验「添加账户」的输入。 */
-function parseAddAccountInput(value: unknown): AddAccountInput {
+/**
+ * 校验用量报表。
+ *
+ * 只做结构校验（与 `status` 同一条纪律）：数据由本插件自己的宿主侧产生，深校验没有
+ * 额外价值；但**必须确认它的形状**，否则页面会在渲染时拿到 `undefined` 而崩。
+ */
+function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
+  if (!isRecord(value) || !isRecord(value.total) || !Array.isArray(value.accounts)) {
+    throw boundaryError(endpoint, "expected a usage report with accounts and total");
+  }
+  return value as unknown as UsageReportView;
+}
+
+/** 校验「添加账户」的输入。 */function parseAddAccountInput(value: unknown): AddAccountInput {
   if (!isRecord(value) || typeof value.label !== "string") {
     throw boundaryError(`${USAGE_NAMESPACE}/addAccount`, "expected { label }");
   }
@@ -392,6 +443,20 @@ const VENDOR_PARAM: ParamSpec = { name: "vendor", typeSymbol: "VendorId", parse:
 const REF_PARAM: ParamSpec = { name: "ref", typeSymbol: "AccountRef", parse: parseString };
 /** 模型 id 数组参数。 */
 const MODELS_PARAM: ParamSpec = { name: "models", typeSymbol: "AccountModels", parse: parseStringArray };
+/**
+ * 用量窗口参数（`today` / `7d` / `30d` / `all`）。
+ *
+ * 取值一旦不认识就退回 `today`：宁可少显示，也不要因为一个拼错的窗口让整块报表报错。
+ */
+const WINDOW_PARAM: ParamSpec = {
+  name: "window",
+  typeSymbol: "UsageWindow",
+  optional: true,
+  parse: (_endpoint, value) => {
+    if (typeof value !== "string") return "today";
+    return value === "today" || value === "7d" || value === "30d" || value === "all" ? value : "today";
+  },
+};
 
 /**
  * 造一个参数描述符。
@@ -496,12 +561,21 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("loginBegin", "LoginStatus", parseLoginStatus, [VENDOR_PARAM]),
     makeDescriptor("loginStatus", "LoginStatus", parseLoginStatus, [VENDOR_PARAM]),
     makeDescriptor("loginCancel", "Void", parseVoid, [VENDOR_PARAM]),
+    // 用量统计：**跨厂商**的一份报表（总账 + 每账号周期）。不带 vendor 参数，
+    // 因为它读的是一本共享台账（见 `vendors/usage-store`）。
+    makeDescriptor("usageReport", "UsageReport", parseUsageReport, [WINDOW_PARAM]),
   ];
 }
 
 /** 客户端侧从命名空间对象上调用全部方法的形状。 */
 export interface UsageNamespace {
   status(vendor: string): Promise<VendorUsageStatus>;
+  /**
+   * 用量报表（跨厂商：每账号按自己的记账周期 + 一份总账）。
+   *
+   * 可选：老版本宿主侧没实现它时，页面不该因此崩 —— 卡片整体不渲染即可。
+   */
+  usageReport?(window: UsageWindowView): Promise<UsageReportView>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   models?(vendor: string): Promise<CatalogModelsResult>;

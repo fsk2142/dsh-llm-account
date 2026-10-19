@@ -72,6 +72,7 @@ import type { OpenDesignAccounts } from "./accounts";
 import { DEFAULT_BASE_URL } from "./protocol";
 import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
+import { createUsagePort } from "../usage-store";
 import { SwitchingController } from "../switching";
 import { VELA_PREFLIGHT_TIMEOUT_MS, createOpenDesignLogin, discoverWorkspaceId, findVelaBinary } from "./login";
 
@@ -377,6 +378,8 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
     beforeRequest: (input) => switching.beforeRequest(input),
+    // 用量采集：三条 provider 行共用一本台账（见 `usage-store`）。
+    usage: createUsagePort(),
   };
   const adapter = createOpenDesignAdapter(deps);
 

@@ -409,6 +409,21 @@ export const PAGE_CSS = `
   line-height: 18px; font-variant-numeric: tabular-nums; }
 .dsl-quota-hint { flex: none; margin-left: 6px; color: var(--dsw-alias-label-tertiary);
   font-size: 11px; line-height: 18px; }
+.dsl-usage-head { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; }
+.dsl-usage-windows { display: flex; flex-direction: row; gap: 4px; flex-wrap: wrap; }
+.dsl-usage-window-active { background: var(--dsw-alias-bg-l2); color: var(--dsw-alias-label-primary); }
+.dsl-usage-group { display: flex; flex-direction: column; gap: 10px; }
+.dsl-usage-block { display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; padding: 8px 10px;
+  border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
+.dsl-usage-account-head { display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 4px; }
+.dsl-usage-row { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px;
+  font-size: 12px; line-height: 18px; }
+.dsl-usage-label { color: var(--dsw-alias-label-tertiary); }
+.dsl-usage-value { color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+.dsl-usage-muted { color: var(--dsw-alias-label-tertiary); }
+.dsl-usage-hint { color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
 .dsl-quota-bar-list { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .dsl-quota-bar { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
 .dsl-quota-bar-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -616,6 +631,17 @@ export const CSS_CLASS = {
   quotaBarMeta: "dsl-quota-bar-meta",
   quotaBarReset: "dsl-quota-bar-reset",
   quotaBarList: "dsl-quota-bar-list",
+  usageHead: "dsl-usage-head",
+  usageWindows: "dsl-usage-windows",
+  usageWindowActive: "dsl-usage-window-active",
+  usageGroup: "dsl-usage-group",
+  usageBlock: "dsl-usage-block",
+  usageAccountHead: "dsl-usage-account-head",
+  usageRow: "dsl-usage-row",
+  usageLabel: "dsl-usage-label",
+  usageValue: "dsl-usage-value",
+  usageMuted: "dsl-usage-muted",
+  usageHint: "dsl-usage-hint",
   ring: "dsl-ring",
   ringChart: "dsl-ring-chart",
   ringSvg: "dsl-ring-svg",

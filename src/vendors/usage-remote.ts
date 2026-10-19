@@ -41,8 +41,28 @@ import {
   type SwitchNowResult,
   type SwitchRecord,
   type UsageInvocationDescriptor,
+  type UsageReportView,
+  type UsageWindowView,
   type VendorUsageStatus,
 } from "../client/usage-contract";
+import { buildUsageReport } from "../core/usage-report";
+import type { UsageRecord } from "../core/usage-stats";
+import { sharedUsageLedger } from "./usage-store";
+
+/**
+ * 额度窗口的「精细度」排序：数字越小越细。
+ *
+ * 用来挑出「本周期」该按哪一档算：5 小时窗口比周/月更能反映最近用了多少。
+ * @param key - `QuotaWindow.key`。
+ * @returns 排序权重。
+ */
+function rankOfWindow(key: string): number {
+  const lower = key.toLowerCase();
+  if (lower.includes("5h") || lower.includes("fivehour") || lower.includes("rolling")) return 0;
+  if (lower.includes("day")) return 1;
+  if (lower.includes("week")) return 2;
+  return 3;
+}
 
 // 线上契约（包名、命名空间、方法名、描述符、结果类型）住在 `src/client/usage-contract.ts`：
 // 客户端要用同一份描述符去 `$mount`，而客户端**不能**导入本文件（这一侧拉进宿主依赖）。
@@ -451,6 +471,55 @@ export class LlmAccountUsageService extends TypertRemoteService {
    */
   async loginCancel(vendor: VendorId): Promise<void> {
     await this.requireLogin(vendor).cancel();
+  }
+
+  /**
+   * 用量报表：读共享台账，按「每账号自己的记账周期」+ 一份总账聚合。
+   *
+   * **跨厂商**：台账是三条 provider 行共用的那一本，所以这里不按 vendor 取读口。
+   *
+   * 周期粒度从**当前额度窗口**推断：`status()` 里已经有每账号的窗口（含 `resetAt`），
+   * 用它能让周期锚到厂商真实的重置时间；额度读不到时退回自然周期（报表里会标明
+   * `fromResetAt: false`，界面上显示成「按自然 X 推算」）。
+   * @param window - 时间窗口（`today` / `7d` / `30d` / `all`）。
+   * @returns 报表。
+   */
+  async usageReport(window: UsageWindowView = "today"): Promise<UsageReportView> {
+    const now = Date.now();
+    let records: UsageRecord[] = [];
+    try {
+      records = await sharedUsageLedger().read();
+    } catch (error) {
+      // 台账读失败（磁盘权限、文件损坏）：给一份空报表 + 一行 warn，而不是让页面崩。
+      console.warn("[dsh-llm-account] could not read the usage ledger:", error);
+    }
+    // 当前各账号的额度窗口：用来定位周期（失败就让报表退回自然周期）。
+    const windows = new Map<string, { windowKey?: string; resetAt?: number }>();
+    for (const vendor of this.vendorDeps.keys()) {
+      try {
+        const status = await this.status(vendor);
+        for (const account of status.accounts ?? []) {
+          // 选**最细**的一档窗口（5 小时比周/月更能反映「本周期」）。
+          const ranked = [...(account.quota?.windows ?? [])].sort(
+            (left, right) => rankOfWindow(left.key) - rankOfWindow(right.key),
+          );
+          const finest = ranked[0];
+          windows.set(`${vendor}\u0000${account.ref}`, {
+            ...(finest === undefined ? {} : { windowKey: finest.key }),
+            ...(finest?.resetAt === undefined ? {} : { resetAt: finest.resetAt }),
+          });
+        }
+      } catch {
+        // 这一家的额度读不到：它的账号退回自然周期，不影响别的家。
+      }
+    }
+    return buildUsageReport({
+      records,
+      window,
+      now,
+      periodWindowOf: (vendor, account) => windows.get(`${vendor}\u0000${account}`)?.windowKey,
+      resetAtOf: (vendor, account) => windows.get(`${vendor}\u0000${account}`)?.resetAt,
+    });
   }
 
   /** 取一家厂商的读口；没登记过就吵出来（静默返回空结果会伪装成「没有账号」）。 */

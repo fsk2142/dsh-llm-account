@@ -23,6 +23,7 @@ import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from "@de
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, TokenUsage } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
+import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
@@ -158,6 +159,11 @@ export interface OpencodeAdapterDeps {
   authBase?: string;
   /** 时钟（测试注入）。 */
   now?: () => number;
+  /**
+   * 用量采集端口（可选）。成功与失败都记 —— 只记成功会让成功率永远是 100%。
+   * 端口实现必须不阻塞、不抛错（见 `core/usage-port`）。
+   */
+  usage?: UsagePort;
 }
 
 /** 填默认值；`0`/负数/NaN 一律回落到默认值，避免把坏配置变成「立即超时」。 */
@@ -350,6 +356,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       let emitted = false;
       let totalTokens = 0;
       let pendingUsage: StreamChunk | undefined;
+      /** 用量采集：把本次尝试的 usage 逐块累加（厂商可能发多次）。 */
+      const counts = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
       // 每次尝试一套「网关证据」记录：失败时用它还原（HTTP 状态，正文），
       // 否则 pi-ai 的错误事件只剩一句文案，`classifyGatewayFailure` 无从下手。
       // 调用方信号一并传入：取消时要能放弃读那条诊断正文（正文读取自带 1s 期限）。
@@ -376,6 +384,10 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
           if (chunk.type === "usage") {
             // usage 不算「已输出」：它只说明这个账号已经产生了计费，由 totalTokens 表达。
             totalTokens += usageTotal(chunk.usage);
+            counts.inputTokens += chunk.usage.inputTokens ?? 0;
+            counts.outputTokens += chunk.usage.outputTokens ?? 0;
+            counts.cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
+            counts.cacheWriteTokens += chunk.usage.cacheWriteTokens ?? 0;
             pendingUsage = chunk;
             continue;
           }
@@ -404,26 +416,63 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         if (pendingUsage !== undefined) yield pendingUsage;
         // 请求由这个账号**服务完了**：规格 §8.1 第 1 条的「最近成功者」（卡片跟随真实账号）。
         this.#deps.rotation.noteSettled(ref);
+        this.#recordUsage(ref, options.model, "success", counts);
         // 服务成功的不是本轮首选 → 它是备用账号：报告给装配层提位（旧插件
         // `GoAccountSelection.adopt` 的同一后果）。提位失败不影响这次请求的结果。
         if (firstPick !== undefined && ref !== firstPick) this.#deps.promoteServed?.(ref);
         return;
       }
 
-      if (options.signal?.aborted === true || this.#isAbort(failure)) throw failure;
+      if (options.signal?.aborted === true || this.#isAbort(failure)) {
+        // 用户主动取消：不算厂商失败，但 token 已经花掉了 —— 仍然记一条。
+        this.#recordUsage(ref, options.model, "failure", counts, "aborted");
+        throw failure;
+      }
       const classified = this.#classify(failure, await gateway.evidence());
       // 请求级拒绝：换账号没有意义。pi-ai 的证据载体换成宿主认识的稳定终态码
       // （`PI_AI_ERROR`，旧插件第 1710 行）：它不在重试白名单里，宿主不会把它当瞬时故障重试。
       if (classified === undefined) {
+        this.#recordUsage(ref, options.model, "failure", counts, "request");
         throw failure instanceof OpencodeStreamFailure
           ? new LlmError(failure.message, PI_AI_ERROR_CODE, { cause: failure })
           : failure;
       }
       this.#deps.rotation.markRejected(ref, classified.rejection);
       lastFailure = classified;
+      this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
       // 唯一的换账号条件（Task 5 的判定）：已输出 / 已消耗 token / 已中止都不换。
       if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
       if (tried.size >= MAX_TRIED) throw classified.thrown;
+    }
+  }
+
+  /**
+   * 把一次尝试的结果交给用量端口（旁路：绝不因为统计失败而改变请求结果）。
+   * @param account - 服务这次请求的账号 ref。
+   * @param model - 模型 id。
+   * @param outcome - 成功或失败。
+   * @param counts - 本次累计的四个 token 计数。
+   * @param failureKind - 失败分类（成功时不传）。
+   */
+  #recordUsage(
+    account: string,
+    model: string | undefined,
+    outcome: "success" | "failure",
+    counts: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number },
+    failureKind?: string,
+  ): void {
+    const port = this.#deps.usage ?? NOOP_USAGE_PORT;
+    try {
+      port.record({
+        vendor: "dsh-opencode-go",
+        account,
+        outcome,
+        ...(model === undefined ? {} : { model }),
+        ...counts,
+        ...(failureKind === undefined ? {} : { failureKind }),
+      });
+    } catch (error) {
+      console.warn("[dsh-llm-account] could not record the usage sample:", error);
     }
   }
 
