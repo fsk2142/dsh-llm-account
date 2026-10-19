@@ -92,13 +92,6 @@ export const VENDORS: readonly VendorEntry[] = [
             // 而不是空白或 undefined（用户没配过就该看到与旧插件一致的 1 分钟体验）。
             fallback: 1,
           },
-          {
-            key: "sidebarRotateMinutes",
-            kind: "number",
-            labelKey: "field.sidebarRotateMinutes",
-            hintKey: "field.sidebarRotateMinutes.hint",
-            fallback: 1,
-          },
         ],
       },
       {
@@ -166,13 +159,6 @@ export const VENDORS: readonly VendorEntry[] = [
             // 而不是空白或 undefined（用户没配过就该看到与旧插件一致的 1 分钟体验）。
             fallback: 1,
           },
-          {
-            key: "sidebarRotateMinutes",
-            kind: "number",
-            labelKey: "field.sidebarRotateMinutes",
-            hintKey: "field.sidebarRotateMinutes.hint",
-            fallback: 1,
-          },
           // **刻意不声明 `usageDisplay`**（自动/常驻/关闭）：那个三模式开关属于参考插件的
           // **会话内用量胶囊**，而胶囊是本期声明不做的东西（`vendors/opencode/index.ts`
           // 模块头的非目标清单）。在页面上放一个没有任何代码读取的开关，就是把「看起来
@@ -226,13 +212,6 @@ export const VENDORS: readonly VendorEntry[] = [
             labelKey: "field.quotaRefreshMinutes",
             hintKey: "field.quotaRefreshMinutes.hint",
             // 与 Config 的 `default(1)` 对齐（见 commandcode 条目同款注释）。
-            fallback: 1,
-          },
-          {
-            key: "sidebarRotateMinutes",
-            kind: "number",
-            labelKey: "field.sidebarRotateMinutes",
-            hintKey: "field.sidebarRotateMinutes.hint",
             fallback: 1,
           },
           // 顶层工作区：账号条目没配 `workspaceId` 时的回退（vela 周期额度查询用）。

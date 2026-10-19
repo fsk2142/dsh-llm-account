@@ -1925,25 +1925,6 @@ export function quotaRefreshMs(value: unknown): number {
   return clamped * 60_000;
 }
 /**
- * 侧边栏「轮播」的旧间隔换算 —— **已停用**（2026-10-19 用户要求去掉轮播）。
- *
- * 保留导出是因为设置页仍会渲染 `sidebarRotateMinutes` 这个字段（配置文件兼容），
- * 但侧边栏不再按它切账号：显示哪个账号由「跟随最近一次请求」决定。
- * @param value - 设置文档里的 `sidebarRotateMinutes`（不可信，按 `unknown` 处理）。
- * @returns 换算后的毫秒数（当前没有调用方，仅为兼容保留）。
- */
-export function sidebarRotateMs(value: unknown): number {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value)
-        : Number.NaN;
-  const minutes = Number.isFinite(parsed) ? parsed : 1;
-  return Math.max(1, Math.min(60, minutes)) * 60_000;
-}
-
-/**
  * 造侧边栏卡片控制器。
  * @param deps - 注册/注销、一次读取与轮询间隔。
  * @returns 控制器。
@@ -2245,11 +2226,10 @@ export function createSidebarCardView(options: {
     }, [vendors.join(",")]);
 
     /**
-     * 两个轮询间隔的取值指纹：只有它们变了才需要重建控制器（读一次新的间隔）。
+     * 轮询间隔的取值指纹：只有它变了才需要重建控制器（读一次新的间隔）。
      *
-     * **轮播已移除**（用户 2026-10-19：「不用轮播那个了，直接去掉」）：不再有
-     * `setTurn` / `setInterval`。`sidebarRotateMinutes` 那个设置项也不再参与指纹 ——
-     * 留着它会让「改一个已经无效的设置」触发无谓的控制器重建。
+     * **轮播已移除**（用户 2026-10-19：「不用轮播那个了，直接去掉」）：不再有`setTurn` /
+     * `setInterval`，对应的设置项 `sidebarRotateMinutes` 也一并从设置页删掉了。
      */
     const refreshKey = quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"]);
 

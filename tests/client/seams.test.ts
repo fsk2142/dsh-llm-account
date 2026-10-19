@@ -16,7 +16,6 @@ import {
   noteSidebarSnapshots,
   onUsageReady,
   quotaRefreshMs,
-  sidebarRotateMs,
   readAccounts,
   readStatus,
   readStatusDetail,
@@ -869,13 +868,6 @@ it("startSharedState：远程面与设置镜像都就位（apply 期引导，幂
   expect(mounts).toBe(1); // 远程面没有重挂
 });
 
-it("sidebarRotateMs：轮播间隔按分钟换算，缺省 1 分钟，夹在 [1, 60] 分钟", () => {
-  expect(sidebarRotateMs(undefined)).toBe(60_000);
-  expect(sidebarRotateMs("nope")).toBe(60_000);
-  expect(sidebarRotateMs(0)).toBe(60_000);
-  expect(sidebarRotateMs(3)).toBe(3 * 60_000);
-  expect(sidebarRotateMs(120)).toBe(60 * 60_000); // 上限 1 小时
-});
 
 it("registerSharedSurfaces：只注册仪表盘一条主栏面板（「转到设置」面板已去掉）", () => {
   const registered: { slot: string; entry: Record<string, unknown> }[] = [];

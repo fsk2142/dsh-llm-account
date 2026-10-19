@@ -117,8 +117,6 @@ export const Config: PluginConfigSchema = z.object(
        * 见 opencode 入口的同名字段说明。
        */
       quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
-      /** 侧边栏轮播间隔（分钟）：多厂商都开启时，卡片轮流显示各家的当前账号额度。 */
-      sidebarRotateMinutes: z.number().step(1).min(1).max(60).default(1),
       accounts: z.array(
         z.object({
           label: z.string(),

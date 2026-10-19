@@ -148,8 +148,6 @@ export const Config: PluginConfigSchema = z.object(
     showSidebarQuota: z.boolean().default(false),
     /** 侧边栏额度卡片的刷新间隔（分钟）；缺省 1、下限 1、上限 120（与另两行同一档）。 */
     quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
-    /** 侧边栏轮播间隔（分钟）：多厂商都开启时，卡片轮流显示各家的当前账号额度。 */
-    sidebarRotateMinutes: z.number().step(1).min(1).max(60).default(1),
     /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */
     workspaceId: z.string().default(""),
     /** 推理网关基地址（Chat Completions）。 */
