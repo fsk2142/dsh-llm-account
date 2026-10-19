@@ -16,7 +16,9 @@
 /** 一次请求的结果。 */
 export type RequestOutcome = "success" | "failure";
 
-/** 一次请求的用量记录（一次 adapter 调用一条）。 */
+/**
+ * 一次请求的用量记录（一次 adapter 调用一条）。
+ */
 export interface UsageRecord {
   /** 厂商 id（`commandcode` / `dsh-opencode-go` / `opendesign`）。 */
   vendor: string;

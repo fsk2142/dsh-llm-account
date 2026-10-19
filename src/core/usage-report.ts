@@ -24,6 +24,17 @@ export interface AccountUsage {
   bucket: UsageBucket;
   /** 同一批记录按**时间窗口**聚合（用户切 7 天/30 天时用）。 */
   windowed: UsageBucket;
+  /**
+   * 厂商自己公布的**本周期已消耗金额**（美元），来自额度窗口的 `used`。
+   *
+   * 这是**权威数字**：订阅制厂商不公布逐 token 单价，但额度端点直接按美元记账
+   * （Command Code 的窗口 `unit: "usd"`；OpenDesign 给了 `creditsPerUsd` 换算）。
+   * 有它就不必用 token×单价去反推 —— 反推出来的数只会比它更不准。
+   * 缺失（额度读不到、或厂商只给百分比）时为 `undefined`。
+   */
+  spent?: number;
+  /** 该金额来自哪个窗口（显示成「5 小时窗口已用 $3.20」）。 */
+  spentWindow?: string;
 }
 
 /** 总账。 */
@@ -34,6 +45,13 @@ export interface TotalUsage {
   bucket: UsageBucket;
   /** 按厂商拆开（界面上分组显示）。 */
   byVendor: { vendor: string; bucket: UsageBucket }[];
+  /**
+   * 窗口内**最近一次请求**的时刻（epoch 毫秒）。
+   *
+   * 为什么值得单独给：用户发完一轮对话会来看这里，需要能确认「刚才那次算进去了」。
+   * 没有记录时为 `undefined`。
+   */
+  lastAt?: number;
 }
 
 /**
@@ -53,6 +71,13 @@ export interface UsageQuery {
   periodWindowOf?: (vendor: string, account: string) => string | undefined;
   /** 每账号该档窗口的重置时间（epoch 毫秒），用于把周期锚到厂商的真实边界。 */
   resetAtOf?: (vendor: string, account: string) => number | undefined;
+  /**
+   * 每账号该档窗口的**已用美元金额**（厂商权威口径）。
+   *
+   * 只在窗口的 `unit === "usd"` 时有值 —— 那是厂商按美元记账的事实；百分比口径的窗口
+   * 不能拿来当钱（会算出一个不存在的数字）。
+   */
+  spentOf?: (vendor: string, account: string) => { amount: number; window: string } | undefined;
 }
 
 /** 空桶（没有记录时也要有形状）。 */
@@ -92,17 +117,31 @@ export function buildUsageReport(query: UsageQuery): { accounts: AccountUsage[];
     );
     const bucket = aggregateUsage(inPeriod, period.key, period.start, priceOf(group.vendor), official);
     const windowed = aggregateUsage(withinWindow(group.items, window, now), window, startOf(window, now), priceOf(group.vendor), official);
-    accounts.push({ vendor: group.vendor, account: group.account, period, bucket, windowed });
+    // 厂商权威金额：只取 `unit === "usd"` 的窗口（百分比窗口不能当钱）。
+    const spent = query.spentOf?.(group.vendor, group.account);
+    accounts.push({
+      vendor: group.vendor,
+      account: group.account,
+      period,
+      bucket,
+      windowed,
+      ...(spent === undefined ? {} : { spent: spent.amount, spentWindow: spent.window }),
+    });
   }
   // 稳定的显示顺序：厂商 name 升序，账号升序。
   accounts.sort((left, right) => left.vendor.localeCompare(right.vendor) || left.account.localeCompare(right.account));
 
   // 2) 总账：全部记录按窗口聚合；再按厂商拆开。
   const windowRecords = withinWindow(records, window, now);
+  const lastAt = windowRecords.reduce<number | undefined>(
+    (latest, record) => (latest === undefined || record.at > latest ? record.at : latest),
+    undefined,
+  );
   const total: TotalUsage = {
     window,
     bucket: aggregateUsage(windowRecords, window, startOf(window, now), () => undefined, official),
     byVendor: [],
+    ...(lastAt === undefined ? {} : { lastAt }),
   };
   const vendors = new Map<string, UsageRecord[]>();
   for (const record of windowRecords) {

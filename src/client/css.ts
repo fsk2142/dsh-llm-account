@@ -424,6 +424,8 @@ export const PAGE_CSS = `
 .dsl-usage-value { color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
 .dsl-usage-muted { color: var(--dsw-alias-label-tertiary); }
 .dsl-usage-hint { color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
+.dsl-usage-split { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px;
+  padding-top: 6px; border-top: .5px solid var(--dsw-alias-border-l1); }
 .dsl-quota-bar-list { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .dsl-quota-bar { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
 .dsl-quota-bar-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -642,6 +644,7 @@ export const CSS_CLASS = {
   usageValue: "dsl-usage-value",
   usageMuted: "dsl-usage-muted",
   usageHint: "dsl-usage-hint",
+  usageSplit: "dsl-usage-split",
   ring: "dsl-ring",
   ringChart: "dsl-ring-chart",
   ringSvg: "dsl-ring-svg",

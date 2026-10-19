@@ -114,12 +114,22 @@ export interface AccountUsageView {
   period: { kind: string; key: string; start: number; end?: number; fromResetAt: boolean };
   bucket: UsageBucketView;
   windowed: UsageBucketView;
+  /** 厂商自己公布的**本周期已消耗金额**（美元）；额度没读到或不是美元口径时缺失。 */
+  spent?: number;
+  /** 该金额来自哪个额度窗口。 */
+  spentWindow?: string;
 }
 
 /** 一份用量报表。 */
 export interface UsageReportView {
   accounts: AccountUsageView[];
-  total: { window: UsageWindowView; bucket: UsageBucketView; byVendor: { vendor: string; bucket: UsageBucketView }[] };
+  total: {
+    window: UsageWindowView;
+    bucket: UsageBucketView;
+    byVendor: { vendor: string; bucket: UsageBucketView }[];
+    /** 窗口内最近一次请求的时刻；没有记录时缺失。 */
+    lastAt?: number;
+  };
 }
 
 /** 一次登录尝试的状态（与宿主侧 `LoginStatus` 同形；`reason` 是稳定文案键）。 */

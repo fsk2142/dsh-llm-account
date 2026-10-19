@@ -495,6 +495,8 @@ export class LlmAccountUsageService extends TypertRemoteService {
     }
     // 当前各账号的额度窗口：用来定位周期（失败就让报表退回自然周期）。
     const windows = new Map<string, { windowKey?: string; resetAt?: number }>();
+    /** 每账号的**权威已用金额**（只来自 `unit === "usd"` 的窗口）。 */
+    const spent = new Map<string, { amount: number; window: string }>();
     for (const vendor of this.vendorDeps.keys()) {
       try {
         const status = await this.status(vendor);
@@ -504,10 +506,14 @@ export class LlmAccountUsageService extends TypertRemoteService {
             (left, right) => rankOfWindow(left.key) - rankOfWindow(right.key),
           );
           const finest = ranked[0];
-          windows.set(`${vendor}\u0000${account.ref}`, {
+          const key = `${vendor}\u0000${account.ref}`;
+          windows.set(key, {
             ...(finest === undefined ? {} : { windowKey: finest.key }),
             ...(finest?.resetAt === undefined ? {} : { resetAt: finest.resetAt }),
           });
+          // 权威金额：优先最细的那档；它没给美元就退到别的美元窗口。
+          const usd = ranked.find((window) => window.unit === "usd" && window.used !== undefined);
+          if (usd?.used !== undefined) spent.set(key, { amount: usd.used, window: usd.key });
         }
       } catch {
         // 这一家的额度读不到：它的账号退回自然周期，不影响别的家。
@@ -519,6 +525,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
       now,
       periodWindowOf: (vendor, account) => windows.get(`${vendor}\u0000${account}`)?.windowKey,
       resetAtOf: (vendor, account) => windows.get(`${vendor}\u0000${account}`)?.resetAt,
+      spentOf: (vendor, account) => spent.get(`${vendor}\u0000${account}`),
     });
   }
 

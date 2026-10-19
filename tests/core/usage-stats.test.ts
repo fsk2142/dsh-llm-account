@@ -270,4 +270,36 @@ describe("报表：每账号按自己的周期 + 单独的总账", () => {
     // 厂商价没公开 → 保持 undefined。
     expect(report.total.bucket.vendorCost).toBeUndefined();
   });
+
+  it("厂商权威金额：额度端点给了美元就用它，比 token×单价更可信", () => {
+    const report = buildUsageReport({
+      records: [record()],
+      window: "today",
+      now,
+      periodWindowOf: () => "fiveHour",
+      spentOf: (vendor) => (vendor === "commandcode" ? { amount: 3.2, window: "fiveHour" } : undefined),
+    });
+    const entry = report.accounts[0]!;
+    expect(entry.spent).toBe(3.2);
+    expect(entry.spentWindow).toBe("fiveHour");
+  });
+
+  it("额度没给美元金额时 spent 缺失（不是 0）", () => {
+    const report = buildUsageReport({ records: [record()], window: "today", now });
+    expect(report.accounts[0]!.spent).toBeUndefined();
+  });
+
+  it("总账给出窗口内最近一次请求的时刻（用户要能确认「刚才那次算进去了」）", () => {
+    const report = buildUsageReport({
+      records: [record({ at: now - 7_200_000 }), record({ at: now - 600_000 }), record({ at: now - 3_600_000 })],
+      window: "today",
+      now,
+    });
+    expect(report.total.lastAt).toBe(now - 600_000);
+  });
+
+  it("窗口里没有记录时 lastAt 缺失（不是 0，也不是现在）", () => {
+    const report = buildUsageReport({ records: [], window: "today", now });
+    expect(report.total.lastAt).toBeUndefined();
+  });
 });

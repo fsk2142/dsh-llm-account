@@ -141,6 +141,9 @@ export type CopyKey =
   | "usage.cacheWrite"
   | "usage.cacheHitRate"
   | "usage.vendorCost"
+  | "usage.spent"
+  | "usage.spentWindow"
+  | "usage.lastAt"
   | "usage.officialCost"
   | "usage.priceUnknown"
   | "usage.period"
@@ -471,6 +474,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.cacheWrite": "缓存写入",
     "usage.cacheHitRate": "缓存命中率",
     "usage.vendorCost": "厂商计价",
+    "usage.spent": "本周期已花",
+    "usage.spentWindow": "{window} 窗口已用",
+    "usage.lastAt": "最近一次请求",
     "usage.officialCost": "≈ 按 DeepSeek 官方价",
     "usage.priceUnknown": "未公开",
     "usage.period": "本周期",
@@ -789,6 +795,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.cacheWrite": "Cache write",
     "usage.cacheHitRate": "Cache hit rate",
     "usage.vendorCost": "Vendor cost",
+    "usage.spent": "Spent this period",
+    "usage.spentWindow": "{window} window used",
+    "usage.lastAt": "Last request",
     "usage.officialCost": "≈ at DeepSeek list price",
     "usage.priceUnknown": "not published",
     "usage.period": "This period",

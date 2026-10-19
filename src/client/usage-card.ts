@@ -205,6 +205,18 @@ export function UsageCard(props: UsageCardProps): ReactElement {
         ),
       ),
       ...bucketRows(t, entry.bucket),
+      // 厂商权威金额：额度端点按美元记账时直接给出「本周期花了多少」，
+      // 比 token×单价反推更准。缺失（额度读不到 / 只给百分比）时整行不画。
+      ...(entry.spent === undefined
+        ? []
+        : [
+            row(
+              "spent",
+              t("usage.spent"),
+              `$${entry.spent.toFixed(2)}`,
+              "spent",
+            ),
+          ]),
     ),
   );
 
@@ -216,17 +228,35 @@ export function UsageCard(props: UsageCardProps): ReactElement {
       "div",
       { className: CSS_CLASS.usageAccountHead },
       createElement("strong", null, t("usage.total")),
-      total.byVendor.length === 0
-        ? null
-        : createElement(
-            "small",
-            { className: CSS_CLASS.usageMuted },
-            total.byVendor
-              .map((entry) => `${entry.vendor} ${grouped(entry.bucket.requests)}`)
-              .join(" · "),
-          ),
     ),
     ...bucketRows(t, total.bucket),
+    ...props.total.lastAt === undefined
+      ? []
+      : [
+          row(
+            "last",
+            t("usage.lastAt"),
+            createElement("time", { "data-usage-last-at": props.total.lastAt, dateTime: new Date(props.total.lastAt).toISOString() }, relativeTime(t, props.total.lastAt)),
+            "last-at",
+          ),
+        ],
+    // 按厂商拆分：每家一行「名字 · 请求数 · 官方折算」。只在有多家时才画 ——
+    // 只有一家时这行与上面完全重复，纯噪音。
+    ...(total.byVendor.length <= 1
+      ? []
+      : [
+          createElement(
+            "div",
+            { key: "by-vendor", "data-usage-by-vendor": "true", className: CSS_CLASS.usageSplit },
+            ...total.byVendor.map((entry) =>
+              createElement(
+                "span",
+                { key: entry.vendor, "data-usage-vendor-row": entry.vendor, className: CSS_CLASS.usageHint },
+                `${entry.vendor} · ${grouped(entry.bucket.requests)} 次 · ${percent(entry.bucket.cacheHitRate)}`,
+              ),
+            ),
+          ),
+        ]),
   );
 
   const empty =

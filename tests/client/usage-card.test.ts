@@ -153,12 +153,32 @@ it("每账号一节标注它的周期与来源（厂商重置 vs 自然推算）
   expect(textsOf(period).join(" ")).toContain("按厂商重置时间");
 });
 
-it("总账单独一节，并列出各厂商的请求数", () => {
+it("总账单独一节；只有一家厂商时不画拆分（那行会完全重复）", () => {
   const tree = render();
   const total = elementsOf(tree).find((element) => element.props["data-usage-total"] !== undefined)!;
   expect(total).toBeDefined();
   expect(textsOf(total).join(" ")).toContain("合计");
-  expect(textsOf(total).join(" ")).toContain("commandcode 2");
+  // 只有一家时不画 by-vendor 行。
+  expect(elementsOf(total).some((element) => element.props["data-usage-by-vendor"] !== undefined)).toBe(false);
+});
+
+it("多家厂商时总账按厂商拆开，各带请求数与命中率", () => {
+  const tree = render({
+    total: {
+      window: "today",
+      bucket: bucketOf(),
+      byVendor: [
+        { vendor: "commandcode", bucket: bucketOf({ requests: 5, cacheHitRate: 0.6 }) },
+        { vendor: "opendesign", bucket: bucketOf({ requests: 3, cacheHitRate: 0.9 }) },
+      ],
+    },
+  });
+  const split = elementsOf(tree).find((element) => element.props["data-usage-by-vendor"] !== undefined)!;
+  expect(split).toBeDefined();
+  const rows = elementsOf(split).filter((element) => element.props["data-usage-vendor-row"] !== undefined);
+  expect(rows.map((element) => element.props["data-usage-vendor-row"])).toEqual(["commandcode", "opendesign"]);
+  expect(textsOf(rows[0]!).join(" ")).toContain("5 次");
+  expect(textsOf(rows[0]!).join(" ")).toContain("60%");
 });
 
 it("没有记录时给出空态说明（而不是一块空白）", () => {
