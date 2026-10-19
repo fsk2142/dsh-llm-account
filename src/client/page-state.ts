@@ -495,6 +495,45 @@ export function sidebarVendorsOf(
 }
 
 /**
+ * 侧边栏**跟随模式**下要读的厂商清单：**全部已注册厂商**，不管各自的开关。
+ *
+ * 为什么与 {@link sidebarVendorsOf} 不同（2026-10-19）：用户把显示方式改成「跟随当前会话」
+ * 之后，`showSidebarQuota` 那种**按厂商**的开关就不再合适 —— 用户在一个 opendesign 的会话里
+ * 发消息，侧边栏却因为「opendesign 的开关没开」而不显示它，这正是用户报的
+ * 「一直显示 commandcode，opendesign 从来没显示过」。
+ *
+ * 新的语义是：**谁在服务当前会话就显示谁**。所以跟随模式下要读全部厂商，由
+ * `lastUsed` 决定最终显示哪一个。
+ * @param entries - 注册表里的厂商声明（已按页面顺序排列）。
+ * @returns 全部厂商 id（按页面顺序）。
+ */
+export function sidebarFollowVendorsOf(entries: readonly VendorEntry[]): string[] {
+  return entries.map((entry) => entry.providerId);
+}
+
+/**
+ * 侧边栏现在该用哪套厂商清单。
+ *
+ * 跟随模式（默认，2026-10-19 起）用全部厂商；只有当用户**显式**关掉了全部开关、且没有任何
+ * 厂商设置过清单时才退回「按开关过滤」—— 换句话说：只要配置里还有一家开着，就按跟随语义
+ * 走（因为开关是旧语义的残留，不该继续限制跟随）。
+ * @param entries - 注册表里的厂商声明。
+ * @param snapshots - 各厂商的设置文档。
+ * @returns 参与侧边栏的厂商 id。
+ */
+export function sidebarScopeOf(
+  entries: readonly VendorEntry[],
+  snapshots: Readonly<Record<string, VendorSnapshot>>,
+): string[] {
+  const enabled = sidebarVendorsOf(entries, snapshots);
+  // 一家都没开：退回旧的「关闭即静默」语义（用户明确关掉了所有卡片）。
+  if (enabled.length === 0) return [];
+  // 有任意一家开着 = 用户想要侧边栏。此时按**跟随**语义放开到全部厂商：
+  // 「我需要这个侧边栏」与「我要限定只看这几家」是两件事，旧开关只表达前者。
+  return sidebarFollowVendorsOf(entries);
+}
+
+/**
  * 一次轮播目标：一个 (厂商, 账号) 对。
  */
 export interface SidebarTarget {
@@ -540,35 +579,33 @@ export function sidebarTargetsOf(
 }
 
 /**
- * 从轮播目标里选出**现在该显示哪一个**（用户 2026-10-19：「根据该会话的模型所属账号显示
- * 当前账号信息，就不需要轮播显示了」）。
+ * 现在该显示哪一个账号（**不轮播**，用户 2026-10-19 明确要求去掉轮播）。
  *
  * 优先级：
- * 1. **最近一次请求的账号**，且它仍在目标清单里、且足够新鲜 → 用它（这就是「跟随当前会话」）；
- * 2. 否则按 `turn` 轮播（用户没发过请求、或那次已经过期时，退回旧行为 —— 总比空着好）。
+ * 1. **最近一次请求的账号**，且它仍在清单里、且足够新鲜 → 用它（这就是「跟随当前会话」）；
+ * 2. 否则用清单里的**第一个**（确定性、可解释 —— 按标签页顺序，第一家那个账号）。
  *
  * 为什么「最近一次请求」够用：宿主的 `remote.session` 没有「前端当前打开哪个会话」的接口
  * （2026-10-19 扫过全部调用点确认）。而刚发过请求的会话几乎必然就是用户在看的那个。
  * 这一点必须在界面上说清楚，不能让用户以为它是实时跟随（见 `SidebarCard` 的 hint）。
  *
- * @param targets - 轮播目标清单（已按当前供应商排过序）。
+ * @param targets - 目标清单（按当前供应商排过序）。
  * @param lastUsed - 最近一次请求的账号；没有时为 `undefined`。
- * @param turn - 轮播进度（仅在「没有新鲜的最近使用」时用到）。
  * @param now - 现在（用于判断新鲜度）。
  * @returns 要显示的目标；清单为空时为 `undefined`。
  */
 export function sidebarCurrentTarget(
   targets: readonly SidebarTarget[],
   lastUsed: { vendor: string; account: string; at: number } | undefined,
-  turn: number,
-  now: number,
+  now: number = Date.now(),
 ): SidebarTarget | undefined {
   if (targets.length === 0) return undefined;
   if (lastUsed !== undefined && isLastUsedFresh(lastUsed.at, now)) {
     const hit = targets.find((item) => item.vendor === lastUsed.vendor && item.ref === lastUsed.account);
     if (hit !== undefined) return hit;
   }
-  return targets[turn % targets.length];
+  // 没有可跟随的：用清单第一个（不再轮播）。用户从没发过请求时就是这个分支。
+  return targets[0];
 }
 
 /**

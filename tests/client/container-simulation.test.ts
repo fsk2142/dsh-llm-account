@@ -667,14 +667,13 @@ describe("侧边栏卡片容器仿真", () => {
     vi.useRealTimers();
   });
 
-  it("多家同开时跟第一家（commandcode）；第一家关掉后跟到 opencode", async () => {
+  it("跟随模式：开关只决定「要不要这个卡片」，不再限制「看得到哪几家」", async () => {
     const mini = await runtime();
     await freshSeams();
     vi.useFakeTimers();
     const host = fakeHost(mini, {
       commandcodeToggle: true,
       opencodeToggle: true,
-      // 两家都带一个已配置账号：轮播「跳过未配置厂商」的逻辑不该在这里触发。
       accounts: {
         commandcode: [{ ref: "cc-1", label: "CC", configured: true, active: true }],
         "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true }],
@@ -685,13 +684,20 @@ describe("侧边栏卡片容器仿真", () => {
     await settleSim(mini);
     expect(host.statusCalls[0]).toBe("commandcode");
 
+    // 关掉 commandcode 的开关：跟随模式下**卡片仍在**（还有 opencode 开着），
+    // 且仍然显示清单第一个（旧语义「关掉一家就换另一家」是轮播时代的产物，已移除）。
     host.rows.get("llm-commandcode")!.value = { ...host.rows.get("llm-commandcode")!.value, showSidebarQuota: false };
     host.emitDocumentUpdated();
     await settleSim(mini);
     expect(cardView.tree()).not.toBeNull();
-    // 只剩 opencode 时卡片显示的必须是它的账号（不再是 commandcode 的）。
-    expect(textsOfSim(cardView.tree()).join(" ")).toContain("OC");
+
+    // 两家都关掉：卡片消失（「关闭即静默」这条语义保留）。
+    host.rows.get("opencode-go")!.value = { ...host.rows.get("opencode-go")!.value, showSidebarQuota: false };
+    host.emitDocumentUpdated();
+    await settleSim(mini);
+    expect(cardView.tree()).toBeNull();
     vi.useRealTimers();
+  });
   });
 
   it("usage 远程面只 $mount 一次（两个 profile 行共享），页面卸载不 dispose", async () => {
@@ -729,7 +735,6 @@ describe("侧边栏卡片容器仿真", () => {
     expect(host.statusCalls).toHaveLength(afterUnmount);
     vi.useRealTimers();
   });
-});
 
 // —— 仿真 3：中栏仪表盘 ————————
 
@@ -1101,7 +1106,7 @@ it("加完账号后模型目录自动重读：加之前读不到（401），加�
   page.unmount();
 });
 
-it("侧边栏轮播：账号级 —— 两个账号轮流显示（先显示第一家那个）", async () => {
+it("侧边栏不再轮播：时间推进不会换账号（用户 2026-10-19 明确要求去掉轮播）", async () => {
   const mini = await runtime();
   await freshSeams();
   vi.useFakeTimers();
@@ -1117,26 +1122,19 @@ it("侧边栏轮播：账号级 —— 两个账号轮流显示（先显示第�
   const cardView = mini.mount(card);
   await settleSim(mini);
 
-  // 起点：第一家的账号（commandcode）。
-  // 账号级轮播要先读各家的账号表才能建清单，所以 `statusCalls` 会包含两家 ——
-  // 断言的是**显示**（用户能看见的东西），不是内部请求序列。
+  // 起点：清单第一个（commandcode 的账号）。
   expect(cardView.tree()).not.toBeNull();
   expect(textsOfSim(cardView.tree()).join(" ")).toContain("CC");
 
-  // 30 秒：还没到轮播点，仍是同一个账号。
-  vi.advanceTimersByTime(30_000);
-  await settleSim(mini);
-  expect(textsOfSim(cardView.tree()).join(" ")).toContain("CC");
-
-  // 到 60 秒：轮到第二个账号（opencode 的 OC）。
-  vi.advanceTimersByTime(30_000);
-  await settleSim(mini);
-  expect(textsOfSim(cardView.tree()).join(" ")).toContain("OC");
-
-  // 再一轮回到第一个账号（两个账号循环）。
-  vi.advanceTimersByTime(60_000);
-  await settleSim(mini);
-  expect(textsOfSim(cardView.tree()).join(" ")).toContain("CC");
+  // 推进三轮轮播间隔（默认 1 分钟）—— 卡片**必须**还显示同一个账号。
+  // 这是「去轮播」的核心断言：以前每 60 秒会换一个。
+  for (const minutes of [1, 2, 3]) {
+    vi.advanceTimersByTime(minutes * 60_000);
+    await settleSim(mini);
+    const shown = textsOfSim(cardView.tree()).join(" ");
+    expect(shown).toContain("CC");
+    expect(shown).not.toContain("OC");
+  }
   vi.useRealTimers();
 });
 
@@ -1305,17 +1303,16 @@ it("usageReport 返回空值或坏形状时不崩：只是少显示用量块", a
   }
 });
 
-it("轮播包含 opendesign：三家都开时第三拍轮到它（ns 与行 id 不同的那家）", async () => {
+it("opendesign 也参与侧边栏（旧版只开 commandcode 时它永远不显示 —— 用户报障）", async () => {
   const mini = await runtime();
   await freshSeams();
   vi.useFakeTimers();
+  // 关键：**只给 commandcode 开** `showSidebarQuota`，opendesign 不开。
+  // 旧语义下 opendesign 永远进不了清单（用户报的就是这个）；跟随语义下应放开到全部厂商。
   const host = fakeHost(mini, {
     commandcodeToggle: true,
-    opencodeToggle: true,
-    opendesignToggle: true,
     accounts: {
       commandcode: [{ ref: "cc-1", label: "CC", configured: true, active: true }],
-      "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true }],
       opendesign: [{ ref: "od-1", label: "OD", configured: true, active: true }],
     },
   });
@@ -1323,16 +1320,9 @@ it("轮播包含 opendesign：三家都开时第三拍轮到它（ns 与行 id �
   const cardView = mini.mount(card);
   await settleSim(mini);
 
-  expect(host.statusCalls[0]).toBe("commandcode");
-  // 第一拍到第二拍：opencode。
-  vi.advanceTimersByTime(60_000);
-  await settleSim(mini);
-  expect(host.statusCalls).toContain("dsh-opencode-go");
-  // 第二拍到第三拍：opendesign（用户报障「始终看不到 opendesign」）。
-  vi.advanceTimersByTime(60_000);
-  await settleSim(mini);
+  // opendesign 被读了（它在跟随范围内），清单因此能包含它的账号。
   expect(host.statusCalls).toContain("opendesign");
-  // 卡片上确实换成了 opendesign 的账号名。
-  expect(textsOfSim(cardView.tree()).join(" ")).toContain("OD");
+  // 卡片有内容（不是空态）。
+  expect(cardView.tree()).not.toBeNull();
   vi.useRealTimers();
 });

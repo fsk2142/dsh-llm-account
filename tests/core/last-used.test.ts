@@ -89,41 +89,37 @@ describe("sidebarCurrentTarget：跟随优先，轮播兜底", () => {
   const targets = [target("commandcode", "cc-1"), target("opendesign", "od-1")];
   const now = 1_000_000;
 
-  it("有新鲜的最近使用 → 显示它，即使 turn 指向别的账号", () => {
-    const picked = sidebarCurrentTarget(
-      targets,
-      { vendor: "opendesign", account: "od-1", at: now - 60_000 },
-      0, // turn 指向 cc-1
-      now,
-    );
+  it("有新鲜的最近使用 → 一定显示它", () => {
+    const picked = sidebarCurrentTarget(targets, { vendor: "opendesign", account: "od-1", at: now - 60_000 }, now);
     expect(picked).toEqual(target("opendesign", "od-1"));
   });
 
-  it("最近使用不在清单里（被删/未勾选）→ 退回轮播", () => {
-    const picked = sidebarCurrentTarget(
-      targets,
-      { vendor: "opendesign", account: "gone", at: now - 60_000 },
-      1,
-      now,
-    );
-    expect(picked).toEqual(target("opendesign", "od-1"));
+  it("最近使用不在清单里（被删/未勾选）→ 用清单第一个，不是凭空造一个", () => {
+    const picked = sidebarCurrentTarget(targets, { vendor: "opendesign", account: "gone", at: now - 60_000 }, now);
+    expect(picked).toEqual(target("commandcode", "cc-1"));
   });
 
-  it("最近使用过期 → 退回轮播", () => {
+  it("最近使用过期 → 用清单第一个", () => {
     const picked = sidebarCurrentTarget(
       targets,
       { vendor: "opendesign", account: "od-1", at: now - DEFAULT_FRESH_TTL_MS - 1 },
-      0,
       now,
     );
     expect(picked).toEqual(target("commandcode", "cc-1"));
   });
 
-  it("没有最近使用 → 退回轮播（用户从没发过请求时的正常路径）", () => {
-    expect(sidebarCurrentTarget(targets, undefined, 1, now)).toEqual(target("opendesign", "od-1"));
+  it("没有最近使用 → 用清单第一个（用户从没发过请求时的正常路径）", () => {
+    expect(sidebarCurrentTarget(targets, undefined, now)).toEqual(target("commandcode", "cc-1"));
+  });
+
+  it("**不再轮播**：反复调用永远给出同一个结果（不会随调用次数漂移）", () => {
+    const first = sidebarCurrentTarget(targets, undefined, now);
+    for (let index = 0; index < 5; index += 1) {
+      expect(sidebarCurrentTarget(targets, undefined, now)).toEqual(first);
+    }
   });
 
   it("清单为空 → undefined（卡片由此进入空态）", () => {
-    expect(sidebarCurrentTarget([], { vendor: "x", account: "y", at: now }, 0, now)).toBeUndefined();
+    expect(sidebarCurrentTarget([], { vendor: "x", account: "y", at: now }, now)).toBeUndefined();
   });
 });

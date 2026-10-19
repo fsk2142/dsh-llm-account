@@ -44,7 +44,7 @@ import {
   sidebarCurrentTarget,
   sidebarTargetsOf,
   sidebarVendorOf,
-  sidebarVendorsOf,
+  sidebarScopeOf,
   toggleExpanded,
   vendorCardKinds,
   type AccountAction,
@@ -1924,17 +1924,13 @@ export function quotaRefreshMs(value: unknown): number {
   const clamped = Math.max(1, Math.min(120, minutes));
   return clamped * 60_000;
 }
-
-/** 侧边栏轮播的默认间隔（毫秒）：1 分钟。 */
-export const SIDEBAR_ROTATE_MS = 60_000;
-
 /**
- * 侧边栏轮播间隔（毫秒），由设置字段 `sidebarRotateMinutes`（分钟）换算而来。
+ * 侧边栏「轮播」的旧间隔换算 —— **已停用**（2026-10-19 用户要求去掉轮播）。
  *
- * 缺省/非法值 1 分钟，夹在 `[1, 60]` 分钟之间：轮播是「看一眼别家」，比刷新间隔更短才有意义，
- * 但低于 1 分钟只会让人眼花（且每切一次都要读一次状态）。
+ * 保留导出是因为设置页仍会渲染 `sidebarRotateMinutes` 这个字段（配置文件兼容），
+ * 但侧边栏不再按它切账号：显示哪个账号由「跟随最近一次请求」决定。
  * @param value - 设置文档里的 `sidebarRotateMinutes`（不可信，按 `unknown` 处理）。
- * @returns 轮播间隔（毫秒）。
+ * @returns 换算后的毫秒数（当前没有调用方，仅为兼容保留）。
  */
 export function sidebarRotateMs(value: unknown): number {
   const parsed =
@@ -1943,7 +1939,7 @@ export function sidebarRotateMs(value: unknown): number {
       : typeof value === "string" && value.trim() !== ""
         ? Number(value)
         : Number.NaN;
-  const minutes = Number.isFinite(parsed) ? parsed : SIDEBAR_ROTATE_MS / 60_000;
+  const minutes = Number.isFinite(parsed) ? parsed : 1;
   return Math.max(1, Math.min(60, minutes)) * 60_000;
 }
 
@@ -2048,10 +2044,8 @@ export function createSidebarCardView(options: {
 }): () => ReactElement {
   const { ctx, entries, t } = options;
   return function ConnectedSidebarCard(): ReactElement {
-    /** 所有开启的厂商（顺序即标签页顺序）。 */
+    /** 参与侧边栏的厂商（跟随模式下是全部；见 `sidebarScopeOf`）。 */
     const [vendors, setVendors] = useState<string[]>(() => sidebarVendorList());
-    /** 轮播进度：对「账号清单长度」取模。 */
-    const [turn, setTurn] = useState(0);
     /**
      * 设置值变化时**重渲染**（让 `refreshKey` 重新计算），从而按新间隔重建控制器。
      *
@@ -2103,20 +2097,19 @@ export function createSidebarCardView(options: {
      * 轮播清单：**渲染期直接算**，不放进 state。
      *
      * 为什么不像第一版那样 `setTargets(...)` 到 state 里：那样会形成
-     * 「清单变 → setState → 重渲染 → 清单的键又变 → 再 setState」的回环，`turn` 每次都被
-     * 重置成 0，轮播永远停在第一个账号（2026-10-19 实测：卡片上反复出现同一个账号）。
-     * 直接现算就没有状态同步问题；`turn` 的模数变化由下面的 effect 收敛。
+     * 「清单变 → setState → 重渲染 → 清单的键又变 → 再 setState」的回环，
+     * 轮播永远停在第一个账号（2026-10-19 实测：卡片上反复出现同一个账号）。
      */
     const targets = sidebarTargetsOf(vendors, statuses, selection);
     /**
-     * 现在该显示哪个账号。
+     * 现在该显示哪个账号。**不轮播**（用户 2026-10-19 明确要求去掉）。
      *
-     * 用户 2026-10-19 的要求改过一次：「根据该会话的模型所属账号显示当前账号信息，就不需要
-     * 轮播显示了」。宿主的 `remote.session` 没有「前端当前打开哪个会话」的接口（扫过 asar
-     * 里全部调用点确认），所以用**最近一次请求的账号**代替 —— 刚发过请求的会话几乎必然
-     * 就是用户在看的那个。`lastUsed` 过期或不在清单里时才退回轮播。
+     * 用户原话：「根据该会话的模型所属账号显示当前账号信息，就不需要轮播显示了」，
+     * 随后又说「不用轮播那个了，直接去掉」。宿主的 `remote.session` 没有「前端当前打开
+     * 哪个会话」的接口（扫过 asar 里全部调用点确认），所以用**最近一次请求的账号**代替
+     * —— 刚发过请求的会话几乎必然就是用户在看的那个。
      */
-    const target = sidebarCurrentTarget(targets, lastUsed, turn, Date.now());
+    const target = sidebarCurrentTarget(targets, lastUsed);
     const vendor = target?.vendor;
 
     /**
@@ -2222,7 +2215,8 @@ export function createSidebarCardView(options: {
         live = false;
       };
       // 与额度轮询同节奏：`read` 每拍会改 `statuses`，`lastUsed` 跟着定期重读即可。
-    }, [turn, statuses]);
+      // （没有轮播了，所以不再依赖 `turn` —— 那次读只会因为额度刷新而重跑。）
+    }, [statuses]);
 
     /**
      * **建清单**：各开启的家读一次（每家一次，读到的账号表进 `statuses`）。
@@ -2250,27 +2244,14 @@ export function createSidebarCardView(options: {
       // 只跟厂商清单走：账号增减由每拍的读数自然刷新（`read` 会更新 `statuses`）。
     }, [vendors.join(",")]);
 
-    // 清单变了（账号增减/勾选变化）就**收敛 `turn`**：取模即可，不必清零 ——
-    // 清零会在「清单键抖动」时把轮播钉在第一个账号上（修过两次的老坑）。
-    const targetsKey = targets.map((item) => `${item.vendor}:${item.ref}`).join(",");
-    useEffect(() => {
-      setTurn((current) => (targets.length === 0 ? 0 : current % targets.length));
-      // 依赖用清单指纹：账号/勾选/厂商任一变化才收敛。
-    }, [targetsKey]);
-
-    // 轮播：每隔 `sidebarRotateMinutes` 分钟切到**下一个账号**（账号级，2026-10-19 用户要求）。
-    // 只有一个目标时完全不排定时器（行为不变，也不空转）。
-    const rotateMs = sidebarRotateMs(sidebarVendorSettings()?.["sidebarRotateMinutes"]);
-    /** 两个轮询间隔的取值指纹：只有它们变了才需要重建控制器（读一次新的间隔）。 */
-    const refreshKey = `${quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"])}:${rotateMs}`;
-    useEffect(() => {
-      if (targets.length <= 1) return;
-      // **有新鲜的「最近使用」时不轮播**：用户 2026-10-19 的要求是「跟随当前会话，就不需要
-      // 轮播了」。只有拿不到（或已过期）时才退回轮播 —— 那时总得显示点什么。
-      if (lastUsed !== undefined && isLastUsedFresh(lastUsed.at, Date.now())) return;
-      const timer = setInterval(() => setTurn((current) => current + 1), rotateMs);
-      return () => clearInterval(timer);
-    }, [targetsKey, rotateMs, lastUsed?.at, lastUsed?.vendor, lastUsed?.account]);
+    /**
+     * 两个轮询间隔的取值指纹：只有它们变了才需要重建控制器（读一次新的间隔）。
+     *
+     * **轮播已移除**（用户 2026-10-19：「不用轮播那个了，直接去掉」）：不再有
+     * `setTurn` / `setInterval`。`sidebarRotateMinutes` 那个设置项也不再参与指纹 ——
+     * 留着它会让「改一个已经无效的设置」触发无谓的控制器重建。
+     */
+    const refreshKey = quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"]);
 
     // 冷启动兜底：设置页从未打开过时存储是冷的，卡片自己读一次已存储的开关
     // （一次设置读取，不是用量查询；读不到就保持关闭，绝不轮询）。
@@ -2828,8 +2809,9 @@ export function noteSidebarSnapshots(entries: readonly VendorEntry[], snapshots:
   for (const snapshot of snapshots) map[snapshot.ns] = snapshot;
   const entry = sidebarVendorOf(entries, map);
   const vendor = entry?.providerId;
-  // 轮播清单：所有开启的厂商（顺序即标签页顺序）。只有一家时卡片行为与从前完全一致。
-  const nextVendors = sidebarVendorsOf(entries, map);
+  // 侧边栏的厂商范围：**跟随模式**下是全部厂商（谁在服务当前会话就显示谁），
+  // 只有「一家开关都没开」时才退回空（用户明确关掉了卡片）。见 sidebarScopeOf。
+  const nextVendors = sidebarScopeOf(entries, map);
   const vendorsChanged =
     nextVendors.length !== sidebarVendorsValue.length ||
     nextVendors.some((item, index) => item !== sidebarVendorsValue[index]);
