@@ -438,12 +438,18 @@ export function applyShell(rawContext: unknown, options: ApplyShellOptions = {})
   context.inject(["remote.credentials"], () => undefined);
 }
 
-/** Check-and-set the page guard, then register the page on the first pass only. */
+/**
+ * 只在第一次成功注册页面之后才置位守卫。
+ *
+ * 为什么顺序要紧：守卫原来在注册**之前**就置位，一旦 `registerPage` 抛错，第二次
+ * `apply`（另一行 / 插件重新激活）会直接 return —— 于是这次失败成为永久状态，
+ * 表现为「设置页刷新一次就不见了」（2026-10-19 报障）。现在失败不置位，下一次还有机会。
+ */
 function registerPageOnce(context: ClientShell, options: ApplyShellOptions): void {
   if (pageRegistered) return;
-  pageRegistered = true;
   try {
     registerPage(context, options);
+    pageRegistered = true;
   } catch (error) {
     // 与两个插槽注册同样的处置（旧插件在 `main`/`sidebar.footer.action` 上就是这么做的）：
     // 留一行错误继续走完 `apply` —— 后面的凭据注入与 applyCount 不该因为一次注册失败而丢掉。
@@ -452,11 +458,12 @@ function registerPageOnce(context: ClientShell, options: ApplyShellOptions): voi
 }
 
 /** Check-and-set the shared-surfaces guard, then register them on the first pass only. */
+/** 侧边栏/面板的守卫也在**成功之后**才置位（失败留一次重试机会，与 `registerPageOnce` 同理）。 */
 function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOptions): void {
   if (sharedSurfacesRegistered) return;
-  sharedSurfacesRegistered = true;
   try {
     options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS));
+    sharedSurfacesRegistered = true;
   } catch (error) {
     // 与页面注册同样的处置：一次注册失败不该把整个客户端带走。
     console.error("[dsh-llm-account] could not register the sidebar card and the usage panel:", error);
@@ -474,8 +481,32 @@ function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOpt
  */
 function registerPage(context: ClientShell, options: ApplyShellOptions): void {
   const t = context.locale.bind(PAGE_LOCALE_NS);
+  /**
+   * 文案注册**必须先撤销上一条**。
+   *
+   * 宿主的 `locale.register` 对同一命名空间的**同一 locale 会直接抛错**
+   * （`dsh-client-locale`：`if (locales.has(localeKey(locale))) throw new Error(...)`）。
+   * 而 `ctx.effect(cb)` 的 cb 在插件重新激活时会再跑一次 —— 于是第二次注册就抛，
+   * 整个 `apply` 被炸掉，表现是**刷新一次设置页就不见了**（2026-10-19 报障）。
+   */
+  let unregisterCopy: (() => void) | undefined;
   context.effect(
-    () => context.locale.register(PAGE_LOCALE_NS, options.copy ?? PAGE_COPY),
+    () => {
+      // 文案注册失败**不能连累页面注册**：宿主对同一 namespace 的同一 locale 会直接抛错
+      // （`already has locale`），而刷新/热重载可能让旧注册还在。文案缺了只是显示 key，
+      // 页面不注册则是「整个设置页消失」—— 两者严重程度差一个量级。
+      try {
+        unregisterCopy?.();
+        const off = context.locale.register(PAGE_LOCALE_NS, options.copy ?? PAGE_COPY);
+        unregisterCopy = typeof off === "function" ? (off as () => void) : undefined;
+      } catch (error) {
+        console.warn("[dsh-llm-account] could not register the page copy:", error);
+      }
+      return () => {
+        unregisterCopy?.();
+        unregisterCopy = undefined;
+      };
+    },
     "dsh-llm-account: page copy",
   );
   const component = options.pageComponent?.(t) ?? PLACEHOLDER_PAGE;
