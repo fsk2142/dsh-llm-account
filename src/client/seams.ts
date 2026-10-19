@@ -2684,14 +2684,14 @@ export function noteSidebarSnapshots(entries: readonly VendorEntry[], snapshots:
     nextVendors.some((item, index) => item !== sidebarVendorsValue[index]);
   sidebarVendorsValue = nextVendors;
   sidebarVendorSeededValue = true;
-  // 始终用最新快照刷新设置值：厂商没变但轮询间隔等设置改了也要即时生效（不能因为
-  // `vendor === sidebarVendorValue` 提前返回就漏掉这次更新）。
+  // 始终用最新快照刷新设置值：厂商没变但轮询间隔等设置改了也要即时生效。
   const nextSettings = entry === undefined ? undefined : map[entry.ns]?.value;
   const settingsChanged = nextSettings !== sidebarVendorSettingsValue;
   sidebarVendorSettingsValue = nextSettings;
   // 设置页缓存的新鲜期跟着「用量刷新间隔」走（同一家：第一家开启的厂商）。
   statusReadingTtlMs = quotaRefreshMs(nextSettings?.["quotaRefreshMinutes"]);
   if (settingsChanged) for (const listener of [...sidebarSettingsListeners]) listener();
+  // 轮播清单变化必须通知 —— 且必须在下面那行 `return` **之前**（2026-10-19 修）。
   if (vendorsChanged) for (const listener of [...sidebarVendorsListeners]) listener(nextVendors);
   if (vendor === sidebarVendorValue) return;
   sidebarVendorValue = vendor;

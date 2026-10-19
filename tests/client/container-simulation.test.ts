@@ -1299,3 +1299,35 @@ it("usageReport 返回空值或坏形状时不崩：只是少显示用量块", a
     expect(findSim(page.tree(), "data-render-error-inline")).toBeUndefined();
   }
 });
+
+it("轮播包含 opendesign：三家都开时第三拍轮到它（ns 与行 id 不同的那家）", async () => {
+  const mini = await runtime();
+  await freshSeams();
+  vi.useFakeTimers();
+  const host = fakeHost(mini, {
+    commandcodeToggle: true,
+    opencodeToggle: true,
+    opendesignToggle: true,
+    accounts: {
+      commandcode: [{ ref: "cc-1", label: "CC", configured: true, active: true }],
+      "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true }],
+      opendesign: [{ ref: "od-1", label: "OD", configured: true, active: true }],
+    },
+  });
+  const { card } = await applyLikeHost(host);
+  const cardView = mini.mount(card);
+  await settleSim(mini);
+
+  expect(host.statusCalls).toEqual(["commandcode"]);
+  // 第一拍到第二拍：opencode。
+  vi.advanceTimersByTime(60_000);
+  await settleSim(mini);
+  expect(host.statusCalls).toContain("dsh-opencode-go");
+  // 第二拍到第三拍：opendesign（用户报障「始终看不到 opendesign」）。
+  vi.advanceTimersByTime(60_000);
+  await settleSim(mini);
+  expect(host.statusCalls).toContain("opendesign");
+  // 卡片上确实换成了 opendesign 的账号名。
+  expect(textsOfSim(cardView.tree()).join(" ")).toContain("OD");
+  vi.useRealTimers();
+});
