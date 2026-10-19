@@ -387,4 +387,24 @@ describe("边界数据到渲染", () => {
     // 元素树里必须真的画出了东西（不是一棵空树）。
     expect(elementsOf(SidebarCard({ t, status: parsed, onOpen: () => undefined })).length).toBeGreaterThan(0);
   });
+});it("边界校验器必须搬运 lastUsed（漏了会让侧边栏不跟随）", () => {
+  const descriptor = usageDescriptors().find((entry) => (entry as { method?: string }).method === "usageReport");
+  expect(descriptor).toBeDefined();
+  const parse = (descriptor as unknown as { result: { create: () => { parse: (v: unknown) => unknown } } }).result.create().parse;
+
+  const lastUsed = { vendor: "opendesign", account: "od-1", model: "deepseek-v4.1-flash", at: 1_000 };
+  const parsed = parse({
+    accounts: [],
+    total: { window: "all", bucket: {}, byVendor: [] },
+    lastUsed,
+  }) as { lastUsed?: typeof lastUsed };
+  expect(parsed.lastUsed).toEqual(lastUsed);
+
+  // 缺字段/形状不对的 lastUsed 被丢弃，而不是让渲染拿到半截数据。
+  for (const bad of [null, {}, { vendor: "x" }, { vendor: "x", account: "y" }, { vendor: "x", account: "y", at: "bad" }]) {
+    const result = parse({ accounts: [], total: { window: "all", bucket: {}, byVendor: [] }, lastUsed: bad }) as {
+      lastUsed?: unknown;
+    };
+    expect(result.lastUsed).toBeUndefined();
+  }
 });

@@ -377,6 +377,10 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
   }
   const accounts = (value.accounts as unknown[]).filter(isAccountUsageRow);
   const byVendor = Array.isArray(total.byVendor) ? (total.byVendor as unknown[]).filter(isVendorBucketRow) : [];
+  // **lastUsed 必须显式搬运**：这个函数会重建对象，漏一个字段就等于把它抹掉。
+  // 这条路径上已经栽过两次（`seams.reportOf` 漏一次、这里漏一次），症状都是「侧边栏不显示
+  // 额度 / 不跟随当前账号」（2026-10-19 报障）。**新增字段时务必同步这一行。**
+  const lastUsed = lastUsedOf(value.lastUsed);
   return {
     accounts,
     total: {
@@ -385,12 +389,30 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
       byVendor,
       ...(typeof total.lastAt === "number" && Number.isFinite(total.lastAt) ? { lastAt: total.lastAt } : {}),
     },
+    ...(lastUsed === undefined ? {} : { lastUsed }),
   } as UsageReportView;
 }
 
 /** 合法的窗口值。 */
 function isUsageWindow(value: unknown): value is UsageWindowView {
   return value === "today" || value === "7d" || value === "30d" || value === "all";
+}
+
+/**
+ * 校验并搬运「最近一次请求的账号」。
+ *
+ * 四个字段（vendor / account / at 必须有效，model 可空）都核对过才收下 —— 缺一块的读数
+ * 拿去渲染只会让侧边栏挑不到账号，静默退回清单第一个（看起来像「不跟随」）。
+ * @param value - 线上值（形状不可信）。
+ * @returns 校验后的读数；不合格时为 `undefined`（当作「没有」，不猜）。
+ */
+function lastUsedOf(value: unknown): { vendor: string; account: string; model: string; at: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const { vendor, account, at } = value;
+  if (typeof vendor !== "string" || vendor === "") return undefined;
+  if (typeof account !== "string" || account === "") return undefined;
+  if (typeof at !== "number" || !Number.isFinite(at) || at <= 0) return undefined;
+  return { vendor, account, model: typeof value.model === "string" ? value.model : "", at };
 }
 
 /**
