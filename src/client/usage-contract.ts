@@ -120,6 +120,8 @@ export interface AccountUsageView {
   spent?: number;
   /** 该金额来自哪个额度窗口。 */
   spentWindow?: string;
+  /** 本周期内**最近一次请求**的时刻（epoch 毫秒）；周期内没有记录时缺失。 */
+  lastAt?: number;
 }
 
 /** 一份用量报表。 */

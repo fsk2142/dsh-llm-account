@@ -20,6 +20,7 @@
 import { createElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import { AccountsPanel } from "./accounts-panel";
+import { RenderBoundary } from "./boundary";
 import { dictionaryOf } from "./copy";
 import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
@@ -53,7 +54,7 @@ import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import type { VendorEntry } from "./registry";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type SwitchRuntimeState, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
-import { AccountUsageBlock, UsageCard } from "./usage-card";
+import { AccountUsageBlock } from "./usage-card";
 
 /**
  * 把账号 ref 翻成可读名（用量卡片显示用）。
@@ -758,6 +759,15 @@ export function shouldPollLogin(login: LoginView | undefined): boolean {
  */
 const LOGIN_UNKNOWN: LoginView = { state: "idle" };
 
+/**
+ * 读用量报表时传的窗口。
+ *
+ * 账号下面的数字是**该账号自己的账期**聚合（`AccountUsage.period`），与这个窗口无关 ——
+ * 窗口只影响报表里那份总账（界面已经不显示它了）。仍旧传一个合法的值，是因为宿主的
+ * 边界校验要求它在白名单里；`all` 最省事：不受时间影响，重读时不会因为跨天而变。
+ */
+const USAGE_REPORT_WINDOW: UsageWindowView = "all";
+
 /** 造**容器组件**：持有页面状态、订阅宿主推送与共享远程面、把回调接上，然后渲染 `PageShell`。
  *
  * 这是本层唯一使用 Hook 的地方，刻意做得极薄：所有判定都在 `page-state.ts` / `dispatchAccountAction`
@@ -773,17 +783,24 @@ const LOGIN_UNKNOWN: LoginView = { state: "idle" };
  */
 export function createConnectedPage(options: ConnectedPageOptions): () => ReactElement {
   const component = createConnectedPageBody(options);
-  // 把容器包进一层渲染兜底。
+  // 两层兜底，缺一不可：
   //
-  // 为什么必须有：`PageShell` 的 try/catch 只覆盖 `pageBody()`，而容器的 Hook 初始化、
-  // `useWebSearchPanel` 以及进入 `PageShell` 之前的全部求值都在它之外。那里一抛错，
-  // React 丢弃整棵子树 —— 用户看到的就是「设置里有条目，点进去一片空白」，控制台之外
-  // 没有任何线索。
-  //
-  // 为什么这里用 try/catch 就够：返回的函数**就是**注册给宿主的组件，React 调用它的
-  // 身体来渲染；`useState` 等 Hook 也是在这段身体里执行的，所以同步异常在这里就能接住，
-  // 然后换成一块可读的错误面板（真实 React 与测试的迷你运行时同一条路径）。
-  return () => renderWithBoundary(component);
+  // 1. `renderWithBoundary` 接住**容器自己**求值时的同步异常（Hook 初始化、组装
+  //    `PageShell` 的入参）。这是同步的，一层 try/catch 就够。
+  // 2. `RenderBoundary` 接住**子组件**渲染/副作用里的异常。React 在 try/catch 之外才逐个
+  //    渲染子组件，所以第 1 层拦不住它们 —— 那正是「刷新用量统计时整个设置页消失」的形状：
+  //    最近的上层边界接住，没有就整棵根树卸载。
+  return () =>
+    createElement(
+      RenderBoundary,
+      {
+        title: "LLM 账号",
+        // 文案刻意说「其余设置不受影响」：那是这层边界存在的全部意义。
+        note: "这一块渲染失败了，其它设置不受影响。可以点「重试」，或把下面的信息反馈给插件作者。",
+        retryLabel: "重试",
+      },
+      renderWithBoundary(component),
+    );
 }
 
 /**
@@ -1222,10 +1239,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     // 必须**在 `accountsPanel` 之前**声明：账号行要内嵌各自的用量（用户要求「单个账号的
     // 统计放在该账号下面」），而构造面板时就要用到 `usageReport`。所有 Hook 仍然集中在
     // 渲染体顶部，顺序在每次渲染之间不变。
-    const [usageWindow, setUsageWindow] = useState<UsageWindowView>("today");
     const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
     const [usageStatsProblem, setUsageStatsProblem] = useState<string | undefined>(undefined);
-    const [usageLoading, setUsageLoading] = useState(true);
     /**
      * 定时重读计数：设置页会开着好一会儿，30 秒一次让数字跟上。
      *
@@ -1245,46 +1260,64 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       let alive = true;
       const load = (): void => {
         if (!alive) return;
-        const api = usageNamespace(ctx);
-        if (api === undefined) {
-          // 远程面**还没挂上**（`usageNamespace` 走懒挂载：挂载完成才有命名空间）。
-          // 保持 loading，等下面的 `onUsageReady` 在挂载完成时再调一次 —— 否则卡片
-          // 会永久不出现（首次渲染几乎总是早于挂载完成）。
-          setUsageLoading(true);
-          return;
+        // **整段包在 try/catch 里**：这是 effect 体，抛出去就是「子树被 React 丢掉」——
+        // 用户看到的正是「每次用量刷新，设置页消失」。`usageNamespace` 会顺带懒挂载
+        // 远程面（`ensureUsageRemote` → `$mount`），宿主上下文过期时它可能抛。
+        try {
+          const api = usageNamespace(ctx);
+          if (api === undefined) {
+            // 远程面**还没挂上**（`usageNamespace` 走懒挂载：挂载完成才有命名空间）。
+            // 等下面的 `onUsageReady` 在挂载完成时再调一次 —— 否则区块会永久不出现
+            // （首次渲染几乎总是早于挂载完成）。
+            return;
+          }
+          if (api.usageReport === undefined) {
+            // 命名空间在、但没有这个方法：宿主版本太旧或本次发布没带它。这时**确定**没有。
+            setUsageReport(undefined);
+            return;
+          }
+          void api.usageReport(USAGE_REPORT_WINDOW).then(
+            (report) => {
+              if (!alive) return;
+              setUsageReport(report);
+              setUsageStatsProblem(undefined);
+            },
+            (error: unknown) => {
+              if (!alive) return;
+              setUsageStatsProblem(error instanceof Error ? error.message : String(error));
+            },
+          );
+        } catch (error) {
+          if (!alive) return;
+          setUsageStatsProblem(error instanceof Error ? error.message : String(error));
         }
-        if (api.usageReport === undefined) {
-          // 命名空间在、但没有这个方法：宿主版本太旧或本次发布没带它。这时**确定**没有，
-          // 收起 loading 且不渲染卡片（不是「还在等」）。
-          setUsageLoading(false);
-          setUsageReport(undefined);
-          return;
-        }
-        setUsageLoading(true);
-        void api.usageReport(usageWindow).then(
-          (report) => {
-            if (!alive) return;
-            setUsageReport(report);
-            setUsageStatsProblem(undefined);
-            setUsageLoading(false);
-          },
-          (error: unknown) => {
-            if (!alive) return;
-            setUsageStatsProblem(error instanceof Error ? error.message : String(error));
-            setUsageLoading(false);
-          },
-        );
       };
-      load();
-      // 远程面挂载完成时补读一次（与侧边栏卡片、仪表盘同一条纪律）。
-      const offReady = onUsageReady(ctx, (namespace) => {
-        if (namespace !== undefined) load();
-      });
-      return () => {
+      try {
+        load();
+        // 远程面挂载完成时补读一次（与侧边栏卡片、仪表盘同一条纪律）。
+        // `onUsageReady` 也会顺带调用 `ensureUsageRemote`，同样可能抛。
+        const offReady = onUsageReady(ctx, (namespace) => {
+          if (namespace !== undefined) load();
+        });
+        return () => {
+          alive = false;
+          offReady();
+        };
+      } catch (error) {
         alive = false;
-        offReady();
-      };
-    }, [usageWindow, accountRevision, usageTick]);
+        setUsageStatsProblem(error instanceof Error ? error.message : String(error));
+        return () => {
+          alive = false;
+        };
+      }
+    }, [accountRevision, usageTick]);
+    /**
+     * 已经报过「用量读不到」的厂商（每次渲染重建）。
+     *
+     * 读数失败要在**用量本该出现的位置**说话，但同一句原因在三个账号下面重复三遍只是噪音：
+     * 同一家只报一次。
+     */
+    const usageProblemShown = new Set<string>();
     /**
      * 某个账号的用量块（渲染在它自己的额度条下方）。
      * @param vendor - 厂商。
@@ -1292,14 +1325,33 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * @returns 用量块；没有该账号的读数时为 `undefined`（不占位）。
      */
     const accountUsageOf = (vendor: string, ref: string): ReactNode => {
+      if (usageStatsProblem !== undefined) {
+        if (usageProblemShown.has(vendor)) return undefined;
+        usageProblemShown.add(vendor);
+        return createElement(
+          "small",
+          { "data-usage-failure": "true", className: CSS_CLASS.failure },
+          `${t("usage.readFailed")}：${usageStatsProblem}`,
+        );
+      }
       const row = usageReport?.accounts.find((entry) => entry.vendor === vendor && entry.account === ref);
       if (row === undefined) return undefined;
-      return AccountUsageBlock({
-        t,
-        entry: row,
-        label: accountLabelOf(statuses[vendor]?.accounts ?? [], ref),
-        compact: true,
-      });
+      // 这一小块自己再套一层边界：用量是**每 30 秒重渲染一次**的东西，它出问题不该
+      // 连累账号行、额度条与整页设置（2026-10-19 报障「每次用量刷新设置页就没了」）。
+      //
+      // 注意第三个参数是**元素**（`createElement(AccountUsageBlock, …)`），不是
+      // `AccountUsageBlock(…)` 的返回值：只有把渲染推迟给 React，抛错才发生在边界的子树里；
+      // 直接在这里调用等于在账号行的渲染期抛，最近的边界是整页那层。
+      return createElement(
+        RenderBoundary,
+        // 文案取现有的「重试」；边界里不碰 `t()` 之外的取词，所以标题也用同一条。
+        { variant: "inline", title: t("usage.title"), retryLabel: t("models.retry") },
+        createElement(AccountUsageBlock, {
+          t,
+          entry: row,
+          label: accountLabelOf(statuses[vendor]?.accounts ?? [], ref),
+        }),
+      );
     };
 
     const accountsPanel = createElement(AccountsPanel, {
@@ -1395,44 +1447,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       loginError: loginErrors,
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
-    const usageCard =
-      usageReport === undefined && usageStatsProblem === undefined && !usageLoading
-        ? undefined
-        : UsageCard({
-            t,
-            window: usageWindow,
-            accounts: usageReport?.accounts ?? [],
-            total: usageReport?.total ?? {
-              window: usageWindow,
-              bucket: {
-                period: usageWindow,
-                since: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                requests: 0,
-                ok: 0,
-                failed: 0,
-              },
-              byVendor: [],
-            },
-            onWindow: setUsageWindow,
-            // 清空：先二次确认（不可撤销），成功后立即重读。
-            onClear: () => {
-              // `confirm` 只在浏览器里有；没有它的环境（测试/非浏览器宿主）一律按「不确认」，
-              // 免得一个不可撤销的操作在没有确认框的地方被触发。
-              const ask = (globalThis as { confirm?: (message: string) => boolean }).confirm;
-              if (typeof ask !== "function" || ask.call(globalThis, t("usage.clearConfirm")) !== true) return;
-              const api = usageNamespace(ctx);
-              if (api?.usageClear === undefined) return;
-              void api.usageClear().then(() => setUsageTick((current) => current + 1));
-            },
-            ...(usageStatsProblem === undefined ? {} : { failure: usageStatsProblem }),
-            ...(usageLoading ? { loading: true } : {}),
-            labelOf: (vendor, account) => accountLabelOf(statuses[vendor]?.accounts ?? [], account),
-          });
-
+    // 统计**全在账号下面**（用户 2026-10-19：「只在每个账号下面统计本身的用量」）：
+    // 页面上不再有跨账号的用量卡片，所以这里不再往 `PageShell` 传 `usage`。
     return PageShell({
       state,
       entries,
@@ -1557,7 +1573,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                 loginBegin: () => beginLogin(activeVendor),
               }),
           }),
-      ...(usageCard === undefined ? {} : { usage: usageCard }),
     });
   };
 }

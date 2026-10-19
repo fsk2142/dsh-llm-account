@@ -45,6 +45,7 @@ vi.mock("react", async () => {
   return {
     createElement: stub.createElement,
     Fragment: stub.Fragment,
+    Component: stub.Component,
     useState: mini.useState,
     useEffect: mini.useEffect,
     useRef: mini.useRef,

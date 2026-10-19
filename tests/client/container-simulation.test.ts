@@ -1157,3 +1157,106 @@ it("轮播跳过没有账号的厂商：第一家未配置 → 直接落到第�
   expect(text).not.toContain("未配置");
   vi.useRealTimers();
 });
+
+// —— 用量统计：只挂在账号下面，且绝不吃掉整页 ————————
+
+/** 默认的聚合桶（4.6K 请求、100% 成功、87% 命中、官方价 $18.14）。 */
+const USAGE_BUCKET: Record<string, unknown> = {
+  period: "2026-10",
+  since: 0,
+  requests: 4_600,
+  ok: 4_600,
+  failed: 0,
+  successRate: 1,
+  cacheHitRate: 0.87,
+  inputTokens: 2_000_000,
+  outputTokens: 4_600_000,
+  cacheReadTokens: 100_000_000,
+  cacheWriteTokens: 0,
+  officialCost: 18.14,
+};
+
+/**
+ * 造一份 usageReport（一个账号、周期为厂商重置的月度账期）。
+ *
+ * `bucket` **整块替换**而不是浅合并：有一个用例要喂一个「读任何字段都抛」的坏桶，
+ * 浅合并会在构造报表时就把 getter 读掉，异常落到 `usageReport()` 调用里，
+ * 于是测到的是「读取失败」而不是「渲染失败」—— 差之毫厘。
+ * @param account - 账号 ref。
+ * @param bucket - 聚合桶（缺省 {@link USAGE_BUCKET}）。
+ * @returns 线上形状的报表。
+ */
+function reportFor(account: string, bucket: Record<string, unknown> = USAGE_BUCKET): Record<string, unknown> {
+  return {
+    accounts: [
+      {
+        vendor: "commandcode",
+        account,
+        period: { kind: "month", key: "2026-10", start: new Date(2026, 9, 14).getTime(), end: new Date(2026, 10, 14).getTime(), fromResetAt: true },
+        bucket,
+        windowed: { period: "all", since: 0, requests: 0, ok: 0, failed: 0 },
+      },
+    ],
+    total: { window: "all", bucket: {}, byVendor: [] },
+  };
+}
+
+it("用量块挂在**它自己的账号行**下面（页面上不再有跨账号的用量卡片）", async () => {
+  const mini = await runtime();
+  await freshSeams();
+  const host = fakeHost(mini, {
+    accounts: { commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }] },
+    usageReport: () => reportFor("cc-1"),
+  });
+  const page = mini.mount(await pageContainer(host));
+  await settleSim(mini);
+
+  const block = find(page.tree(), "data-usage-account", "cc-1");
+  // 位置：在账号行**里面**（额度条下方），不是页面级别的另一张卡。
+  // 只能看结构（`elementsOfSim` 每次展开都会重新求值组件，对象恒等比较没有意义）。
+  const row = find(page.tree(), "data-account", "cc-1");
+  expect(elementsOfSim(row).some((element) => element.props["data-usage-account"] === "cc-1")).toBe(true);
+  const text = textsOfSim(block).join(" ");
+  expect(text).toContain("用量");
+  expect(text).toContain("4.6K");
+  expect(text).toContain("4.6K 成功 / 0 失败");
+  expect(text).toContain("官方价");
+  // 窗口选择器随大卡片一起没了：页面上不该再出现时间窗口按钮。
+  expect(findSim(page.tree(), "data-usage-window")).toBeUndefined();
+});
+
+it("用量块渲染抛错时只坏它自己：账号行与整页设置仍在（不再整页消失）", async () => {
+  const mini = await runtime();
+  await freshSeams();
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    // 坏桶：读任何字段都抛。边界校验器只查「是不是对象」，所以它能走到渲染层 ——
+    // 这正是 2026-10-19 报障的形状（刷新用量时整页消失）。
+    const exploding: Record<string, unknown> = {};
+    for (const key of ["requests", "ok", "failed", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "successRate", "cacheHitRate", "officialCost"]) {
+      Object.defineProperty(exploding, key, {
+        enumerable: true,
+        get() {
+          throw new Error(`boom reading ${key}`);
+        },
+      });
+    }
+    const host = fakeHost(mini, {
+      accounts: { commandcode: [{ ref: "cc-1", label: "Work", configured: true, active: true, effective: true }] },
+      usageReport: () => reportFor("cc-1", exploding),
+    });
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+
+    // 页面本体还在（标题、账号行都在）。
+    expect(findSim(page.tree(), "data-page", "llm-account")).toBeDefined();
+    expect(findSim(page.tree(), "data-account", "cc-1")).toBeDefined();
+    expect(textsOfSim(page.tree()).join(" ")).toContain("Work");
+    // 只有用量那一小块换成了行内失败提示，并且原因看得见。
+    const inline = find(page.tree(), "data-render-error-inline", "true");
+    expect(elementsOfSim(inline).length).toBeGreaterThan(0);
+    expect(textsOfSim(page.tree()).join(" ")).toContain("boom reading");
+  } finally {
+    errors.mockRestore();
+  }
+});

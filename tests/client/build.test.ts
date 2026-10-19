@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import * as reactStub from "../support/react-stub";
+
 const CLIENT_BUNDLE = fileURLToPath(new URL("../../lib/client.js", import.meta.url));
 
 /**
@@ -87,8 +89,17 @@ type LoaderRegistration = {
   factory: (require: (id: string) => unknown) => unknown;
 };
 
-/** Evaluate the bundle the way the GUI loader does: one `__ModuleLoader__.load` call. */
-function loadClientBundle(source: string, requireImpl: (id: string) => unknown = () => ({})): unknown {
+/**
+ * Evaluate the bundle the way the GUI loader does: one `__ModuleLoader__.load` call.
+ *
+ * The `require` stub answers `react` with the test stand-in — the real loader supplies the host's
+ * React, and the bundle needs at least `Component` (the render boundary is a class component) at
+ * evaluation time. Every other id gets an empty module, which is all `apply()` reads.
+ */
+function loadClientBundle(
+  source: string,
+  requireImpl: (id: string) => unknown = (id: string) => (id === "react" ? reactStub : {}),
+): unknown {
   const registrations: LoaderRegistration[] = [];
   const host = globalThis as typeof globalThis & { window?: { __ModuleLoader__?: unknown } };
   const previous = host.window;

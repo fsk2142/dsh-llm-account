@@ -59,14 +59,23 @@ declare module "react" {
   /**
    * 类组件基类（错误边界只能用类组件写，React 没有函数式等价物）。
    *
-   * 只声明本项目用到的那一小块：`props` / `state` / `render` / `componentDidCatch` /
-   * 静态 `getDerivedStateFromError`。真实 React 的 `Component` 是这些成员的超集。
+   * 只声明本项目用到的那一小块：`props` / `state` / `setState` / `render` /
+   * `componentDidCatch` / 静态 `getDerivedStateFromError`。真实 React 的 `Component`
+   * 是这些成员的超集。
    */
   export class Component<Props = Record<string, unknown>, State = Record<string, unknown>> {
     props: Props;
     state: State;
     constructor(props: Props);
+    /** 合并式更新（错误边界的「重试」用它把 `failure` 清成 `undefined`）。 */
+    setState(next: Partial<State> | ((previous: State) => Partial<State>)): void;
     render(): ReactNode;
     componentDidCatch?(error: unknown, info?: unknown): void;
+  }
+
+  /** `componentDidCatch` 的第二参：React 给的组件栈。 */
+  export interface ErrorInfo {
+    /** 出错位置在组件树里的路径（React 提供；这里只用它打日志）。 */
+    readonly componentStack?: string;
   }
 }

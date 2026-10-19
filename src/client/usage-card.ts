@@ -1,14 +1,19 @@
 /**
- * 用量卡片：**额度下方**那块统计（请求数、成功率、token、缓存命中率、两种计价）。
+ * 账号用量区块：**长在账号自己下面**的那一小块统计。
  *
- * 分层要求（用户原话）：
- * 1. 「每个账号只统计自己的记账周期」→ 先按账号列，每行标注它的周期；
- * 2. 「单独有一个总的记录」→ 末尾一节总账，按选中的时间窗口。
+ * 两次要求叠出来的形状（用户原话）：
+ * 1. 「每个账号只统计自己的记账周期」→ 每个账号按**它自己的账期**聚合，不跟着页面上的时间窗口走；
+ * 2. 「只在每个账号下面统计本身的用量」→ 页面上**没有**一张跨账号的大卡片了。额度是「还剩多少」，
+ *    用量是「用了多少」，同一账号的两面贴在一起读才对得上。
  *
- * 纯 props → 元素树：不取数、不留状态（窗口切换由容器给回调）。
+ * 版式对齐用户给的参考图：一行标题（「用量」+ 账期区间 + 口径来源），下面四个指标块
+ * （请求 / 成功率 / 花费 / Token），每个块带一行小字补充（成功失败数、官方价折算、入/出 token）。
+ * 缓存命中率与最近一次请求不占指标位，收在脚下那一行 —— 它们是核对用的，不该跟结论抢版面。
+ *
+ * 纯 props → 元素树：不取数、不留状态、不设定时器。
  * @module dsh-llm-account/src/client/usage-card
  */
-import { createElement, type ReactElement, type ReactNode } from "react";
+import { createElement, type ReactElement } from "react";
 
 import { CSS_CLASS } from "./css";
 import type { AccountUsageView, UsageBucketView, UsageReportView, UsageWindowView } from "./usage-contract";
@@ -21,50 +26,44 @@ import { relativeTime } from "./time";
  * 不该为了几个字段把核心层拉进来；传输类型的可选字段（`successRate?`）也正好对应
  * 「这个数可能没有」的界面语义。
  */
-export type { AccountUsageView, UsageBucketView, UsageReportView };
+export type { AccountUsageView, UsageBucketView, UsageReportView, UsageWindowView };
 
-/** 一个可选的窗口（顺序即界面顺序）。 */
-const WINDOWS: readonly { key: UsageWindowView; copy: string }[] = [
-  { key: "today", copy: "usage.window.today" },
-  { key: "7d", copy: "usage.window.7d" },
-  { key: "30d", copy: "usage.window.30d" },
-  { key: "all", copy: "usage.window.all" },
-];
-
-/** 卡片属性。 */
-export interface UsageCardProps {
-  t: (key: string) => string;
-  /** 当前窗口。 */
-  window: UsageWindowView;
-  /** 每账号明细。 */
-  accounts: readonly AccountUsageView[];
-  /** 总账。 */
-  total: UsageReportView["total"];
-  /** 切换窗口。 */
-  onWindow?: (window: UsageWindowView) => void;
-  /** 读取失败原因（可选）。 */
-  failure?: string;
-  /** 还没读到（与「没有记录」区分开）。 */
-  loading?: boolean;
-  /** 把 ref 翻成可读的账号名（容器给；缺省原样显示）。 */
-  labelOf?: (vendor: string, account: string) => string;
-  /**
-   * 清空台账。
-   *
-   * 二次确认由**容器**用 `confirm()` 做（卡片是纯组件，不自己弹窗）；不传就没有这个
-   * 入口 —— 没有记录的空白页面上摆一个「清空」按钮毫无意义。
-   */
-  onClear?: () => void;
+/** 一个数值字段是否可信（线上可能是 null / 字符串 / NaN）。 */
+function finite(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/** 千分位（数字是给人看的，别让人自己数位数）。 */
-function grouped(value: number): string {
-  return Math.round(value).toLocaleString();
+/**
+ * 紧凑数字（`4600` → `4.6K`，`2_100_000_000` → `2.1B`）。
+ *
+ * 为什么不像以前那样只加千分位：账号卡片一行里要塞四个数，`4,600` 与 `2,100,000,000`
+ * 长度差三倍，标题会被最长的那一个撑开；参考图用的就是 K/M/B。
+ * @param value - 数值；缺失或非有限值时给破折号（**不是 0**）。
+ * @returns 可读的紧凑文本。
+ */
+function compact(value: number | undefined): string {
+  if (value === undefined) return "—";
+  const sign = value < 0 ? "-" : "";
+  const magnitude = Math.abs(value);
+  if (magnitude < 1_000) return `${sign}${Math.round(magnitude)}`;
+  const units: readonly (readonly [string, number])[] = [
+    ["B", 1_000_000_000],
+    ["M", 1_000_000],
+    ["K", 1_000],
+  ];
+  for (const [suffix, size] of units) {
+    if (magnitude < size) continue;
+    // 一位小数就够读；整数倍不留 `.0`（`4.0M` 看起来像有精度的假数字）。
+    const scaled = Math.round((magnitude / size) * 10) / 10;
+    return `${sign}${scaled % 1 === 0 ? scaled.toFixed(0) : scaled.toFixed(1)}${suffix}`;
+  }
+  return `${sign}${Math.round(magnitude)}`;
 }
 
 /** 百分比（0–1 → 「93%」）；`undefined` → 破折号（缺失不是 0%）。 */
 function percent(rate: number | undefined): string {
-  return rate === undefined ? "—" : `${Math.round(rate * 100)}%`;
+  if (rate === undefined) return "—";
+  return `${Math.round(rate * 100)}%`;
 }
 
 /** 金额：小于 1 分也显示成 `<0.01`，不要显示成 0（那会让人以为是免费）。 */
@@ -74,24 +73,44 @@ function money(value: number | undefined, unknownText: string): string {
   return `$${value.toFixed(2)}`;
 }
 
-/** 一行「标签 …… 值」。 */
-function row(key: string, label: string, value: ReactNode, attribute: string): ReactElement {
-  return createElement(
-    "div",
-    { key, "data-usage-row": attribute, className: CSS_CLASS.usageRow },
-    createElement("span", { className: CSS_CLASS.usageLabel }, label),
-    createElement("span", { className: CSS_CLASS.usageValue }, value),
-  );
+/** 账期端点 → `2026/10/14`（本地时区；账期本来就是按用户本地日历算的）。 */
+function dateText(at: number | undefined): string | undefined {
+  if (at === undefined || at <= 0) return undefined;
+  const date = new Date(at);
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
 }
 
 /**
- * 一张**指标卡**：大数字 + 标签 + 可选的小字补充。
+ * 账期区间文案（`2026/10/14 – 2026/11/14`）。
  *
- * 为什么值得单独做：原来所有指标平铺成「标签 …… 数值」的九行列表，成功率、命中率、
- * 金额这些**该一眼看到的数**沉在列表里，读起来像调试输出。指标卡把它们提到顶部，
- * 细节行留在下面 —— 先看结论，需要时再看构成。
+ * 端点缺失时只写起点（`自 2026/10/14`）：`end` 缺失表示厂商没说什么时候重置，
+ * 编一个终点比不写更糟。两个都没有就不画这一行。
+ * @param t - 取词。
+ * @param start - 账期起点（epoch 毫秒）。
+ * @param end - 账期终点（epoch 毫秒，可缺）。
+ * @returns 文案；没有可用端点时为 `undefined`。
+ */
+export function periodRangeText(t: (key: string) => string, start: unknown, end: unknown): string | undefined {
+  const from = dateText(finite(start));
+  const to = dateText(finite(end));
+  if (from !== undefined && to !== undefined) return t("usage.periodRange").replace("{from}", from).replace("{to}", to);
+  if (from !== undefined) return t("usage.periodFrom").replace("{from}", from);
+  return undefined;
+}
+
+/** 成功率/命中率的健康色：好→绿、一般→黄、缺失→灰。 */
+function rateTone(rate: number | undefined): "ok" | "warn" | "muted" {
+  if (rate === undefined) return "muted";
+  if (rate >= 0.9) return "ok";
+  return "warn";
+}
+
+/**
+ * 一张**指标块**：大数字 + 标签 + 一行小字补充。
+ *
+ * 结构对参考图：数字在上、标签在中、补充说明在下，四块等宽横排（窄容器自动折行）。
  * @param props - 取词与数值。
- * @returns 指标卡。
+ * @returns 指标块。
  */
 function metric(props: {
   key: string;
@@ -100,6 +119,8 @@ function metric(props: {
   attribute: string;
   hint?: string | undefined;
   tone?: "plain" | "ok" | "warn" | "muted";
+  /** 额外的 data 属性（例如权威金额原值）。 */
+  data?: Record<string, string | number>;
 }): ReactElement {
   return createElement(
     "div",
@@ -108,308 +129,186 @@ function metric(props: {
       "data-usage-metric": props.attribute,
       "data-tone": props.tone ?? "plain",
       className: CSS_CLASS.usageMetric,
+      ...props.data,
     },
     createElement("span", { className: CSS_CLASS.usageMetricValue }, props.value),
     createElement("span", { className: CSS_CLASS.usageMetricLabel }, props.label),
+    // 没有补充的小字就**不留空行**：空 `small` 会让四块高度不齐，看着像渲染坏了。
     ...(props.hint === undefined
       ? []
       : [createElement("small", { key: "hint", className: CSS_CLASS.usageMetricHint }, props.hint)]),
   );
 }
 
-/** 成功率/命中率的健康色：好→绿、一般→黄、差→红；缺失→灰。 */
-function rateTone(rate: number | undefined): "ok" | "warn" | "muted" {
-  if (rate === undefined) return "muted";
-  if (rate >= 0.9) return "ok";
-  return "warn";
+/** 脚下那一行的一小项（`缓存命中率 75%`）。 */
+function footItem(key: string, text: string, attribute: string, extra?: Record<string, string | number>): ReactElement {
+  return createElement(
+    "span",
+    { key, "data-usage-foot": attribute, className: CSS_CLASS.usageHint, ...extra },
+    text,
+  );
 }
 
 /**
- * 一个桶的数值区（账号行与总账共用同一份渲染，避免两处口径分叉）。
+ * 一个账号的用量区块。
  *
- * 分两层：上面是**指标卡**（请求数 / 成功率 / 命中率 / 花费），下面是**明细行**
- * （token 四分项与计价）。这样重要数字第一眼可见，构成仍可核对。
- * @param t - 取词。
- * @param bucket - 聚合桶。
- * @returns 元素列表。
- */
-function bucketRows(t: (key: string) => string, bucket: UsageBucketView): ReactElement[] {
-  const tokens = bucket.inputTokens + bucket.outputTokens + bucket.cacheReadTokens + bucket.cacheWriteTokens;
-  return [
-    createElement(
-      "div",
-      { key: "metrics", "data-usage-metrics": "true", className: CSS_CLASS.usageMetrics },
-      metric({
-        key: "requests",
-        attribute: "requests",
-        label: t("usage.requests"),
-        value: grouped(bucket.requests),
-        hint: `${t("usage.okShort")} ${grouped(bucket.ok)} · ${t("usage.failedShort")} ${grouped(bucket.failed)}`,
-      }),
-      metric({
-        key: "success",
-        attribute: "success-rate",
-        label: t("usage.successRate"),
-        value: percent(bucket.successRate),
-        tone: rateTone(bucket.successRate),
-      }),
-      metric({
-        key: "cache",
-        attribute: "cache-hit-rate",
-        label: t("usage.cacheHitRate"),
-        value: percent(bucket.cacheHitRate),
-        tone: rateTone(bucket.cacheHitRate),
-      }),
-      metric({
-        key: "tokens",
-        attribute: "tokens",
-        label: t("usage.tokens"),
-        value: grouped(tokens),
-      }),
-    ),
-    // 明细：token 四分项与计价留在下面，避免「总量对不上」的疑问。
-    row("input", t("usage.input"), grouped(bucket.inputTokens), "input"),
-    row("output", t("usage.output"), grouped(bucket.outputTokens), "output"),
-    row("cache-read", t("usage.cacheRead"), grouped(bucket.cacheReadTokens), "cache-read"),
-    row("cache-write", t("usage.cacheWrite"), grouped(bucket.cacheWriteTokens), "cache-write"),
-  ].concat(costRows(t, bucket));
-}
-
-/** 计价两行：厂商价 + 官方折算（小字）。 */
-function costRows(t: (key: string) => string, bucket: UsageBucketView): ReactElement[] {
-  return [
-    createElement(
-      "div",
-      { key: "cost", "data-usage-row": "vendor-cost", className: CSS_CLASS.usageRow },
-      createElement("span", { className: CSS_CLASS.usageLabel }, t("usage.vendorCost")),
-      createElement(
-        "span",
-        { className: bucket.vendorCost === undefined ? CSS_CLASS.usageMuted : CSS_CLASS.usageValue },
-        money(bucket.vendorCost, t("usage.priceUnknown")),
-      ),
-    ),
-    createElement(
-      "div",
-      { key: "official", "data-usage-row": "official-cost", className: CSS_CLASS.usageRow },
-      createElement("span", { className: CSS_CLASS.usageLabel }, ""),
-      createElement(
-        "small",
-        { "data-usage-official": bucket.officialCost ?? "unknown", className: CSS_CLASS.usageHint },
-        `${t("usage.officialCost")} ${money(bucket.officialCost, "—")}`,
-      ),
-    ),
-  ];
-}
-
-/**
- * 一个账号的用量区块（**两处共用同一份渲染**）。
- *
- * 用在两处：设置页那张「用量统计」卡里的账号列表，以及**账号行自己的额度条下方**
- * （用户 2026-10-19 要求单个账号的统计放在账号下面）。两处共用一个实现，口径不分叉。
- * @param props - 取词、账号用量、显示用的标签。
+ * 渲染层**绝不因为一条数据形状不对就抛**：一抛就是整棵子树被丢弃，表现为「刷新用量统计时
+ * 整块内容消失」（2026-10-19 报障）。边界校验器（`usage-contract`）已挡掉大部分坏行，
+ * 这里再兜住残留 —— 每个字段都过 {@link finite}，缺失一律显示破折号。
+ * @param props - 取词、账号用量、可选的账号名（只用于无障碍标签）。
  * @returns 区块元素。
  */
 export function AccountUsageBlock(props: {
   t: (key: string) => string;
   entry: AccountUsageView;
-  label: string;
-  /** 紧凑模式：账号行内嵌时不要标题行（账号名已经在上面了）。 */
-  compact?: boolean;
+  /** 账号名；账号卡片里名字就在上面，所以只挂到 `aria-label`，不重复上图。 */
+  label?: string;
+  /** 「现在」（测试注入；缺省 `Date.now()`）。 */
+  now?: number;
 }): ReactElement {
   const { t, entry } = props;
-  // 防御性取数：渲染层**绝不因为一条数据形状不对就抛** —— 一抛就是整棵子树被丢弃，
-  // 表现为「刷新用量统计时整块内容消失」（2026-10-19 报障）。
-  // 边界校验器已挡掉大部分，这里兜住残留（例如校验通过但字段是 null）。
   const period = entry.period ?? ({} as AccountUsageView["period"]);
+  const fromVendor = period.fromResetAt === true;
   const kind = typeof period.kind === "string" ? period.kind : "month";
-  const periodText = period.fromResetAt === true
+  // 词典里没有这个粒度（宿主新增了一种周期）时退回「月」：宁可说错粒度，也不要把
+  // `usage.kind.whatever` 这个键名直接印到界面上。
+  const kindKey = `usage.kind.${kind}`;
+  const kindText = t(kindKey) === kindKey ? t("usage.kind.month") : t(kindKey);
+  const sourceText = fromVendor
     ? t("usage.periodFromVendor")
-    : t("usage.periodEstimated").replace("{kind}", t(`usage.kind.${kind}`));
+    : t("usage.periodEstimated").replace("{kind}", kindText);
+
   const bucket = entry.bucket ?? ({} as UsageBucketView);
-  return createElement(
-    "section",
-    {
-      key: `${entry.vendor}\u0000${entry.account}`,
-      "data-usage-account": entry.account,
-      "data-usage-vendor": entry.vendor,
-      "data-usage-compact": props.compact === true ? "true" : undefined,
-      className: props.compact === true ? CSS_CLASS.usageInline : CSS_CLASS.usageBlock,
-    },
-    createElement(
-      "div",
-      { className: CSS_CLASS.usageAccountHead },
-      // 紧凑模式下账号名在上面的标题行里，这里只留周期说明。
-      ...(props.compact === true ? [] : [createElement("strong", { key: "name" }, props.label)]),
-      createElement(
-        "small",
-        {
-          "data-usage-period": period.key,
-          "data-usage-period-source": period.fromResetAt === true ? "vendor" : "estimated",
-          className: CSS_CLASS.usageMuted,
-        },
-        `${t("usage.period")} · ${periodText}`,
-      ),
-      // 权威金额跟在周期后面（额度端点按美元记账时才有）。
-      ...(typeof entry.spent !== "number" || !Number.isFinite(entry.spent)
-        ? []
-        : [
-            createElement(
-              "small",
-              { key: "spent", "data-usage-spent": entry.spent, className: CSS_CLASS.usageHint },
-              `${t("usage.spent")} $${entry.spent.toFixed(2)}`,
-            ),
-          ]),
-    ),
-    ...bucketRows(t, bucket),
-  );
-}
+  const requests = finite(bucket.requests);
+  const ok = finite(bucket.ok);
+  const failed = finite(bucket.failed);
+  const input = finite(bucket.inputTokens);
+  const output = finite(bucket.outputTokens);
+  const cacheRead = finite(bucket.cacheReadTokens);
+  const cacheWrite = finite(bucket.cacheWriteTokens);
+  const successRate = finite(bucket.successRate);
+  const cacheHitRate = finite(bucket.cacheHitRate);
+  const officialCost = finite(bucket.officialCost);
+  const vendorCost = finite(bucket.vendorCost);
+  const spent = finite(entry.spent);
+  const lastAt = finite(entry.lastAt);
 
-/**
- * 用量卡片。
- * @param props - 见 {@link UsageCardProps}。
- * @returns 元素树。
- */
-export function UsageCard(props: UsageCardProps): ReactElement {
-  const { t, accounts, total } = props;
-  const labelOf = props.labelOf ?? ((_vendor: string, account: string): string => account);
+  // 总 token：四个分项相加。任一分项缺失都还是能加（缺失按 0），但**全部**缺失就是没有数据。
+  const tokenParts = [input, output, cacheRead, cacheWrite];
+  const tokens = tokenParts.every((part) => part === undefined)
+    ? undefined
+    : tokenParts.reduce<number>((sum, part) => sum + (part ?? 0), 0);
 
-  /** 窗口按钮（含选中态）。抽成数组，好在同一个动作组里和「清空」并排。 */
-  const windowButtons: ReactElement[] = WINDOWS.map((entry) =>
-    createElement(
-      "button",
-      {
-        key: entry.key,
-        type: "button",
-        "data-usage-window": entry.key,
-        "aria-pressed": props.window === entry.key,
-        className:
-          props.window === entry.key
-            ? `${CSS_CLASS.buttonGhost} ${CSS_CLASS.usageWindowActive}`
-            : CSS_CLASS.buttonGhost,
-        onClick: () => props.onWindow?.(entry.key),
-      },
-      t(entry.copy),
-    ),
-  );
+  // 花费：厂商按美元记账的权威金额优先；没有它才退回「token × 厂商单价」。
+  // 两者都没有就是「未公开」——不写 $0.00，那会让人以为免费。
+  const cost = spent ?? vendorCost;
+  // 原值留在 data 属性上供排查/测试（`data-usage-spent` = 厂商权威口径，
+  // `data-usage-official` = 官方价折算），界面上只显示格式化后的金额。
+  const costData: Record<string, string | number> = {};
+  if (spent !== undefined) costData["data-usage-spent"] = spent;
+  if (officialCost !== undefined) costData["data-usage-official"] = officialCost;
 
-  const header = createElement(
-    "header",
+  const head = createElement(
+    "div",
     { className: CSS_CLASS.usageHead },
-    createElement("h2", null, t("usage.title")),
-    createElement(
-      "div",
-      { "data-usage-windows": "true", className: CSS_CLASS.usageWindows },
-      ...windowButtons,
-      // 「清空」只在确实有记录、且容器给了动作时渲染。
-      ...(props.onClear === undefined || total.bucket.requests === 0
-        ? []
-        : [
-            createElement(
-              "button",
-              {
-                key: "clear",
-                type: "button",
-                "data-usage-clear": "true",
-                className: CSS_CLASS.buttonGhost,
-                onClick: () => props.onClear?.(),
-              },
-              t("usage.clear"),
-            ),
-          ]),
-    ),
+    createElement("span", { className: CSS_CLASS.usageTitle }, t("usage.title")),
+    ...(() => {
+      const range = periodRangeText(t, period.start, period.end);
+      if (range === undefined) return [];
+      return [
+        createElement(
+          "small",
+          {
+            key: "period",
+            "data-usage-period": period.key,
+            "data-usage-period-source": fromVendor ? "vendor" : "estimated",
+            className: CSS_CLASS.usagePeriod,
+          },
+          range,
+        ),
+        createElement("small", { key: "source", className: CSS_CLASS.usageMuted }, sourceText),
+      ];
+    })(),
   );
 
-  // 失败的提示优先（「读不到」与「没有数据」是两件事）。
-  const failure =
-    props.failure === undefined
-      ? null
-      : createElement(
-          "p",
-          { "data-usage-failure": "true", className: CSS_CLASS.failure },
-          `${t("usage.readFailed")}：${props.failure}`,
-        );
-
-  const loading = props.loading === true ? createElement("p", { className: CSS_CLASS.note }, t("usage.loading")) : null;
-
-  // 每账号一节：标题是账号名，副标题是它的记账周期。
-  const perAccount = accounts.map((entry) =>
-    AccountUsageBlock({
-      t,
-      entry,
-      label: labelOf(entry.vendor, entry.account),
+  const metrics = createElement(
+    "div",
+    { "data-usage-metrics": "true", className: CSS_CLASS.usageMetrics },
+    metric({
+      key: "requests",
+      attribute: "requests",
+      label: t("usage.requests"),
+      value: compact(requests),
+      // 参考图的口径：总数在上，成功/失败在下。
+      ...(ok === undefined && failed === undefined
+        ? {}
+        : { hint: `${compact(ok)} ${t("usage.okShort")} / ${compact(failed)} ${t("usage.failedShort")}` }),
+    }),
+    metric({
+      key: "success",
+      attribute: "success-rate",
+      label: t("usage.successRate"),
+      value: percent(successRate),
+      tone: rateTone(successRate),
+    }),
+    metric({
+      key: "cost",
+      attribute: "cost",
+      label: t("usage.cost"),
+      value: money(cost, t("usage.priceUnknown")),
+      tone: cost === undefined ? "muted" : "plain",
+      // 官方价折算跟在金额下面（用户要求「出个小字约等于官方多少」）。
+      ...(officialCost === undefined ? {} : { hint: `${t("usage.officialShort")} ≈ ${money(officialCost, "—")}` }),
+      data: costData,
+    }),
+    metric({
+      key: "tokens",
+      attribute: "tokens",
+      label: t("usage.tokens"),
+      value: compact(tokens),
+      ...(input === undefined && output === undefined
+        ? {}
+        : { hint: `${compact(input)} ${t("usage.inputShort")} / ${compact(output)} ${t("usage.outputShort")}` }),
     }),
   );
 
-  // 总账一节（放在最后，与账号分隔开）。
-  const totalSection = createElement(
-    "section",
-    { "data-usage-total": "true", className: CSS_CLASS.usageBlock },
-    createElement(
-      "div",
-      { className: CSS_CLASS.usageAccountHead },
-      createElement("strong", null, t("usage.total")),
-    ),
-    ...bucketRows(t, total.bucket),
-    ...props.total.lastAt === undefined
-      ? []
-      : [
-          row(
-            "last",
-            t("usage.lastAt"),
-            createElement("time", { "data-usage-last-at": props.total.lastAt, dateTime: new Date(props.total.lastAt).toISOString() }, relativeTime(t, props.total.lastAt)),
-            "last-at",
-          ),
-        ],
-    // 按厂商拆分：每家一行「名字 · 请求数 · 官方折算」。只在有多家时才画 ——
-    // 只有一家时这行与上面完全重复，纯噪音。
-    ...(total.byVendor.length <= 1
-      ? []
-      : [
-          createElement(
-            "div",
-            { key: "by-vendor", "data-usage-by-vendor": "true", className: CSS_CLASS.usageSplit },
-            ...total.byVendor.map((entry) => {
-              // 同上：这条路径也在渲染期，字段缺失不能让它抛。
-              const vendorBucket = entry.bucket ?? ({} as UsageBucketView);
-              return createElement(
-                "span",
-                { key: entry.vendor, "data-usage-vendor-row": entry.vendor, className: CSS_CLASS.usageHint },
-                `${entry.vendor} · ${grouped(vendorBucket.requests ?? 0)} 次 · ${percent(vendorBucket.cacheHitRate)}`,
-              );
-            }),
-          ),
-        ]),
-  );
-
-  const empty =
-    accounts.length === 0 && total.bucket.requests === 0 && props.loading !== true && props.failure === undefined
-      ? createElement("p", { "data-usage-empty": "true", className: CSS_CLASS.note }, t("usage.empty"))
-      : null;
-
-  // 加载中**不画数据区**：否则会先闪一屏全 0 的指标卡，看起来像「用量就是 0」，
-  // 等真实数字到了再跳一次 —— 那比只显示「正在读取」更让人怀疑数据。
-  const showData = props.loading !== true;
+  // 脚下那一行：核对用的数（命中率、缓存读写、最近一次请求），有哪个画哪个。
+  const foot: ReactElement[] = [];
+  if (cacheHitRate !== undefined) {
+    foot.push(footItem("hit", `${t("usage.cacheHitRate")} ${percent(cacheHitRate)}`, "cache-hit-rate"));
+  }
+  if (cacheRead !== undefined || cacheWrite !== undefined) {
+    foot.push(
+      footItem(
+        "cache",
+        `${t("usage.cacheRead")} ${compact(cacheRead)} · ${t("usage.cacheWrite")} ${compact(cacheWrite)}`,
+        "cache-tokens",
+      ),
+    );
+  }
+  if (lastAt !== undefined) {
+    foot.push(
+      footItem(
+        "last",
+        `${t("usage.lastAt")} ${relativeTime(t, lastAt, props.now)}`,
+        "last-at",
+        { "data-usage-last-at": lastAt },
+      ),
+    );
+  }
 
   return createElement(
     "section",
-    { "data-card": "usage", className: CSS_CLASS.card },
-    header,
-    failure,
-    loading,
-    empty,
-    ...(showData
-      ? [
-          accounts.length === 0
-            ? null
-            : createElement(
-                "div",
-                { key: "accounts", className: CSS_CLASS.usageGroup },
-                createElement("h3", null, t("usage.perAccount")),
-                ...perAccount,
-              ),
-          total.bucket.requests === 0 && accounts.length > 0 ? null : totalSection,
-        ]
-      : []),
+    {
+      // key 只在数组上下文里需要；这里也留住，方便调用方把块塞进列表。
+      "data-usage-account": typeof entry.account === "string" ? entry.account : undefined,
+      "data-usage-vendor": typeof entry.vendor === "string" ? entry.vendor : undefined,
+      "aria-label": props.label,
+      className: CSS_CLASS.usageSection,
+    },
+    head,
+    metrics,
+    ...(foot.length === 0 ? [] : [createElement("div", { key: "foot", className: CSS_CLASS.usageFoot }, ...foot)]),
   );
 }
 

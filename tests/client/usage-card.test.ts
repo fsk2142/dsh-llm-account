@@ -1,16 +1,20 @@
 /**
- * 用量卡片的渲染测试。
+ * 账号用量区块的渲染测试（`AccountUsageBlock`）。
  *
- * 关注的不是样式，而是**几条会被用户当承诺读的口径**：
- * - 失败/成功率/命中率缺失时显示破折号，不显示 0%；
- * - 厂商价未公开时显示「未公开」，不显示 $0.00；
- * - 官方价折算以**小字**跟随（用户要求「出个小字」）；
- * - 每账号带自己的周期来源，总账单独一节。
+ * 用户 2026-10-19 的要求：统计**只在每个账号下面**，版式对齐参考图 —— 一行标题（用量 + 账期
+ * 区间 + 口径来源）、四个指标块（请求 / 成功率 / 花费 / Token）、每个块带一行小字补充，
+ * 核对用的数（命中率、缓存读写、最近一次请求）收在脚下。
+ *
+ * 关注的是几条会被用户当承诺读的口径：
+ * - 缺失的比率/金额显示破折号或「未公开」，绝不显示 0 / $0.00；
+ * - 官方价折算以小字跟随厂商金额（「出个小字」）；
+ * - 账期区间按账号自己的周期给，不跟页面上的时间窗口走。
  */
 import { expect, it } from "vitest";
 
 import { dictionaryOf } from "../../src/client/copy";
-import { UsageCard, type UsageReportView } from "../../src/client/usage-card";
+import { AccountUsageBlock, periodRangeText } from "../../src/client/usage-card";
+import type { AccountUsageView, UsageBucketView } from "../../src/client/usage-contract";
 import type { StubElement } from "../support/react-stub";
 
 /** 展平元素树。 */
@@ -41,8 +45,13 @@ function textsOf(node: unknown): string[] {
   return out;
 }
 
-/** 造一个桶（默认「2 次请求、1 成功 1 失败、100 输入、50 输出、300 缓存读」）。 */
-function bucketOf(overrides: Partial<UsageReportView["total"]["bucket"]> = {}): UsageReportView["total"]["bucket"] {
+/** 本地时区的某天 0 点（账期区间按本地日历格式化，测试不能用 UTC 常量）。 */
+function localDay(year: number, month: number, day: number): number {
+  return new Date(year, month - 1, day).getTime();
+}
+
+/** 造一个桶（默认「2 次请求、1 成功 1 失败」）。 */
+function bucketOf(overrides: Partial<UsageBucketView> = {}): UsageBucketView {
   return {
     period: "p",
     since: 0,
@@ -60,224 +69,160 @@ function bucketOf(overrides: Partial<UsageReportView["total"]["bucket"]> = {}): 
   };
 }
 
-/** 造一份报表。 */
-function reportOf(overrides: Partial<UsageReportView> = {}): UsageReportView {
+/** 造一条账号用量行。 */
+function entryOf(overrides: Partial<AccountUsageView> = {}): AccountUsageView {
   return {
-    accounts: [
-      {
-        vendor: "commandcode",
-        account: "a",
-        period: { kind: "five-hour", key: "2026-10-19T13", start: 0, fromResetAt: true },
-        bucket: bucketOf(),
-        windowed: bucketOf(),
-      },
-    ],
-    total: { window: "today", bucket: bucketOf(), byVendor: [{ vendor: "commandcode", bucket: bucketOf() }] },
+    vendor: "commandcode",
+    account: "a",
+    period: {
+      kind: "month",
+      key: "2026-10",
+      start: localDay(2026, 10, 14),
+      end: localDay(2026, 11, 14),
+      fromResetAt: true,
+    },
+    bucket: bucketOf(),
+    windowed: bucketOf(),
     ...overrides,
   };
 }
 
 /** 渲染一次。 */
-function render(overrides: Partial<UsageReportView> = {}, extra: Record<string, unknown> = {}): StubElement {
-  const report = reportOf(overrides);
-  return UsageCard({
+function render(entry: Partial<AccountUsageView> = {}, extra: Record<string, unknown> = {}): StubElement {
+  return AccountUsageBlock({
     t: dictionaryOf("zh"),
-    window: "today",
-    accounts: report.accounts,
-    total: report.total,
+    entry: entryOf(entry),
+    label: "主账号",
     ...extra,
   });
 }
 
-it("请求数同时给出总数与成功/失败；成功率与命中率按百分比显示", () => {
+/** 某个指标块。 */
+function metric(tree: StubElement, attribute: string): StubElement {
+  const found = elementsOf(tree).find((element) => element.props["data-usage-metric"] === attribute);
+  if (found === undefined) throw new Error(`no metric carries data-usage-metric=${attribute}`);
+  return found;
+}
+
+it("标题行给出用量、账期区间与口径来源", () => {
   const tree = render();
   const texts = textsOf(tree).join(" ");
-  // 指标卡：总数在大数字上，成功/失败是小字补充。
-  expect(texts).toContain("成功 1 · 失败 1");
-  expect(texts).toContain("50%"); // 成功率
-  expect(texts).toContain("75%"); // 命中率
-  // 四个指标卡都在（账号节与总账节各一组，所以取第一组的前四个）。
+  expect(texts).toContain("用量");
+  expect(texts).toContain("账期 2026/10/14 – 2026/11/14");
+  expect(texts).toContain("按厂商重置时间");
+  const period = elementsOf(tree).find((element) => element.props["data-usage-period"] !== undefined)!;
+  expect(period.props["data-usage-period"]).toBe("2026-10");
+  expect(period.props["data-usage-period-source"]).toBe("vendor");
+});
+
+it("账期没有厂商重置时间时标注「自然月推算」来源", () => {
+  const tree = render({
+    period: { kind: "month", key: "2026-10", start: localDay(2026, 10, 1), fromResetAt: false },
+  });
+  const period = elementsOf(tree).find((element) => element.props["data-usage-period"] !== undefined)!;
+  expect(period.props["data-usage-period-source"]).toBe("estimated");
+  expect(textsOf(tree).join(" ")).toContain("按自然月推算");
+  // 没有终点就只写起点，不编一个结束日期。
+  expect(textsOf(tree).join(" ")).toContain("自 2026/10/1 起");
+});
+
+it("四个指标块的顺序固定为 请求 / 成功率 / 花费 / Token", () => {
+  const tree = render();
   const metrics = elementsOf(tree).filter((element) => element.props["data-usage-metric"] !== undefined);
-  expect(metrics.slice(0, 4).map((element) => element.props["data-usage-metric"])).toEqual([
+  expect(metrics.map((element) => element.props["data-usage-metric"])).toEqual([
     "requests",
     "success-rate",
-    "cache-hit-rate",
+    "cost",
     "tokens",
   ]);
 });
 
-it("成功率与命中率按健康度上色：好→绿、差→黄、缺失→灰", () => {
-  const good = render();
-  const okMetrics = elementsOf(good).filter((element) => element.props["data-usage-metric"] !== undefined);
-  // 50% 成功率、75% 命中率都不到 90% → warn
-  expect(okMetrics[1]!.props["data-tone"]).toBe("warn");
-  expect(okMetrics[2]!.props["data-tone"]).toBe("warn");
-
-  const high = render({
-    accounts: [],
-    total: { window: "today", bucket: bucketOf({ successRate: 0.98, cacheHitRate: 0.95 }), byVendor: [] },
-  });
-  const highMetrics = elementsOf(high).filter((element) => element.props["data-usage-metric"] !== undefined);
-  expect(highMetrics[1]!.props["data-tone"]).toBe("ok");
-  expect(highMetrics[2]!.props["data-tone"]).toBe("ok");
-
-  const missing = render({
-    accounts: [],
-    total: { window: "today", bucket: bucketOf({ successRate: undefined, cacheHitRate: undefined }), byVendor: [] },
-  });
-  const missingMetrics = elementsOf(missing).filter((element) => element.props["data-usage-metric"] !== undefined);
-  expect(missingMetrics[1]!.props["data-tone"]).toBe("muted");
-  expect(missingMetrics[2]!.props["data-tone"]).toBe("muted");
+it("请求数带成功/失败的小字，成功率按百分比显示", () => {
+  const tree = render();
+  const requests = metric(tree, "requests");
+  expect(textsOf(requests).join(" ")).toContain("2");
+  expect(textsOf(requests).join(" ")).toContain("1 成功 / 1 失败");
+  expect(textsOf(metric(tree, "success-rate")).join(" ")).toContain("50%");
 });
 
-it("四个 token 分项都列出来（总量对不上时可以自己对账）", () => {
-  const tree = render();
-  const rows = elementsOf(tree).map((element) => element.props["data-usage-row"]);
-  expect(rows).toContain("input");
-  expect(rows).toContain("output");
-  expect(rows).toContain("cache-read");
-  expect(rows).toContain("cache-write");
-  const texts = textsOf(tree).join(" ");
-  expect(texts).toContain("未命中输入");
-  expect(texts).toContain("缓存命中");
+it("大数字用 K/M/B 收窄（一行要塞四个数）", () => {
+  const tree = render({
+    bucket: bucketOf({ requests: 4_600, ok: 4_600, failed: 0, inputTokens: 2_000_000_000, outputTokens: 100_000_000 }),
+  });
+  expect(textsOf(metric(tree, "requests")).join(" ")).toContain("4.6K");
+  expect(textsOf(metric(tree, "tokens")).join(" ")).toContain("2.1B");
+  // 入/出分项也在小字里按同一套单位给。
+  expect(textsOf(metric(tree, "tokens")).join(" ")).toContain("2B 入 / 100M 出");
 });
 
-it("厂商价未公开时显示「未公开」，不是 $0.00", () => {
-  const tree = render();
+it("花费优先用厂商记账金额，官方价折算以小字跟随", () => {
+  const tree = render({ spent: 3.2 });
+  const cost = metric(tree, "cost");
+  expect(textsOf(cost).join(" ")).toContain("$3.20");
+  expect(cost.props["data-usage-spent"]).toBe(3.2);
+  const hint = elementsOf(cost).find((element) => element.type === "small" && textsOf(element).join(" ").includes("官方价"));
+  expect(hint, "官方价必须是一行小字").toBeDefined();
+  expect(textsOf(hint!).join(" ")).toContain("$0.42");
+});
+
+it("没有厂商金额时退回 token × 厂商单价", () => {
+  const tree = render({ bucket: bucketOf({ vendorCost: 1.5, officialCost: undefined }) });
+  expect(textsOf(metric(tree, "cost")).join(" ")).toContain("$1.50");
+});
+
+it("金额与比率都缺失时显示「未公开」/破折号，绝不显示成 0", () => {
+  const tree = render({
+    bucket: { period: "p", since: 0 } as never,
+  });
   const texts = textsOf(tree).join(" ");
   expect(texts).toContain("未公开");
   expect(texts).not.toContain("$0.00");
+  expect(texts).not.toContain("NaN");
+  expect(textsCached(tree)).not.toContain("%");
 });
 
-it("官方价折算以**小字**跟随厂商价（用户要求「出个小字」）", () => {
-  const tree = render();
-  const official = elementsOf(tree).find((element) => element.props["data-usage-row"] === "official-cost")!;
-  expect(official).toBeDefined();
-  // 官方价那一格必须是 <small>，不是普通数值。
-  const hint = elementsOf(official).find((element) => element.props["data-usage-official"] !== undefined)!;
-  expect(hint.type).toBe("small");
-  expect(textsOf(hint).join(" ")).toContain("按 DeepSeek 官方价");
-  expect(textsOf(hint).join(" ")).toContain("$0.42");
+/** 指标数值区（不含小字）的文本：用来确认比率缺失时没有百分比。 */
+function textsCached(tree: StubElement): string {
+  return ["requests", "success-rate", "cost", "tokens"]
+    .map((attribute) => {
+      const values = elementsOf(metric(tree, attribute)).filter((element) => element.type === "span");
+      return textsOf(values[0]).join(" ");
+    })
+    .join(" | ");
+}
+
+it("核对用的数收在脚下：命中率、缓存读/写、最近一次请求", () => {
+  const at = localDay(2026, 10, 20) + 12 * 3_600_000;
+  const tree = render({ lastAt: at }, { now: at + 120_000 });
+  const foot = elementsOf(tree).find((element) => element.props["data-usage-foot"] !== undefined)!;
+  expect(foot).toBeDefined();
+  const footRow = elementsOf(tree).find((element) => element.props.className === "dsl-usage-foot")!;
+  expect(textsOf(footRow).join(" ")).toContain("缓存命中率 75%");
+  expect(textsOf(footRow).join(" ")).toContain("缓存命中 300 · 缓存写入 0");
+  expect(textsOf(footRow).join(" ")).toContain("最近一次请求 2 分钟前");
+  const last = elementsOf(tree).find((element) => element.props["data-usage-last-at"] !== undefined)!;
+  expect(last.props["data-usage-last-at"]).toBe(at);
 });
 
-it("缺失的比率/成本显示破折号或「未公开」，绝不显示成 0", () => {
+it("没有可核对的数时不画脚下那一行（不留一块空壳）", () => {
   const tree = render({
-    accounts: [],
-    total: {
-      window: "today",
-      bucket: bucketOf({ requests: 1, ok: 1, failed: 0, successRate: 1, cacheHitRate: undefined, officialCost: undefined }),
-      byVendor: [],
-    },
+    bucket: { requests: 1, ok: 1, failed: 0 } as never,
   });
-  // 命中率指标卡必须是破折号（缺失 ≠ 0%）。
-  const cacheMetric = elementsOf(tree).find((element) => element.props["data-usage-metric"] === "cache-hit-rate")!;
-  expect(textsOf(cacheMetric).join(" ")).toContain("—");
-  expect(textsOf(cacheMetric).join(" ")).not.toContain("%");
-  // 官方价缺失也显示破折号，不是 $0.00。
-  const officialRow = elementsOf(tree).find((element) => element.props["data-usage-row"] === "official-cost")!;
-  expect(textsOf(officialRow).join(" ")).toContain("—");
-  expect(textsOf(officialRow).join(" ")).not.toContain("$0.00");
+  expect(elementsOf(tree).some((element) => element.props["data-usage-foot"] !== undefined)).toBe(false);
 });
 
-it("每账号一节标注它的周期与来源（厂商重置 vs 自然推算）", () => {
-  const tree = render();
-  const period = elementsOf(tree).find((element) => element.props["data-usage-period"] !== undefined)!;
-  expect(period.props["data-usage-period-source"]).toBe("vendor");
-  expect(textsOf(period).join(" ")).toContain("按厂商重置时间");
+it("成功率与命中率按健康度上色：好→绿、差→黄、缺失→灰", () => {
+  expect(metric(render(), "success-rate").props["data-tone"]).toBe("warn");
+  expect(metric(render({ bucket: bucketOf({ successRate: 0.98 }) }), "success-rate").props["data-tone"]).toBe("ok");
+  expect(metric(render({ bucket: bucketOf({ successRate: undefined }) }), "success-rate").props["data-tone"]).toBe("muted");
 });
 
-it("总账单独一节；只有一家厂商时不画拆分（那行会完全重复）", () => {
-  const tree = render();
-  const total = elementsOf(tree).find((element) => element.props["data-usage-total"] !== undefined)!;
-  expect(total).toBeDefined();
-  expect(textsOf(total).join(" ")).toContain("合计");
-  // 只有一家时不画 by-vendor 行。
-  expect(elementsOf(total).some((element) => element.props["data-usage-by-vendor"] !== undefined)).toBe(false);
-});
-
-it("多家厂商时总账按厂商拆开，各带请求数与命中率", () => {
-  const tree = render({
-    total: {
-      window: "today",
-      bucket: bucketOf(),
-      byVendor: [
-        { vendor: "commandcode", bucket: bucketOf({ requests: 5, cacheHitRate: 0.6 }) },
-        { vendor: "opendesign", bucket: bucketOf({ requests: 3, cacheHitRate: 0.9 }) },
-      ],
-    },
-  });
-  const split = elementsOf(tree).find((element) => element.props["data-usage-by-vendor"] !== undefined)!;
-  expect(split).toBeDefined();
-  const rows = elementsOf(split).filter((element) => element.props["data-usage-vendor-row"] !== undefined);
-  expect(rows.map((element) => element.props["data-usage-vendor-row"])).toEqual(["commandcode", "opendesign"]);
-  expect(textsOf(rows[0]!).join(" ")).toContain("5 次");
-  expect(textsOf(rows[0]!).join(" ")).toContain("60%");
-});
-
-it("没有记录时给出空态说明（而不是一块空白）", () => {
-  const empty = bucketOf({ requests: 0, ok: 0, failed: 0, successRate: undefined, cacheHitRate: undefined, officialCost: undefined });
-  const tree = render({ accounts: [], total: { window: "today", bucket: empty, byVendor: [] } });
-  expect(textsOf(tree).join(" ")).toContain("还没有用量记录");
-});
-
-it("窗口按钮带上当前选中态，点它回调窗口键", () => {
-  const calls: string[] = [];
-  const tree = render({}, { onWindow: (next: string) => calls.push(next) });
-  const buttons = elementsOf(tree).filter((element) => element.props["data-usage-window"] !== undefined);
-  expect(buttons.map((element) => element.props["data-usage-window"])).toEqual(["today", "7d", "30d", "all"]);
-  // 当前窗口是 today → aria-pressed
-  expect(buttons[0]!.props["aria-pressed"]).toBe(true);
-  (buttons[1]!.props.onClick as () => void)();
-  expect(calls).toEqual(["7d"]);
-});
-
-it("有记录且给了动作时才渲染「清空」；点了回调它", () => {
-  const calls: number[] = [];
-  const withRecords = render({}, { onClear: () => calls.push(1) });
-  const clear = elementsOf(withRecords).find((element) => element.props["data-usage-clear"] !== undefined)!;
-  expect(clear).toBeDefined();
-  (clear.props.onClick as () => void)();
-  expect(calls).toEqual([1]);
-
-  // 没给动作 → 不渲染（纯组件不自作主张弹确认框）。
-  expect(elementsOf(render()).some((element) => element.props["data-usage-clear"] !== undefined)).toBe(false);
-
-  // 没有记录 → 也不渲染（空页面上摆个清空按钮毫无意义）。
-  const empty = bucketOf({ requests: 0, ok: 0, failed: 0 });
-  const emptyTree = render({ accounts: [], total: { window: "today", bucket: empty, byVendor: [] } }, { onClear: () => calls.push(2) });
-  expect(elementsOf(emptyTree).some((element) => element.props["data-usage-clear"] !== undefined)).toBe(false);
-});
-
-it("配额没给美元时账号节不画「本周期已花」那一行", () => {
-  const tree = render();
-  expect(elementsOf(tree).some((element) => element.props["data-usage-spent"] !== undefined)).toBe(false);
-});
-
-it("额度给了美元金额时账号节显示「本周期已花」", () => {
-  const tree = render({
-    accounts: [
-      {
-        vendor: "commandcode",
-        account: "a",
-        period: { kind: "five-hour", key: "k", start: 0, fromResetAt: true },
-        bucket: bucketOf(),
-        windowed: bucketOf(),
-        spent: 3.2,
-        spentWindow: "fiveHour",
-      },
-    ],
-  });
-  // 金额渲染在账号节的标题行里（与周期说明并排），不是独立明细行。
-  const spent = elementsOf(tree).find((element) => element.props["data-usage-spent"] !== undefined)!;
-  expect(spent).toBeDefined();
-  expect(textsOf(spent).join(" ")).toContain("$3.20");
-});
-
-it("总账给出最近一次请求时间时显示成相对时间", () => {
-  const at = Date.now() - 120_000;
-  const tree = render({ total: { window: "today", bucket: bucketOf(), byVendor: [], lastAt: at } });
-  const lastRow = elementsOf(tree).find((element) => element.props["data-usage-row"] === "last-at")!;
-  expect(lastRow).toBeDefined();
-  const time = elementsOf(lastRow).find((element) => element.props["data-usage-last-at"] !== undefined)!;
-  expect(time.props.dateTime).toBe(new Date(at).toISOString());
+it("账期文案的纯函数：有终点给区间、只有起点给「自…起」、都没有就不给", () => {
+  const t = dictionaryOf("zh");
+  const start = localDay(2026, 10, 14);
+  const end = localDay(2026, 11, 14);
+  expect(periodRangeText(t, start, end)).toBe("账期 2026/10/14 – 2026/11/14");
+  expect(periodRangeText(t, start, undefined)).toBe("自 2026/10/14 起");
+  expect(periodRangeText(t, undefined, undefined)).toBeUndefined();
+  expect(periodRangeText(t, "x", null)).toBeUndefined();
 });

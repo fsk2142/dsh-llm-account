@@ -97,6 +97,11 @@ export function fakeHost(
     conflictOnce?: boolean;
     accounts?: Record<string, readonly Record<string, unknown>[]>;
     /**
+     * `usageReport(window)` 的返回（注入自定义报表；缺省**不提供**这个方法，走「宿主没实现」
+     * 那条降级路径）。抛错会让页面进入「用量读取失败」分支 —— 用来钉住两种降级。
+     */
+    usageReport?: (window: string) => unknown;
+    /**
      * 网页登录的脚本：`begin` 决定 `loginBegin(vendor)` 的返回（可以是 `failed` 状态，
      * 也可以抛错来模拟"调用没发出去"）；`status` 决定轮询读到的状态。
      * 缺省按厂商返回 `waiting`（带各自的授权网址），状态读作 `idle`。
@@ -151,6 +156,15 @@ export function fakeHost(
     },
     accounts: (): Promise<unknown[]> => mini.track([]),
     switches: (): Promise<unknown[]> => mini.track([]),
+    // 只有测试显式给了报表才提供这个方法：缺省时页面走「宿主没实现 usageReport」的降级。
+    ...(options.usageReport === undefined
+      ? {}
+      : {
+          usageReport: (window: string): Promise<unknown> => {
+            host.usageCalls.push({ method: "usageReport", vendor: window });
+            return mini.track(options.usageReport?.(window));
+          },
+        }),
     models: (vendor: string): Promise<unknown> => {
       host.modelCalls.push(vendor);
       return mini.track({

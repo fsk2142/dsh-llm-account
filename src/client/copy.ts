@@ -142,15 +142,20 @@ export type CopyKey =
   | "usage.cacheRead"
   | "usage.cacheWrite"
   | "usage.cacheHitRate"
-  | "usage.vendorCost"
+  | "usage.cost"
   | "usage.spent"
   | "usage.spentWindow"
   | "usage.lastAt"
   | "usage.clear"
   | "usage.clearConfirm"
   | "usage.officialCost"
+  | "usage.officialShort"
   | "usage.priceUnknown"
   | "usage.period"
+  | "usage.periodRange"
+  | "usage.periodFrom"
+  | "usage.inputShort"
+  | "usage.outputShort"
   | "usage.periodFromVendor"
   | "usage.periodEstimated"
   | "usage.perAccount"
@@ -410,7 +415,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.window.monthly": "每月",
     "quota.window.monthlyCredits": "月度额度",
     "quota.capOnly": "上限 {cap}",
-    "usage.title": "用量统计",
+    "usage.title": "用量",
     "usage.window.today": "今日",
     "usage.window.7d": "近 7 天",
     "usage.window.30d": "近 30 天",
@@ -423,18 +428,23 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.tokens": "Token",
     "usage.input": "未命中输入",
     "usage.output": "输出",
+    "usage.inputShort": "入",
+    "usage.outputShort": "出",
     "usage.cacheRead": "缓存命中",
     "usage.cacheWrite": "缓存写入",
     "usage.cacheHitRate": "缓存命中率",
-    "usage.vendorCost": "厂商计价",
+    "usage.cost": "花费",
     "usage.spent": "本周期已花",
     "usage.spentWindow": "{window} 窗口已用",
     "usage.lastAt": "最近一次请求",
     "usage.clear": "清空",
     "usage.clearConfirm": "清空全部用量记录？此操作不可撤销。",
     "usage.officialCost": "≈ 按 DeepSeek 官方价",
+    "usage.officialShort": "官方价",
     "usage.priceUnknown": "未公开",
     "usage.period": "本周期",
+    "usage.periodRange": "账期 {from} – {to}",
+    "usage.periodFrom": "自 {from} 起",
     "usage.periodFromVendor": "按厂商重置时间",
     "usage.periodEstimated": "按自然{kind}推算",
     "usage.perAccount": "按账号（各自记账周期）",
@@ -695,18 +705,23 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.tokens": "Tokens",
     "usage.input": "Uncached input",
     "usage.output": "Output",
+    "usage.inputShort": "in",
+    "usage.outputShort": "out",
     "usage.cacheRead": "Cache read",
     "usage.cacheWrite": "Cache write",
     "usage.cacheHitRate": "Cache hit rate",
-    "usage.vendorCost": "Vendor cost",
+    "usage.cost": "Cost",
     "usage.spent": "Spent this period",
     "usage.spentWindow": "{window} window used",
     "usage.lastAt": "Last request",
     "usage.clear": "Clear",
     "usage.clearConfirm": "Clear all usage records? This cannot be undone.",
     "usage.officialCost": "≈ at DeepSeek list price",
+    "usage.officialShort": "list price",
     "usage.priceUnknown": "not published",
     "usage.period": "This period",
+    "usage.periodRange": "Billing period {from} – {to}",
+    "usage.periodFrom": "Since {from}",
     "usage.periodFromVendor": "anchored to the vendor reset",
     "usage.periodEstimated": "estimated from the natural {kind}",
     "usage.perAccount": "Per account (own billing period)",

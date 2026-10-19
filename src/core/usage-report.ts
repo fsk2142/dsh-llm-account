@@ -35,6 +35,8 @@ export interface AccountUsage {
   spent?: number;
   /** 该金额来自哪个窗口（显示成「5 小时窗口已用 $3.20」）。 */
   spentWindow?: string;
+  /** 周期内**最近一次请求**的时刻（epoch 毫秒）；周期内没有记录时缺失。 */
+  lastAt?: number;
 }
 
 /** 总账。 */
@@ -119,6 +121,11 @@ export function buildUsageReport(query: UsageQuery): { accounts: AccountUsage[];
     const windowed = aggregateUsage(withinWindow(group.items, window, now), window, startOf(window, now), priceOf(group.vendor), official);
     // 厂商权威金额：只取 `unit === "usd"` 的窗口（百分比窗口不能当钱）。
     const spent = query.spentOf?.(group.vendor, group.account);
+    // 周期内最近一次请求：账号行要能显示「刚刚」—— 这是「刚才那次算进去了」的唯一凭据。
+    const lastAt = inPeriod.reduce<number | undefined>(
+      (latest, record) => (latest === undefined || record.at > latest ? record.at : latest),
+      undefined,
+    );
     accounts.push({
       vendor: group.vendor,
       account: group.account,
@@ -126,6 +133,7 @@ export function buildUsageReport(query: UsageQuery): { accounts: AccountUsage[];
       bucket,
       windowed,
       ...(spent === undefined ? {} : { spent: spent.amount, spentWindow: spent.window }),
+      ...(lastAt === undefined ? {} : { lastAt }),
     });
   }
   // 稳定的显示顺序：厂商 name 升序，账号升序。

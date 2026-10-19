@@ -42,12 +42,6 @@ export interface PageShellProps {
   renderVendorCards?: (ns: string) => ReactNode;
   /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
   mergeTabs?: boolean;
-  /**
-  /**
-   * 用量统计卡片：**跨厂商**，放在账户/额度之后（用户要求「在额度下方」）。
-   * 与合并账户面板同形：由容器渲染，页面只负责摆位置。
-   */
-  usage?: ReactNode;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */
   saving?: boolean;
 }
@@ -95,8 +89,6 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
     props.accounts === undefined ? null : props.accounts,
-    // 用量统计紧跟在账户（含额度条）之后 —— 「额度下方」。
-    props.usage === undefined ? null : props.usage,
     props.mergeTabs === true ? null : tabRow(props),
     active === undefined
       ? createElement(

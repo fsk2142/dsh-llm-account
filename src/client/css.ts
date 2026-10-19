@@ -422,26 +422,18 @@ export const PAGE_CSS = `
   line-height: 18px; font-variant-numeric: tabular-nums; }
 .dsl-quota-hint { flex: none; margin-left: 6px; color: var(--dsw-alias-label-tertiary);
   font-size: 11px; line-height: 18px; }
-.dsl-usage-head { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px;
-  flex-wrap: wrap; }
-.dsl-usage-windows { display: flex; flex-direction: row; gap: 4px; flex-wrap: wrap; }
-.dsl-usage-window-active { background: var(--dsw-alias-bg-l2); color: var(--dsw-alias-label-primary); }
-.dsl-usage-group { display: flex; flex-direction: column; gap: 10px; }
-.dsl-usage-block { display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; padding: 8px 10px;
-  border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
-.dsl-usage-account-head { display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 4px; }
-.dsl-usage-row { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px;
-  font-size: 12px; line-height: 18px; }
-.dsl-usage-label { color: var(--dsw-alias-label-tertiary); }
-.dsl-usage-value { color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
-.dsl-usage-muted { color: var(--dsw-alias-label-tertiary); }
+/* 账号用量块：紧贴额度条下方，靠一条细分隔线与额度分开 —— 账号卡片本身就是外框，
+   不再套第二层框（两层边框+两层内边距会把一行账号撑成一屏）。 */
+.dsl-usage-section { display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
+  padding-top: 8px; border-top: .5px dashed var(--dsw-alias-border-l1); }
+.dsl-usage-head { display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dsl-usage-title { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dsl-usage-period { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums; }
+.dsl-usage-muted { font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-tertiary); }
 .dsl-usage-hint { color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
-.dsl-usage-split { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px;
-  padding-top: 6px; border-top: .5px solid var(--dsw-alias-border-l1); }
-/* 指标卡：四张小卡横排，窄容器自动折行（设置页可能很窄）。 */
-.dsl-usage-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px;
-  margin: 2px 0 8px; }
+/* 指标块：四块等宽横排，窄容器自动折行（设置页可能很窄）。 */
+.dsl-usage-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }
 .dsl-usage-metric { display: flex; flex-direction: column; gap: 1px; box-sizing: border-box; padding: 7px 9px;
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-bg-l1); min-width: 0; }
@@ -453,9 +445,9 @@ export const PAGE_CSS = `
 .dsl-usage-metric[data-tone="ok"] .dsl-usage-metric-value { color: var(--dsw-alias-state-success-primary); }
 .dsl-usage-metric[data-tone="warn"] .dsl-usage-metric-value { color: var(--dsw-alias-state-warn-primary); }
 .dsl-usage-metric[data-tone="muted"] .dsl-usage-metric-value { color: var(--dsw-alias-label-tertiary); }
-/* 账号行内嵌的用量：无外框（已经在账号卡片里），只靠一条细分隔线与额度分开。 */
-.dsl-usage-inline { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding-top: 6px;
-  border-top: .5px dashed var(--dsw-alias-border-l1); }
+/* 核对用的补充数（命中率、缓存读写、最近一次请求）：一行小字，不占指标位。 */
+.dsl-usage-foot { display: flex; flex-direction: row; flex-wrap: wrap; gap: 2px 12px;
+  font-size: 11px; line-height: 15px; }
 .dsl-quota-bar-list { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .dsl-quota-bar { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
 .dsl-quota-bar-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -513,6 +505,12 @@ export const PAGE_CSS = `
   border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-secondary); font-family: var(--dsw-font-mono); font-size: 11px;
   line-height: 17px; overflow-wrap: anywhere; }
+/* 渲染兜底面板：只在子树抛错时出现。虚线框 —— 它不是一个正常的分组，别让人误以为这是新功能。 */
+.dsl-boundary { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 12px;
+  border: 1px dashed var(--dsw-alias-state-error-primary); border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1); }
+.dsl-boundary > h2 { margin: 0; font-size: 14px; line-height: 20px; color: var(--dsw-alias-label-primary); }
+.dsl-boundary > button { align-self: flex-start; }
 
 /* ═══ 底部保存条（有改动才出现；放在内容末尾，不浮动遮挡） ═══ */
 .dsl-save { position: static; display: flex; flex-direction: row;
@@ -586,6 +584,7 @@ export const CSS_CLASS = {
   header: "dsl-header",
   intro: "dsl-intro",
   diagnostic: "dsl-diagnostic",
+  boundary: "dsl-boundary",
   tabs: "dsl-tabs",
   tab: "dsl-tab",
   card: "dsl-card",
@@ -665,24 +664,18 @@ export const CSS_CLASS = {
   quotaBarMeta: "dsl-quota-bar-meta",
   quotaBarReset: "dsl-quota-bar-reset",
   quotaBarList: "dsl-quota-bar-list",
+  usageSection: "dsl-usage-section",
   usageHead: "dsl-usage-head",
-  usageWindows: "dsl-usage-windows",
-  usageWindowActive: "dsl-usage-window-active",
-  usageGroup: "dsl-usage-group",
-  usageBlock: "dsl-usage-block",
-  usageAccountHead: "dsl-usage-account-head",
-  usageRow: "dsl-usage-row",
-  usageLabel: "dsl-usage-label",
-  usageValue: "dsl-usage-value",
+  usageTitle: "dsl-usage-title",
+  usagePeriod: "dsl-usage-period",
   usageMuted: "dsl-usage-muted",
   usageHint: "dsl-usage-hint",
-  usageSplit: "dsl-usage-split",
   usageMetrics: "dsl-usage-metrics",
   usageMetric: "dsl-usage-metric",
   usageMetricValue: "dsl-usage-metric-value",
   usageMetricLabel: "dsl-usage-metric-label",
   usageMetricHint: "dsl-usage-metric-hint",
-  usageInline: "dsl-usage-inline",
+  usageFoot: "dsl-usage-foot",
   ring: "dsl-ring",
   ringChart: "dsl-ring-chart",
   ringSvg: "dsl-ring-svg",
