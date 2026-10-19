@@ -93,12 +93,12 @@ export const VENDORS: readonly VendorEntry[] = [
             fallback: 1,
           },
           {
-            key: "autoFallbackModels",
-            kind: "models",
-            labelKey: "field.autoFallbackModels",
-            hintKey: "field.autoFallbackModels.hint",
-            // 与 Config 的 `default([])` 对齐：没配过就是空数组（= 不限制）。
-            fallback: [],
+            key: "autoSwitchModelOnQuota",
+            kind: "boolean",
+            labelKey: "field.autoSwitchModelOnQuota",
+            hintKey: "field.autoSwitchModelOnQuota.hint",
+            // 与 Config 的 `default(false)` 对齐：默认**不**自动换模型。
+            fallback: false,
           },
         ],
       },
@@ -168,12 +168,12 @@ export const VENDORS: readonly VendorEntry[] = [
             fallback: 1,
           },
           {
-            key: "autoFallbackModels",
-            kind: "models",
-            labelKey: "field.autoFallbackModels",
-            hintKey: "field.autoFallbackModels.hint",
-            // 与 Config 的 `default([])` 对齐：没配过就是空数组（= 不限制）。
-            fallback: [],
+            key: "autoSwitchModelOnQuota",
+            kind: "boolean",
+            labelKey: "field.autoSwitchModelOnQuota",
+            hintKey: "field.autoSwitchModelOnQuota.hint",
+            // 与 Config 的 `default(false)` 对齐：默认**不**自动换模型。
+            fallback: false,
           },
           // **刻意不声明 `usageDisplay`**（自动/常驻/关闭）：那个三模式开关属于参考插件的
           // **会话内用量胶囊**，而胶囊是本期声明不做的东西（`vendors/opencode/index.ts`
@@ -231,14 +231,13 @@ export const VENDORS: readonly VendorEntry[] = [
             fallback: 1,
           },
           {
-            key: "autoFallbackModels",
-            kind: "models",
-            labelKey: "field.autoFallbackModels",
-            hintKey: "field.autoFallbackModels.hint",
-            // 与 Config 的 `default([])` 对齐：没配过就是空数组（= 不限制）。
-            fallback: [],
+            key: "autoSwitchModelOnQuota",
+            kind: "boolean",
+            labelKey: "field.autoSwitchModelOnQuota",
+            hintKey: "field.autoSwitchModelOnQuota.hint",
+            // 与 Config 的 default(false) 对齐：默认不自动换模型。
+            fallback: false,
           },
-          // 顶层工作区：账号条目没配 `workspaceId` 时的回退（vela 周期额度查询用）。
           {
             key: "workspaceId",
             kind: "text",

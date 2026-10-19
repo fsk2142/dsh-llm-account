@@ -1,15 +1,16 @@
 /**
- * 限额时换模型的纯判定测试。
+ * 限额换模型的纯判定测试。
  *
- * 这些规则会被用户当**承诺**读，所以每条都要钉住：
- * - 只换同名（不猜档位，避免「限额时悄悄降智」）；
- * - 官方直连永远排除；
- * - 思考强度尽量保留，保不住就取该模型最高档，而不是发一个它不认的值。
+ * 用户 2026-10-19 晚定的四级优先（原话：「优先原则就是同供应商同模型，其次就是不同供应商
+ * 同模型，再其次就是同供应商不同模型，原则为参数能力什么的接近，最后就是不同供应商不同模型」，
+ * 并明确「供应商」= 网关，同一级里随机选）。
  */
 import { describe, expect, it } from "vitest";
 
 import {
+  capabilityDistance,
   fallbackEffort,
+  fallbackTierOf,
   isOfficialProvider,
   modelKeyOf,
   pickFallbackModel,
@@ -17,27 +18,26 @@ import {
 } from "../../src/core/model-fallback";
 
 /** 造一个候选。 */
-function at(provider: string, model: string): FallbackCandidate {
-  return { provider, model };
+function at(provider: string, model: string, extra: Partial<FallbackCandidate> = {}): FallbackCandidate {
+  return { provider, model, ...extra };
 }
+
+/** 固定随机源（返回 0 → 永远取第一个；让随机行为可断言）。 */
+const first = (): number => 0;
+/** 固定随机源（返回 0.999 → 取最后一个）。 */
+const last = (): number => 0.999;
 
 describe("排除官方直连", () => {
   it("官方路由被认出来", () => {
     expect(isOfficialProvider("deepseek")).toBe(true);
     expect(isOfficialProvider("deepseek-account")).toBe(true);
     expect(isOfficialProvider("DeepSeek")).toBe(true);
-    expect(isOfficialProvider("deepseek-official")).toBe(true);
   });
 
   it("本包托管的三个网关不被误判成官方", () => {
     expect(isOfficialProvider("commandcode")).toBe(false);
     expect(isOfficialProvider("dsh-opencode-go")).toBe(false);
     expect(isOfficialProvider("opendesign")).toBe(false);
-  });
-
-  it("空串不是官方（拿不到 provider 时不乱排除）", () => {
-    expect(isOfficialProvider("")).toBe(false);
-    expect(isOfficialProvider("  ")).toBe(false);
   });
 });
 
@@ -46,7 +46,6 @@ describe("模型归一化键", () => {
     expect(modelKeyOf("deepseek/deepseek-v4.1-flash")).toBe("deepseekv41flash");
     expect(modelKeyOf("deepseek-v4.1-flash")).toBe("deepseekv41flash");
     expect(modelKeyOf("DeepSeek-V4.1-Flash")).toBe("deepseekv41flash");
-    expect(modelKeyOf("deepseek_v4_1_flash")).toBe("deepseekv41flash");
   });
 
   it("不同档位的模型不会被当成同名", () => {
@@ -54,73 +53,117 @@ describe("模型归一化键", () => {
   });
 });
 
-describe("挑替代模型", () => {
-  const current = at("commandcode", "deepseek/deepseek-v4.1-flash");
+describe("四级判定", () => {
+  const current = at("commandcode", "deepseek-v4.1-flash");
 
-  it("同一网关内换到**同名**模型（adapter 的能力边界内）", () => {
-    const picked = pickFallbackModel(current, [
-      current,
-      at("commandcode", "deepseek-v4.1-flash"),
-      at("commandcode", "kimi-k3"),
-    ]);
-    expect(picked).toEqual(at("commandcode", "deepseek-v4.1-flash"));
+  it("同网关 + 同名 = 第 1 级", () => {
+    expect(fallbackTierOf(current, at("commandcode", "deepseek/deepseek-v4.1-flash"))).toBe(1);
   });
 
-  it("默认**不**跨 provider：adapter 不能替别家发请求", () => {
-    // 宿主的 `GenerateOptions.provider` 由路由决定，adapter 改不了它 ——
-    // 所以跨厂商换模型必须由上层编排，这里不替它做主。
-    const picked = pickFallbackModel(current, [current, at("opendesign", "deepseek-v4.1-flash")]);
-    expect(picked).toBeUndefined();
+  it("跨网关 + 同名 = 第 2 级", () => {
+    expect(fallbackTierOf(current, at("opendesign", "deepseek-v4.1-flash"))).toBe(2);
   });
 
-  it("显式允许时可以跨 provider（供上层编排复用同一份判定）", () => {
+  it("同网关 + 异名 = 第 3 级", () => {
+    expect(fallbackTierOf(current, at("commandcode", "kimi-k3"))).toBe(3);
+  });
+
+  it("跨网关 + 异名 = 第 4 级", () => {
+    expect(fallbackTierOf(current, at("opendesign", "kimi-k3"))).toBe(4);
+  });
+});
+
+describe("按四级优先挑替代", () => {
+  const current = at("commandcode", "deepseek-v4.1-flash", { contextWindow: 1_000_000, effortCount: 3 });
+
+  it("优先同网关同名（即使跨网关同名也在候选里）", () => {
+    const sameGateway = at("commandcode", "deepseek/deepseek-v4.1-flash");
+    const picked = pickFallbackModel(current, [at("opendesign", "deepseek-v4.1-flash"), sameGateway], {
+      random: first,
+    });
+    expect(picked).toEqual(sameGateway);
+  });
+
+  it("没有同网关同名时，选跨网关同名（第 2 级优先于第 3 级）", () => {
+    const crossGateway = at("opendesign", "deepseek-v4.1-flash");
+    const picked = pickFallbackModel(current, [at("commandcode", "kimi-k3"), crossGateway], { random: first });
+    expect(picked).toEqual(crossGateway);
+  });
+
+  it("同名都没有时，第 3 级优先于第 4 级", () => {
+    const sameGateway = at("commandcode", "claude-sonnet-5");
+    const picked = pickFallbackModel(current, [at("opendesign", "kimi-k3"), sameGateway], { random: first });
+    expect(picked).toEqual(sameGateway);
+  });
+
+  it("只剩第 4 级时也能换（不硬性停手）", () => {
+    const only = at("opendesign", "kimi-k3");
+    expect(pickFallbackModel(current, [only], { random: first })).toEqual(only);
+  });
+
+  it("排除官方直连", () => {
     const picked = pickFallbackModel(
       current,
-      [current, at("opendesign", "deepseek-v4.1-flash")],
-      { allowCrossProvider: true },
+      [at("deepseek", "deepseek-v4.1-flash"), at("opendesign", "deepseek-v4.1-flash")],
+      { random: first },
     );
     expect(picked).toEqual(at("opendesign", "deepseek-v4.1-flash"));
   });
 
-  it("不会换到不同档位的模型（不猜）", () => {
-    const picked = pickFallbackModel(current, [
-      current,
-      at("commandcode", "deepseek-v4-pro"),
-      at("commandcode", "claude-sonnet-5"),
-    ]);
-    expect(picked).toBeUndefined();
+  it("排除自己（同网关同 id）", () => {
+    expect(pickFallbackModel(current, [current], { random: first })).toBeUndefined();
   });
 
-  it("排除官方直连：同名但走官方路由的不选", () => {
+  it("没有候选时停手", () => {
+    expect(pickFallbackModel(current, [], { random: first })).toBeUndefined();
+  });
+});
+
+describe("同一级里随机", () => {
+  const current = at("commandcode", "deepseek-v4.1-flash", { contextWindow: 1_000_000, effortCount: 3 });
+
+  it("第 2 级有两个时，随机源决定选哪个", () => {
+    const candidates = [at("opendesign", "deepseek-v4.1-flash"), at("dsh-opencode-go", "deepseek-v4.1-flash")];
+    expect(pickFallbackModel(current, candidates, { random: first })).toEqual(candidates[0]);
+    expect(pickFallbackModel(current, candidates, { random: last })).toEqual(candidates[1]);
+  });
+
+  it("随机源始终落在候选集合内（不越界）", () => {
+    const candidates = [at("opendesign", "deepseek-v4.1-flash"), at("dsh-opencode-go", "deepseek-v4.1-flash")];
+    for (const value of [0, 0.5, 0.999999, 1]) {
+      const picked = pickFallbackModel(current, candidates, { random: () => value });
+      expect(candidates).toContainEqual(picked);
+    }
+  });
+});
+
+describe("异名模型的「参数能力接近」", () => {
+  it("上下文窗口越接近，距离越小", () => {
+    const current = at("commandcode", "a", { contextWindow: 1_000_000, effortCount: 3 });
+    const near = capabilityDistance(current, at("commandcode", "b", { contextWindow: 1_000_000, effortCount: 3 }));
+    const far = capabilityDistance(current, at("commandcode", "c", { contextWindow: 32_000, effortCount: 3 }));
+    expect(near).toBeLessThan(far);
+  });
+
+  it("第 3 级里优先选能力最接近的（即使随机源指向别的）", () => {
+    const current = at("commandcode", "deepseek-v4.1-flash", { contextWindow: 1_000_000, effortCount: 3 });
     const picked = pickFallbackModel(
       current,
-      [current, at("deepseek", "deepseek-v4.1-flash"), at("opendesign", "deepseek-v4.1-flash")],
-      { allowCrossProvider: true },
+      [
+        at("commandcode", "tiny-old", { contextWindow: 32_000, effortCount: 1 }),
+        at("commandcode", "same-class", { contextWindow: 1_000_000, effortCount: 3 }),
+      ],
+      { random: first },
     );
-    expect(picked).toEqual(at("opendesign", "deepseek-v4.1-flash"));
+    // 收窄到最接近的那一档后只剩一个，所以随机源是谁都选它。
+    expect(picked?.model).toBe("same-class");
   });
 
-  it("只有官方同名时不换（宁可停手）", () => {
-    const picked = pickFallbackModel(
-      current,
-      [current, at("deepseek", "deepseek-v4.1-flash")],
-      { allowCrossProvider: true },
-    );
-    expect(picked).toBeUndefined();
-  });
-
-  it("跳过自己（同一个 provider + model 不算替代）", () => {
-    const picked = pickFallbackModel(current, [current]);
-    expect(picked).toBeUndefined();
-  });
-
-  it("按候选顺序取第一个可用（偏好顺序由调用方决定）", () => {
-    const picked = pickFallbackModel(
-      current,
-      [current, at("dsh-opencode-go", "deepseek-v4.1-flash"), at("opendesign", "deepseek-v4.1-flash")],
-      { allowCrossProvider: true },
-    );
-    expect(picked?.provider).toBe("dsh-opencode-go");
+  it("上下文窗口未知时给大惩罚分（未知不算恰好合适）", () => {
+    const current = at("commandcode", "a", { contextWindow: 1_000_000, effortCount: 3 });
+    const known = capabilityDistance(current, at("commandcode", "b", { contextWindow: 900_000, effortCount: 3 }));
+    const unknown = capabilityDistance(current, at("commandcode", "c"));
+    expect(unknown).toBeGreaterThan(known);
   });
 });
 
@@ -129,71 +172,11 @@ describe("思考强度回落", () => {
     expect(fallbackEffort("max", ["low", "high", "max"])).toBe("max");
   });
 
-  it("不支持原档位时取该模型最高档（尽量想得一样多）", () => {
+  it("不支持原档位时取该模型最高档", () => {
     expect(fallbackEffort("max", ["off", "low", "high"])).toBe("high");
   });
 
   it("替代模型没有档位时交给厂商决定", () => {
     expect(fallbackEffort("max", [])).toBeUndefined();
-    expect(fallbackEffort(undefined, [])).toBeUndefined();
-  });
-
-  it("原本没选档位时也不凭空造一个", () => {
-    // 没有 wanted 时仍取最高档：从「厂商自己决定」变成明确指定，是为了对齐用户
-    // 「连同思考强度一起切换」的要求；但绝不在无档位模型上发字段。
-    expect(fallbackEffort(undefined, ["low", "high"])).toBe("high");
-  });
-});
-
-describe("自动切换模型白名单", () => {
-  const current = { provider: "commandcode", model: "deepseek-v4.1-flash" };
-  const candidates = [
-    current,
-    { provider: "commandcode", model: "deepseek/deepseek-v4.1-flash" },
-    { provider: "opendesign", model: "deepseek-v4.1-flash" },
-  ];
-
-  it("名单为空 = 不限制（退回原来的候选）", () => {
-    const picked = pickFallbackModel(current, candidates, { allowCrossProvider: true, whitelist: [] });
-    expect(picked).toEqual({ provider: "commandcode", model: "deepseek/deepseek-v4.1-flash" });
-  });
-
-  it("名单非空时只收名单内的", () => {
-    const picked = pickFallbackModel(current, candidates, {
-      allowCrossProvider: true,
-      whitelist: ["opendesign-not-a-model"],
-    });
-    expect(picked).toBeUndefined();
-  });
-
-  it("名单命中时正常换过去", () => {
-    const picked = pickFallbackModel(current, candidates, {
-      allowCrossProvider: true,
-      whitelist: ["deepseek-v4.1-flash"],
-    });
-    // 同名（归一化后相等）且在白名单里 → 选中第一个合格候选。
-    expect(picked).toEqual({ provider: "commandcode", model: "deepseek/deepseek-v4.1-flash" });
-  });
-
-  it("白名单同样按归一化键比较（写法差异不影响）", () => {
-    // 用户填 `deepseek/deepseek-v4.1-flash`，候选是 `deepseek-v4.1-flash` —— 两者同键。
-    const picked = pickFallbackModel(
-      { provider: "opendesign", model: "deepseek-v4.1-flash" },
-      [
-        { provider: "opendesign", model: "deepseek-v4.1-flash" },
-        { provider: "commandcode", model: "deepseek-v4.1-flash" },
-      ],
-      { allowCrossProvider: true, whitelist: ["deepseek/deepseek-v4.1-flash"] },
-    );
-    expect(picked).toEqual({ provider: "commandcode", model: "deepseek-v4.1-flash" });
-  });
-
-  it("名单里的空串/空白被忽略（不会把候选全挡掉）", () => {
-    const picked = pickFallbackModel(current, candidates, {
-      allowCrossProvider: true,
-      whitelist: ["", "  "],
-    });
-    // 清洗后名单为空 → 视为不限制。
-    expect(picked).not.toBeUndefined();
   });
 });

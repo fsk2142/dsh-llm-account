@@ -40,16 +40,30 @@ describe("可见性规则（换模型的输入就是它）", () => {
 });
 
 describe("候选只在可选范围内", () => {
-  it("被关掉的同名模型不会被选中", () => {
-    // 假设目录里有三个同名写法，但用户只允许第一个。
-    const all = ["deepseek-v4.1-flash", "deepseek-v4.1-flash-old", "deepseek/deepseek-v4.1-flash"];
-    const visibility = normalizeVisibility({ visibleModels: ["deepseek-v4.1-flash-old"] });
+  it("候选池之外的同名模型不会被选中（只在该账号已勾选的模型里换）", () => {
+    // 用户 2026-10-19 确认的语义：「可以降级，但**严格限定在该账号已勾选的模型里**」。
+    // 这里验证「池外」——只有当前模型自己在池里时，换不了（因为排除自己）。
+    const all = ["deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash", "kimi-k3"];
+    const visibility = normalizeVisibility({ visibleModels: ["deepseek-v4.1-flash"] });
     const allowed = selectVisible(all.map(entry), visibility).map((item) => item.id);
-    // 换模型的候选 = allowed（注册表用 listModels 就是这个集合）。
+    expect(allowed).toEqual(["deepseek-v4.1-flash"]);
+    const picked = pickFallbackModel(
+      { provider: "commandcode", model: "deepseek-v4.1-flash" },
+      allowed.map((model) => ({ provider: "commandcode", model })),
+    );
+    // 池里只有它自己 → 排除自己后没有候选 → 停手（不会去拿池外的 kimi-k3）。
+    expect(picked).toBeUndefined();
+  });
+
+  it("池内可以降级到不同名模型（但绝不跨出池子）", () => {
+    // 用户允许了两个模型：一个同名、一个不同名。额度用尽时按四级优先，先同名。
+    const all = ["deepseek-v4.1-flash", "kimi-k3", "claude-opus-5"];
+    const visibility = normalizeVisibility({ visibleModels: ["deepseek-v4.1-flash", "kimi-k3"] });
+    const allowed = selectVisible(all.map(entry), visibility).map((item) => item.id);
     const candidates = allowed.map((model) => ({ provider: "commandcode", model }));
     const picked = pickFallbackModel({ provider: "commandcode", model: "deepseek-v4.1-flash" }, candidates);
-    // 用户没允许的那个「同名」不在候选里，所以**换不了**（停手，而不是硬切）。
-    expect(picked).toBeUndefined();
+    // 只剩 kimi-k3（第 3 级），claude-opus-5 不在池里所以永不被选中。
+    expect(picked?.model).toBe("kimi-k3");
   });
 
   it("允许了同名模型时能换过去", () => {

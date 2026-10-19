@@ -167,17 +167,14 @@ export const Config: PluginConfigSchema = z.object(
      * 上限 120 分钟（再长用量基本就是过期的，反而误导）。整数是因为 UI 用「分钟」步进输入框。
      */
     quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
-    /**
-     * **自动切换模型白名单**（用户 2026-10-19 要求）。
-     *
-     * 限额（或账号全部被拒）时自动换模型，**只在这个名单里挑**同名模型。
-     * 空数组 = 不限制（退回「用户模型选择器里开启的那些」）。
-     *
-     * 为什么要单独一个名单、而不直接用模型可见性：可见性决定「模型选择器里能选什么」，
-     * 而这里是「出错时自动换到哪」——两件事的意图不同。用户可能希望某个模型可以手动选，
-     * 但不愿它被自动切过去（例如贵很多的那个）。
-     */
-    autoFallbackModels: z.array(z.string()).default([]),
+      /**
+       * **额度用尽后是否自动切换模型**（用户 2026-10-19：默认关闭）。
+       *
+       * 关着时：账号全被限额拒绝就直接报错，不替用户换模型。
+       * 打开后按四级优先（同网关同名 → 跨网关同名 → 同网关异名 → 跨网关异名）随机挑一个，
+       * 且**只在该账号已勾选的模型里**。
+       */
+      autoSwitchModelOnQuota: z.boolean().default(false),
     baseURL: z.string().default(DEFAULT_BASE_URL),
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),
@@ -360,16 +357,34 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     fallbackCandidates: () => modelCandidates(),
     // 自动切换模型白名单（用户 2026-10-19）：每次现读设置，改完即时生效。
     // 空数组 = 不限制（候选退回「模型选择器里开启的那些」）。
-    fallbackWhitelist: () => {
-      const declared = document()["autoFallbackModels"];
-      return Array.isArray(declared) ? declared.filter((item): item is string => typeof item === "string") : [];
-    },
+    // 额度用尽后是否自动换模型（用户 2026-10-19：**默认关闭**）。
+    // 关着时账号全被限额拒绝就直接报错，不替用户换。
+    autoSwitchModel: () => document()["autoSwitchModelOnQuota"] === true,
   };
   const adapter = createOpencodeAdapter(deps);
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。
   registerCatalogSource({
     provider: "dsh-opencode-go",
-    models: () => adapter.listModels(PROVIDER_ID).then((rows) => rows.map((row) => row.id)),
+    // 只回报**用户已允许的模型**（listModels 已按可见性过滤），并带上能力信息 ——
+    // 换模型时「参数能力接近」要靠上下文窗口与档位数比较。
+    //
+    // 只含账号里已显示的模型，正是用户要的「从每个账号可选模型中随机切换」：没勾选的模型
+    // 不会出现在候选里。
+    models: () =>
+      adapter.listModels(PROVIDER_ID).then(async (rows) =>
+        Promise.all(
+          rows.map(async (row) => {
+            const meta = await adapter
+              .resolveModel(PROVIDER_ID, row.id)
+              .then((info) => ({
+                ...(info.context?.contextWindow === undefined ? {} : { contextWindow: info.context.contextWindow }),
+                ...(info.reasoning?.efforts === undefined ? {} : { effortCount: info.reasoning.efforts.length }),
+              }))
+              .catch(() => ({}) as { contextWindow?: number; effortCount?: number });
+            return { id: row.id, ...meta };
+          }),
+        ),
+      ),
     // 跨厂商换模型的执行入口：别家要换到这家时，由**这家的 adapter** 自己发请求
     // （宿主的路由是固定的，adapter 不能以别家身份发）。
     stream: (options) => adapter.stream(options as Parameters<typeof adapter.stream>[0]),

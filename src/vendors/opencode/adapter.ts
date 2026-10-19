@@ -180,12 +180,12 @@ export interface OpencodeAdapterDeps {
    */
   fallbackCandidates?: () => readonly ModelFallbackCandidate[] | undefined | Promise<readonly ModelFallbackCandidate[]>;
   /**
-   * **自动切换模型白名单**（用户 2026-10-19 要求）。
+   * **额度用尽后是否自动切换模型**（用户 2026-10-19：默认关闭）。
    *
-   * 非空时，限额换模型**只在这些模型里挑**；空/缺省 = 不限制。
-   * 与模型可见性的区别：那个决定「选择器里能选什么」，这个决定「出错时自动换到哪」。
+   * 关着的时候，账号全部被限额拒绝就直接报错 —— 不替用户换模型。打开后才按四级优先
+   * （同网关同名 → 跨网关同名 → 同网关异名 → 跨网关异名）随机挑一个。
    */
-  fallbackWhitelist?: () => readonly string[];
+  autoSwitchModel?: () => boolean;
   /** 真找到并换了模型时通知装配层（日志/遥测）。 */
   onModelFallback?: (from: { provider: string; model: string }, to: ModelFallbackCandidate) => void;
 }
@@ -262,7 +262,15 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       normalizeVisibility(raw),
     );
     // 把目录交给跨厂商注册表：限额换模型时走缓存，不再现打网络。
-    noteCatalogModels(provider, visible.map((entry) => entry.id));
+    noteCatalogModels(
+      provider,
+      // 带上能力信息：换模型时的「参数能力接近」要用上下文窗口与档位数。
+      visible.map((entry) => ({
+        id: entry.id,
+        ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
+        ...(entry.efforts === undefined ? {} : { effortCount: entry.efforts.length }),
+      })),
+    );
     return visible.map((entry) => ({
       provider,
       id: entry.id,
@@ -635,31 +643,43 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
 
 
   /**
-   * 限额换模型的判定（用户 2026-10-19：「遇到账号限额的时候自动切换到同等类型的模型」）。
+   * 额度用尽后换模型的判定（用户 2026-10-19 的四级优先）。
    *
-   * 只在**所有账号都被拒绝**之后调用：那时继续换账号已经无意义，而换一个同名模型往往还能
-   * 服务。判定全在 `core/model-fallback`（纯函数、已单测）：
-   * - 只认**同名**（去掉厂商前缀/大小写/分隔符后相等），不猜档位 —— 限额是要省钱，不是
-   *   悄悄把用户降到更弱的模型；
-   * - 排除 DeepSeek 官方直连；
-   * - 找不到同名就返回 `undefined`（停手，让调用方抛原来的失败）。
+   * 只在**所有账号都被拒绝**之后调用，且必须先过开关（`autoSwitchModel`，默认关闭）。
+   *
+   * 四级优先由 `core/model-fallback` 的纯函数实现：同网关同名 → 跨网关同名 →
+   * 同网关异名（按上下文窗口与推理档位接近度收窄）→ 跨网关异名；同一级里随机。
    * @param options - 当前请求。
-   * @returns 替代目标；不该/不能换时为 `undefined`。
+   * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
    */
   async #fallbackModel(options: GenerateOptions): Promise<ModelFallbackCandidate | undefined> {
+    // 开关（默认关闭）：关着就完全不换，让调用方抛原来的限额错误。
+    if (this.#deps.autoSwitchModel?.() !== true) return undefined;
     const candidates = await this.#deps.fallbackCandidates?.();
     if (candidates === undefined || candidates.length === 0) return undefined;
-    // 只允许**同 provider 内**换：adapter 不能替别家发请求（`options.provider` 由路由决定）。
-    // 跨厂商的换模型需要上层编排，见 `core/model-fallback` 的模块注释。
+    // 当前模型的上下文窗口 / 档位数：从自己的目录里查，供「能力接近」排序用。
+    let currentMeta: { contextWindow?: number; effortCount?: number } = {};
+    try {
+      const record = (await this.#catalog(resolveConfig(this.#deps.config()), undefined)).find((item) => item.entry.id === options.model);
+      const entry = record?.entry;
+      if (entry !== undefined) {
+        currentMeta = {
+          ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
+          ...(entry.efforts === undefined ? {} : { effortCount: entry.efforts.length }),
+        };
+      }
+    } catch {
+      // 目录读不到：能力信息缺失（排序会给大惩罚），但仍可换同名模型。
+    }
     const picked = pickFallbackModel(
-      { provider: options.provider, model: options.model },
-      candidates,
-      // 允许跨厂商：执行层会转给目标家的 adapter（`delegateStream`）。
-      {
-        allowCrossProvider: true,
-        // 白名单非空时只在这些模型里挑（用户配置；见 deps 的同名字段）。
-        whitelist: this.#deps.fallbackWhitelist?.() ?? [],
-      },
+      { provider: options.provider, model: options.model, ...currentMeta },
+      // 候选只有「用户已允许的模型」（注册表用 listModels 过滤，只含账号里已显示的）。
+      candidates.map((item) => ({
+        provider: item.provider,
+        model: item.model,
+        ...(item.contextWindow === undefined ? {} : { contextWindow: item.contextWindow }),
+        ...(item.effortCount === undefined ? {} : { effortCount: item.effortCount }),
+      })),
     );
     if (picked === undefined) return undefined;
     this.#deps.onModelFallback?.({ provider: options.provider, model: options.model }, picked);

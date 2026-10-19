@@ -969,7 +969,7 @@ it("限额时换到同名模型：目录里先记下候选，配一个能服务�
   const { noteCatalogModels, resetCatalogSources, cachedModelCandidates } = await import("../../src/vendors/model-catalog-registry");
   resetCatalogSources();
   // 模拟「适配器读过目录」：这是缓存的真实填充路径（不再额外发请求）。
-  noteCatalogModels("commandcode", ["deepseek-v4.1-flash", "deepseek-v4.1-flash-2"]);
+  noteCatalogModels("commandcode", [{ id: "deepseek-v4.1-flash" }, { id: "deepseek-v4.1-flash-2" }]);
   expect(cachedModelCandidates()?.map((item) => item.model)).toContain("deepseek-v4.1-flash");
   resetCatalogSources();
 });

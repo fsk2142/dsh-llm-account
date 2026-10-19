@@ -1,18 +1,26 @@
 /**
- * **限额时换模型**的纯判定（用户 2026-10-19 要求）。
+ * **限额换模型**的纯判定（用户 2026-10-19 要求，同日晚间改成四级优先）。
  *
- * 需求原话：「遇到账号限额的时候自动切换到同等类型的模型还有思考强度，但是排除官方的 API」。
- * 澄清后的一句话版本：**只换同名模型**，没有同名就停手；绝不切到 DeepSeek 官方直连。
+ * ## 需求演化（记下来，免得再绕回去）
  *
- * 为什么「同名」是唯一安全的对应：三家网关各自编模型 id（`deepseek/deepseek-v4.1-flash`、
- * `deepseek-v4.1-flash`、`deepseek/deepseek-v4-pro`），没有任何官方对应表。按「档位词」
- * 猜（flash↔pro）等于替用户改了模型等级 —— 限额是要省钱，不是降智。所以：
+ * 1. 最初：「遇到账号限额的时候自动切换到同等类型的模型还有思考强度，但是排除官方的 API」；
+ * 2. 中间加过「自动切换模型白名单」（手填 / 勾选）；
+ * 3. 现在（2026-10-19 晚）：「不要那个了，太复杂了，就直接从每个账号可选模型中随机切换吧」，
+ *    并给出明确优先级。
  *
- * 1. 优先找一个**归一化后同名**的模型（去掉厂商前缀、大小写、`.`/`-` 差异）；
- * 2. 找不到就**不换**（`undefined`），把决定权交回用户 —— 停手比猜错好；
- * 3. 官方直连路由永远排除。
+ * ## 四级优先（用户原话的落地）
  *
- * 纯函数：不读网络、不读设置、不留状态，可完整单测。
+ * 1. **同网关 + 同名模型**（最安全：还是同一家发请求、模型等级不变）；
+ * 2. **跨网关 + 同名模型**（换一家发，模型等级不变）；
+ * 3. **同网关 + 不同名模型**（换等级但不出这家；「参数能力什么的接近」按上下文窗口与
+ *    推理档位接近度排）；
+ * 4. **跨网关 + 不同名模型**（最后手段）。
+ *
+ * 同一优先级里有多个候选时**随机**选一个（用户要求「随机切换」，避免总压在同一个上）。
+ *
+ * 排除 DeepSeek 官方直连（用户最初就要求的），以及**自己**（同一个网关+同一个 id）。
+ *
+ * 纯函数：不读网络、不读设置、不留状态，可完整单测（随机源可注入）。
  * @module dsh-llm-account/src/core/model-fallback
  */
 
@@ -29,7 +37,7 @@ const OFFICIAL_PROVIDER_PREFIXES: readonly string[] = ["deepseek", "deepseek-acc
  *
  * 为什么不只比 `=== "deepseek"`：官方那套插件的路由名不止一个
  * （`deepseek` / `deepseek-account`），将来还可能有 `deepseek-official` 之类的变体。
- * 前缀匹配 + 精确排除本包三家，既挡住官方，也不会误伤 `dsh-opencode-go`。
+ * 前缀匹配既挡住官方，也不会误伤 `dsh-opencode-go`。
  * @param provider - provider 路由 id。
  * @returns 是否官方直连。
  */
@@ -60,56 +68,129 @@ export function modelKeyOf(model: string): string {
 
 /** 一个可切换的候选模型。 */
 export interface FallbackCandidate {
-  /** 提供这个模型的 provider 路由 id。 */
+  /** 提供这个模型的网关路由 id（`commandcode` / `dsh-opencode-go` / `opendesign`）。 */
   provider: string;
   /** 模型 id。 */
   model: string;
+  /**
+   * 上下文窗口（token）。用于第 3/4 级「参数能力接近」的排序；未知时缺省
+   * （视为最不接近 —— 未知不该被当成"恰好合适"）。
+   */
+  contextWindow?: number;
+  /** 推理档位数量。档位越多通常能力越强，作为「接近度」的第二判据。 */
+  effortCount?: number;
+}
+
+/** 四级优先的级别（数字越小越优先）。 */
+export type FallbackTier = 1 | 2 | 3 | 4;
+
+/**
+ * 一个候选属于第几级。
+ *
+ * @param current - 刚失败的 (网关, 模型)。
+ * @param candidate - 待判定的候选。
+ * @returns 级别：1 同网关同名 / 2 跨网关同名 / 3 同网关异名 / 4 跨网关异名。
+ */
+export function fallbackTierOf(current: FallbackCandidate, candidate: FallbackCandidate): FallbackTier {
+  const sameGateway = candidate.provider === current.provider;
+  const sameModel = modelKeyOf(candidate.model) === modelKeyOf(current.model);
+  if (sameGateway) return sameModel ? 1 : 3;
+  return sameModel ? 2 : 4;
 }
 
 /**
- * 挑一个替代模型：**同名、非官方、在白名单里、且不是刚失败的那一个**。
+ * 「参数能力接近度」：与当前模型差多少（越小越接近）。
  *
- * @param current - 刚失败的 (provider, model)。
- * @param candidates - 这台机器上可用的所有 (provider, model)，顺序即偏好顺序。
- * @param options - 见下：
- *   - `excludeOfficial` 默认 `true`（用户明确要求排除官方）；
- *   - `allowCrossProvider` 默认 `false`（adapter 不能替别家发请求；上层编排才开）；
- *   - `whitelist` 用户配置的「自动切换模型白名单」：**非空时只收名单内的**，
- *     空或未给 = 不限制（退回候选原样）。
- * @returns 替代目标；没有合格候选时为 `undefined`（**不猜档位**）。
+ * 只在第 3/4 级（异名模型）时用得上 —— 同名时等级本来就一样。
+ * 判据按重要性排：
+ * 1. 上下文窗口的相对差（相差一个数量级就明显不是同级模型）；
+ * 2. 推理档位数量之差（反映深度档位丰富度）。
+ *
+ * 未知值（缺省）给一个很大的惩罚分：宁可选一个已知相近的，也不要把未知当成恰好合适。
+ * @param current - 当前模型。
+ * @param candidate - 候选。
+ * @returns 距离分（非负；越小越接近）。
+ */
+export function capabilityDistance(current: FallbackCandidate, candidate: FallbackCandidate): number {
+  const UNKNOWN = 1e9;
+  const windowScore = (() => {
+    const from = current.contextWindow;
+    const to = candidate.contextWindow;
+    if (from === undefined || to === undefined || from <= 0 || to <= 0) return UNKNOWN;
+    // 相对差：同量级时很小，差 10 倍时约 9。
+    return Math.abs(Math.log2(to / from));
+  })();
+  const effortScore = (() => {
+    const from = current.effortCount;
+    const to = candidate.effortCount;
+    if (from === undefined || to === undefined) return UNKNOWN / 100;
+    return Math.abs(to - from);
+  })();
+  // 窗口优先（×100），档位作为同窗口下的次级判据。
+  return windowScore * 100 + effortScore;
+}
+
+/**
+ * 从候选里按**四级优先**选一个替代模型。
+ *
+ * 同一级里有多个候选时**随机**取一个（用户要求「随机切换」）。为什么不是取第一个：
+ * 候选来自固定顺序的目录，总取第一个会让所有账号的失败都压到同一个模型上。
+ *
+ * @param current - 刚失败的 (网关, 模型)。
+ * @param candidates - 可选模型（**只该包含用户允许的那些**，由调用方过滤）。
+ * @param options - `random` 随机源（测试注入，缺省 `Math.random`）；
+ *   `excludeOfficial` 默认 `true`。
+ * @returns 替代目标；没有任何合格候选时为 `undefined`（停手）。
  */
 export function pickFallbackModel(
   current: FallbackCandidate,
   candidates: readonly FallbackCandidate[],
-  options: {
-    excludeOfficial?: boolean;
-    allowCrossProvider?: boolean;
-    whitelist?: readonly string[];
-  } = {},
+  options: { random?: () => number; excludeOfficial?: boolean } = {},
 ): FallbackCandidate | undefined {
   const excludeOfficial = options.excludeOfficial !== false;
-  // 默认**只在同一 provider 内换**：adapter 无法替别的 provider 发请求（宿主的
-  // `GenerateOptions.provider` 由路由决定），跨厂商换模型得由上层编排。
-  const allowCrossProvider = options.allowCrossProvider === true;
-  // 白名单：非空时只在这些模型里挑。**用同一个 `modelKeyOf` 归一**，否则用户填
-  // `deepseek/deepseek-v4.1-flash` 而候选是 `deepseek-v4.1-flash` 就永远匹配不上 ——
-  // 那种「设置了却没效果」最难排查。
-  const allowed = new Set<number>();
-  const whitelist = (options.whitelist ?? []).filter((item) => typeof item === "string" && item.trim() !== "");
-  const whitelistKeys = new Set(whitelist.map((item) => modelKeyOf(item)));
-  const wanted = modelKeyOf(current.model);
-  if (wanted === "") return undefined;
-  void allowed;
-  for (const candidate of candidates) {
-    if (excludeOfficial && isOfficialProvider(candidate.provider)) continue;
-    if (candidate.provider === current.provider && candidate.model === current.model) continue;
-    if (!allowCrossProvider && candidate.provider !== current.provider) continue;
-    if (modelKeyOf(candidate.model) !== wanted) continue;
-    // 白名单非空 → 只收名单内的（同样用归一化键比较）。
-    if (whitelistKeys.size > 0 && !whitelistKeys.has(modelKeyOf(candidate.model))) continue;
-    return candidate;
+  const random = options.random ?? Math.random;
+  const currentKey = modelKeyOf(current.model);
+
+  // 1) 过滤掉不合格的：官方直连、自己、空 id。
+  const usable = candidates.filter((candidate) => {
+    if (typeof candidate.model !== "string" || candidate.model.trim() === "") return false;
+    if (typeof candidate.provider !== "string" || candidate.provider.trim() === "") return false;
+    if (excludeOfficial && isOfficialProvider(candidate.provider)) return false;
+    // 「自己」：同网关 + 同 id（同名但不同写法的算合格 —— 那正是第 1 级要找的）。
+    if (candidate.provider === current.provider && candidate.model === current.model) return false;
+    return true;
+  });
+  if (usable.length === 0) return undefined;
+
+  // 2) 按级别分组，取最小的那个非空级别。
+  const tiers = new Map<FallbackTier, FallbackCandidate[]>();
+  for (const candidate of usable) {
+    const tier = fallbackTierOf(current, candidate);
+    const bucket = tiers.get(tier);
+    if (bucket === undefined) tiers.set(tier, [candidate]);
+    else bucket.push(candidate);
   }
-  return undefined;
+  const bestTier = ([1, 2, 3, 4] as const).find((tier) => (tiers.get(tier)?.length ?? 0) > 0);
+  if (bestTier === undefined) return undefined;
+  const pool = tiers.get(bestTier)!;
+  if (pool.length === 1) return pool[0];
+
+  // 3) 第 3/4 级（异名模型）先按能力接近度收窄，再随机。
+  //
+  // 为什么收窄再随机：用户说「原则为参数能力什么的接近」。如果直接在全部异名模型里随机，
+  // 有可能把一个 1M 上下文的 flash 换成一个 8K 上下文的旧模型 —— 那不是"切换"，是降级。
+  // 收窄到「最接近的那一档」再在其中随机，兼顾了「接近」与「不要总压同一个」。
+  const narrowed =
+    bestTier === 3 || bestTier === 4
+      ? (() => {
+          const scored = pool.map((candidate) => ({ candidate, distance: capabilityDistance(current, candidate) }));
+          const min = Math.min(...scored.map((item) => item.distance));
+          return scored.filter((item) => item.distance === min).map((item) => item.candidate);
+        })()
+      : pool;
+  void currentKey;
+  const index = Math.min(narrowed.length - 1, Math.max(0, Math.floor(random() * narrowed.length)));
+  return narrowed[index];
 }
 
 /**

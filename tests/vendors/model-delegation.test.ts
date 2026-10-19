@@ -33,7 +33,7 @@ describe("委托给另一家", () => {
     const seen: unknown[] = [];
     registerCatalogSource({
       provider: "opendesign",
-      models: async () => ["deepseek-v4.1-flash"],
+      models: async () => ["deepseek-v4.1-flash"].map((id) => ({ id })),
       stream: ((options: unknown) => {
         seen.push(options);
         return (async function* () {
@@ -73,14 +73,14 @@ describe("委托给另一家", () => {
   });
 
   it("登记了但没提供 stream → 不能委托", () => {
-    registerCatalogSource({ provider: "opendesign", models: async () => ["x"] });
+    registerCatalogSource({ provider: "opendesign", models: async () => ["x"].map((id) => ({ id })) });
     expect(canDelegate("opendesign")).toBe(false);
     expect(delegateStream({ provider: "opendesign", model: "x" }, {})).toBeUndefined();
   });
 
   it("官方直连永不被委托（即使被登记了）", () => {
     const spy = vi.fn(fakeStream([]));
-    registerCatalogSource({ provider: "deepseek", models: async () => ["deepseek-v4.1-flash"], stream: spy as never });
+    registerCatalogSource({ provider: "deepseek", models: async () => ["deepseek-v4.1-flash"].map((id) => ({ id })), stream: spy as never });
     expect(canDelegate("deepseek")).toBe(true);
     // 纵深防御：挑候选时已用 `isOfficialProvider` 排除，这里再挡一次。
     expect(delegateStream({ provider: "deepseek", model: "deepseek-v4.1-flash" }, {})).toBeUndefined();
@@ -88,8 +88,8 @@ describe("委托给另一家", () => {
   });
 
   it("没有 stream 的家不参与委托，别家照旧可用", () => {
-    registerCatalogSource({ provider: "opendesign", models: async () => ["x"] });
-    registerCatalogSource({ provider: "dsh-opencode-go", models: async () => ["x"], stream: fakeStream([]) as never });
+    registerCatalogSource({ provider: "opendesign", models: async () => ["x"].map((id) => ({ id })) });
+    registerCatalogSource({ provider: "dsh-opencode-go", models: async () => ["x"].map((id) => ({ id })), stream: fakeStream([]) as never });
     expect(canDelegate("opendesign")).toBe(false);
     expect(canDelegate("dsh-opencode-go")).toBe(true);
   });

@@ -26,7 +26,7 @@ export interface CatalogSource {
    * 已经允许的模型之间换，否则会切到一个他明确关掉的模型上
    * （2026-10-19 用户要求「根据当前的可选模型配置切换模型名单」）。
    */
-  models: () => Promise<readonly string[]>;
+  models: () => Promise<readonly CatalogRow[]>;
   /**
    * 用**这一家**发一次流式请求（跨厂商换模型的执行入口）。
    *
@@ -41,9 +41,21 @@ export interface CatalogSource {
 }
 
 /** 一个候选：provider + model。 */
+/** 一家目录里的一行：id 必填，能力信息**有则带上**（供换模型时比较「接近度」）。 */
+export interface CatalogRow {
+  id: string;
+  /** 上下文窗口（token）；厂商没公布时缺省。 */
+  contextWindow?: number;
+  /** 推理档位数量；没公布时缺省。 */
+  effortCount?: number;
+}
+
+/** 一个候选：provider + model + 可选能力信息。 */
 export interface ModelCandidate {
   provider: string;
   model: string;
+  contextWindow?: number;
+  effortCount?: number;
 }
 
 /** 合并清单的缓存新鲜期（毫秒）：一分钟。失败路径上的目录查询不该每次都打三个端点。 */
@@ -86,8 +98,17 @@ export async function modelCandidates(now: number = Date.now()): Promise<ModelCa
   const listed = await Promise.all(
     [...sources.values()].map(async (source) => {
       try {
-        const ids = await source.models();
-        return ids.map((model): ModelCandidate => ({ provider: source.provider, model }));
+        const rows = await source.models();
+        return rows
+          .filter((row) => typeof row.id === "string" && row.id.trim() !== "")
+          .map(
+            (row): ModelCandidate => ({
+              provider: source.provider,
+              model: row.id,
+              ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }),
+              ...(row.effortCount === undefined ? {} : { effortCount: row.effortCount }),
+            }),
+          );
       } catch {
         // 这一家的目录读不到：它这次没有候选。
         return [];
@@ -124,12 +145,22 @@ export function cachedModelCandidates(now: number = Date.now()): ModelCandidate[
  * @param models - 该家的模型 id 列表。
  * @param now - 时钟（测试注入）。
  */
-export function noteCatalogModels(provider: string, models: readonly string[], now: number = Date.now()): void {
+export function noteCatalogModels(
+  provider: string,
+  models: readonly CatalogRow[],
+  now: number = Date.now(),
+): void {
   const value = cached === undefined ? [] : [...cached.value];
   // 先摘掉这一家的旧条目，再追加新的（同一家重复调用不会累积）。
   const kept = value.filter((candidate) => candidate.provider !== provider);
-  for (const model of models) {
-    if (model.trim() !== "") kept.push({ provider, model });
+  for (const row of models) {
+    if (typeof row.id !== "string" || row.id.trim() === "") continue;
+    kept.push({
+      provider,
+      model: row.id,
+      ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }),
+      ...(row.effortCount === undefined ? {} : { effortCount: row.effortCount }),
+    });
   }
   cached = { at: now, value: kept };
 }
