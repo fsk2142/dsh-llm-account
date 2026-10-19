@@ -38,7 +38,7 @@ import type { AccountPort, AccountView, CatalogEntry, CatalogModel, CatalogModel
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/model-fallback";
-import { noteCatalogModels } from "../model-catalog-registry";
+import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
@@ -377,9 +377,18 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
           const swapped = await this.#fallbackModel(options);
           if (swapped !== undefined && swapped.model !== options.model) {
             swappedOnce = true;
-            options = { ...options, model: swapped.model };
-            tried.clear();
-            continue;
+            // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
+            if (swapped.provider !== options.provider) {
+              const delegated = delegateStream(swapped, options as unknown as Record<string, unknown>);
+              if (delegated !== undefined) {
+                yield* delegated as AsyncIterable<StreamChunk>;
+                return;
+              }
+            } else {
+              options = { ...options, model: swapped.model };
+              tried.clear();
+              continue;
+            }
           }
         }
         if (lastFailure !== undefined) throw lastFailure.thrown;
@@ -687,7 +696,12 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     if (candidates === undefined || candidates.length === 0) return undefined;
     // 只允许**同 provider 内**换：adapter 不能替别家发请求（`options.provider` 由路由决定）。
     // 跨厂商的换模型需要上层编排，见 `core/model-fallback` 的模块注释。
-    const picked = pickFallbackModel({ provider: options.provider, model: options.model }, candidates);
+    const picked = pickFallbackModel(
+      { provider: options.provider, model: options.model },
+      candidates,
+      // 允许跨厂商：执行层会转给目标家的 adapter（`delegateStream`）。
+      { allowCrossProvider: true },
+    );
     if (picked === undefined) return undefined;
     this.#deps.onModelFallback?.({ provider: options.provider, model: options.model }, picked);
     return picked;

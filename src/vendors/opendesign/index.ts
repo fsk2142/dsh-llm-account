@@ -389,7 +389,13 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   };
   const adapter = createOpenDesignAdapter(deps);
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。
-  registerCatalogSource({ provider: "opendesign", models: () => adapter.listModels(PROVIDER_ID).then((rows) => rows.map((row) => row.id)) });
+  registerCatalogSource({
+    provider: "opendesign",
+    models: () => adapter.listModels(PROVIDER_ID).then((rows) => rows.map((row) => row.id)),
+    // 跨厂商换模型的执行入口：别家要换到这家时，由**这家的 adapter** 自己发请求
+    // （宿主的路由是固定的，adapter 不能以别家身份发）。
+    stream: (options) => adapter.stream(options as Parameters<typeof adapter.stream>[0]),
+  });
 
   /**
    * 当前这次路由注册的句柄；`enabled: false` 时是 `undefined`（行仍然挂载）。

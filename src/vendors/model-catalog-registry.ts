@@ -13,7 +13,9 @@
  * @module dsh-llm-account/src/vendors/model-catalog-registry
  */
 
-/** 一家的目录读口。 */
+import { isOfficialProvider } from "../core/model-fallback";
+
+/** 一家的目录读口 **+ 流式委托**。 */
 export interface CatalogSource {
   /** provider 路由 id（`commandcode` / `dsh-opencode-go` / `opendesign`）。 */
   provider: string;
@@ -25,6 +27,17 @@ export interface CatalogSource {
    * （2026-10-19 用户要求「根据当前的可选模型配置切换模型名单」）。
    */
   models: () => Promise<readonly string[]>;
+  /**
+   * 用**这一家**发一次流式请求（跨厂商换模型的执行入口）。
+   *
+   * 为什么必须由注册表提供：宿主的 `GenerateOptions.provider` 由路由决定，一个 adapter
+   * **不能**改它去别家发请求（宿主只把对应路由的调用投给它）。所以「换到别家的同名模型」
+   * 只能由目标那一家的 adapter 自己来发 —— 这里登记它的 `stream`，编排层
+   * （{@link delegateStream}）负责把请求转过去。
+   *
+   * 缺省表示这家不支持被跨厂商委托（那就只能同家换）。
+   */
+  stream?: (options: unknown) => AsyncIterable<unknown>;
 }
 
 /** 一个候选：provider + model。 */
@@ -145,4 +158,42 @@ export function primeModelCandidates(onError?: (error: unknown) => void): Promis
 export function resetCatalogSources(): void {
   sources.clear();
   cached = undefined;
+}
+
+/**
+ * 把一次请求**委托给另一家**（跨厂商换模型的执行层）。
+ *
+ * 为什么需要这一层：宿主的 `GenerateOptions.provider` 由路由决定，adapter 不能改它 ——
+ * 一个 commandcode 的 adapter 无法「以 opendesign 的身份」发请求。所以换到别家同名模型时，
+ * 必须由**目标那一家的 adapter** 自己去发。这里就是那个转接点：查注册表拿到目标家的
+ * `stream`，把 `options` 的 `provider` 改成目标家再调过去。
+ *
+ * 安全约束：
+ * - 目标家必须**已登记且提供了 `stream`**（否则返回 `undefined`，调用方按「换不了」处理）；
+ * - 目标家必须**不是官方直连**（`isOfficialProvider` 由调用方在挑候选时已排除，这里再挡一次
+ *   作为纵深防御）；
+ * - 只换 `provider` / `model` 两个字段，其余（消息、工具、signal）**原样透传** —— 请求语义
+ *   不该因为换了家而变。
+ * @param target - 目标 (provider, model)。
+ * @param options - 原始请求（形状由调用方保证；本层只做字段替换）。
+ * @returns 目标家的 chunk 流；不能委托时为 `undefined`。
+ */
+export function delegateStream(
+  target: ModelCandidate,
+  options: Record<string, unknown>,
+): AsyncIterable<unknown> | undefined {
+  const source = sources.get(target.provider);
+  if (source === undefined || source.stream === undefined) return undefined;
+  if (isOfficialProvider(target.provider)) return undefined;
+  return source.stream({ ...options, provider: target.provider, model: target.model });
+}
+
+/**
+ * 这家能不能被跨厂商委托（已登记且有 `stream`）。
+ * @param provider - provider 路由 id。
+ * @returns 能否委托。
+ */
+export function canDelegate(provider: string): boolean {
+  const source = sources.get(provider);
+  return source !== undefined && source.stream !== undefined;
 }
