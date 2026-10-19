@@ -85,4 +85,9 @@ it("真实 bundle：激活 + 再次激活（模拟刷新）都不抛，且设置
   expect(names).toContain("settings.section");
   expect(names).toContain("sidebar.footer.action");
   expect(names).toContain("main");
+
+  // 反方向：**同一个 ctx** 再 apply 一次不应该重复注册（两行共享一个 ctx 的常见情形）。
+  const before = second.registered.length;
+  exports.apply(second.ctx);
+  expect(second.registered.length, "同一个 ctx 不该重复注册").toBe(before);
 });

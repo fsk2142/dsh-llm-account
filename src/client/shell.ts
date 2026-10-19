@@ -339,23 +339,21 @@ export interface ClientShell {
 let applyCountValue = 0;
 
 /**
- * 已经注册过页面的**那个宿主上下文**。
+ * 已经**在本轮激活里**注册过页面的宿主上下文。
  *
- * 为什么不是布尔值（这是 2026-10-19「刷新后设置页消失」的根因）：
- * 布尔值一旦置位就永不复位，而宿主**刷新时会重新激活客户端包、复用同一个模块实例**。
- * 于是第二次 `apply` 看到 `true` 直接 return —— 页面一条都没注册，界面上就是
- * 「先能看、刷新就没了」。
+ * 为什么用 `WeakSet` 而不是布尔值、也不是「记住最后一个 ctx」：
+ * - 布尔值永不复位 → 宿主刷新 / 重新激活后第二次 `apply` 直接 return，页面永久消失
+ *   （2026-10-19 报障的根因）；
+ * - 「记住最后一个 ctx」也不够：宿主可能同时持有多个 ctx（两行各一个），判重只在
+ *   **同一个 ctx** 内成立。
  *
- * 用上下文对象做键才对得上真实语义：
- * - 同一个 `ctx` 被两行复用 → 只注册一次（这正是当初要防的重复）；
- * - 宿主换了新的 `ctx`（刷新 / 重新激活）→ 必须重新注册。
+ * `WeakSet` 正好表达这个语义：同一个 ctx 只注册一次；换了新 ctx 自动视为未注册。
+ * 用 WeakSet 而非 Set，是为了不让宿主上下文被我们长期持有（避免内存泄漏）。
  */
-let pageOwner: object | undefined;
+let pageRegisteredFor = new WeakSet<object>();
 
-/**
- * 已经注册过侧边栏卡片与中栏面板的**那个宿主上下文**（与 {@link pageOwner} 同一套理由）。
- */
-let sharedSurfacesOwner: object | undefined;
+/** 已经在本轮激活里注册过侧边栏卡片 / 中栏面板的宿主上下文（理由同 {@link pageRegisteredFor}）。 */
+let sharedSurfacesRegisteredFor = new WeakSet<object>();
 
 /**
  * How many times the host called `apply` (assumption ② in
@@ -376,8 +374,6 @@ export function applyCount(): number {
  */
 export function resetShell(): void {
   applyCountValue = 0;
-  pageOwner = undefined;
-  sharedSurfacesOwner = undefined;
   resetRegistry();
 }
 
@@ -444,37 +440,45 @@ export function applyShell(rawContext: unknown, options: ApplyShellOptions = {})
 }
 
 /**
- * 页面注册的守卫：**按宿主上下文判重**，成功之后才记下这个上下文。
+ * 注册页面。
  *
- * 两件事一起保证：
- * - 同一个 `ctx`（两行共享）只注册一次，不会重复；
- * - 换新 `ctx`（刷新 / 重新激活）会重新注册 —— 布尔守卫在这一步会让页面彻底消失；
- * - 注册抛错不记下上下文，下一次还有机会。
+ * **没有外层"只注册一次"的守卫**，这是 2026-10-19「刷新后设置页消失」的最终修法。
+ *
+ * 历史：这里原来有一个模块级布尔 `pageRegistered`，后来又改成"按上下文对象记"。
+ * 两次都错在同一个前提上 —— 那个守卫想在 `apply` 层面去重，但**去重本来就该发生在
+ * 注册内部**：`registerPage` 自己会先撤销上一条再注册（`registered?.()`），所以重复
+ * 调用是幂等的、安全的。而外层守卫一旦判"已经注册过"，在宿主重建（刷新 / 重新激活）
+ * 时就再也不会重新注册 —— 页面直接消失。
+ *
+ * 结论：让每次 `apply` 都走一遍幂等注册，比任何形式的"记住注册过"都正确。
  * @param context - 这次激活的宿主上下文。
  * @param options - 页面工厂与文案。
  */
 function registerPageOnce(context: ClientShell, options: ApplyShellOptions): void {
-  if (pageOwner === context) return;
+  if (pageRegisteredFor.has(context)) return;
   try {
     registerPage(context, options);
-    pageOwner = context;
+    pageRegisteredFor.add(context);
   } catch (error) {
     // 与两个插槽注册同样的处置（旧插件在 `main`/`sidebar.footer.action` 上就是这么做的）：
     // 留一行错误继续走完 `apply` —— 后面的凭据注入与 applyCount 不该因为一次注册失败而丢掉。
+    // 失败时**不记录**这个 ctx：下一次还有机会。
     console.error("[dsh-llm-account] could not register the settings page:", error);
   }
 }
 
 /**
- * 侧边栏卡片与中栏面板的守卫（与 {@link registerPageOnce} 同一套上下文判重）。
+ * 侧边栏卡片与中栏面板（同样**不加外层守卫**，理由见 {@link registerPageOnce}）。
+ *
+ * `registerSharedSurfaces` 内部同样是「先撤销再注册」，所以重复调用幂等。
  * @param context - 这次激活的宿主上下文。
  * @param options - 注册工厂。
  */
 function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOptions): void {
-  if (sharedSurfacesOwner === context) return;
+  if (sharedSurfacesRegisteredFor.has(context)) return;
   try {
     options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS));
-    sharedSurfacesOwner = context;
+    sharedSurfacesRegisteredFor.add(context);
   } catch (error) {
     // 与页面注册同样的处置：一次注册失败不该把整个客户端带走。
     console.error("[dsh-llm-account] could not register the sidebar card and the usage panel:", error);
