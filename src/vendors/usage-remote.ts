@@ -45,6 +45,7 @@ import {
   type UsageWindowView,
   type VendorUsageStatus,
 } from "../client/usage-contract";
+import { lastUsedAccountOf } from "../core/last-used";
 import { buildUsageReport } from "../core/usage-report";
 import type { UsageRecord } from "../core/usage-stats";
 import { sharedUsageLedger } from "./usage-store";
@@ -569,7 +570,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
         // 这一家的额度读不到：它的账号退回自然周期，不影响别的家。
       }
     }
-    return buildUsageReport({
+    const report = buildUsageReport({
       records,
       window,
       now,
@@ -579,6 +580,11 @@ export class LlmAccountUsageService extends TypertRemoteService {
       planPeriodStartOf: (vendor, account) => planStarts.get(`${vendor}\u0000${account}`),
       spentOf: (vendor, account) => spent.get(`${vendor}\u0000${account}`),
     });
+    // 「最近一次请求」：侧边栏据此跟随当前会话（用户 2026-10-19 要求取代轮播）。
+    // 只收**仍然存在的账号**：台账里可能留着已删除的 ref，拿它显示会对不上名字。
+    const known = new Set(windows.keys());
+    const lastUsed = lastUsedAccountOf(records, (vendor, account) => known.has(`${vendor}\u0000${account}`));
+    return lastUsed === undefined ? report : { ...report, lastUsed };
   }
 
   /**

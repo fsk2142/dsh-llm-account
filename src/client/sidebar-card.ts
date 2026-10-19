@@ -38,6 +38,13 @@ export interface SidebarCardProps {
    * 账号」—— 那样多账号的厂商永远只显示一个。
    */
   accountRef?: string | undefined;
+  /**
+   * 现在显示的是「最近一次请求的账号」而不是轮播（用户 2026-10-19 要求跟随会话）。
+   *
+   * 由此在标题旁标一句「跟随最近一次请求」—— 措辞必须诚实：宿主的 `remote.session` 没有
+   * 「前端当前打开哪个会话」的接口，所以这是**最近发过请求**的那个账号，不是实时跟随。
+   */
+  following?: boolean;
   /** 打开中栏仪表盘。**整张卡片**点下去就是这个动作。 */
   onOpen: () => void;
   /**
@@ -135,6 +142,12 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
         "div",
         { className: CSS_CLASS.sidebarHead },
         createElement("h3", { "data-sidebar-title": "true" }, titleOf(props, currentRow)),
+        // 跟随当前会话时标一句。措辞必须诚实：这是**最近一次请求**的账号，不是实时跟随
+        // 会话（宿主的 `remote.session` 没有「前端当前打开哪个会话」的接口）。不标的话，
+        // 用户翻看一个旧会话而没发消息时，会觉得"显示错了"。
+        ...(props.following === true
+          ? [createElement("small", { key: "following", "data-sidebar-following": "true", className: CSS_CLASS.sidebarFollowing }, t("sidebar.following"))]
+          : []),
       ),
       ...(hasData
         ? [

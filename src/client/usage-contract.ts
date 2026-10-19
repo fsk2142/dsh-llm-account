@@ -141,6 +141,15 @@ export interface UsageReportView {
     /** 窗口内最近一次请求的时刻；没有记录时缺失。 */
     lastAt?: number;
   };
+  /**
+   * **最近一次请求**是哪个账号（侧边栏「跟随当前会话」用）。
+   *
+   * 用户 2026-10-19：「根据该会话的模型所属账号显示当前账号信息，就不需要轮播」。
+   * 宿主的 `remote.session` 没有「当前打开哪个会话」的接口，所以用「最近一次请求」代替
+   * ——刚发过请求的那个会话几乎必然就是用户在看的那个（见 `core/last-used` 的说明）。
+   * 没有可用记录时缺失（那就退回轮播）。
+   */
+  lastUsed?: { vendor: string; account: string; model: string; at: number };
 }
 
 /** 一次登录尝试的状态（与宿主侧 `LoginStatus` 同形；`reason` 是稳定文案键）。 */

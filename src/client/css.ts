@@ -545,6 +545,8 @@ export const PAGE_CSS = `
 .dsl-sidebar h3 { margin: 0; font-size: 13px; font-weight: 500; line-height: 20px;
   color: var(--dsw-alias-label-primary); }
 .dsl-sidebar-head { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; }
+.dsl-sidebar-following { flex: none; font-size: 10px; line-height: 14px; color: var(--dsw-alias-label-tertiary);
+  font-weight: 400; text-wrap: nowrap; }
 .dsl-sidebar-head > h3 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   text-wrap: nowrap; }
 /* 两行额度（2026-10-19 用户定的版式）：
@@ -741,6 +743,7 @@ export const CSS_CLASS = {
   sidebarShell: "dsl-sidebar-shell",
   sidebarCompact: "dsl-sidebar-compact",
   sidebarHead: "dsl-sidebar-head",
+  sidebarFollowing: "dsl-sidebar-following",
   sidebarFoot: "dsl-sidebar-foot",
   marks: "dsl-marks",
   dashboard: "dsl-dashboard",

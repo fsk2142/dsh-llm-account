@@ -41,6 +41,7 @@ import {
   setField,
   sidebarAccountKeysOf,
   sidebarSelectionConfigured as selectionConfiguredIn,
+  sidebarCurrentTarget,
   sidebarTargetsOf,
   sidebarVendorOf,
   sidebarVendorsOf,
@@ -51,6 +52,7 @@ import {
   type PageState,
   type VendorSnapshot,
 } from "./page-state";import type { LoginView } from "./account-card";
+import { isLastUsedFresh } from "../core/last-used";
 import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
@@ -2080,6 +2082,15 @@ export function createSidebarCardView(options: {
      */
     const [statuses, setStatuses] = useState<Record<string, VendorUsageStatus | undefined>>({});
     /**
+     * **最近一次请求**是哪个账号（侧边栏跟随当前会话）。
+     *
+     * 从用量报表的 `lastUsed` 来（宿主侧从台账算好）。它比轮播更贴近用户预期：
+     * 用户在一个会话里发消息，侧边栏就该显示那个会话正在用的账号。
+     */
+    const [lastUsed, setLastUsed] = useState<{ vendor: string; account: string; model: string; at: number } | undefined>(
+      undefined,
+    );
+    /**
      * 轮播清单的勾选：`keys` 是 `vendor:ref`，`configured` 表示用户是否显式配置过。
      * 未配置 = 全部账号轮播（用户 2026-10-19 要的默认）。
      */
@@ -2097,7 +2108,15 @@ export function createSidebarCardView(options: {
      * 直接现算就没有状态同步问题；`turn` 的模数变化由下面的 effect 收敛。
      */
     const targets = sidebarTargetsOf(vendors, statuses, selection);
-    const target = targets.length === 0 ? undefined : targets[turn % targets.length];
+    /**
+     * 现在该显示哪个账号。
+     *
+     * 用户 2026-10-19 的要求改过一次：「根据该会话的模型所属账号显示当前账号信息，就不需要
+     * 轮播显示了」。宿主的 `remote.session` 没有「前端当前打开哪个会话」的接口（扫过 asar
+     * 里全部调用点确认），所以用**最近一次请求的账号**代替 —— 刚发过请求的会话几乎必然
+     * 就是用户在看的那个。`lastUsed` 过期或不在清单里时才退回轮播。
+     */
+    const target = sidebarCurrentTarget(targets, lastUsed, turn, Date.now());
     const vendor = target?.vendor;
 
     /**
@@ -2183,6 +2202,29 @@ export function createSidebarCardView(options: {
     );
 
     /**
+     * 读「最近一次请求是哪个账号」（侧边栏跟随当前会话）。
+     *
+     * 一次 `usageReport` 就带回它（宿主从台账算好，不额外打网络）。读失败不抛：拿不到就
+     * 退回轮播，侧边栏不该因此变空。
+     */
+    useEffect(() => {
+      const usage = usageNamespace(ctx);
+      if (usage?.usageReport === undefined) return;
+      let live = true;
+      void remoteValueDetailed<UsageReportView>(callRemote(() => usage.usageReport?.(USAGE_REPORT_WINDOW))).then(
+        (detail) => {
+          if (!live || !detail.ok) return;
+          const report = reportOf(detail.value);
+          setLastUsed(report?.lastUsed);
+        },
+      );
+      return () => {
+        live = false;
+      };
+      // 与额度轮询同节奏：`read` 每拍会改 `statuses`，`lastUsed` 跟着定期重读即可。
+    }, [turn, statuses]);
+
+    /**
      * **建清单**：各开启的家读一次（每家一次，读到的账号表进 `statuses`）。
      *
      * 账号级轮播必须知道「有哪些账号」，而账号表住在 `status()` 里 —— 这是唯一需要
@@ -2223,9 +2265,12 @@ export function createSidebarCardView(options: {
     const refreshKey = `${quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"])}:${rotateMs}`;
     useEffect(() => {
       if (targets.length <= 1) return;
+      // **有新鲜的「最近使用」时不轮播**：用户 2026-10-19 的要求是「跟随当前会话，就不需要
+      // 轮播了」。只有拿不到（或已过期）时才退回轮播 —— 那时总得显示点什么。
+      if (lastUsed !== undefined && isLastUsedFresh(lastUsed.at, Date.now())) return;
       const timer = setInterval(() => setTurn((current) => current + 1), rotateMs);
       return () => clearInterval(timer);
-    }, [targetsKey, rotateMs]);
+    }, [targetsKey, rotateMs, lastUsed?.at, lastUsed?.vendor, lastUsed?.account]);
 
     // 冷启动兜底：设置页从未打开过时存储是冷的，卡片自己读一次已存储的开关
     // （一次设置读取，不是用量查询；读不到就保持关闭，绝不轮询）。
@@ -2293,6 +2338,8 @@ export function createSidebarCardView(options: {
       t,
       status: view.status,
       ...(target === undefined ? {} : { accountRef: target.ref }),
+      // 是否在跟随「最近一次请求」（而不是轮播）—— 卡片据此标一句，措辞要诚实。
+      ...(lastUsed !== undefined && isLastUsedFresh(lastUsed.at, Date.now()) ? { following: true } : {}),
       ...(view.failure === undefined ? {} : { failure: view.failure }),
       ...(view.stale ? { stale: true } : {}),
       // 整张卡片点下去就打开用量面板（2026-10-19 用户要求：去掉卡片上那个「打开用量面板」

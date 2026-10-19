@@ -11,6 +11,7 @@
  */
 import type { CardGroupSpec, FieldSpec, VendorEntry } from "./registry";
 import type { DiscoveryProblem } from "./seams";
+import { isLastUsedFresh } from "../core/last-used";
 import type { VendorUsageStatus } from "./usage-contract";
 
 /** 宿主设置命名空间的一份快照：值 + 修订号（保存时要用它做并发围栏）。 */
@@ -536,6 +537,38 @@ export function sidebarTargetsOf(
     }
   }
   return targets;
+}
+
+/**
+ * 从轮播目标里选出**现在该显示哪一个**（用户 2026-10-19：「根据该会话的模型所属账号显示
+ * 当前账号信息，就不需要轮播显示了」）。
+ *
+ * 优先级：
+ * 1. **最近一次请求的账号**，且它仍在目标清单里、且足够新鲜 → 用它（这就是「跟随当前会话」）；
+ * 2. 否则按 `turn` 轮播（用户没发过请求、或那次已经过期时，退回旧行为 —— 总比空着好）。
+ *
+ * 为什么「最近一次请求」够用：宿主的 `remote.session` 没有「前端当前打开哪个会话」的接口
+ * （2026-10-19 扫过全部调用点确认）。而刚发过请求的会话几乎必然就是用户在看的那个。
+ * 这一点必须在界面上说清楚，不能让用户以为它是实时跟随（见 `SidebarCard` 的 hint）。
+ *
+ * @param targets - 轮播目标清单（已按当前供应商排过序）。
+ * @param lastUsed - 最近一次请求的账号；没有时为 `undefined`。
+ * @param turn - 轮播进度（仅在「没有新鲜的最近使用」时用到）。
+ * @param now - 现在（用于判断新鲜度）。
+ * @returns 要显示的目标；清单为空时为 `undefined`。
+ */
+export function sidebarCurrentTarget(
+  targets: readonly SidebarTarget[],
+  lastUsed: { vendor: string; account: string; at: number } | undefined,
+  turn: number,
+  now: number,
+): SidebarTarget | undefined {
+  if (targets.length === 0) return undefined;
+  if (lastUsed !== undefined && isLastUsedFresh(lastUsed.at, now)) {
+    const hit = targets.find((item) => item.vendor === lastUsed.vendor && item.ref === lastUsed.account);
+    if (hit !== undefined) return hit;
+  }
+  return targets[turn % targets.length];
 }
 
 /**
