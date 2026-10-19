@@ -24,10 +24,6 @@
       "types": "./lib/opendesign.d.ts",
       "default": "./lib/opendesign.js"
     },
-    "./web-search": {
-      "types": "./lib/web-search.d.ts",
-      "default": "./lib/web-search.js"
-    },
     "./client": {
       "default": "./lib/client.js"
     },
@@ -54,12 +50,6 @@
       ]
     }
   },
-  "peerDependenciesMeta": {
-    "//": "dsh-web 只在**类型**上用到（WebSearchProvider/WebError 形状）；运行时不得依赖它 —— 宿主没装桌面端搜索时该包不存在，静态 import 会让整行插件加载失败、宿主起不来（2026-10-19 报障）。",
-    "@deepseek-ai/dsh-web": {
-      "optional": true
-    }
-  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4 || ~4.0.5",
     "@deepseek-ai/dsh-credentials": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
@@ -67,7 +57,6 @@
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
     "@deepseek-ai/dsh-settings": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
-    "@deepseek-ai/dsh-web": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
     "@deepseek-ai/schemastery": "~3.18.4 || ~3.18.5"
   },
   "devDependencies": {
@@ -79,7 +68,6 @@
     "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
     "@deepseek-ai/dsh-timeout": "0.2.0-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-web": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "3.18.4",
     "@types/node": "^26.6.5",
     "opencode-go-pi-ai": "npm:@earendil-works/pi-ai@1.1.0",

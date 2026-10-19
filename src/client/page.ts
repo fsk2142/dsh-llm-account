@@ -43,17 +43,9 @@ export interface PageShellProps {
   /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
   mergeTabs?: boolean;
   /**
-   * 跨厂商的「网页搜索」卡片（厂商主体之后）。
-   *
-   * 搜索来源不属于任何一家厂商（三选一跨全部厂商），所以与合并账户面板同形：由容器渲染，
-   * 页面外壳只负责放在厂商主体之后。
-   */
-  webSearch?: ReactNode;
-  /** 网页搜索卡片有未保存的改动（与厂商字段共用底部那一个「保存」）。 */
-  webSearchDirty?: boolean;
   /**
    * 用量统计卡片：**跨厂商**，放在账户/额度之后（用户要求「在额度下方」）。
-   * 与 `webSearch` 同形：由容器渲染，页面只负责摆位置。
+   * 与合并账户面板同形：由容器渲染，页面只负责摆位置。
    */
   usage?: ReactNode;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */
@@ -122,8 +114,6 @@ function pageBody(props: PageShellProps): ReactElement {
               ),
         )
       : vendorBody(props, active),
-    // 网页搜索卡片：跨厂商，放在厂商主体之后（不传 = 不渲染，与 accounts 同纪律）。
-    props.webSearch === undefined ? null : props.webSearch,
   );
 }
 
@@ -193,7 +183,7 @@ function vendorBody(props: PageShellProps, entry: VendorEntry): ReactNode {
     null,
     ...cardGroupsOf(entry).map((group) => cardGroupElement(props, entry, group)),
     extras === undefined ? null : extras,
-    isDirty(props.state, entry.ns) || props.webSearchDirty === true ? saveBar(props, entry) : null,
+    isDirty(props.state, entry.ns) ? saveBar(props, entry) : null,
   );
 }
 

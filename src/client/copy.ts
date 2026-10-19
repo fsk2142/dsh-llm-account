@@ -280,60 +280,6 @@ export type CopyKey =
   | "account.reason.config-invalid"
   | "account.reason.error"
   | "empty.noVendor"
-  | "webSearch.title"
-  | "webSearch.hint"
-  | "webSearch.loading"
-  | "webSearch.readFailed"
-  | "webSearch.option.account"
-  | "webSearch.option.account.hint"
-  | "webSearch.option.deepseek"
-  | "webSearch.option.deepseek.hint"
-  | "webSearch.option.custom"
-  | "webSearch.option.custom.hint"
-  | "webSearch.effective"
-  | "webSearch.effective.none"
-  | "webSearch.summary.none"
-  | "webSearch.route"
-  | "webSearch.supported"
-  | "webSearch.unsupported"
-  | "webSearch.noModel"
-  | "webSearch.account.keyConfigured"
-  | "webSearch.account.keyMissing"
-  | "webSearch.field.endpoint"
-  | "webSearch.field.endpoint.hint"
-  | "webSearch.field.method"
-  | "webSearch.field.queryParam"
-  | "webSearch.field.queryParam.hint"
-  | "webSearch.field.queryField"
-  | "webSearch.field.queryField.hint"
-  | "webSearch.field.keyField"
-  | "webSearch.field.keyField.hint"
-  | "webSearch.field.resultsPath"
-  | "webSearch.field.resultsPath.hint"
-  | "webSearch.field.authHeader"
-  | "webSearch.field.authHeader.hint"
-  | "webSearch.field.authScheme"
-  | "webSearch.field.authScheme.hint"
-  | "webSearch.key"
-  | "webSearch.key.keep"
-  | "webSearch.key.placeholder"
-  | "webSearch.key.configured"
-  | "webSearch.key.missing"
-  | "webSearch.key.unreadable"
-  | "webSearch.key.unavailable"
-  | "webSearch.deepseek.hint"
-  | "webSearch.save"
-  | "webSearch.saving"
-  | "webSearch.saveHint"
-  | "webSearch.failure"
-  | "webSearch.saved"
-  | "webSearch.rowMissing"
-  | "webSearch.webRowMissing"
-  | "webSearch.blocked"
-  | "webSearch.blocked.endpoint"
-  | "webSearch.blocked.noKey"
-  | "webSearch.blocked.noModel"
-  | "webSearch.blocked.unsupported";
 
 /** 语言字典：键 → 文案。 */
 export type CopyDictionary = Record<string, string>;
@@ -611,60 +557,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.reason.config-invalid": "本机的登录产物形状不认识（缺少 runtime key）。请重新登录一次。",
     "account.reason.error": "登录失败。",
     "empty.noVendor": "没有可显示的厂商。",
-    "webSearch.title": "网页搜索",
-    "webSearch.hint": "选择会话里联网搜索由谁执行：跟随模型账号走账号网关的原生搜索，也可以改用 DeepSeek 官方或任何第三方搜索 API。",
-    "webSearch.loading": "正在读取网页搜索设置…",
-    "webSearch.readFailed": "网页搜索设置读取失败",
-    "webSearch.option.account": "跟随模型账号",
-    "webSearch.option.account.hint": "用当前默认模型所属厂商的网关执行搜索，不另配密钥（需网关支持）。",
-    "webSearch.option.deepseek": "DeepSeek 官方",
-    "webSearch.option.deepseek.hint": "使用宿主内置的 DeepSeek 搜索；密钥在宿主自带的「网页搜索」卡片里配置。",
-    "webSearch.option.custom": "第三方 API",
-    "webSearch.option.custom.hint": "通用自定义：填写接口地址与密钥，适配 Tavily、Serper 等常见形态。",
-    "webSearch.effective": "当前生效：{provider}",
-    "webSearch.effective.none": "宿主还没有设置搜索来源（未选择任何提供方）。",
-    "webSearch.summary.none": "未设置",
-    "webSearch.route": "当前默认模型：{vendor} 的 {model}",
-    "webSearch.supported": "该账号网关支持原生联网搜索。",
-    "webSearch.unsupported": "该账号网关不支持原生搜索",
-    "webSearch.noModel": "还没有设置默认模型，无法确定要跟随哪个账号。",
-    "webSearch.account.keyConfigured": "账号网关密钥已配置（{ref}）。",
-    "webSearch.account.keyMissing": "账号网关密钥未配置（{ref}）。",
-    "webSearch.field.endpoint": "接口地址",
-    "webSearch.field.endpoint.hint": "搜索结果 JSON 的完整 URL，例如 https://api.tavily.com/search。",
-    "webSearch.field.method": "请求方法",
-    "webSearch.field.queryParam": "查询参数名",
-    "webSearch.field.queryParam.hint": "GET 时拼进 URL 的参数名，通常为 q 或 query。",
-    "webSearch.field.queryField": "正文字段名",
-    "webSearch.field.queryField.hint": "POST JSON body 里承载查询的字段名。",
-    "webSearch.field.keyField": "密钥字段名",
-    "webSearch.field.keyField.hint": "留空表示密钥走请求头；填写后密钥会放进 body 的这个字段。",
-    "webSearch.field.resultsPath": "结果数组路径",
-    "webSearch.field.resultsPath.hint": "留空自动探测；形如 data.results，指向结果数组所在的位置。",
-    "webSearch.field.authHeader": "密钥请求头",
-    "webSearch.field.authHeader.hint": "承载密钥的请求头名称，通常为 Authorization。",
-    "webSearch.field.authScheme": "认证方案",
-    "webSearch.field.authScheme.hint": "请求头里密钥的前缀，通常为 Bearer；留空表示只放裸值。",
-    "webSearch.key": "搜索 API 密钥",
-    "webSearch.key.keep": "已保存的密钥不会回显；仅在需要更换时填写。",
-    "webSearch.key.placeholder": "粘贴新的 API 密钥（留空表示不修改）",
-    "webSearch.key.configured": "密钥已配置（{ref}）。",
-    "webSearch.key.missing": "密钥未配置（{ref}）。",
-    "webSearch.key.unreadable": "读不到密钥状态（凭据服务不可用）。",
-    "webSearch.key.unavailable": "凭据服务不可用，无法写入密钥。",
-    "webSearch.deepseek.hint": "密钥在宿主自带的「网页搜索」卡片里填写；这里只负责把搜索来源切过去。",
-    "webSearch.save": "保存搜索设置",
-    "webSearch.saving": "保存中…",
-    "webSearch.saveHint": "保存后立即生效；只写入本插件自己的设置行。",
-    "webSearch.failure": "保存失败",
-    "webSearch.saved": "已保存，搜索来源已切换。",
-    "webSearch.rowMissing": "本插件的设置行还没有被宿主创建，暂时无法保存。",
-    "webSearch.webRowMissing": "宿主的「网页搜索」设置行不存在，无法切换来源；设置已保存。",
-    "webSearch.blocked": "已保存设置；未切换搜索来源：{reason}",
-    "webSearch.blocked.endpoint": "第三方接口地址还没填或不是合法的 URL。",
-    "webSearch.blocked.noKey": "账号网关密钥未配置（{ref}）。",
-    "webSearch.blocked.noModel": "还没有设置默认模型。",
-    "webSearch.blocked.unsupported": "当前账号网关不支持原生联网搜索。",
   },
   en: {
     nav: "LLM accounts",
@@ -937,60 +829,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.reason.config-invalid": "The local sign-in data has an unrecognised shape (no runtime key). Sign in again.",
     "account.reason.error": "Sign-in failed.",
     "empty.noVendor": "No vendor to display.",
-    "webSearch.title": "Web search",
-    "webSearch.hint": "Choose who performs web search in a session: follow the model account's native search, or switch to DeepSeek official or any third-party search API.",
-    "webSearch.loading": "Reading the web search settings…",
-    "webSearch.readFailed": "Could not read the web search settings",
-    "webSearch.option.account": "Follow the model account",
-    "webSearch.option.account.hint": "Run search through the current default model's provider gateway, no extra key needed (the gateway must support it).",
-    "webSearch.option.deepseek": "DeepSeek official",
-    "webSearch.option.deepseek.hint": "Use the host's built-in DeepSeek search; the key is configured in the host's own \"Web search\" card.",
-    "webSearch.option.custom": "Third-party API",
-    "webSearch.option.custom.hint": "Generic custom endpoint: fill in the URL and key; fits common shapes such as Tavily or Serper.",
-    "webSearch.effective": "Currently in effect: {provider}",
-    "webSearch.effective.none": "The host has no search source configured (no provider selected).",
-    "webSearch.summary.none": "not set",
-    "webSearch.route": "Current default model: {model} on {vendor}",
-    "webSearch.supported": "This account gateway supports native web search.",
-    "webSearch.unsupported": "This account gateway does not support native search",
-    "webSearch.noModel": "No default model is set, so there is no account to follow.",
-    "webSearch.account.keyConfigured": "Account gateway key configured ({ref}).",
-    "webSearch.account.keyMissing": "Account gateway key not configured ({ref}).",
-    "webSearch.field.endpoint": "Endpoint URL",
-    "webSearch.field.endpoint.hint": "Full URL returning search results as JSON, e.g. https://api.tavily.com/search.",
-    "webSearch.field.method": "HTTP method",
-    "webSearch.field.queryParam": "Query parameter",
-    "webSearch.field.queryParam.hint": "Parameter name appended to the URL for GET, usually q or query.",
-    "webSearch.field.queryField": "Body field",
-    "webSearch.field.queryField.hint": "Field name carrying the query in the POST JSON body.",
-    "webSearch.field.keyField": "Key field",
-    "webSearch.field.keyField.hint": "Leave empty to send the key in a header; filled in, the key goes into this body field.",
-    "webSearch.field.resultsPath": "Results array path",
-    "webSearch.field.resultsPath.hint": "Leave empty to auto-detect; e.g. data.results, pointing at the results array.",
-    "webSearch.field.authHeader": "Key header",
-    "webSearch.field.authHeader.hint": "Header name carrying the key, usually Authorization.",
-    "webSearch.field.authScheme": "Auth scheme",
-    "webSearch.field.authScheme.hint": "Prefix before the key in the header, usually Bearer; empty means the raw value.",
-    "webSearch.key": "Search API key",
-    "webSearch.key.keep": "A saved key is never shown again; fill it in only to replace it.",
-    "webSearch.key.placeholder": "Paste a new API key (leave empty to keep)",
-    "webSearch.key.configured": "Key configured ({ref}).",
-    "webSearch.key.missing": "Key not configured ({ref}).",
-    "webSearch.key.unreadable": "Key status unavailable (credential service unreachable).",
-    "webSearch.key.unavailable": "The credential service is unavailable, so the key could not be written.",
-    "webSearch.deepseek.hint": "The key goes in the host's own \"Web search\" card; this card only switches the search source.",
-    "webSearch.save": "Save web search",
-    "webSearch.saving": "Saving…",
-    "webSearch.saveHint": "Takes effect immediately; only writes this plugin's own settings row.",
-    "webSearch.failure": "Save failed",
-    "webSearch.saved": "Saved; the search source has been switched.",
-    "webSearch.rowMissing": "This plugin's settings row has not been created by the host yet, so saving is unavailable.",
-    "webSearch.webRowMissing": "The host's \"Web search\" settings row does not exist, so the source cannot be switched; settings were saved.",
-    "webSearch.blocked": "Settings saved; search source not switched: {reason}",
-    "webSearch.blocked.endpoint": "The third-party endpoint is empty or not a valid URL.",
-    "webSearch.blocked.noKey": "Account gateway key not configured ({ref}).",
-    "webSearch.blocked.noModel": "No default model is set.",
-    "webSearch.blocked.unsupported": "The current account gateway does not support native web search.",
   },
 };
 

@@ -39,14 +39,6 @@ const HOST_BUNDLES: ReadonlyArray<{ path: string; specifiers: readonly string[] 
     path: fileURLToPath(new URL("../../lib/opendesign.js", import.meta.url)),
     specifiers: ["@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
   },
-  {
-    // 网页搜索：比适配器多两样宿主包 —— `dsh-web`（搜索/抓取抽象）与
-    // `dsh-credentials`（引用名校验，密钥只经凭据库）。
-    path: fileURLToPath(new URL("../../lib/web-search.js", import.meta.url)),
-    // 刻意**没有** `@deepseek-ai/dsh-web`：它是可选依赖，宿主没装桌面端搜索时该包不存在，
-    // 静态 import 会让整行插件在加载期就失败（2026-10-19 用户报障：DSH 起不来）。
-    specifiers: ["@deepseek-ai/dsh-credentials", "@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
-  },
 ];
 
 /** Node builtins that must never reach the browser product (bare, un-prefixed form). */
@@ -178,17 +170,4 @@ describe("host-side bundles", () => {
     const importedEverywhere = emittedBundles().flatMap((path) => bareDeepseekImports(readBundle(path)));
     expect(importedEverywhere).toContain("@deepseek-ai/dsh-typert-protocol");
   });
-});
-
-it("没有任何产物在**运行时** import @deepseek-ai/dsh-web（可选依赖）", () => {
-  // 2026-10-19 用户报障「DSH 起不来」：宿主 profile 里没有 dsh-web（桌面端搜索没装），
-  // 而静态 import 是**加载期**解析的 —— 一行插件加载失败，整个客户端起不来。
-  // 只允许 `import type`（编译期擦除）。
-  const offenders: string[] = [];
-  for (const file of readdirSync(fileURLToPath(new URL("../../lib", import.meta.url)))) {
-    if (!file.endsWith(".js")) continue;
-    const source = readFileSync(fileURLToPath(new URL(`../../lib/${file}`, import.meta.url)), "utf8");
-    if (/from\s*"@deepseek-ai\/dsh-web"/.test(source)) offenders.push(file);
-  }
-  expect(offenders, `这些产物仍静态依赖 dsh-web：${offenders.join(", ")}`).toEqual([]);
 });

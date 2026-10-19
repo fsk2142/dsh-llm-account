@@ -25,7 +25,6 @@ import { CSS_CLASS } from "./css";
 import { Dashboard } from "./dashboard";
 import { closeLoginWindow, openLoginWindow, pointLoginWindowAt, type LoginWindowHandle } from "./login-window";
 import { SidebarCard } from "./sidebar-card";
-import { useWebSearchPanel } from "./web-search-panel";
 import {
   applyModelEdit,
   closeAction,
@@ -1396,17 +1395,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       loginError: loginErrors,
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
-    // 网页搜索卡片：跨厂商，放在厂商主体之后。以自定义 Hook 调用（而不是子元素组件）——
-    // Hook 必须落在本容器这一个挂载根上（Ruling 22；子元素里的 Hook 过不了迷你夹具）。
-    // 无条件挂载：读取/凭据/写回的每种失败面板内部都有人话出口，缺席接缝不该让整块
-    // 设置页少一张卡（那看起来像功能没装）。
-    const webSearchSave = useRef<(() => Promise<void>) | undefined>(undefined);
-    const [webSearchDirty, setWebSearchDirty] = useState(false);
-    const webSearch = useWebSearchPanel(ctx, t, {
-      saveRef: webSearchSave,
-      onDirty: setWebSearchDirty,
-    });
-
     const usageCard =
       usageReport === undefined && usageStatsProblem === undefined && !usageLoading
         ? undefined
@@ -1451,13 +1439,10 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       t,
       accounts,
       mergeTabs: true,
-      webSearchDirty,
       saving: savingNs === state.activeNs,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
       onSave: (ns) => {
-        // 一个「保存」同时落两处：网页搜索卡片（独立设置行）与当前厂商字段。
-        void webSearchSave.current?.();
         const fields = dirtyFields(state, ns);
         if (fields.length === 0) return;
         setSavingNs(ns);
@@ -1572,7 +1557,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                 loginBegin: () => beginLogin(activeVendor),
               }),
           }),
-      webSearch,
       ...(usageCard === undefined ? {} : { usage: usageCard }),
     });
   };

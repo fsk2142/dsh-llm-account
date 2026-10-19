@@ -80,12 +80,11 @@ function insertRows(yaml: string): Row[] {
 describe("cordis.patch.yml boot-graph contract", () => {
   const rows = insertRows(readFileSync(PATCH, "utf8"));
 
-  it("inserts exactly the four host rows (two legacy vendors + OpenDesign + web-search)", () => {
+  it("inserts exactly the three host rows (two legacy vendors + OpenDesign)", () => {
     expect(rows.map((row) => row.id)).toEqual([
       "llm-commandcode",
       "opencode-go",
       "opendesign",
-      "llm-account-web-search",
     ]);
   });
 
