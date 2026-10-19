@@ -2211,8 +2211,9 @@ export function createSidebarCardView(options: {
       status: view.status,
       ...(view.failure === undefined ? {} : { failure: view.failure }),
       ...(view.stale ? { stale: true } : {}),
+      // 整张卡片点下去就打开用量面板（2026-10-19 用户要求：去掉卡片上那个「打开用量面板」
+      // 按钮，手动刷新也搬到面板里 —— 面板上本来就有刷新图标）。
       onOpen: () => options.onOpen(),
-      onRefresh: () => read(true),
     });
   };
 }

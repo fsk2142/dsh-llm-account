@@ -206,7 +206,8 @@ it("模型卡片：搜索、逐模型移除、添加都有类", () => {
 
 it("侧边栏卡片与中栏仪表盘：按钮都有类", () => {
   const status = statusOf([account({ ref: "work", effective: true, quota: { windows: [{ key: "rolling", percent: 35 }], failures: [] } })], "work");
-  const card = SidebarCard({ t, status, onOpen: vi.fn(), onRefresh: vi.fn() });
+  // 侧边栏的刷新入口已搬到面板里（2026-10-19），卡片本身没有 onRefresh 了。
+  const card = SidebarCard({ t, status, onOpen: vi.fn() });
   const panel = Dashboard({ t, status, onClose: vi.fn(), onRefresh: vi.fn() });
   expect(assertStyled(card, "侧边栏卡片")).toBeGreaterThan(1);
   expect(assertStyled(panel, "中栏仪表盘")).toBeGreaterThan(1);

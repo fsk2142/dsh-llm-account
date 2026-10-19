@@ -73,14 +73,14 @@ it("远程面把可省略字段序列化成 null 时也不崩（渲染路径抛�
   const tree = renderCard(nulled);
   // 没有生效账号时回落到已配置账号，至少显示账号名和空额度条，且不抛。
   expect(textsOf(tree).join(" ")).toContain("a");
-  // 侧边栏只画小时级窗口一条（占位大是用户 2026-10-18 的反馈）。
-  expect(elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined)).toHaveLength(1);
+  // 没有额度读数时画**空占位**（三档回退窗口各一列），但不画填充条（缺失 ≠ 用光）。
+  expect(elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined).length).toBeGreaterThan(0);
   expect(elementsOf(tree).some((element) => element.props["data-quota-bar-fill"] !== undefined)).toBe(false);
   expect(textsOf(tree).join(" ")).not.toContain("undefined");
   expect(textsOf(tree).join(" ")).not.toContain("null");
 });
 
-it("开启后显示**生效账号**的额度（不是固定账号的）", () => {
+it("开启后显示**生效账号**的额度，且一行放下 5 小时 + 每周（有几档画几档）", () => {
   const tree = renderCard(
     statusOf({
       pinned: "fixed",
@@ -92,11 +92,50 @@ it("开启后显示**生效账号**的额度（不是固定账号的）", () => 
     }),
   );
   const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
-  // 只保留小时级窗口：weekly 这些去中栏面板看（2026-10-18 用户要求侧边栏简略）。
-  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h"]);
-  // 数字来自生效账号那一行（7/10），不是固定账号的（1/10）。
-  expect(textsOf(windows[0]!)).toContain("已用 7 / 共 10");
+  // 2026-10-19 用户要求：一行里同时给出 5 小时与每周（有月度就更要画）。
+  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly"]);
+  // 数字来自生效账号那一行（7/10 → 剩 30%），不是固定账号的（1/10 → 剩 90%）。
+  expect(textsOf(windows[0]!)).toContain("30%");
+  expect(textsOf(windows[1]!)).toContain("70%");
   expect(textsOf(tree)).toContain("Serving");
+});
+
+it("三档齐全时一行给出 5 小时 / 每周 / 每月", () => {
+  const tree = renderCard(
+    statusOf({
+      effective: { ref: "a", at: 1 },
+      accounts: [
+        row("a", {
+          effective: true,
+          quota: {
+            windows: [
+              { key: "5h", percent: 20 },
+              { key: "weekly", percent: 50 },
+              { key: "monthly", used: 3, cap: 120, unit: "usd" },
+            ],
+            failures: [],
+          },
+        }),
+      ],
+    }),
+  );
+  const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
+  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly", "monthly"]);
+  expect(textsOf(tree).join(" ")).toContain("5 小时");
+  expect(textsOf(tree).join(" ")).toContain("每周");
+  expect(textsOf(tree).join(" ")).toContain("每月");
+});
+
+it("整张卡片就是一个按钮：点它打开用量面板（不再有单独的按钮）", () => {
+  const onOpen = vi.fn();
+  const tree = SidebarCard({ t: dictionaryOf("zh"), status: statusOf({ effective: { ref: "a", at: 1 }, accounts: [row("a")] }), onOpen });
+  const whole = elementsOf(tree).find((element) => element.props["data-sidebar-whole"] === "true")!;
+  expect(whole.type).toBe("button");
+  (whole.props.onClick as () => void)();
+  expect(onOpen).toHaveBeenCalledTimes(1);
+  // 卡片上不再有「打开用量面板」文字按钮，也没有刷新按钮（刷新搬到面板里）。
+  expect(textsOf(whole).join(" ")).not.toContain("打开用量面板");
+  expect(elementsOf(tree).some((element) => element.props["data-sidebar-refresh"] !== undefined)).toBe(false);
 });
 
 it("侧边栏只显示当前账号名称，不再标注「已指定/生效」或切换提示", () => {
@@ -121,10 +160,11 @@ it("没有请求过时显示占位，而不是 0%", () => {
   expect(textsOf(unknown)).toContain(dictionaryOf("zh")("sidebar.noRequest"));
   expect(textsOf(unknown).join(" ")).not.toMatch(/\b0\b/);
 
-  // 读到了状态但还没有任何一次请求 → 显示已配置账号和一条空额度条，而不是纯文字或 0。
+  // 读到了状态但还没有任何一次请求 → 显示已配置账号和空额度占位，而不是纯文字或 0。
   const noRequest = renderCard(statusOf({ accounts: [row("a")] }));
   expect(textsOf(noRequest).join(" ")).toContain("a");
-  expect(elementsOf(noRequest).filter((element) => element.props["data-sidebar-window"] !== undefined)).toHaveLength(1);
+  // 没有读数时按厂商的常规档位画占位（一列一档），但填充条一条都不画。
+  expect(elementsOf(noRequest).filter((element) => element.props["data-sidebar-window"] !== undefined).length).toBeGreaterThan(0);
   expect(textsOf(noRequest).join(" ")).not.toMatch(/\b0\b/);
 });
 
@@ -134,16 +174,19 @@ it("生效账号的额度字段缺失时不渲染成 0（与账户卡片同一�
   );
   const window = elementsOf(tree).find((element) => element.props["data-sidebar-window"] === "5h")!;
   expect(window.props["data-sidebar-window-shape"]).toBe("missing");
-  expect(textsOf(window)).toContain(dictionaryOf("zh")("account.quotaMissing"));
-  expect(textsOf(window).join(" ")).not.toMatch(/\b0\b/);
+  // 侧边栏用的是紧凑列（名称 + 剩余百分比 + 细条），缺失时百分比是破折号而不是 0%。
+  expect(textsOf(window).join(" ")).toContain("—");
+  expect(textsOf(window).join(" ")).not.toMatch(/\b0%/);
 });
 
-it("打开仪表盘的按钮把意图报出去", () => {
+it("点整张卡片就打开仪表盘（收起态的图标按钮也是同一个动作）", () => {
   const onOpen = vi.fn();
   const tree = SidebarCard({ t: dictionaryOf("zh"), status: statusOf({ effective: { ref: "a", at: 1 }, accounts: [row("a")] }), onOpen });
-  const button = elementsOf(tree).find((element) => element.props["data-sidebar-open"] !== undefined)!;
-  (button.props.onClick as () => void)();
-  expect(onOpen).toHaveBeenCalledTimes(1);
+  const buttons = elementsOf(tree).filter((element) => element.props["data-sidebar-open"] !== undefined);
+  // 展开态（整卡）+ 收起态（图标），两处都能打开。
+  expect(buttons).toHaveLength(2);
+  for (const button of buttons) (button.props.onClick as () => void)();
+  expect(onOpen).toHaveBeenCalledTimes(2);
 });
 
 // —— 生命周期（默认关闭 / 零后台查询 / 关闭即停） ——

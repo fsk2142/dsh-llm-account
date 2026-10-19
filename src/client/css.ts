@@ -535,12 +535,34 @@ export const PAGE_CSS = `
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-secondary);
   font-size: 12px; line-height: 18px; }
+/* 整张卡片是一个按钮（2026-10-19 用户要求）：点哪里都打开用量面板。
+   所以它要长得像能点的：左对齐、指针、悬停浮起；且**不能**沿用按钮的居中与内边距。 */
+.dsl-sidebar-button { width: 100%; text-align: left; font: inherit; cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease; }
+.dsl-sidebar-button:hover { background: var(--dsw-alias-bg-l2);
+  border-color: var(--dsw-alias-border-l3); }
+.dsl-sidebar-button:active { background: var(--dsw-alias-bg-l1); }
 .dsl-sidebar h3 { margin: 0; font-size: 13px; font-weight: 500; line-height: 20px;
   color: var(--dsw-alias-label-primary); }
 .dsl-sidebar-head { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; }
 .dsl-sidebar-head > h3 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   text-wrap: nowrap; }
-.dsl-sidebar-head > button { margin: -5px -6px 0 0; }
+/* 一行三档（5 小时 / 每周 / 每月）：等宽三列，窄了自动折行。
+   每列只有「名称 / 剩余百分比 / 细条」三行 —— 完整读数在点开的面板里。 */
+.dsl-sidebar-windows { display: grid; grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
+  gap: 6px 8px; width: 100%; }
+.dsl-sidebar-window { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dsl-sidebar-window-label { font-size: 10px; line-height: 14px; color: var(--dsw-alias-label-tertiary);
+  overflow: hidden; text-overflow: ellipsis; text-wrap: nowrap; }
+.dsl-sidebar-window-value { font-size: 13px; line-height: 18px; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--dsw-alias-state-success-primary); }
+.dsl-sidebar-window[data-sidebar-window-level="error"] .dsl-sidebar-window-value {
+  color: var(--dsw-alias-state-error-primary); }
+.dsl-sidebar-window[data-sidebar-window-level="missing"] .dsl-sidebar-window-value,
+.dsl-sidebar-window[data-sidebar-window-level="unlimited"] .dsl-sidebar-window-value {
+  color: var(--dsw-alias-label-tertiary); font-weight: 400; }
+.dsl-sidebar-window-track { display: block; overflow: hidden; height: 4px; border-radius: 999px;
+  background: var(--dsw-alias-border-l1); }
 .dsl-sidebar-foot { display: flex; flex-direction: row; gap: 8px; }
 .dsl-sidebar-foot > button { flex: 1 1 auto; }
 .dsl-sidebar .dsl-empty { padding: 10px; font-size: 12px; line-height: 18px; }
@@ -696,6 +718,12 @@ export const CSS_CLASS = {
   quotaFill: "dsl-quota-fill",
   save: "dsl-save",
   sidebar: "dsl-sidebar",
+  sidebarButton: "dsl-sidebar-button",
+  sidebarWindows: "dsl-sidebar-windows",
+  sidebarWindow: "dsl-sidebar-window",
+  sidebarWindowLabel: "dsl-sidebar-window-label",
+  sidebarWindowValue: "dsl-sidebar-window-value",
+  sidebarWindowTrack: "dsl-sidebar-window-track",
   sidebarShell: "dsl-sidebar-shell",
   sidebarCompact: "dsl-sidebar-compact",
   sidebarHead: "dsl-sidebar-head",
