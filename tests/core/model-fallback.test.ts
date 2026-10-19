@@ -144,3 +144,56 @@ describe("思考强度回落", () => {
     expect(fallbackEffort(undefined, ["low", "high"])).toBe("high");
   });
 });
+
+describe("自动切换模型白名单", () => {
+  const current = { provider: "commandcode", model: "deepseek-v4.1-flash" };
+  const candidates = [
+    current,
+    { provider: "commandcode", model: "deepseek/deepseek-v4.1-flash" },
+    { provider: "opendesign", model: "deepseek-v4.1-flash" },
+  ];
+
+  it("名单为空 = 不限制（退回原来的候选）", () => {
+    const picked = pickFallbackModel(current, candidates, { allowCrossProvider: true, whitelist: [] });
+    expect(picked).toEqual({ provider: "commandcode", model: "deepseek/deepseek-v4.1-flash" });
+  });
+
+  it("名单非空时只收名单内的", () => {
+    const picked = pickFallbackModel(current, candidates, {
+      allowCrossProvider: true,
+      whitelist: ["opendesign-not-a-model"],
+    });
+    expect(picked).toBeUndefined();
+  });
+
+  it("名单命中时正常换过去", () => {
+    const picked = pickFallbackModel(current, candidates, {
+      allowCrossProvider: true,
+      whitelist: ["deepseek-v4.1-flash"],
+    });
+    // 同名（归一化后相等）且在白名单里 → 选中第一个合格候选。
+    expect(picked).toEqual({ provider: "commandcode", model: "deepseek/deepseek-v4.1-flash" });
+  });
+
+  it("白名单同样按归一化键比较（写法差异不影响）", () => {
+    // 用户填 `deepseek/deepseek-v4.1-flash`，候选是 `deepseek-v4.1-flash` —— 两者同键。
+    const picked = pickFallbackModel(
+      { provider: "opendesign", model: "deepseek-v4.1-flash" },
+      [
+        { provider: "opendesign", model: "deepseek-v4.1-flash" },
+        { provider: "commandcode", model: "deepseek-v4.1-flash" },
+      ],
+      { allowCrossProvider: true, whitelist: ["deepseek/deepseek-v4.1-flash"] },
+    );
+    expect(picked).toEqual({ provider: "commandcode", model: "deepseek-v4.1-flash" });
+  });
+
+  it("名单里的空串/空白被忽略（不会把候选全挡掉）", () => {
+    const picked = pickFallbackModel(current, candidates, {
+      allowCrossProvider: true,
+      whitelist: ["", "  "],
+    });
+    // 清洗后名单为空 → 视为不限制。
+    expect(picked).not.toBeUndefined();
+  });
+});

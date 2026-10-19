@@ -301,6 +301,20 @@ function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftFie
       },
     });
   }
+  if (spec.kind === "models") {
+    // 逗号分隔（全角逗号也认：中文输入法下很常见）。写库前清洗成字符串数组 ——
+    // 空串与纯空白一律丢弃，否则 `[""]` 会被当成「非空白名单」把候选全挡掉。
+    const current = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    const parse = (raw: string): string[] =>
+      [...new Set(raw.split(/[,，\n]/u).map((item) => item.trim()).filter((item) => item !== ""))];
+    return createElement("input", {
+      "data-field-input": spec.key,
+      type: "text",
+      value: current.join(", "),
+      placeholder: props.t("field.autoFallbackModels.placeholder"),
+      onChange: (event: { target?: { value?: string } }) => change(parse(event.target?.value ?? "")),
+    });
+  }
   return undefined;
 }
 

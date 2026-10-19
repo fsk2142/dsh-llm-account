@@ -148,6 +148,17 @@ export const Config: PluginConfigSchema = z.object(
     showSidebarQuota: z.boolean().default(false),
     /** 侧边栏额度卡片的刷新间隔（分钟）；缺省 1、下限 1、上限 120（与另两行同一档）。 */
     quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
+    /**
+     * **自动切换模型白名单**（用户 2026-10-19 要求）。
+     *
+     * 限额（或账号全部被拒）时自动换模型，**只在这个名单里挑**同名模型。
+     * 空数组 = 不限制（退回「用户模型选择器里开启的那些」）。
+     *
+     * 为什么要单独一个名单、而不直接用模型可见性：可见性决定「模型选择器里能选什么」，
+     * 而这里是「出错时自动换到哪」——两件事的意图不同。用户可能希望某个模型可以手动选，
+     * 但不愿它被自动切过去（例如贵很多的那个）。
+     */
+    autoFallbackModels: z.array(z.string()).default([]),
     /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */
     workspaceId: z.string().default(""),
     /** 推理网关基地址（Chat Completions）。 */
@@ -384,6 +395,12 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     usage: createUsagePort(),
     // 限额换模型（用户 2026-10-19）：候选来自跨厂商注册表（三家各自登记目录读口）。
     fallbackCandidates: () => modelCandidates(),
+    // 自动切换模型白名单（用户 2026-10-19）：每次现读设置，改完即时生效。
+    // 空数组 = 不限制（候选退回「模型选择器里开启的那些」）。
+    fallbackWhitelist: () => {
+      const declared = document()["autoFallbackModels"];
+      return Array.isArray(declared) ? declared.filter((item): item is string => typeof item === "string") : [];
+    },
   };
   const adapter = createOpenDesignAdapter(deps);
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。

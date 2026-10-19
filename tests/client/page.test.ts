@@ -174,6 +174,7 @@ it("字段列表按声明顺序展开，值来自草稿 → 基线 → 声明默
   expect(fields.map((field) => field.spec.key)).toEqual([
     "showSidebarQuota",
     "quotaRefreshMinutes",
+    "autoFallbackModels",
     "apiBase",
     "protocol",
     "requestTimeoutMs",

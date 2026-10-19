@@ -67,29 +67,46 @@ export interface FallbackCandidate {
 }
 
 /**
- * 挑一个替代模型：**同名、非官方、且不是刚失败的那一个**。
+ * 挑一个替代模型：**同名、非官方、在白名单里、且不是刚失败的那一个**。
  *
  * @param current - 刚失败的 (provider, model)。
  * @param candidates - 这台机器上可用的所有 (provider, model)，顺序即偏好顺序。
- * @param options - `excludeOfficial` 默认 `true`（用户明确要求排除官方）。
- * @returns 替代目标；没有同名候选时为 `undefined`（**不猜档位**）。
+ * @param options - 见下：
+ *   - `excludeOfficial` 默认 `true`（用户明确要求排除官方）；
+ *   - `allowCrossProvider` 默认 `false`（adapter 不能替别家发请求；上层编排才开）；
+ *   - `whitelist` 用户配置的「自动切换模型白名单」：**非空时只收名单内的**，
+ *     空或未给 = 不限制（退回候选原样）。
+ * @returns 替代目标；没有合格候选时为 `undefined`（**不猜档位**）。
  */
 export function pickFallbackModel(
   current: FallbackCandidate,
   candidates: readonly FallbackCandidate[],
-  options: { excludeOfficial?: boolean; allowCrossProvider?: boolean } = {},
+  options: {
+    excludeOfficial?: boolean;
+    allowCrossProvider?: boolean;
+    whitelist?: readonly string[];
+  } = {},
 ): FallbackCandidate | undefined {
   const excludeOfficial = options.excludeOfficial !== false;
   // 默认**只在同一 provider 内换**：adapter 无法替别的 provider 发请求（宿主的
   // `GenerateOptions.provider` 由路由决定），跨厂商换模型得由上层编排。
   const allowCrossProvider = options.allowCrossProvider === true;
+  // 白名单：非空时只在这些模型里挑。**用同一个 `modelKeyOf` 归一**，否则用户填
+  // `deepseek/deepseek-v4.1-flash` 而候选是 `deepseek-v4.1-flash` 就永远匹配不上 ——
+  // 那种「设置了却没效果」最难排查。
+  const allowed = new Set<number>();
+  const whitelist = (options.whitelist ?? []).filter((item) => typeof item === "string" && item.trim() !== "");
+  const whitelistKeys = new Set(whitelist.map((item) => modelKeyOf(item)));
   const wanted = modelKeyOf(current.model);
   if (wanted === "") return undefined;
+  void allowed;
   for (const candidate of candidates) {
     if (excludeOfficial && isOfficialProvider(candidate.provider)) continue;
     if (candidate.provider === current.provider && candidate.model === current.model) continue;
     if (!allowCrossProvider && candidate.provider !== current.provider) continue;
     if (modelKeyOf(candidate.model) !== wanted) continue;
+    // 白名单非空 → 只收名单内的（同样用归一化键比较）。
+    if (whitelistKeys.size > 0 && !whitelistKeys.has(modelKeyOf(candidate.model))) continue;
     return candidate;
   }
   return undefined;

@@ -20,7 +20,15 @@
 export type CardGroupId = "switch" | "privacy" | "integrations" | "advanced";
 
 /** 字段的控件种类（页面按它渲染，不认识的一律不渲染）。 */
-export type FieldKind = "boolean" | "text" | "number" | "select" | "duration";
+export type FieldKind = "boolean" | "text" | "number" | "select" | "duration" | "models";
+
+/**
+ * `models` 类型使用说明：一个**逗号分隔的模型 id 输入框**。
+ *
+ * 为什么不是勾选列表：页面拿不到模型目录（那是各厂商适配器的读口，容器没往下传），
+ * 而白名单的语义是「出错时允许自动换到哪些模型」——用户通常只填一两个名字，
+ * 手输比在一长串目录里翻找更快。写库前会清洗（去空白、丢空串、去重）。
+ */
 
 /**
  * 一个设置字段的声明。

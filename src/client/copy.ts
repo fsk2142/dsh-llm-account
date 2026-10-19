@@ -62,6 +62,9 @@ export type CopyKey =
   | "field.showSidebarQuota"
   | "field.showSidebarQuota.hint"
   | "field.quotaRefreshMinutes"
+  | "field.autoFallbackModels"
+  | "field.autoFallbackModels.hint"
+  | "field.autoFallbackModels.placeholder"
   | "field.quotaRefreshMinutes.hint"
   | "field.apiBase"
   | "field.apiBase.hint"
@@ -346,6 +349,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.showSidebarQuota": "侧边栏额度卡片",
     "field.showSidebarQuota.hint": "开启后侧边栏底部显示额度卡片；关闭时不发起任何后台用量查询。",
     "field.quotaRefreshMinutes": "用量刷新间隔（分钟）",
+    "field.autoFallbackModels": "自动切换模型白名单",
+    "field.autoFallbackModels.hint":
+      "账号限额时自动换模型，只在这个名单里挑同名模型；留空表示不限制（用模型选择器里开启的那些）。多个用逗号分隔。",
+    "field.autoFallbackModels.placeholder": "例如 deepseek-v4.1-flash, kimi-k3",
     "field.quotaRefreshMinutes.hint": "侧边栏卡片与设置页读取用量数据的间隔（设置页缓存也按它失效）；标签页隐藏时暂停刷新，连续失败会自动放慢。",
     "field.apiBase": "API 基地址",
     "field.apiBase.hint": "留空使用默认地址。",
@@ -625,6 +632,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.showSidebarQuota": "Sidebar quota card",
     "field.showSidebarQuota.hint": "Shows a quota card at the bottom of the sidebar; while off, no background usage request is made.",
     "field.quotaRefreshMinutes": "Usage refresh interval (minutes)",
+    "field.autoFallbackModels": "Auto-switch model whitelist",
+    "field.autoFallbackModels.hint":
+      "When an account hits its limit, only same-named models from this list are used; leave empty for no restriction (uses whatever is enabled in the model picker). Separate multiple entries with commas.",
+    "field.autoFallbackModels.placeholder": "e.g. deepseek-v4.1-flash, kimi-k3",
     "field.quotaRefreshMinutes.hint": "How often the sidebar card and the settings page read usage data (the settings cache expires on the same schedule); paused while the tab is hidden, and failures are slowed down automatically.",
     "field.apiBase": "API base URL",
     "field.apiBase.hint": "Leave blank for the default endpoint.",

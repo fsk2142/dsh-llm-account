@@ -166,6 +166,13 @@ export interface OpenDesignAdapterDeps {
    * 可以返回 promise：缓存缺失时要读一次目录才答得上来。只在限额失败后调用一次。
    */
   fallbackCandidates?: () => readonly ModelFallbackCandidate[] | undefined | Promise<readonly ModelFallbackCandidate[]>;
+  /**
+   * **自动切换模型白名单**（用户 2026-10-19 要求）。
+   *
+   * 非空时，限额换模型**只在这些模型里挑**；空/缺省 = 不限制。
+   * 与模型可见性的区别：那个决定「选择器里能选什么」，这个决定「出错时自动换到哪」。
+   */
+  fallbackWhitelist?: () => readonly string[];
   /** 真找到并换了模型时通知装配层（日志/遥测）。 */
   onModelFallback?: (from: { provider: string; model: string }, to: ModelFallbackCandidate) => void;
 }
@@ -700,7 +707,11 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       { provider: options.provider, model: options.model },
       candidates,
       // 允许跨厂商：执行层会转给目标家的 adapter（`delegateStream`）。
-      { allowCrossProvider: true },
+      {
+        allowCrossProvider: true,
+        // 白名单非空时只在这些模型里挑（用户配置；见 deps 的同名字段）。
+        whitelist: this.#deps.fallbackWhitelist?.() ?? [],
+      },
     );
     if (picked === undefined) return undefined;
     this.#deps.onModelFallback?.({ provider: options.provider, model: options.model }, picked);
