@@ -339,18 +339,23 @@ export interface ClientShell {
 let applyCountValue = 0;
 
 /**
- * Whether the one `settings.section` has been registered. Module-level, like the
- * registry: both profile rows share this module instance, so this guard is what
- * turns "two `apply` calls" into exactly one page.
+ * 已经注册过页面的**那个宿主上下文**。
+ *
+ * 为什么不是布尔值（这是 2026-10-19「刷新后设置页消失」的根因）：
+ * 布尔值一旦置位就永不复位，而宿主**刷新时会重新激活客户端包、复用同一个模块实例**。
+ * 于是第二次 `apply` 看到 `true` 直接 return —— 页面一条都没注册，界面上就是
+ * 「先能看、刷新就没了」。
+ *
+ * 用上下文对象做键才对得上真实语义：
+ * - 同一个 `ctx` 被两行复用 → 只注册一次（这正是当初要防的重复）；
+ * - 宿主换了新的 `ctx`（刷新 / 重新激活）→ 必须重新注册。
  */
-let pageRegistered = false;
+let pageOwner: object | undefined;
 
 /**
- * Whether the sidebar card and the centre-column panel have been registered.
- * Same module-level guard story as {@link pageRegistered}: one bundle, one
- * registration, shared by both rows.
+ * 已经注册过侧边栏卡片与中栏面板的**那个宿主上下文**（与 {@link pageOwner} 同一套理由）。
  */
-let sharedSurfacesRegistered = false;
+let sharedSurfacesOwner: object | undefined;
 
 /**
  * How many times the host called `apply` (assumption ② in
@@ -371,8 +376,8 @@ export function applyCount(): number {
  */
 export function resetShell(): void {
   applyCountValue = 0;
-  pageRegistered = false;
-  sharedSurfacesRegistered = false;
+  pageOwner = undefined;
+  sharedSurfacesOwner = undefined;
   resetRegistry();
 }
 
@@ -439,17 +444,20 @@ export function applyShell(rawContext: unknown, options: ApplyShellOptions = {})
 }
 
 /**
- * 只在第一次成功注册页面之后才置位守卫。
+ * 页面注册的守卫：**按宿主上下文判重**，成功之后才记下这个上下文。
  *
- * 为什么顺序要紧：守卫原来在注册**之前**就置位，一旦 `registerPage` 抛错，第二次
- * `apply`（另一行 / 插件重新激活）会直接 return —— 于是这次失败成为永久状态，
- * 表现为「设置页刷新一次就不见了」（2026-10-19 报障）。现在失败不置位，下一次还有机会。
+ * 两件事一起保证：
+ * - 同一个 `ctx`（两行共享）只注册一次，不会重复；
+ * - 换新 `ctx`（刷新 / 重新激活）会重新注册 —— 布尔守卫在这一步会让页面彻底消失；
+ * - 注册抛错不记下上下文，下一次还有机会。
+ * @param context - 这次激活的宿主上下文。
+ * @param options - 页面工厂与文案。
  */
 function registerPageOnce(context: ClientShell, options: ApplyShellOptions): void {
-  if (pageRegistered) return;
+  if (pageOwner === context) return;
   try {
     registerPage(context, options);
-    pageRegistered = true;
+    pageOwner = context;
   } catch (error) {
     // 与两个插槽注册同样的处置（旧插件在 `main`/`sidebar.footer.action` 上就是这么做的）：
     // 留一行错误继续走完 `apply` —— 后面的凭据注入与 applyCount 不该因为一次注册失败而丢掉。
@@ -457,13 +465,16 @@ function registerPageOnce(context: ClientShell, options: ApplyShellOptions): voi
   }
 }
 
-/** Check-and-set the shared-surfaces guard, then register them on the first pass only. */
-/** 侧边栏/面板的守卫也在**成功之后**才置位（失败留一次重试机会，与 `registerPageOnce` 同理）。 */
+/**
+ * 侧边栏卡片与中栏面板的守卫（与 {@link registerPageOnce} 同一套上下文判重）。
+ * @param context - 这次激活的宿主上下文。
+ * @param options - 注册工厂。
+ */
 function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOptions): void {
-  if (sharedSurfacesRegistered) return;
+  if (sharedSurfacesOwner === context) return;
   try {
     options.sharedSurfaces?.(context, context.locale.bind(PAGE_LOCALE_NS));
-    sharedSurfacesRegistered = true;
+    sharedSurfacesOwner = context;
   } catch (error) {
     // 与页面注册同样的处置：一次注册失败不该把整个客户端带走。
     console.error("[dsh-llm-account] could not register the sidebar card and the usage panel:", error);
