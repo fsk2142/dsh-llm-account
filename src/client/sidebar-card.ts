@@ -200,6 +200,15 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
     createElement(
       "div",
       { key: "windows", "data-sidebar-windows": "true", className: CSS_CLASS.sidebarWindows },
+      // 表头：把「中间那列是条、右边那列是重置时间」讲清楚，也让两行的对齐有参照物
+      // （用户 2026-10-19 给的版式：账号 / 用量周期 / 重置时间）。
+      createElement(
+        "div",
+        { key: "head", "data-sidebar-head": "true", className: CSS_CLASS.sidebarWindowsHead },
+        createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, t("sidebar.usagePeriod")),
+        createElement("span", null, ""),
+        createElement("span", { className: CSS_CLASS.sidebarWindowReset }, t("sidebar.resetTime")),
+      ),
       ...rows.map((window, index) =>
         createElement(
           "div",

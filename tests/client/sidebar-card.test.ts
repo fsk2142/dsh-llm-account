@@ -345,3 +345,32 @@ it("两条进度条共享同一套列宽（对齐：grid 定义在外层容器�
   );
   expect(rowsInContainer.map((element) => element.props["data-sidebar-row"])).toEqual(["primary", "secondary"]);
 });
+
+it("额度区有表头「用量周期 / 重置时间」（用户 2026-10-19 的版式）", () => {
+  const tree = renderCard(
+    statusOf({
+      effective: { ref: "a", at: 1 },
+      accounts: [
+        row("a", {
+          label: "A",
+          effective: true,
+          quota: {
+            windows: [
+              { key: "5h", percent: 20, resetAt: Date.now() + 3_600_000 },
+              { key: "weekly", percent: 50, resetAt: Date.now() + 86_400_000 },
+            ],
+            failures: [],
+          },
+        }),
+      ],
+    }),
+  );
+  const head = elementsOf(tree).find((element) => element.props["data-sidebar-head"] === "true");
+  expect(head).toBeDefined();
+  const texts = textsOf(head!).join(" ");
+  expect(texts).toContain("用量周期");
+  expect(texts).toContain("重置时间");
+  // 表头和数据行在**同一个** grid 容器里（否则列宽不共享，又会对不齐）。
+  const container = elementsOf(tree).find((element) => element.props["data-sidebar-windows"] === "true")!;
+  expect(elementsOf(container).some((element) => element.props["data-sidebar-head"] === "true")).toBe(true);
+});

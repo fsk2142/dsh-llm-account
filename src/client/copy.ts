@@ -179,6 +179,8 @@ export type CopyKey =
   | "quota.window.daily"
   | "quota.window.weekly"
   | "quota.window.monthly"
+  | "sidebar.usagePeriod"
+  | "sidebar.resetTime"
   | "quota.window.monthlyCredits"
   | "quota.window.plan"
   | "quota.window.unknown"
@@ -420,6 +422,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.window.daily": "每日",
     "quota.window.weekly": "每周",
     "quota.window.monthly": "每月",
+    "sidebar.usagePeriod": "用量周期",
+    "sidebar.resetTime": "重置时间",
     "quota.window.monthlyCredits": "月度额度",
     "quota.capOnly": "上限 {cap}",
     "usage.title": "用量",
@@ -703,6 +707,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.window.daily": "Daily",
     "quota.window.weekly": "Weekly",
     "quota.window.monthly": "Monthly",
+    "sidebar.usagePeriod": "Period",
+    "sidebar.resetTime": "Resets",
     "quota.window.monthlyCredits": "Monthly credits",
     "quota.capOnly": "Cap {cap}",
     "usage.title": "Usage",

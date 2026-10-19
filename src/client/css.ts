@@ -556,6 +556,12 @@ export const PAGE_CSS = `
 .dsl-sidebar-row-secondary { display: contents; }
 .dsl-sidebar-windows { display: grid; grid-template-columns: max-content minmax(40px, 1fr) max-content;
   align-items: center; gap: 6px 8px; width: 100%; min-width: 0; }
+/* 表头：「用量周期 / 重置时间」。字号更小、颜色更淡，读作标题而不是数据。
+ * 中间那格是空的（对应进度条列），这样三列与下面的数据行严格对齐。 */
+.dsl-sidebar-windows-head { display: contents; }
+.dsl-sidebar-windows-head > .dsl-sidebar-window-label,
+.dsl-sidebar-windows-head > .dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
+  font-weight: 500; color: var(--dsw-alias-label-tertiary); }
 .dsl-sidebar-window { display: contents; }
 .dsl-sidebar-window-head { display: contents; }
 .dsl-sidebar-window-label { font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary);
@@ -740,6 +746,7 @@ export const CSS_CLASS = {
   sidebar: "dsl-sidebar",
   sidebarButton: "dsl-sidebar-button",
   sidebarWindows: "dsl-sidebar-windows",
+  sidebarWindowsHead: "dsl-sidebar-windows-head",
   sidebarRowPrimary: "dsl-sidebar-row-primary",
   sidebarRowSecondary: "dsl-sidebar-row-secondary",
   sidebarWindow: "dsl-sidebar-window",
