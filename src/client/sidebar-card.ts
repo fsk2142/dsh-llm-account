@@ -172,55 +172,59 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
 }
 
 /**
- * 额度概览：**只显示 5 小时档 + 下次重置时间**（用户 2026-10-19 定稿）。
+ * 额度概览：**两行**，每行一条「标签 — 进度条 — 重置时间」（用户 2026-10-19 定稿）。
  *
- * 走过的弯路：先试过一行三档（5 小时 / 每周 / 每月并排），窄的时候档位名要截断、重置时间
- * 完全放不下；又试过两行（第一行 5 小时、第二行周+月）。用户最终确定只要**一档**：
- * 侧边栏是常驻的窄条，5 小时才是会被自动切换盯着的那个，其余档位去用量面板看。
+ * 第一行 5 小时档、第二行周档。为什么不并排：侧边栏只有两百多像素宽，并排后档位名要截断、
+ * 重置时间完全放不下；横排一行一条才塞得下这三样，而且和「还剩多少 + 什么时候恢复」的
+ * 阅读顺序一致。
  *
- * 找不到 5 小时档时（旧宿主只给无键窗口）退回「第一个能读的窗口」，别让整块空白。
+ * 缺少某一档时**不占位**（三家并不都有周窗口）；一档都没有时退回第一个能读的窗口，
+ * 别让整块空白。
  * @param props - 卡片属性。
  * @param row - 当前账号。
- * @returns 要追加的元素。
+ * @returns 要追加的行元素。
  */
 function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined): ReactNode[] {
   const { t } = props;
   const vendor = props.status?.vendor ?? "";
   const windows = row?.quota?.windows?.length ? row.quota.windows : fallbackQuotaWindows(vendor);
-  const primary = windowOfKind(windows, "five-hour") ?? windows.find((window) => window.unlimited !== true) ?? windows[0];
-  if (primary === undefined) return [];
-  return [
+  const fiveHour = windowOfKind(windows, "five-hour");
+  const week = windowOfKind(windows, "week");
+  const shown = [fiveHour, week].filter((item): item is QuotaWindow => item !== undefined);
+  // 一档都认不出来（旧宿主只给无键窗口）：用第一个能读的，不留空白。
+  const rows = shown.length > 0 ? shown : windows.filter((item) => item.unlimited !== true).slice(0, 1);
+  if (rows.length === 0) return [];
+  return rows.map((window, index) =>
     createElement(
       "div",
-      { key: "primary", "data-sidebar-row": "primary", className: CSS_CLASS.sidebarRowPrimary },
-      // `wide` = 档位名与重置时间同一行 + 下面「剩余百分比 + 细条」。
-      sidebarMeter(t, primary, "wide"),
+      {
+        key: window.key,
+        "data-sidebar-row": index === 0 ? "primary" : "secondary",
+        className: CSS_CLASS.sidebarRowPrimary,
+      },
+      sidebarMeter(t, window),
     ),
-  ];
+  );
 }
 /**
- * 一档窗口的一块读数。
+ * 一档窗口的一行读数：**标签 — 进度条 — 重置时间**（横向三样，用户 2026-10-19 定稿）。
  *
- * 两种密度：
- * - `wide`（第一行）：档位名 + 重置时间在一行，下面「剩余百分比 + 细条」；
- * - `compact`（第二行两列）：档位名、剩余百分比、细条三行，**不带重置时间** ——
- *   半行宽度放不下，而周/月的重置时间本来也不常看。
+ * 条的长度是两个读数的比值：左侧填色 = **剩余**比例（与 QuotaBar 同一口径），
+ * 所以「条越长越安全」。百分比数字不再单列一行 —— 条本身已经表达了比例，重置时间更重要。
  *
- * 剩余百分比沿用 {@link QuotaBar} 的口径（绿色 = 还剩多少）；**缺失显示破折号**，不是 0%。
+ * 缺失数据时的表现：条不填色、重置时间写「未知」，都不猜成 0。
  * @param t - 取词。
  * @param window - 该档窗口。
- * @param density - 版式密度。
- * @returns 一块元素。
+ * @returns 一行元素。
  */
-function sidebarMeter(t: (key: string) => string, window: QuotaWindow, density: "wide" | "compact"): ReactElement {
+function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactElement {
   const meter = quotaMeter(window);
   const remaining = meter === undefined ? undefined : Math.max(0, Math.min(100, 100 - meter.percent));
   // 「不限」是端点给的事实，与「读不到」不是一回事。
   const unlimited = window.unlimited === true;
   const reading = quotaReading(window);
-  const text = unlimited ? t("quota.unlimited") : remaining === undefined ? "—" : `${remaining}%`;
   const level = unlimited ? "unlimited" : remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
-  const reset = density === "wide" ? quotaResetText(t, window) : undefined;
+  const reset = quotaResetText(t, window) ?? t("quota.resetUnknown");
   const bar =
     meter === undefined || unlimited
       ? null
@@ -237,26 +241,24 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow, density: 
       "data-sidebar-window": window.key,
       "data-sidebar-window-shape": reading.shape,
       "data-sidebar-window-level": level,
-      "data-sidebar-density": density,
       className: CSS_CLASS.sidebarWindow,
     },
-    // 档位名 + （第一行才有的）重置时间。
+    createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
     createElement(
-      "div",
-      { className: CSS_CLASS.sidebarWindowHead },
-      createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
-      ...(reset === undefined
-        ? []
-        : [
-            createElement(
-              "small",
-              { key: "reset", "data-sidebar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.sidebarWindowReset },
-              reset,
-            ),
-          ]),
+      "span",
+      // aria-label 给读屏：条是纯视觉的，把「还剩多少」说出来。
+      {
+        "data-sidebar-track": window.key,
+        "aria-label": unlimited ? t("quota.unlimited") : remaining === undefined ? t("account.quotaMissing") : `${remaining}%`,
+        className: CSS_CLASS.sidebarWindowTrack,
+      },
+      bar,
     ),
-    createElement("span", { className: CSS_CLASS.sidebarWindowValue }, text),
-    createElement("span", { className: CSS_CLASS.sidebarWindowTrack }, bar),
+    createElement(
+      "small",
+      { "data-sidebar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.sidebarWindowReset },
+      reset,
+    ),
   );
 }
 

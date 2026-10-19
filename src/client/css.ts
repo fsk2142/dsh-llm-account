@@ -547,33 +547,28 @@ export const PAGE_CSS = `
 .dsl-sidebar-head { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; }
 .dsl-sidebar-head > h3 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   text-wrap: nowrap; }
-/* 两行额度（2026-10-19 用户定的版式）：
-   第一行 5 小时独占整行（带重置时间），第二行周 + 月并排两列。
-   并排三列时每档只剩五六十像素、档位名要截断、重置时间完全放不下，所以拆成两行。 */
+/* 额度行：**一条一行**，「标签 — 进度条 — 重置时间」横向三样（用户 2026-10-19 定稿）。
+ *
+ * 为什么不再并排：侧边栏只有两百多像素宽，并排后档位名要截断、重置时间完全放不下。
+ * 横排一条一行既塞得下三样，也贴合「还剩多少 + 什么时候恢复」的阅读顺序。 */
 .dsl-sidebar-row-primary { display: flex; flex-direction: row; width: 100%; }
-.dsl-sidebar-row-secondary { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  gap: 8px; width: 100%; }
-.dsl-sidebar-window { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.dsl-sidebar-window-head { display: flex; flex-direction: row; align-items: baseline;
-  justify-content: space-between; gap: 6px; min-width: 0; }
-.dsl-sidebar-window-label { font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-tertiary);
-  overflow: hidden; text-overflow: ellipsis; text-wrap: nowrap; }
-/* 重置时间：第一行才有（半行宽的周/月放不下，也不常看）。 */
-.dsl-sidebar-window-reset { flex: none; font-size: 10px; line-height: 14px;
+.dsl-sidebar-row-secondary { display: flex; flex-direction: row; width: 100%; }
+/* 三列：标签固定宽度（「5 小时」「每周」），条吃掉剩余空间，重置时间靠右不被压缩。 */
+.dsl-sidebar-window { display: grid; grid-template-columns: auto minmax(40px, 1fr) auto;
+  align-items: center; gap: 8px; width: 100%; min-width: 0; }
+.dsl-sidebar-window-head { display: contents; }
+.dsl-sidebar-window-label { font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary);
+  text-wrap: nowrap; }
+/* 重置时间：**两行都有**（用户要求第二行也显示）。等宽数字，短日期不抖。 */
+.dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
-.dsl-sidebar-window-value { font-size: 14px; line-height: 19px; font-weight: 600;
-  font-variant-numeric: tabular-nums; color: var(--dsw-alias-state-success-primary); }
-/* 第二行两列：数字小一档，好让两列看起来是一组。 */
-.dsl-sidebar-window[data-sidebar-density="compact"] .dsl-sidebar-window-value { font-size: 13px;
-  line-height: 18px; }
-.dsl-sidebar-window[data-sidebar-window-level="error"] .dsl-sidebar-window-value {
-  color: var(--dsw-alias-state-error-primary); }
-.dsl-sidebar-window[data-sidebar-window-level="missing"] .dsl-sidebar-window-value,
-.dsl-sidebar-window[data-sidebar-window-level="unlimited"] .dsl-sidebar-window-value {
-  color: var(--dsw-alias-label-tertiary); font-weight: 400; }
-.dsl-sidebar-window-track { display: block; overflow: hidden; height: 5px; border-radius: 999px;
-  background: var(--dsw-alias-border-l1); }
-.dsl-sidebar-window[data-sidebar-density="compact"] .dsl-sidebar-window-track { height: 4px; }
+/* 百分比数值不再单独一行：条已经表达了比例（见 sidebarMeter 的说明）。留着这条
+ * 规则是为了兼容旧的 data-sidebar-window-value（万一别处还渲染它）。 */
+.dsl-sidebar-window-value { display: none; }
+.dsl-sidebar-window[data-sidebar-window-level="error"] .dsl-sidebar-window-track {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, var(--dsw-alias-border-l1)); }
+.dsl-sidebar-window-track { display: block; overflow: hidden; height: 6px; border-radius: 999px;
+  background: var(--dsw-alias-border-l1); min-width: 0; }
 .dsl-sidebar-foot { display: flex; flex-direction: row; gap: 8px; }
 .dsl-sidebar-foot > button { flex: 1 1 auto; }
 .dsl-sidebar .dsl-empty { padding: 10px; font-size: 12px; line-height: 18px; }

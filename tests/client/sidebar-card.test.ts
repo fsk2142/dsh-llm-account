@@ -80,8 +80,9 @@ it("远程面把可省略字段序列化成 null 时也不崩（渲染路径抛�
   expect(textsOf(tree).join(" ")).not.toContain("null");
 });
 
-it("只显示 5 小时档 + 重置时间（用户 2026-10-19 定稿：第二行去掉）", () => {
-  const resetAt = new Date(2026, 9, 19, 20, 0, 0).getTime();
+it("两行额度：5 小时 + 每周，每行都是「标签 — 条 — 重置时间」", () => {
+  const fiveHourReset = new Date(2026, 9, 19, 20, 0, 0).getTime();
+  const weekReset = new Date(2026, 9, 25, 10, 0, 0).getTime();
   const tree = renderCard(
     statusOf({
       effective: { ref: "serving", at: 1_700_000_000_000 },
@@ -91,8 +92,8 @@ it("只显示 5 小时档 + 重置时间（用户 2026-10-19 定稿：第二行�
           effective: true,
           quota: {
             windows: [
-              { key: "5h", percent: 20, resetAt },
-              { key: "weekly", percent: 50 },
+              { key: "5h", percent: 20, resetAt: fiveHourReset },
+              { key: "weekly", percent: 50, resetAt: weekReset },
               { key: "monthly", used: 3, cap: 120, unit: "usd" },
             ],
             failures: [],
@@ -101,17 +102,21 @@ it("只显示 5 小时档 + 重置时间（用户 2026-10-19 定稿：第二行�
       ],
     }),
   );
-  // **只有一档**：5 小时。周/月不再出现在侧边栏（去用量面板看）。
+  // 只画两档：5 小时与每周。月度不在侧边栏（去用量面板看）。
   const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
-  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h"]);
-  // 带重置时间（用户要求「5 小时额度信息和下次重置时间」）。
-  expect(elementsOf(tree).some((element) => element.props["data-sidebar-reset"] !== undefined)).toBe(true);
-  // 不再有第二行。
-  expect(elementsOf(tree).some((element) => element.props["data-sidebar-row"] === "secondary")).toBe(false);
-  expect(textsOf(tree).join(" ")).toContain("5 小时");
-  expect(textsOf(tree).join(" ")).not.toContain("每周");
-  expect(textsOf(tree).join(" ")).not.toContain("每月");
+  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly"]);
+  // 每行都有条 + 重置时间（用户要求「5小时---进度条---重置时间」这种结构，第二行同样）。
+  for (const window of windows) {
+    expect(elementsOf(window).some((element) => element.props["data-sidebar-track"] !== undefined)).toBe(true);
+    expect(elementsOf(window).some((element) => element.props["data-sidebar-reset"] !== undefined)).toBe(true);
+  }
+  // 两行不再并排：第二行的标记是 secondary。
+  const rowsMarker = elementsOf(tree)
+    .map((element) => element.props["data-sidebar-row"])
+    .filter((value) => value !== undefined);
+  expect(rowsMarker).toEqual(["primary", "secondary"]);
 });
+
 
 it("整张卡片就是一个按钮：点它打开用量面板（不再有单独的按钮）", () => {
   const onOpen = vi.fn();
@@ -155,16 +160,18 @@ it("没有请求过时显示占位，而不是 0%", () => {
   expect(textsOf(noRequest).join(" ")).not.toMatch(/\b0\b/);
 });
 
-it("生效账号的额度字段缺失时不渲染成 0（与账户卡片同一条规则）", () => {
+it("额度字段缺失时不渲染成 0（条不填色、重置写未知）", () => {
   const tree = renderCard(
     statusOf({ effective: { ref: "a", at: 1 }, accounts: [row("a", { effective: true, quota: { windows: [{ key: "5h" }], failures: [] } })] }),
   );
   const window = elementsOf(tree).find((element) => element.props["data-sidebar-window"] === "5h")!;
   expect(window.props["data-sidebar-window-shape"]).toBe("missing");
-  // 侧边栏用的是紧凑列（名称 + 剩余百分比 + 细条），缺失时百分比是破折号而不是 0%。
-  expect(textsOf(window).join(" ")).toContain("—");
-  expect(textsOf(window).join(" ")).not.toMatch(/\b0%/);
+  // 缺失 ≠ 用光：条不填色（没有 fill 元素）。
+  expect(elementsOf(window).some((element) => element.props["data-quota-bar-fill"] !== undefined)).toBe(false);
+  // 重置时间写「未知」，不是空白也不是编造的时间。
+  expect(textsOf(window).join(" ")).toContain(dictionaryOf("zh")("quota.resetUnknown"));
 });
+
 
 it("点整张卡片就打开仪表盘（收起态的图标按钮也是同一个动作）", () => {
   const onOpen = vi.fn();
