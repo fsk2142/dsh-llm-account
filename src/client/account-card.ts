@@ -746,6 +746,10 @@ function loginSection(props: AccountCardProps): ReactNode[] {
     detail.push(
       createElement("p", { key: "reason", "data-login-reason": login.reason ?? "error", className: CSS_CLASS.failure }, reasonText(t, login.reason)),
     );
+    // 缺环境是**唯一**一种用户自己就能修好的失败：给出可执行的安装步骤，而不是一句
+    // 「请先安装」（用户 2026-10-20：「用户缺少环境的时候给出提示，如何快速安装环境」）。
+    const guide = velaInstallGuide(t, login.reason, props.onLoginBegin === undefined ? undefined : () => props.onLoginBegin());
+    if (guide !== null) detail.push(guide);
   }
   return [
     createElement("div", { key: "login-row", "data-login-panel": login?.state ?? "idle", className: CSS_CLASS.actions }, button),
@@ -764,6 +768,51 @@ export function reasonText(t: (key: string) => string, reason: string | undefine
   if (reason === undefined) return t("account.reason.error");
   const text = t(key);
   return text === key ? t("account.reason.error") : text;
+}
+
+/**
+ * `vela` 缺失时的**安装指引**块（只对这一种原因渲染，其余失败保持一句话）。
+ *
+ * 用户 2026-10-20：「opendesign 新增账户的时候如果使用网页登录，用户缺少环境的时候给出提示，
+ * 如何快速安装环境」。为什么值得单独做一块：
+ *
+ * - 这是**唯一**一种用户自己就能修好的登录失败（其余是网络/未批准/凭据问题，用户改不了）；
+ * - 「请先安装 vela」对普通用户等于没说 —— 他们不知道 vela 是什么、从哪来、装完怎么确认。
+ *   所以给三档可执行路径（装桌面端最省事 / 只装 CLI / 设 VELA_BIN），命令单独一行便于复制。
+ *
+ * @param t - 取词函数。
+ * @param reason - 登录失败原因键。
+ * @param onRetry - 「重试网页登录」的回调；缺省时不渲染那个按钮。
+ * @returns 指引块；原因不是 `vela-missing` 时为 `null`。
+ */
+export function velaInstallGuide(
+  t: (key: string) => string,
+  reason: string | undefined,
+  onRetry?: () => void,
+): ReactElement | null {
+  if (reason !== "vela-missing") return null;
+  return createElement(
+    "div",
+    { key: "vela-guide", "data-vela-guide": "true", className: CSS_CLASS.inset },
+    createElement("strong", { className: CSS_CLASS.velaGuideTitle }, t("account.vela.title")),
+    createElement("small", null, t("account.vela.step1")),
+    createElement("small", null, t("account.vela.step2")),
+    // 命令单独一块等宽块：整行可选中复制，比夹在一段话里更好用。
+    createElement("code", { "data-vela-command": "true", className: CSS_CLASS.mono }, t("account.vela.command")),
+    createElement("small", null, t("account.vela.step3")),
+    onRetry === undefined
+      ? null
+      : createElement(
+          "button",
+          {
+            type: "button",
+            "data-vela-retry": "true",
+            className: cls(CSS_CLASS.buttonSecondary, CSS_CLASS.buttonSm),
+            onClick: onRetry,
+          },
+          t("account.vela.retry"),
+        ),
+  );
 }
 
 /**

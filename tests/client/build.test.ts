@@ -148,6 +148,19 @@ describe("client bundle build", () => {
     expect(source).not.toMatch(/(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']\.{1,2}\//);
   });
 
+  it("真正渲染的登录失败指引进了产物（防「挂在没人走的路径上」）", () => {
+    // 2026-10-20 实测踩到的坑：把 vela 安装指引挂在 `AccountCard` 的 `loginSection` 里，
+    // 而账户面板实际走的是 `accounts-panel` 的 `loginNotes`（整组件不参与渲染）。
+    // 结果 —— 单测全绿、构建通过、产物里却没有那段代码，用户在界面上永远看不到。
+    //
+    // 这条护栏钉住「代码在产物里」，配合 `vela-install-guide.test.ts` 的
+    // 「面板里真的渲染出来」一起，才算把这条链焊死。
+    const source = readBundle(CLIENT_BUNDLE);
+    for (const marker of ["data-vela-guide", "data-vela-command", "data-vela-retry"]) {
+      expect(source, `${marker} 没有进产物 = 指引挂在了不会被渲染的路径上`).toContain(marker);
+    }
+  });
+
   it("客户端产物只引用宿主提供的模块（白名单之外的裸导入一律不许出现）", () => {
     // 这一条守的是「按值导入宿主/内核代码」这类回归：`src/client/usage-contract.ts` 从
     // `src/core/adapter.ts` 只做**类型**导入（`verbatimModuleSyntax` 会擦掉整条 import），一旦

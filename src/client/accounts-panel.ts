@@ -10,7 +10,7 @@
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
-import { accountAddSection, accountRows, reasonText, type AccountCardProps, type LoginView } from "./account-card";
+import { accountAddSection, accountRows, reasonText, velaInstallGuide, type AccountCardProps, type LoginView } from "./account-card";
 import { CSS_CLASS } from "./css";
 import { UsageClearButton, UsageExportButton } from "./failure-list";
 import { isHttpUrl } from "./login-window";
@@ -402,6 +402,13 @@ function loginNotes(props: AccountsPanelProps, vendor: string): ReactNode[] {
         reasonText(props.t, login.reason),
       ),
     );
+    // 缺 vela 是**唯一**一种用户能自己修好的登录失败：给出可执行的安装步骤。
+    //
+    // 必须挂在这里（`loginNotes`）而不是 `AccountCard` 的 `loginSection`：账户面板走的是
+    // `accountRows` + 本函数这条路，`AccountCard` 整组件并不参与渲染 —— 挂错了地方，
+    // 代码能通过全部单测，但用户永远看不到（本轮实测踩到）。
+    const guide = velaInstallGuide(props.t, login.reason, () => props.onLoginBegin?.(vendor));
+    if (guide !== null) notes.push(guide);
   }
   const error = props.loginError?.[vendor];
   if (error !== undefined) {

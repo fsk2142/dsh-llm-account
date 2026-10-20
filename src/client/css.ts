@@ -194,6 +194,19 @@ export const PAGE_CSS = `
 [data-secret-rows] { gap: 0; padding: 2px 10px; }
 [data-secret-rows] > small { font-size: 12px; line-height: 18px; }
 
+/* ═══ vela 缺失时的安装指引（只在这一种登录失败时出现） ═══
+ * 三档可执行路径 + 一行可复制的命令。刻意用内嵌面板（dsl-inset）而不是一句话：
+ * 用户 2026-10-20 要的是「如何快速安装环境」，不是「请先安装」。
+ */
+.dsl-vela-guide-title { font-size: 13px; line-height: 20px; font-weight: 600;
+  color: var(--dsw-alias-label-primary); }
+/* 命令块：等宽、可整行选中、允许横向滚动（命令不长，但别让它把卡片撑破）。 */
+.dsl-inset > code { display: block; box-sizing: border-box; max-width: 100%; padding: 6px 8px;
+  border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-mono); font-size: 12px; line-height: 18px;
+  overflow-x: auto; text-wrap: nowrap; user-select: all; }
+
 /* ═══ 开关（appearance:none 画出来的滑轨，比默认复选框更符合「开/关」语义） ═══ */
 .dsl-toggle { appearance: none; -webkit-appearance: none; position: relative; flex: none;
   box-sizing: border-box; width: 34px; height: 20px; margin: 0; padding: 0; border: none;
@@ -707,6 +720,8 @@ export const CSS_CLASS = {
   fieldText: "dsl-field-text",
   inline: "dsl-inline",
   inset: "dsl-inset",
+  /* vela 缺失时的安装指引块标题（2026-10-20）。 */
+  velaGuideTitle: "dsl-vela-guide-title",
   empty: "dsl-empty",
   note: "dsl-note",
   actions: "dsl-actions",
