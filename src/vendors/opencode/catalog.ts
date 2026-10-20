@@ -22,6 +22,7 @@ import { LlmError } from "@deepseek-ai/dsh-llm";
 import type { ModelModality } from "@deepseek-ai/dsh-llm";
 
 import type { CatalogEntry } from "../../core/adapter";
+import { assignUniqueNames } from "../../core/model-names";
 import {
   DEFAULT_API,
   DEFAULT_CATALOG_TTL_MS,
@@ -70,13 +71,16 @@ function inputModalitiesOf(value: unknown): readonly ModelModality[] {
  * 有效的行只需要非空 `id`（在线清单常常只给 id，名字与上限来自元数据）；`name` 缺省时
  * 退回 id。`contextWindow` / `maxTokens` 未公布时**不写**该字段，让「未公布」与
  * 「公布为 0」在数据上可区分。
+ *
+ * 展示名由 id 派生（`assignUniqueNames`），与另两家同一套规则；清单里的 `name` 不参与
+ * 展示（同一模型在三家网关写法不同，见 `core/model-names` 的说明）。
  * @param payload - 已解析的响应正文（形状不可信）。
  * @returns 可用条目与被忽略的行数。
  */
 export function parseModels(payload: unknown): CatalogParseResult {
   if (!isRecord(payload)) return { entries: [], ignored: 0 };
   const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
-  const entries: CatalogEntry[] = [];
+  const entries: Omit<CatalogEntry, "name">[] = [];
   let ignored = 0;
 
   for (const raw of rows) {
@@ -93,14 +97,17 @@ export function parseModels(payload: unknown): CatalogParseResult {
     const maxTokens = positiveNumber(raw.max_output_tokens ?? raw.maxTokens);
     entries.push({
       id,
-      name: stringValue(raw.name) ?? id,
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
       inputModalities: inputModalitiesOf(raw),
     });
   }
 
-  return { entries, ignored };
+  const names = assignUniqueNames(entries.map((entry) => entry.id));
+  return {
+    entries: entries.map((entry, index) => ({ ...entry, name: names[index] ?? entry.id })),
+    ignored,
+  };
 }
 
 /** models.dev 为一条模型给出的元数据（全部可选：缺失就是未知）。 */
@@ -280,14 +287,18 @@ export function createOpencodeCatalog(input: {
   const load = async (signal: AbortSignal | undefined): Promise<OpencodeCatalogRecord[]> => {
     const entries = await listing(signal);
     const metadataById = await metadata(signal);
-    const records = entries.map((entry): OpencodeCatalogRecord => {
+    // 展示名在**合并之后**统一派生：清单层派生的名字会被 models.dev 的 `name` 覆盖，
+    // 而元数据的名字写法与另两家不同（`DeepSeek V4.1 Flash` vs `DeepSeek-V4.1-Flash`）。
+    // 元数据只提供能力事实（上下文、输出、档位、模态、协议），名字一律走统一规则。
+    const names = assignUniqueNames(entries.map((entry) => entry.id));
+    const records = entries.map((entry, index): OpencodeCatalogRecord => {
       const meta = metadataById.get(entry.id);
       const contextWindow = meta?.contextWindow ?? entry.contextWindow;
       const maxTokens = meta?.maxTokens ?? entry.maxTokens;
       return {
         entry: {
           id: entry.id,
-          name: meta?.name ?? entry.name,
+          name: names[index] ?? entry.name,
           ...(contextWindow === undefined ? {} : { contextWindow }),
           ...(maxTokens === undefined ? {} : { maxTokens }),
           ...(meta?.efforts === undefined ? {} : { efforts: meta.efforts }),

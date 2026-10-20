@@ -24,6 +24,7 @@ import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelIn
 
 import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/model-fallback";
+import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
@@ -317,7 +318,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     return {
       provider,
       id: model,
-      name: entry?.name ?? model,
+      name: entry?.name ?? officialModelName(model),
       inputModalities: entry?.inputModalities ?? ["text"],
       ...(contextWindow === undefined ? {} : { context: { contextWindow } }),
       ...(maxTokens === undefined ? {} : { defaultMaxTokens: maxTokens }),
@@ -554,7 +555,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const model = buildPiModel(
       {
         id: options.model,
-        name: entry?.name ?? options.model,
+        name: entry?.name ?? officialModelName(options.model),
         api: record?.api ?? DEFAULT_API,
         ...(contextWindow === undefined ? {} : { contextWindow }),
         ...(modelLimit === undefined ? {} : { maxTokens: modelLimit }),

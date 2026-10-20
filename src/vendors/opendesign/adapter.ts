@@ -38,6 +38,7 @@ import type { AccountPort, AccountView, CatalogEntry, CatalogModel, CatalogModel
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/model-fallback";
+import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
 import { MAX_TRIED, RotationEngine } from "../../core/rotation";
@@ -343,7 +344,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     return {
       provider,
       id: model,
-      name: entry?.name ?? model,
+      name: entry?.name ?? officialModelName(model),
       inputModalities: entry?.inputModalities ?? ["text"],
       ...(entry?.contextWindow === undefined ? {} : { context: { contextWindow: entry.contextWindow } }),
       ...(entry?.maxTokens === undefined ? {} : { defaultMaxTokens: entry.maxTokens }),

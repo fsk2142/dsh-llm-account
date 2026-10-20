@@ -6,7 +6,8 @@
  * 用户最直接的体感（**账户接进来之后模型能不能用**），此前零覆盖。本文件把它补齐：
  * 1. `listModels`：打 `GET /models`（不带 Authorization），按可见性规则过滤；
  * 2. `catalogModels`：**不**过滤（隐藏的模型也要能回到勾选列表里）；
- * 3. `resolveModel`：目录声明的上下文/输出上限/档位/图片能力原样带出；目录不可用时退化成裸模型；
+ * 3. `resolveModel`：目录声明的上下文/输出上限/档位/图片能力原样带出；目录不可用时退化成裸模型
+ *    （名字仍走统一展示名，不是原始 id）；
  * 4. `stream` 正常链路：URL、Bearer、请求体（model/messages/stream/max_tokens）、chunk 顺序、
  *    usage 与 finish；
  * 5. `stream` 的档位闸门：**只有目录为这个模型声明过**才发 `reasoning_effort`；
@@ -245,10 +246,13 @@ it("resolveModel：目录拉不到时退化成裸模型，请求照旧能发出�
   const fetchImpl = scriptedFetch([() => Promise.reject(new Error("ECONNREFUSED")) as never]);
   const adapter = createOpenDesignAdapter(adapterDeps({ fetchImpl }));
 
+  // 名字仍然是**统一展示名**（不是原始 slug）：目录读不到是常态，而宿主的模型选择器用
+  // `resolveModel().name` 显示当前模型 —— 退回 slug 就与目录可用的那家写出两套名字
+  // （2026-10-20 报障「模型名称又不一致了」的第二条路径）。
   await expect(adapter.resolveModel("opendesign", "od-unknown")).resolves.toMatchObject({
     provider: "opendesign",
     id: "od-unknown",
-    name: "od-unknown",
+    name: "Od-Unknown",
     inputModalities: ["text"],
   });
 });

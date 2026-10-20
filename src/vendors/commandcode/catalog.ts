@@ -13,6 +13,7 @@
 import type { ModelModality } from "@deepseek-ai/dsh-llm";
 
 import type { CatalogEntry } from "../../core/adapter";
+import { assignUniqueNames } from "../../core/model-names";
 
 /** 一次目录解析的结果。 */
 export interface CatalogParseResult {
@@ -86,13 +87,17 @@ function effortsOf(row: Record<string, unknown>): readonly string[] {
  * 有效的行必须同时有非空 `id` 与非空 `name`（旧插件 `normalizeModel` 第 5218-5220 行
  * 的同一道门槛）；其余行计入 `ignored`。`contextWindow` / `maxTokens` 缺失时**不写**
  * 该字段，让「未公布」与「公布为 0」在数据上可区分。
+ *
+ * **展示名不用负载里的 `name`**：那份 name 带网关自己的标记（`DeepSeek V4.1 Flash (CC)`、
+ * `… (latest)`），与另两家的同一模型写法不同（2026-10-20 报障「模型名称又不一致了」）。
+ * name 只用来过上面那道门槛，展示名由 `assignUniqueNames` 统一从 id 派生。
  * @param payload - 已解析的响应正文（形状不可信）。
  * @returns 可用条目与被忽略的行数。
  */
 export function parseCatalog(payload: unknown): CatalogParseResult {
   if (!isRecord(payload)) return { entries: [], ignored: 0 };
   const rows = rowsOf(payload);
-  const entries: CatalogEntry[] = [];
+  const entries: Omit<CatalogEntry, "name">[] = [];
   let ignored = 0;
 
   for (const raw of rows) {
@@ -111,7 +116,6 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     const efforts = effortsOf(raw);
     entries.push({
       id,
-      name,
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
       ...(efforts.length === 0 ? {} : { efforts }),
@@ -119,5 +123,9 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     });
   }
 
-  return { entries, ignored };
+  const names = assignUniqueNames(entries.map((entry) => entry.id));
+  return {
+    entries: entries.map((entry, index) => ({ ...entry, name: names[index] ?? entry.id })),
+    ignored,
+  };
 }

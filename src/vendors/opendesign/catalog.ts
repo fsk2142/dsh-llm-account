@@ -13,7 +13,7 @@
 import type { ModelModality } from "@deepseek-ai/dsh-llm";
 
 import type { CatalogEntry } from "../../core/adapter";
-import { officialModelName } from "../../core/model-names";
+import { assignUniqueNames, officialModelName } from "../../core/model-names";
 
 /** 一次目录解析的结果。 */
 export interface CatalogParseResult {
@@ -88,13 +88,19 @@ function effortsOf(row: Record<string, unknown>): readonly string[] {
  * `{ id, object, created, owned_by }`），照搬另两家「缺 name 就忽略」会把整份目录丢光；
  * 缺 `name` 时按 `name = id` 收下，页面本来也是这么兜底的。
  * `contextWindow` / `maxTokens` 缺失时**不写**该字段，让「未公布」与「公布为 0」在数据上可区分。
+ *
+ * 展示名与另两家同一套：由 id 派生（{@link assignUniqueNames}）。负载给的 `name` 与 id
+ * 不同时仍然优先 —— 这家哪天开始公布真名就以它为准，那是更新的真相；但它必须与另两家
+ * 的写法一致才用得上（`name === id` 的回显照旧走规则）。
  * @param payload - 已解析的响应正文（形状不可信）。
  * @returns 可用条目与被忽略的行数。
  */
 export function parseCatalog(payload: unknown): CatalogParseResult {
   if (!isRecord(payload)) return { entries: [], ignored: 0 };
   const rows = rowsOf(payload);
-  const entries: CatalogEntry[] = [];
+  const entries: Omit<CatalogEntry, "name">[] = [];
+  /** 每行声明的 name（可能缺省）；与 id 相同视为「没公布」。 */
+  const declaredNames: (string | undefined)[] = [];
   let ignored = 0;
 
   for (const raw of rows) {
@@ -107,17 +113,13 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
       ignored += 1;
       continue;
     }
-    // 展示名：优先负载自己给的 `name`；没有（或只是把 id 回显一遍）时用官方名规则生成。
-    // OpenAI 形状的 `/v1/models` 通常**不带** name —— 直接用 id 会让同一张列表里这一家是
-    // 原始 slug、另两家是「Claude Sonnet 4.5」（用户报障：显示名称要统一成官方名）。
     const declared = stringValue(raw.name);
-    const name = declared !== undefined && declared !== id ? declared : officialModelName(id);
+    declaredNames.push(declared !== undefined && declared !== id ? declared : undefined);
     const contextWindow = positiveNumber(raw.context_length ?? raw.contextWindow);
     const maxTokens = positiveNumber(raw.max_output_tokens ?? raw.maxTokens ?? raw.publishedMaxTokens);
     const efforts = effortsOf(raw);
     entries.push({
       id,
-      name,
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
       ...(efforts.length === 0 ? {} : { efforts }),
@@ -125,5 +127,12 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     });
   }
 
-  return { entries, ignored };
+  const generated = assignUniqueNames(entries.map((entry) => entry.id));
+  return {
+    entries: entries.map((entry, index) => ({
+      ...entry,
+      name: declaredNames[index] ?? generated[index] ?? officialModelName(entry.id) ?? entry.id,
+    })),
+    ignored,
+  };
 }
