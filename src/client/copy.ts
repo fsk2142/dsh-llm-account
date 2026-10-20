@@ -104,6 +104,15 @@ export type CopyKey =
   | "search.secretNeedRef"
   | "search.keyConfigured"
   | "search.keyMissing"
+  /**
+   * 密钥实测（用户 2026-10-20：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话
+   * 就进行提示」+「或者多增加一个测试按钮，让用户可以自行测试密钥的有效性」）。
+   */
+  | "search.keyTest"
+  | "search.keyTesting"
+  | "search.keyOk"
+  | "search.keyInvalid"
+  | "search.keyUnknown"
   | "field.searchApiKeyEnv"
   | "field.searchApiKeyEnv.hint"
   | "card.display"
@@ -421,6 +430,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "search.secretNeedRef": "先在上面填一个凭据引用名，这里才能保存密钥。",
     "search.keyConfigured": "已添加",
     "search.keyMissing": "未添加",
+    "search.keyTest": "测试",
+    "search.keyTesting": "测试中…",
+    "search.keyOk": "可用",
+    "search.keyInvalid": "不可用",
+    "search.keyUnknown": "暂时无法验证",
     "card.display": "显示设置",
     "card.display.hint": "侧边栏额度卡片要不要显示、多久刷新一次。三家共用。",
     "card.switching": "切换设置",
@@ -723,6 +737,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "search.secretNeedRef": "Fill in a credential reference name above first, then you can save the key here.",
     "search.keyConfigured": "added",
     "search.keyMissing": "not added",
+    "search.keyTest": "Test",
+    "search.keyTesting": "Testing…",
+    "search.keyOk": "Works",
+    "search.keyInvalid": "Not working",
+    "search.keyUnknown": "Could not verify",
     "card.display": "Display",
     "card.display.hint": "Whether the sidebar quota card shows, and how often it refreshes. Shared by all vendors.",
     "card.switching": "Switching",

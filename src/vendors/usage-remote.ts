@@ -163,6 +163,14 @@ export interface UsageVendorDeps {
    * 缺省时 `credentialStatus` 如实回答「都没配」—— 不猜。
    */
   readonly credentials?: CredentialPort;
+  /**
+   * 搜索密钥实测：给一个引用名发一次**最小**搜索请求，回答它到底能不能用。
+   *
+   * 为什么放在宿主侧：密钥只在宿主侧解析（客户端从不接触明文），而「能不能用」只有真的
+   * 发一次请求才知道 —— 凭据库里有没有这把 key 与它是否有效是两件事。
+   * 缺省时 `probeSearchCredential` 如实回答 `unknown`（不谎称已验证）。
+   */
+  readonly probeSearchKey?: (ref: string) => Promise<{ state: "ok" | "invalid" | "unknown"; reason?: string }>;
   /** 设置文档里的全局顺序（`vendor:ref` 键；两家相同）。 */
   readonly accountOrder?: () => readonly string[];
   /** 把同一份全局顺序写进两家文档。 */
@@ -691,6 +699,40 @@ export class LlmAccountUsageService extends TypertRemoteService {
       throw new Error("dsh-llm-account: 凭据服务不可用，无法写入密钥（请在宿主的凭据页添加）");
     }
     await credentials.set(ref, secret);
+  }
+
+  /**
+   * 实测一组搜索密钥：每个引用名发一次**最小**请求，回答「能不能用」。
+   *
+   * 为什么必须真的发请求：凭据库里「有这把 key」与「这把 key 能用」是两件事 —— 2026-10-20
+   * 实测到用户把一段中文误存成密钥，`configured` 一直是 `true`，而搜索每次都在构造请求头时
+   * 就炸了。只有实测能让界面在**添加的那一刻**就把问题说出来。
+   *
+   * 三档语义见 `CredentialProbe`：网络类失败归 `unknown`，**绝不**据此说密钥无效。
+   * @param refs - 要实测的引用名。
+   * @returns 逐条结论（顺序与入参一致）。
+   */
+  async probeSearchCredential(refs: readonly string[]): Promise<{ ref: string; state: "ok" | "invalid" | "unknown"; reason?: string }[]> {
+    const probe = [...this.vendorDeps.values()][0]?.probeSearchKey;
+    if (probe === undefined) {
+      // 没实现实测（老装配）：如实说「没能判定」，界面据此只显示「已保存」。
+      return refs.map((ref) => ({ ref, state: "unknown" as const, reason: "这个版本不支持密钥实测" }));
+    }
+    const out: { ref: string; state: "ok" | "invalid" | "unknown"; reason?: string }[] = [];
+    for (const ref of refs) {
+      try {
+        const result = await probe(ref);
+        out.push(result.reason === undefined ? { ref, state: result.state } : { ref, state: result.state, reason: result.reason });
+      } catch (error) {
+        // 实测自己炸了（装配故障）：同样归 unknown —— 那是「没测出来」，不是「密钥无效」。
+        out.push({
+          ref,
+          state: "unknown",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return out;
   }
 
   /** 取一家厂商的读口；没登记过就吵出来（静默返回空结果会伪装成「没有账号」）。 */

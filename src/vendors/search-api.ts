@@ -96,6 +96,54 @@ function messageOf(payload: unknown): string | undefined {
 }
 
 /**
+ * 把一个实测失败**分档**：这把 key 是「确定不能用」还是「只是这次没测出来」。
+ *
+ * 为什么必须分开：只有 401/402/403 是服务端在**说这把密钥有问题**；网络错误、超时、5xx
+ * 都可能是此刻的抖动 —— 把它们报成「密钥无效」会让用户去换一把其实没问题的密钥，
+ * 而那正是最难自查的误导。
+ * @param error - 实测时捕获的错误。
+ * @returns `invalid`（确定不能用）或 `unknown`（没能判定）。
+ */
+export function probeVerdictOf(error: unknown): "invalid" | "unknown" {
+  const status = error instanceof SearchApiError ? error.status : undefined;
+  if (status === 401 || status === 402 || status === 403) return "invalid";
+  return "unknown";
+}
+
+/**
+ * 实测一把搜索密钥：发一次**最小**请求，回答它到底能不能用。
+ *
+ * 与正式搜索的区别只有两点，都是为了「小」：
+ * 1. `query` 固定成一个短词、`count: 1` —— 计费按请求次数，最小化请求即最小化开销；
+ * 2. **空结果算成功**（`ok`）：那说明鉴权与配额都通过了，只是这个词没搜到东西。
+ *    这正是「密钥能用」要证明的事，不该误报成不可用。
+ *
+ * 早期版本还会在本地先挡掉含非 ASCII 的密钥（那种值会在构造请求头时就抛
+ * `Cannot convert argument to a ByteString`），现在交给 `probeVerdictOf` 归到 `unknown`
+ * 之外的 `invalid` 更准确 —— 见下面的显式判断。
+ * @param input - 密钥与注入的 fetch。
+ * @returns 结论与可读原因。
+ */
+export async function probeSearchKey(input: {
+  key: string;
+  fetchImpl: typeof fetch;
+  signal?: AbortSignal;
+}): Promise<{ state: "ok" | "invalid" | "unknown"; reason?: string }> {
+  // 先做一次本地形状检查：非 ASCII 的值**不可能是** DeepSeek 密钥（粘贴错了），
+  // 而且它会让 fetch 在构造头时就抛一个对用户毫无意义的 ByteString 错误。
+  if (/[^\x20-\x7E]/.test(input.key)) {
+    return { state: "invalid", reason: "密钥里含非 ASCII 字符（多半是粘贴错了，把中文或空格存进来了）" };
+  }
+  try {
+    await searchViaApi({ query: "deepseek", key: input.key, maxResults: 1, fetchImpl: input.fetchImpl, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+    return { state: "ok" };
+  } catch (error) {
+    const state = probeVerdictOf(error);
+    return { state, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * 发一次 Search API 请求。
  * @param input - 查询、密钥与注入的 fetch。
  * @returns 来源列表（可能为空 —— 空结果是合法结果）。

@@ -48,6 +48,10 @@ export interface FakeHost {
   credentialStatusCalls: string[][];
   /** 让下一次 `setCredential` 被宿主拒绝（凭据服务报错）。 */
   failCredentialOnce: string | undefined;
+  /** 每次实测被问到的引用名（断言「加完自动测了一次」）。 */
+  probeCalls: string[][];
+  /** 各引用名的实测结论（缺省 `ok`）。 */
+  probeVerdicts: Record<string, { state: "ok" | "invalid" | "unknown"; reason?: string }>;
   /**
    * 下一次/后续 `models()` 要带的失败项（空 = 正常）。可随时改写：
    * 「加账号前目录读不到、加账号后读到」这条链要靠它复现（失败的读数不进缓存）。
@@ -171,6 +175,8 @@ export function fakeHost(
     credentialWrites: [],
     credentialStatusCalls: [],
     failCredentialOnce: undefined,
+    probeCalls: [],
+    probeVerdicts: {},
     conflictOnce: options.conflictOnce ?? false,
     failOnce: undefined,
     ctx: {},
@@ -273,6 +279,18 @@ export function fakeHost(
             }
             host.credentials.add(ref);
             return mini.track(undefined);
+          },
+          /** 密钥实测：按 `host.probeVerdicts` 回答（缺省一律 `ok`）。 */
+          probeSearchCredential: (refs: readonly string[]): Promise<unknown> => {
+            host.probeCalls.push([...refs]);
+            return mini.track(
+              refs.map((ref) => {
+                const verdict = host.probeVerdicts[ref] ?? { state: "ok" as const };
+                return verdict.reason === undefined
+                  ? { ref, state: verdict.state }
+                  : { ref, state: verdict.state, reason: verdict.reason };
+              }),
+            );
           },
         }),
   });

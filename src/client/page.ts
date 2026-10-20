@@ -16,6 +16,7 @@ import { ChevronIcon, RemoveIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, specOf, type DraftField, type PageState } from "./page-state";
 import { parseSecretRefs, summarizeKeyStatus, validateSecretInput } from "../core/switching/search-keys";
 import { savesImmediately } from "./registry";
+import type { CredentialProbe } from "./usage-contract";
 import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
@@ -77,6 +78,17 @@ export interface PageShellProps {
   onSaveSecret?: (ref: string, secret: string) => Promise<string | undefined>;
   /** 删除一把已添加的密钥（列表每行的 ×）。 */
   onRemoveSecret?: (ref: string) => void;
+  /**
+   * 测试一把密钥能不能用（每行的「测试」按钮）。
+   *
+   * 用户 2026-10-20：「或者多增加一个测试按钮，让用户可以自行测试密钥的有效性」。
+   * 缺省时按钮不渲染（老宿主没有实测通道 —— 不留一个点了没反应的死按钮）。
+   */
+  onTestSecret?: (ref: string) => void;
+  /** 各把密钥的实测结论（`ref → 结论`）；没测过的不在里面。 */
+  keyProbes?: Readonly<Record<string, CredentialProbe>>;
+  /** 正在测试哪一把（按钮禁用 + 换文案）。 */
+  keyProbing?: string;
   /** 正在写密钥（按钮禁用 + 换文案）。 */
   secretSaving?: boolean;
   /** 密码框的当前值（受控：页面是纯函数，草稿由容器持有）。 */
@@ -439,6 +451,10 @@ function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): 
         ]
       : refs.map((ref) => {
           const configured = props.credentialStatus?.[ref];
+          // 实测结论（`undefined` = 还没测过）：用户 2026-10-20 要求「添加后就验证一次」+
+          // 「多一个测试按钮让他自己测」。三档都显示出来 —— `unknown` 不能说成「不可用」。
+          const probe = props.keyProbes?.[ref];
+          const probing = props.keyProbing === ref;
           return createElement(
             "div",
             {
@@ -465,7 +481,38 @@ function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): 
                     },
                     configured ? t("search.keyConfigured") : t("search.keyMissing"),
                   ),
+              probe === undefined
+                ? null
+                : createElement(
+                    "small",
+                    {
+                      key: "probe",
+                      "data-secret-probe": probe.state,
+                      // 宿主给的原因挂在 data 属性上：界面上是短标签，排查时能拿到原文。
+                      ...(probe.reason === undefined ? {} : { "data-secret-probe-reason": probe.reason }),
+                      className: probe.state === "ok" ? CSS_CLASS.mark : CSS_CLASS.failure,
+                    },
+                    probe.state === "ok"
+                      ? t("search.keyOk")
+                      : probe.state === "invalid"
+                        ? t("search.keyInvalid")
+                        : t("search.keyUnknown"),
+                  ),
             ),
+            // 测试按钮：随时自己验一次（添加时会自动验，这个按钮是「再验一次」与「排查」用）。
+            props.onTestSecret === undefined
+              ? null
+              : createElement(
+                  "button",
+                  {
+                    type: "button",
+                    "data-secret-test": ref,
+                    className: CSS_CLASS.buttonSm,
+                    disabled: probing,
+                    onClick: () => props.onTestSecret?.(ref),
+                  },
+                  probing ? t("search.keyTesting") : t("search.keyTest"),
+                ),
             createElement(
               "button",
               {

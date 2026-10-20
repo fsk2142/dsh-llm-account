@@ -54,7 +54,7 @@ import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/sea
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import { savesImmediately, type VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type CredentialProbe, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
 import { AccountUsageBlock } from "./usage-card";
 
 /**
@@ -1520,6 +1520,15 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [secretSaving, setSecretSaving] = useState(false);
     const [secretError, setSecretError] = useState<string | undefined>(undefined);
     /**
+     * 密钥实测结论（`ref → 结论`）与正在测试的那一把。
+     *
+     * 用户 2026-10-20：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话就进行提示」
+     * +「多增加一个测试按钮，让用户可以自行测试密钥的有效性」。
+     * 结论**只在真的测过之后**存在：没测过就是 `undefined`，界面不给任何暗示。
+     */
+    const [keyProbes, setKeyProbes] = useState<Record<string, CredentialProbe>>({});
+    const [keyProbing, setKeyProbing] = useState<string | undefined>(undefined);
+    /**
      * 定时重读计数：设置页会开着好一会儿，30 秒一次让数字跟上。
      *
      * 为什么不是「请求完成就刷新」：客户端没有可订阅的回合结束事件（宿主的
@@ -1837,6 +1846,39 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
     // 统计**全在账号下面**（用户 2026-10-19：「只在每个账号下面统计本身的用量」）：
     // 页面上不再有跨账号的用量卡片，所以这里不再往 `PageShell` 传 `usage`。
+    /**
+     * 测试一把密钥能不能用（添加后自动调一次；「测试」按钮也调它）。
+     *
+     * 三档结论直接来自宿主（`probeSearchCredential`）：`ok` / `invalid` / `unknown`。
+     * **`unknown` 绝不当成失败**：网络抖动不该让用户去换一把其实没问题的密钥。
+     * 失败本身不抛：结论进 `keyProbes`，界面上就是那一行的小标签。
+     * @param ref - 凭据引用名。
+     */
+    const testSecret = async (ref: string): Promise<void> => {
+      const probe = usage?.probeSearchCredential;
+      if (probe === undefined) return; // 老宿主：没有实测通道，界面也不渲染按钮
+      setKeyProbing(ref);
+      try {
+        const result = unwrapRemote(await callRemote(() => probe([ref])));
+        const verdict = (result.ok ? (result.value as CredentialProbe[] | undefined)?.[0] : undefined);
+        setKeyProbes((probes) => ({
+          ...probes,
+          [ref]:
+            verdict === undefined
+              ? // 调用失败（装配故障/信封是失败）：同样只是「没测出来」。
+                { ref, state: "unknown", reason: result.ok ? "宿主没有返回结论" : result.error }
+              : verdict,
+        }));
+      } catch (error) {
+        setKeyProbes((probes) => ({
+          ...probes,
+          [ref]: { ref, state: "unknown", reason: error instanceof Error ? error.message : String(error) },
+        }));
+      } finally {
+        setKeyProbing((current) => (current === ref ? undefined : current));
+      }
+    };
+
     return PageShell({
       state,
       // 页面外壳要**完整**列表：它按 `activeNs` 找 entry 渲染字段，功能页也在其中
@@ -1904,6 +1946,10 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                 // 这里走 `saveOneField`：它不依赖输入类字段的「卡片保存按钮」那条路。
                 await saveOneField(FEATURE_TAB_NS, "searchApiKeyRefs", [...existing, ref]);
                 setState((current) => ({ ...current, credentialRevision: current.credentialRevision + 1 }));
+                // **加完立刻验一次**（用户 2026-10-20：「添加了 key 后就发起一次小请求验证一下
+                // 是否可用，不可用的话就进行提示」）。这样「存进去了但用不了」当场可见，
+                // 而不是等到某次搜索失败才发现。
+                void testSecret(ref);
                 return undefined;
               } catch (error) {
                 return error instanceof Error ? error.message : String(error);
@@ -1911,9 +1957,19 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                 setSecretSaving(false);
               }
             },
+      ...(usage?.probeSearchCredential === undefined ? {} : { onTestSecret: (ref: string) => void testSecret(ref) }),
+      ...(Object.keys(keyProbes).length === 0 ? {} : { keyProbes }),
+      ...(keyProbing === undefined ? {} : { keyProbing }),
       onRemoveSecret: (ref: string) => {
         // 从**草稿**里算：刚添加、还没被 `adopt` 吸收的那一条也在草稿里（读快照会漏掉它）。
         const current = currentKeyRefsOf();
+        // 删掉的同时清掉它的实测结论：那条记录描述的是已经不存在的密钥。
+        setKeyProbes((probes) => {
+          if (probes[ref] === undefined) return probes;
+          const next = { ...probes };
+          delete next[ref];
+          return next;
+        });
         void saveOneField(
           FEATURE_TAB_NS,
           "searchApiKeyRefs",

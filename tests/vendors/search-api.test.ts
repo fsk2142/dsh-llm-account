@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { searchViaApi, SEARCH_API_PATH } from "../../src/vendors/search-api";
+import { probeSearchKey, searchViaApi, SEARCH_API_PATH } from "../../src/vendors/search-api";
 
 /** 一份成功的响应。 */
 function okResponse() {
@@ -135,5 +135,59 @@ describe("失败原因要能区分", () => {
   it("把服务端给的 message 带进错误（不吞掉诊断信息）", async () => {
     const { impl } = fakeFetch({ error: { message: "'count' must be between 1 and 50" } }, 400);
     await expect(searchViaApi({ query: "q", key: "sk", fetchImpl: impl })).rejects.toThrow(/count/);
+  });
+});
+
+describe("密钥实测：分档决定界面上说什么", () => {
+  it("200 → ok（哪怕一条结果都没有，也说明鉴权与配额都通过了）", async () => {
+    const { impl } = fakeFetch({ results: [] });
+    await expect(probeSearchKey({ key: "sk-ok", fetchImpl: impl })).resolves.toEqual({ state: "ok" });
+  });
+
+  it("401/402/403 → invalid（服务端明确说这把密钥不行）", async () => {
+    for (const status of [401, 402, 403]) {
+      const { impl } = fakeFetch({ error: { message: "nope" } }, status);
+      const result = await probeSearchKey({ key: "sk-x", fetchImpl: impl });
+      expect(result.state, `HTTP ${status}`).toBe("invalid");
+      expect(result.reason).toBeDefined();
+    }
+  });
+
+  it("429 / 5xx → unknown（那不是密钥的问题，不能让人去换一把好密钥）", async () => {
+    for (const status of [429, 500, 503]) {
+      const { impl } = fakeFetch({ error: { message: "later" } }, status);
+      const result = await probeSearchKey({ key: "sk-x", fetchImpl: impl });
+      expect(result.state, `HTTP ${status}`).toBe("unknown");
+    }
+  });
+
+  it("网络层抛错 → unknown", async () => {
+    const impl = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    const result = await probeSearchKey({ key: "sk-x", fetchImpl: impl });
+    expect(result.state).toBe("unknown");
+    expect(result.reason).toContain("fetch failed");
+  });
+
+  it("**含非 ASCII 的密钥 → invalid，且根本不发请求**", async () => {
+    // 2026-10-20 真机数据：用户把一段中文误存成 DEEPSEEK_API_KEY，`configured` 一直是 true，
+    // 而每次搜索都在构造请求头时就抛 ByteString 错误。实测必须当场说清楚。
+    let called = 0;
+    const impl = (async () => {
+      called += 1;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await probeSearchKey({ key: "继续全力修补", fetchImpl: impl });
+    expect(result.state).toBe("invalid");
+    expect(result.reason).toContain("非 ASCII");
+    expect(called, "本地就能判定的错误不该发请求（也不花钱）").toBe(0);
+  });
+
+  it("实测请求是最小的一次（count: 1），计费按请求次数所以必须小", async () => {
+    const { impl, calls } = fakeFetch({ results: [] });
+    await probeSearchKey({ key: "sk-ok", fetchImpl: impl });
+    const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+    expect(body.count).toBe(1);
   });
 });

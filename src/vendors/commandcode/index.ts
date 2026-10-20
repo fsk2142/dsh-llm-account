@@ -65,6 +65,7 @@ import { applyUsageRemote } from "../usage-remote";
 import { applyAutoContinue } from "../auto-continue";
 import { applySearch } from "../search";
 import { registerSearchProvider } from "../search-provider";
+import { probeSearchKey } from "../search-api";
 import { normalizeSearchKeyRefs } from "../../core/switching/search-keys";
 import { createUsagePort } from "../usage-store";
 import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
@@ -436,6 +437,15 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   applyUsageRemote(ctx, {
     vendor: PROVIDER_ID,
     credentials,
+    // 密钥实测（搜索卡「测试」按钮 + 添加后自动验一次）。与 provider 共用同一份实现，
+    // 保证「测试说的」与「搜索实际用的」永远一致。
+    probeSearchKey: async (ref) => {
+      const key = await credentials.resolve(ref);
+      if (key === undefined) {
+        return { state: "invalid" as const, reason: "凭据库里找不到这把密钥（可能已被删除）" };
+      }
+      return await probeSearchKey({ key, fetchImpl: fetch });
+    },
     rotation,
     accounts,
     quota,

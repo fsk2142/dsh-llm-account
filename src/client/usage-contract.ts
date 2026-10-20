@@ -87,6 +87,8 @@ export const USAGE_METHODS = [
   // 凭据状态（只回布尔，不回密钥）
   "credentialStatus",
   "setCredential",
+  // 密钥实测（真的发一次最小请求，回答「能不能用」）
+  "probeSearchCredential",
 ] as const;
 
 /** 一个方法名。 */
@@ -432,6 +434,51 @@ function parseCredentialStatus(endpoint: string, value: unknown): { ref: string;
     if (typeof ref !== "string" || ref === "") continue;
     if (typeof configured !== "boolean") continue;
     out.push({ ref, configured });
+  }
+  return out;
+}
+
+/**
+ * 一次「密钥实测」的结论。
+ *
+ * 三档而不是两档，因为**「测不出来」和「密钥无效」是两件完全不同的事**：
+ * - `ok`：真的拿到结果了；
+ * - `invalid`：服务端明确拒绝（401 无效 / 402 余额不足 / 403 被封）—— 这把 key 不能用；
+ * - `unknown`：**没能判定**（网络不通、超时、5xx）—— 不能因此告诉用户「你的 key 是错的」，
+ *   那会让人去换一把其实没问题的密钥。界面对这一档只提示「暂时无法验证」。
+ */
+export type CredentialProbeState = "ok" | "invalid" | "unknown";
+
+/** 密钥实测的结果（宿主 → 界面）。**绝不含密钥本身。** */
+export interface CredentialProbe {
+  ref: string;
+  state: CredentialProbeState;
+  /** 人话原因；`ok` 时为空。 */
+  reason?: string;
+}
+
+/**
+ * 校验「密钥实测」的结果。
+ *
+ * 形状不可信：缺 `state`、出现三档之外的值、`ref` 为空，一律丢掉 —— 界面宁可什么都不显示，
+ * 也不能把一个猜出来的结论当成事实呈现（这条与全项目「不猜」的纪律一致）。
+ * @param endpoint - 调用点。
+ * @param value - 线上值。
+ * @returns 合格的结果列表（可能为空）。
+ */
+function parseCredentialProbes(endpoint: string, value: unknown): CredentialProbe[] {
+  if (!Array.isArray(value)) {
+    throw boundaryError(endpoint, `expected an array of credential probes, got ${describeValue(value)}`);
+  }
+  const out: CredentialProbe[] = [];
+  for (const row of value) {
+    if (!isRecord(row)) continue;
+    const ref = row.ref;
+    const state = row.state;
+    if (typeof ref !== "string" || ref === "") continue;
+    if (state !== "ok" && state !== "invalid" && state !== "unknown") continue;
+    const reason = typeof row.reason === "string" && row.reason !== "" ? row.reason : undefined;
+    out.push(reason === undefined ? { ref, state } : { ref, state, reason });
   }
   return out;
 }
@@ -817,6 +864,10 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("credentialStatus", "CredentialStatusList", parseCredentialStatus, [REFS_PARAM]),
     // 写入一把密钥：搜索设置卡里的「保存密钥」走这条（与账号卡片「更换密钥」同一条路径）。
     makeDescriptor("setCredential", "Void", parseVoid, [REF_PARAM, SECRET_PARAM]),
+    // 密钥实测：加完立刻发一次最小搜索请求，把「能不能用」当场告诉用户。
+    // 用户 2026-10-20：「添加了key后就发起一次小请求验证一下是否可用，不可用的话就进行提示」。
+    // 只回结论与原因，**绝不回密钥**。
+    makeDescriptor("probeSearchCredential", "CredentialProbes", parseCredentialProbes, [REFS_PARAM]),
   ];
 }
 
@@ -859,6 +910,13 @@ export interface UsageNamespace {
    * 返回 `unknown`：真实值是信封，必须 `unwrapRemote`。
    */
   setCredential?(ref: string, secret: string): Promise<unknown>;
+  /**
+   * 实测一组搜索密钥能不能用（每个引用名发一次最小请求）。
+   *
+   * 可选：老宿主没实现时界面跳过验证 —— 那种情况只显示「已保存」，不谎称已验证。
+   * 返回 `unknown`：真实值是信封，必须 `unwrapRemote`。
+   */
+  probeSearchCredential?(refs: readonly string[]): Promise<unknown>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   models?(vendor: string): Promise<CatalogModelsResult>;

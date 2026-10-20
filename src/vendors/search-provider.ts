@@ -26,7 +26,6 @@
  */
 
 import { chooseSearchRoute, isSearchDisabled, type SearchRoute } from "../core/switching/search-route";
-import { pickWorkingKey } from "../core/switching/search-keys";
 import { SearchApiError, searchViaApi } from "./search-api";
 
 /** 本 provider 的稳定 id（宿主注册表的键）。 */
@@ -134,6 +133,64 @@ export class SearchUnavailableError extends Error {
 }
 
 /**
+ * 这个策略失败后**允许**回退到另一条路吗。
+ *
+ * 与 `chooseSearchRoute` 里的语义严格对齐：`*-first` 是「优先但可回退」，`*-only` 与 `off`
+ * 是「不许偷偷换路」（用户明确要求只用某一条，换过去会违背他的意图 —— 也可能烧他的余额）。
+ * @param strategy - 设置文档里的策略值。
+ * @returns 失败后是否还可以试另一条路。
+ */
+export function strategyCanFallBack(strategy: unknown): boolean {
+  if (typeof strategy !== "string") return true; // 形状不可信时按缺省的 gateway-first 语义
+  const value = strategy.trim().toLowerCase();
+  return value.endsWith("-first") || value === "";
+}
+
+/** 一次 API 路的尝试结局。 */
+type ApiAttempt =
+  | { kind: "ok"; sources: SearchSource[] }
+  | { kind: "failed"; reason: string };
+
+/**
+ * 用一组 key 依次尝试 Search API（多 key 轮替）。
+ *
+ * 与旧实现的差别：旧版只在「HTTP 401/402」时换下一把，而没有状态码的失败（请求根本没发出去）
+ * 直接终止 —— 实测最典型的就是密钥里混进中文导致的 `ByteString` 错误。那把 key 永远用不了，
+ * 但**别的 key 可能是好的**，所以现在也换。
+ * 每一把的失败原因都会累积进最终消息，用户不必靠猜。
+ * @param apiKeys - 按优先级排列的 key。
+ * @param request - 搜索请求。
+ * @param signal - 取消信号。
+ * @returns 成功的结果或失败原因。
+ */
+async function searchWithApiKeys(
+  apiKeys: readonly { ref: string; key: string }[],
+  request: SearchRequest,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal | undefined,
+): Promise<ApiAttempt> {
+  const reasons: string[] = [];
+  for (const item of apiKeys) {
+    try {
+      const result = await searchViaApi({
+        query: request.query,
+        key: item.key,
+        ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
+        fetchImpl,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return { kind: "ok", sources: result.sources };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      reasons.push(`${item.ref}: ${message}`);
+      // 换了也没用的失败（限流/服务端/参数错）：立刻停止，不折腾剩下的 key。
+      if (!worthAnotherKey(error)) break;
+    }
+  }
+  return { kind: "failed", reason: `搜索失败（已尝试 ${reasons.length} 个密钥）—— ${reasons.join("；")}` };
+}
+
+/**
  * 把一个 provider 注册进宿主的 `ctx.web`，并返回注销函数。
  *
  * 宿主的 `registerSearchProvider` 返回它自己的 disposer（随调用方 fiber 释放）；
@@ -160,6 +217,28 @@ export function registerSearchProvider(
  */
 function statusOf(error: unknown): number | undefined {
   return error instanceof SearchApiError ? error.status : undefined;
+}
+
+/**
+ * 这个失败是否「换一把 key 就有可能好」。
+ *
+ * 三类都属于：
+ * 1. **401/402**：这把 key 无效或余额不足（原本就有的判定）；
+ * 2. **压根没发出请求**（没有状态码）：实测最典型的是密钥里混进了中文 —— fetch 在构造请求头时
+ *    就抛 `Cannot convert argument to a ByteString`。这把 key 永远用不了，但**别的 key 可能好好
+ *    的**，所以必须换下一条；
+ * 3. **429/5xx**：按厂商限流/服务端错误，换了也一样 —— **不换**。
+ *
+ * 这条判据来自 2026-10-20 的真机数据：用户把一段中文误存成 `DEEPSEEK_API_KEY`，而真正能用的
+ * `DEEPSEEK_API_KEY_2` 排在后面；旧逻辑因为「没有状态码 → 不换 key」既没试到好 key，
+ * 也没回退网关，搜索直接不可用。
+ * @param error - 捕获到的错误。
+ * @returns 是否该换下一把 key。
+ */
+function worthAnotherKey(error: unknown): boolean {
+  const status = statusOf(error);
+  if (status === undefined) return true; // 请求根本没发出去：换一把
+  return status === 401 || status === 402;
 }
 
 /**
@@ -223,35 +302,15 @@ export function createSearchProvider(deps: SearchProviderDeps): {
       // —— API 路：直连 /v1/tools/search（不吃对话 token）——
       if (chosen.kind === "api") {
         if (apiKeys.length === 0) throw new SearchUnavailableError("没有解析到 DeepSeek API key");
-        // **多 key 轮替**：401/402（这把 key 不行）就换下一条，其余错误不换。
-        const tried = new Set<string>();
-        let lastError: unknown;
-        for (;;) {
-          const current = pickWorkingKey(
-            apiKeys.map((item) => item.ref),
-            // 第一轮没有失败码：直接取第一条。
-            lastError === undefined ? 401 : statusOf(lastError),
-            tried,
-          );
-          const picked = current === undefined ? undefined : apiKeys.find((item) => item.ref === current);
-          if (picked === undefined) break;
-          tried.add(picked.ref);
-          try {
-            const result = await searchViaApi({
-              query: request.query,
-              key: picked.key,
-              ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
-              fetchImpl: deps.fetchImpl,
-              ...(signal === undefined ? {} : { signal }),
-            });
-            return { sources: result.sources };
-          } catch (error) {
-            lastError = error;
-            // 不该换 key 的失败（429/5xx/400）直接抛，不折腾其他 key。
-            if (pickWorkingKey(apiKeys.map((item) => item.ref), statusOf(error), tried) === undefined) break;
-          }
+        const failure = await searchWithApiKeys(apiKeys, request, deps.fetchImpl, signal);
+        if (failure.kind === "ok") return { sources: failure.sources };
+        // API 路试完全部 key 仍失败。**`*-first` 是可回退的**（见 `chooseSearchRoute`：
+        // `api-first` = 「优先但可回退」），所以还有网关就走网关；`api-only` 或网关不可用
+        // 时明确失败，并把 API 侧的真实原因带出去（否则用户只看到一句「搜索不可用」）。
+        if (!strategyCanFallBack(deps.strategy()) || access === undefined) {
+          throw new SearchUnavailableError(failure.reason);
         }
-        throw new SearchUnavailableError(lastError instanceof Error ? lastError.message : String(lastError));
+        // 落到下面的网关路；若网关也失败，用户会看到网关的原因（那是最后一道）。
       }
 
       // —— 网关路：模型在对话里调用服务端搜索工具 ——
