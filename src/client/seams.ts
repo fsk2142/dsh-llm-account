@@ -1860,7 +1860,11 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       setKeyProbing(ref);
       try {
         const result = unwrapRemote(await callRemote(() => probe([ref])));
-        const verdict = (result.ok ? (result.value as CredentialProbe[] | undefined)?.[0] : undefined);
+        // 按 **ref 匹配**而不是取 `[0]`：宿主契约说「顺序与入参一致」，但结论贴错行
+        // （把 A 的可用性显示在 B 那一行）是很难自查的误导 —— 匹配不到就当没测出来。
+        const verdict = result.ok
+          ? (result.value as CredentialProbe[] | undefined)?.find((row) => row.ref === ref)
+          : undefined;
         setKeyProbes((probes) => ({
           ...probes,
           [ref]:
@@ -2374,7 +2378,15 @@ export function createSidebarCardView(options: {
         failures.current = 0;
         // 写回设置页的读数缓存：同一份 `status()` 读数，让「侧边栏开着」时打开设置直接吃最新的那份。
         // 与设置页同一条纪律：只有**完整**的读数进缓存（见 completeReading）。
-        if (completeReading(next)) statusReadings.put(readVendor, next);
+        //
+        // 这一段包在 try 里：缓存判定只是**优化**，它抛错不该把「已经拿到的读数」丢掉 ——
+        // 那会让一次刷新变成「额度消失」（2026-10-20 报障的真实形状：`completeReading`
+        // 对缺失字段没有防护，抛出的异常打断了刷新链）。
+        try {
+          if (completeReading(next)) statusReadings.put(readVendor, next);
+        } catch (error) {
+          console.warn("[dsh-llm-account] could not cache the usage reading:", error);
+        }
         setView({ status: next, stale: false });
       });
     };
@@ -2824,13 +2836,22 @@ const catalogReadings = new ReadingCache<CatalogModelsResult>(CATALOG_READING_TT
  * @returns 够格进缓存时为 `true`。
  */
 export function completeReading(status: VendorUsageStatus): boolean {
-  if (status.failures.length > 0) return false;
-  for (const account of status.accounts) {
+  // **形状不可信**：这个函数跑在一次刷新的 promise 链里，抛出去的异常会打断整条链 ——
+  // 调用方（`read()` / 建清单的 effect）没有 catch，于是那次刷新静默中断：界面停在
+  // 旧读数的状态，看起来就是「刷新时额度消失」（2026-10-20 报障）。
+  // 线上真见过 `quota` 存在但 `failures`/`windows` 缺失的形状，所以每一项都单独判定。
+  const failures = status.failures;
+  if (Array.isArray(failures) && failures.length > 0) return false;
+  const accounts = Array.isArray(status.accounts) ? status.accounts : [];
+  for (const account of accounts) {
     // 与账户行同一条纪律：线上 `accounts` 可能混进渲染不了的行（null / 非对象）。
     if (typeof account !== "object" || account === null) continue;
     if (account.configured !== true) continue;
     const quota = account.quota;
-    if (quota === undefined || quota.failures.length > 0 || quota.windows.length === 0) return false;
+    // 额度缺席、额度自己报失败、一个窗口都没有 —— 三种都说明这次读得不完整。
+    if (typeof quota !== "object" || quota === null) return false;
+    if (Array.isArray(quota.failures) && quota.failures.length > 0) return false;
+    if (!Array.isArray(quota.windows) || quota.windows.length === 0) return false;
   }
   return true;
 }

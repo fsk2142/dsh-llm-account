@@ -52,6 +52,12 @@ export interface FakeHost {
   probeCalls: string[][];
   /** 各引用名的实测结论（缺省 `ok`）。 */
   probeVerdicts: Record<string, { state: "ok" | "invalid" | "unknown"; reason?: string }>;
+  /** 让下一次 `status()` 返回失败信封（刷新时的一次读失败）。 */
+  statusFailOnce: string | undefined;
+  /** 覆盖 `status()` 返回的账号表（运行中可改：模拟读数变化/清空）。 */
+  accountsOverride: Record<string, readonly Record<string, unknown>[]> | undefined;
+  /** 让下一次 `settings.describe()` 返回空数组（模拟设置服务瞬时读不到）。 */
+  describeReturnsEmptyOnce: boolean;
   /**
    * 下一次/后续 `models()` 要带的失败项（空 = 正常）。可随时改写：
    * 「加账号前目录读不到、加账号后读到」这条链要靠它复现（失败的读数不进缓存）。
@@ -177,6 +183,9 @@ export function fakeHost(
     failCredentialOnce: undefined,
     probeCalls: [],
     probeVerdicts: {},
+    statusFailOnce: undefined,
+    accountsOverride: undefined,
+    describeReturnsEmptyOnce: false,
     conflictOnce: options.conflictOnce ?? false,
     failOnce: undefined,
     ctx: {},
@@ -189,7 +198,14 @@ export function fakeHost(
   const usage = (): Record<string, unknown> => ({
     status: (vendor: string): Promise<unknown> => {
       host.statusCalls.push(vendor);
-      return mini.track(usageStatus(vendor, options.accounts ?? {}));
+      // 可注入的失败：用来复现「刷新时的一次读失败」（2026-10-20 报障）。
+      if (host.statusFailOnce !== undefined) {
+        const reason = host.statusFailOnce;
+        host.statusFailOnce = undefined;
+        return mini.track({ ok: false, error: reason });
+      }
+      const accounts = host.accountsOverride ?? options.accounts ?? {};
+      return mini.track(usageStatus(vendor, accounts));
     },
     accounts: (): Promise<unknown[]> => mini.track([]),
     switches: (): Promise<unknown[]> => mini.track([]),
@@ -296,8 +312,14 @@ export function fakeHost(
   });
 
   const settings = {
-    describe: (): Promise<{ ns: string; value: Record<string, unknown>; revision: number }[]> =>
-      mini.track([...rows.entries()].map(([row, state]) => ({ ns: row, value: { ...state.value }, revision: state.revision }))),
+    describe: (): Promise<{ ns: string; value: Record<string, unknown>; revision: number }[]> => {
+      // 可注入的「这次没读出来」：模拟设置服务瞬时失败。
+      if (host.describeReturnsEmptyOnce) {
+        host.describeReturnsEmptyOnce = false;
+        return mini.track([]);
+      }
+      return mini.track([...rows.entries()].map(([row, state]) => ({ ns: row, value: { ...state.value }, revision: state.revision })));
+    },
     mutate: async (row: string, ops: readonly { op: string; path: readonly string[]; value: unknown }[], expected: number): Promise<unknown> => {
       const state = rows.get(row);
       if (state === undefined) throw new Error(`No configurable plugin entry "${row}"`);
