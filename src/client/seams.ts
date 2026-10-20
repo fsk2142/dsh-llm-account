@@ -1220,9 +1220,21 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       let alive = true;
       // 账户操作（排序、autoSwitch、增删改）会改设置文档，所以每次都把快照重读一遍；
       // 用户的未保存草稿由 `createPageState(…, previous)` 保留。
-      void discoverVendors(ctx, entries).then((discovery) => {
-        if (alive) adopt(discovery);
-      });
+      //
+      // **必须带 catch**（2026-10-20 独立审查附录）：`discoverVendors` 内部已经全防御，
+      // 但它仍可能因为装配层故障 reject；不接住就是一条未处理拒绝（控制台刺眼、且在
+      // 某些宿主里会中断后续渲染队列）。设置页此刻不需要额外提示 —— 空态由
+      // `state.problems` 表达，这里只负责不让 promise 逃走。
+      void discoverVendors(ctx, entries)
+        .then((discovery) => {
+          if (alive) adopt(discovery);
+        })
+        .catch((error: unknown) => {
+          console.warn(
+            "[dsh-llm-account] could not read the vendor snapshots:",
+            error instanceof Error ? error.message : String(error),
+          );
+        });
       if (usage !== undefined) {
         // 「打开设置就重新获取一次」的对策（2026-10-18 用户提问：授权后每次打开都要重取吗？）：
         // 挂载后的第一次读取先看模块级缓存 —— TTL 内直接采纳上一次的读数（含设置页面板版本
