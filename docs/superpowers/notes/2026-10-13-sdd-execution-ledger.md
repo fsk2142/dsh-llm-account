@@ -1,5 +1,9 @@
 # SDD ledger — plan: D:\work\llm-acct-repo\docs\superpowers\plans\2026-10-13-dsh-llm-account-phase1-host.md
 
+> **2026-10-20 注**：本 ledger 引用的 1a 期计划与 `2026-10-13-host-smoke.md` 已在文档清理时删除
+> （描述的是已完成、且被后续多轮重构取代的阶段）。本文件保留是因为它记录了 **46 条裁决**
+> （Ruling 1–46）—— 那些判断理由至今仍是理解设计取舍的依据。需要被删文档的原文时从 git 历史取回。
+
 Spec: docs/superpowers/specs/2026-10-13-dsh-llm-account-design.md（已读，是绑定权威；计划与它有冲突时按 spec 裁决）
 Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-phase1-host\
 

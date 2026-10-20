@@ -4,6 +4,10 @@
 项目：`dsh-llm-account`（一个包，托管两条 provider 路由：`commandcode`、`dsh-opencode-go`）
 上游：计划 `docs/superpowers/plans/2026-10-13-dsh-llm-account-phase1-host.md`（Task 1）；规格 `docs/superpowers/specs/2026-10-13-dsh-llm-account-design.md`（§4.1、§8、§14）
 
+> **2026-10-20 注**：本文件提到的 1a 期计划 `2026-10-13-dsh-llm-account-phase1-host.md` 与冒烟记录
+> `2026-10-13-host-smoke.md` 已在文档清理时删除（它们描述的是已完成且被后续重构取代的阶段，
+> 其中「未验证项」清单的结论已并入后续文档）。**本文的假设条目仍然有效**，需要原文时从 git 历史取回。
+
 ## 0. 这份文档是什么
 
 原计划的「宿主接缝试验」（写一个最小插件、在本机建 profile、启动宿主观察行为）已被用户取消。本文件把原本要靠试验回答的问题**改写成假设**，供两个下游使用：
