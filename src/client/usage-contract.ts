@@ -82,6 +82,8 @@ export const USAGE_METHODS = [
   "usageReport",
   // 清空用量台账（用户显式操作，页面会先二次确认）
   "usageClear",
+  // 导出用量台账为 CSV 文本
+  "usageExportCsv",
 ] as const;
 
 /** 一个方法名。 */
@@ -150,6 +152,13 @@ export interface UsageReportView {
    * 没有可用记录时缺失（那就退回轮播）。
    */
   lastUsed?: { vendor: string; account: string; model: string; at: number };
+  /**
+   * 失败明细：这一期按分类（`FailureKind`）收成的几行。
+   *
+   * 台账早就在记 `failureKind`，但界面从没读过 —— 用户只看到「成功率 99.6%」，报障时无从
+   * 判断是网络抖动、限额还是凭据失效。缺失时整块不渲染（**不是**给一条全 0 的行）。
+   */
+  failuresByKind?: { kind: string; count: number; lastAt: number; lastAccount: string }[];
 }
 
 /** 一次登录尝试的状态（与宿主侧 `LoginStatus` 同形；`reason` 是稳定文案键）。 */
@@ -359,6 +368,26 @@ function parseVoid(): undefined {
 }
 
 /**
+ * 校验导出结果：必须是一段**非空**的 CSV 文本。
+ *
+ * 为什么拒绝空串：真实导出**永远至少有表头**（`ledgerCsvOf` 对空台账也返回表头），所以
+ * 空串只可能来自坏掉的宿主。接受它会让用户下载到一个 0 字节文件，还以为导出成功了 ——
+ * 那是这条路径上最糟的失败形态（静默地给出一个看起来成功的结果）。
+ * @param endpoint - 调用点（错误信息里点名）。
+ * @param value - 线上值。
+ * @returns CSV 文本。
+ */
+function parseUsageCsv(endpoint: string, value: unknown): string {
+  if (typeof value !== "string") {
+    throw boundaryError(endpoint, `expected the CSV text, got ${describeValue(value)}`);
+  }
+  if (value === "") {
+    throw boundaryError(endpoint, "expected a CSV header, got an empty string");
+  }
+  return value;
+}
+
+/**
  * 校验用量报表。
  *
  * **必须逐层校验**，不能只看顶层：渲染时会直接解引用 `account.period.kind` /
@@ -381,6 +410,9 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
   // 这条路径上已经栽过两次（`seams.reportOf` 漏一次、这里漏一次），症状都是「侧边栏不显示
   // 额度 / 不跟随当前账号」（2026-10-19 报障）。**新增字段时务必同步这一行。**
   const lastUsed = lastUsedOf(value.lastUsed);
+  // 失败明细同样**必须显式搬运**：这个函数会重建对象，漏一行就等于把字段抹掉
+  // （与 lastUsed 那条注释同一条纪律）。
+  const failuresByKind = failuresByKindOf(value.failuresByKind);
   return {
     accounts,
     total: {
@@ -390,7 +422,36 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
       ...(typeof total.lastAt === "number" && Number.isFinite(total.lastAt) ? { lastAt: total.lastAt } : {}),
     },
     ...(lastUsed === undefined ? {} : { lastUsed }),
+    ...(failuresByKind === undefined ? {} : { failuresByKind }),
   } as UsageReportView;
+}
+
+/**
+ * 校验并搬运失败明细。
+ *
+ * 逐行核对四个字段：形状不合格的行**丢弃**（一行坏掉不该让整块消失）。一行都不剩时返回
+ * `undefined` —— 界面上「没有失败」与「明细读不到」因此长得一样，这正是我们要的：
+ * 不给用户一条「失败 0 次」的行。
+ * @param value - 线上值（形状不可信）。
+ * @returns 明细行；没有合格行时为 `undefined`。
+ */
+function failuresByKindOf(
+  value: unknown,
+): { kind: string; count: number; lastAt: number; lastAccount: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.filter((row): row is { kind: string; count: number; lastAt: number; lastAccount: string } => {
+    if (!isRecord(row)) return false;
+    return (
+      typeof row.kind === "string" &&
+      row.kind !== "" &&
+      typeof row.count === "number" &&
+      Number.isFinite(row.count) &&
+      typeof row.lastAt === "number" &&
+      Number.isFinite(row.lastAt) &&
+      typeof row.lastAccount === "string"
+    );
+  });
+  return rows.length === 0 ? undefined : rows;
 }
 
 /** 合法的窗口值。 */
@@ -660,6 +721,11 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     // 因为它读的是一本共享台账（见 `vendors/usage-store`）。
     makeDescriptor("usageReport", "UsageReport", parseUsageReport, [WINDOW_PARAM]),
     makeDescriptor("usageClear", "Void", parseVoid, []),
+    // 导出：返回 CSV 文本（不是文件）—— 传文件路径/让宿主写盘会把「存在哪」变成新问题，
+    // 而浏览器侧本来就有下载能力。
+    makeDescriptor("usageExportCsv", "UsageCsv", parseUsageCsv, [
+      { name: "limit", typeSymbol: "ExportLimit", parse: parseNumber, optional: true },
+    ]),
   ];
 }
 
@@ -674,6 +740,11 @@ export interface UsageNamespace {
   usageReport?(window: UsageWindowView): Promise<UsageReportView>;
   /** 清空用量台账（不可撤销；页面负责二次确认）。 */
   usageClear?(): Promise<void>;
+  /**
+   * 导出用量台账为 CSV 文本（可选：老宿主没实现时按钮不显示）。
+   * @param limit - 最多导出多少条（尾部，即最近的）。
+   */
+  usageExportCsv?(limit?: number): Promise<string>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   models?(vendor: string): Promise<CatalogModelsResult>;

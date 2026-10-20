@@ -12,6 +12,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { accountAddSection, accountRows, reasonText, type AccountCardProps, type LoginView } from "./account-card";
 import { CSS_CLASS } from "./css";
+import { UsageExportButton } from "./failure-list";
 import { isHttpUrl } from "./login-window";
 import type { AccountAction } from "./page-state";
 import type { VendorEntry } from "./registry";
@@ -106,6 +107,17 @@ export interface AccountsPanelProps {
    * 惠及该厂商的所有账号，但不碰别家。**不传 = 那些按钮不渲染**（旧调用方/纯测试不受影响）。
    */
   onRefreshModels?: (vendor: string) => void;
+  /**
+   * 导出用量台账（CSV）。
+   *
+   * 缺省表示当前宿主没有这个能力 —— 那就整个按钮不渲染，而不是留一个点了没反应的入口。
+   * 回调返回 promise：导出要读台账并拼整段文本，按钮据此显示「导出中」并禁用。
+   */
+  onExportUsage?: (() => Promise<void>) | undefined;
+  /** 导出进行中（按钮禁用 + 换文案）。 */
+  exportBusy?: boolean;
+  /** 上一次导出的失败原因（人话）；成功或还没导过时缺省。 */
+  exportError?: string | undefined;
 }
 
 /**
@@ -136,7 +148,27 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
       { "data-panel-head": "accounts", className: CSS_CLASS.panelHead },
       createElement("h2", null, t("group.accounts")),
       createElement("span", { "data-accounts-count": total, className: CSS_CLASS.panelCount }, t("account.count").replace("{n}", String(total))),
+      // 导出整本台账：与「账号数」并排，因为它是**全局**动作（台账是本机共享的一本账，
+      // 不按厂商/账号拆）。能力缺席时 `UsageExportButton` 自己返回 null。
+      createElement(UsageExportButton, {
+        t,
+        onExport: props.onExportUsage === undefined ? undefined : () => void props.onExportUsage?.(),
+        busy: props.exportBusy === true,
+      }),
     ),
+    // 导出失败要说一句：静默失败会让人以为导出成功、而文件内容还是旧的。
+    props.exportError === undefined
+      ? null
+      : createElement(
+          "small",
+          {
+            key: "export-error",
+            "data-usage-export-error": true,
+            "data-usage-export-error-detail": props.exportError,
+            className: CSS_CLASS.failure,
+          },
+          `${t("usage.exportFailed")}：${props.exportError}`,
+        ),
     createElement(
       "details",
       {

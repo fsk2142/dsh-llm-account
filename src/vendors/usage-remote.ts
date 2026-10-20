@@ -46,8 +46,10 @@ import {
   type VendorUsageStatus,
 } from "../client/usage-contract";
 import { lastUsedAccountOf } from "../core/last-used";
+import { ledgerCsvOf, exportTailOf } from "../core/usage-export";
+import { failureBreakdownOf } from "../core/usage-failures";
 import { buildUsageReport } from "../core/usage-report";
-import type { UsageRecord } from "../core/usage-stats";
+import { withinWindow, type UsageRecord } from "../core/usage-stats";
 import { sharedUsageLedger } from "./usage-store";
 
 /**
@@ -584,7 +586,27 @@ export class LlmAccountUsageService extends TypertRemoteService {
     // 只收**仍然存在的账号**：台账里可能留着已删除的 ref，拿它显示会对不上名字。
     const known = new Set(windows.keys());
     const lastUsed = lastUsedAccountOf(records, (vendor, account) => known.has(`${vendor}\u0000${account}`));
-    return lastUsed === undefined ? report : { ...report, lastUsed };
+    // 失败明细：只在**这个窗口**内统计（与总账同一口径）。一条失败都没有时不写这个字段
+    // —— 界面据此整块不渲染，而不是画一行「失败 0 次」。
+    const failuresByKind = failureBreakdownOf(withinWindow(records, window, now));
+    return {
+      ...report,
+      ...(lastUsed === undefined ? {} : { lastUsed }),
+      ...(failuresByKind.length === 0 ? {} : { failuresByKind }),
+    };
+  }
+
+  /**
+   * 导出用量台账为 CSV（最近 `limit` 条）。
+   *
+   * 为什么在宿主侧做序列化：台账文件在这台机器上，客户端只拿到远程结果；把 CSV 文本整个传过去
+   * 比传几千条记录再在浏览器里拼更省事，也保证导出与界面看到的是**同一份**数据。
+   * @param limit - 最多导出多少条（尾部，即最近的）；缺省 1000。
+   * @returns CSV 文本（含表头）。
+   */
+  async usageExportCsv(limit?: number): Promise<string> {
+    const records = await sharedUsageLedger().read();
+    return ledgerCsvOf(exportTailOf(records, limit ?? 1000));
   }
 
   /**

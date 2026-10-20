@@ -16,6 +16,7 @@
 import { createElement, type ReactElement } from "react";
 
 import { CSS_CLASS } from "./css";
+import { FailureKindList, type FailureKindRowView } from "./failure-list";
 import type { AccountUsageView, UsageBucketView, UsageReportView, UsageWindowView } from "./usage-contract";
 import { relativeTime } from "./time";
 
@@ -179,6 +180,13 @@ export function AccountUsageBlock(props: {
   label?: string;
   /** 「现在」（测试注入；缺省 `Date.now()`）。 */
   now?: number;
+  /**
+   * 这一期按分类的失败明细（缺省 = 不画）。
+   *
+   * 由容器按厂商过滤后传进来（报表里那份是跨厂商的）。空数组等同于缺省：没有失败就整块
+   * 不渲染，不画「失败 0 次」。
+   */
+  failures?: readonly FailureKindRowView[];
 }): ReactElement {
   const { t, entry } = props;
   const period = entry.period ?? ({} as AccountUsageView["period"]);
@@ -336,5 +344,7 @@ export function AccountUsageBlock(props: {
     head,
     metrics,
     ...(foot.length === 0 ? [] : [createElement("div", { key: "foot", className: CSS_CLASS.usageFoot }, ...foot)]),
+    // 失败明细排在核对行之后：先说结论（用了多少、成功率），再展开原因。
+    createElement(FailureKindList, { key: "failures", t, rows: props.failures ?? [] }),
   );
 }

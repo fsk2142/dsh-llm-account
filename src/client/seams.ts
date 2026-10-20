@@ -710,6 +710,7 @@ function reportOf(value: UsageReportView | undefined): UsageReportView | undefin
     return {
       accounts,
       ...(value.lastUsed === undefined ? {} : { lastUsed: value.lastUsed }),
+      ...(value.failuresByKind === undefined ? {} : { failuresByKind: value.failuresByKind }),
       total: {
         window: USAGE_REPORT_WINDOW,
         bucket: {
@@ -739,7 +740,57 @@ function reportOf(value: UsageReportView | undefined): UsageReportView | undefin
     // 曾经漏了 lastUsed —— 客户端永远拿不到「最近一次请求的账号」，侧边栏因此
     // 一直显示清单第一个（commandcode），opendesign 永远出不来（2026-10-19 报障）。
     ...(value.lastUsed === undefined ? {} : { lastUsed: value.lastUsed }),
+    ...(value.failuresByKind === undefined ? {} : { failuresByKind: value.failuresByKind }),
   };
+}
+
+/**
+ * 下载所需的最小 DOM 形状。
+ *
+ * 为什么不引 `lib: ["DOM"]`：本项目的 `tsconfig` 刻意只有 ES2023（内核层不该拿到 `document`
+ * 这类浏览器全局），为一个下载辅助函数打开 DOM 类型会让整个 `src/` 都能误用它们。这里只声明
+ * 真正用到的那几个成员，形状由浏览器提供。
+ */
+interface DownloadDocument {
+  body: { appendChild(node: unknown): void };
+  createElement(tag: string): {
+    href: string;
+    download: string;
+    style: { display: string };
+    click(): void;
+    remove(): void;
+  };
+}
+
+/**
+ * 把 CSV 文本变成一次浏览器下载。
+ *
+ * 为什么用 Blob + `a[download]` 而不是让宿主写文件：浏览器侧本来就有下载能力，写盘会把
+ * 「文件存在哪、要不要覆盖」变成两个新问题；而这段代码跑在页面里，下载目录由浏览器决定。
+ *
+ * 三处必须记得收尾（否则会漏内存或留下隐藏节点）：`createObjectURL` 要 `revoke`、
+ * 临时 `<a>` 要摘掉。`document` 缺席时（纯单测环境）**静默跳过** —— 这不是失败路径，
+ * 导出本身已经成功了。
+ * @param csv - CSV 文本。
+ * @param fileName - 文件名（缺省带日期，便于多次导出区分）。
+ */
+export function downloadCsv(csv: string, fileName?: string): void {
+  const doc = (globalThis as { document?: DownloadDocument }).document;
+  if (doc === undefined || typeof URL.createObjectURL !== "function") return;
+  const stamp = new Date();
+  const day = `${stamp.getFullYear()}-${String(stamp.getMonth() + 1).padStart(2, "0")}-${String(stamp.getDate()).padStart(2, "0")}`;
+  // BOM：Excel 打开 UTF-8 CSV 时没有它会按本地代码页解，中文账号名会变乱码。
+  const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = doc.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName ?? `dsh-usage-${day}.csv`;
+  anchor.style.display = "none";
+  doc.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // 立刻 revoke 会让部分浏览器取消下载；放到下一轮事件循环。
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 /** 造**容器组件**：持有页面状态、订阅宿主推送与共享远程面、把回调接上，然后渲染 `PageShell`。
@@ -854,6 +905,10 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [savingNs, setSavingNs] = useState<string | undefined>(undefined);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
+    /** 导出进行中（按钮禁用，避免连点导出两份）。 */
+    const [exportBusy, setExportBusy] = useState(false);
+    /** 上一次导出失败的原因（人话）；成功即清掉。 */
+    const [exportError, setExportError] = useState<string | undefined>(undefined);
     /**
      * 上一次账户操作没提交出去的原因（人话）。
      *
@@ -1291,6 +1346,23 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      */
     const usageProblemShown = new Set<string>();
     /**
+     * 某个厂商在这个窗口里的失败明细。
+     *
+     * 报表里的 `failuresByKind` 是**跨厂商**的（台账是一本共享账），而失败明细要挂在具体
+     * 账号下面，所以这里按账号从 `accounts[].bucket.failed` 是否大于 0 过滤 —— 只有真的
+     * 有失败记录的厂商才拿得到明细。同一次失败不会被两家重复显示。
+     * @param vendor - 厂商。
+     * @returns 明细行；没有失败或报表还没读到时为 `undefined`。
+     */
+    const failuresOf = (vendor: string): readonly { kind: string; count: number; lastAt: number; lastAccount: string }[] | undefined => {
+      const rows = usageReport?.failuresByKind;
+      if (!Array.isArray(rows) || rows.length === 0) return undefined;
+      // 该厂商的账号里有没有失败：没有就不把这个厂商的明细挂到别人头上。
+      const own = (usageReport?.accounts ?? []).filter((entry) => entry?.vendor === vendor);
+      const hasFailure = own.some((entry) => typeof entry?.bucket?.failed === "number" && entry.bucket.failed > 0);
+      return hasFailure ? rows : undefined;
+    };
+    /**
      * 某个账号的用量块（渲染在它自己的额度条下方）。
      * @param vendor - 厂商。
      * @param ref - 账号 ref。
@@ -1338,6 +1410,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           t,
           entry: row,
           label: accountLabelOf(statuses[vendor]?.accounts ?? [], ref),
+          // 失败明细挂在用量块脚下：它与「成功率」说的是同一件事，分开两处会让人对不上。
+          ...(failuresOf(vendor) === undefined ? {} : { failures: failuresOf(vendor) }),
         }),
       );
     };
@@ -1433,6 +1507,26 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       },
       loginStarting,
       loginError: loginErrors,
+      // 导出：远程取 CSV 文本 → 浏览器下载。宿主侧不写文件（「存在哪」会变成新问题）。
+      // 远程面没有这个方法（老宿主）时传 undefined，按钮自己就不渲染。
+      onExportUsage:
+        usage?.usageExportCsv === undefined
+          ? undefined
+          : async () => {
+              setExportBusy(true);
+              setExportError(undefined);
+              try {
+                const csv = await usage.usageExportCsv!();
+                downloadCsv(csv);
+              } catch (error) {
+                // 失败必须说出来：静默失败会让人以为导出成功、而拿到的还是一份空的/旧的。
+                setExportError(error instanceof Error ? error.message : String(error));
+              } finally {
+                setExportBusy(false);
+              }
+            },
+      exportBusy,
+      ...(exportError === undefined ? {} : { exportError }),
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
     // 统计**全在账号下面**（用户 2026-10-19：「只在每个账号下面统计本身的用量」）：

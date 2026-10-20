@@ -123,6 +123,8 @@ describe("参数校验器接受真值", () => {
     settings: { strategy: "order", intervalMinutes: 60, atTurnEnd: true, autoSwitch: true },
     // 用量报表的窗口参数（`usageReport`）。
     window: "today",
+    // 导出的条数上限（`usageExportCsv`，可省略）。
+    limit: 1000,
   };
 
   const seen = new Set<string>();
@@ -217,8 +219,13 @@ describe("边界校验器的性质", () => {
           expect(parse(value), descriptor.method).toBeUndefined();
           continue;
         }
-        // 其余端点接受的载荷至少要是个对象（数组是账号/切换记录的合法形状）。
-        const shape = typeof value === "object" && value !== null;
+        // 其余端点接受的载荷必须是**它声明的那个类型**（数组是账号/切换记录的合法形状）。
+        // 导出端点声明返回 CSV 文本，所以它该接受非空字符串而不是对象 —— 这条断言按「类型对得上」
+        // 判定，不预设所有端点都返回对象。
+        const shape =
+          descriptor.method === "usageExportCsv"
+            ? typeof value === "string" && value !== ""
+            : typeof value === "object" && value !== null;
         expect(shape, `${descriptor.method} accepted ${JSON.stringify(value)}`).toBe(true);
       }
     }
