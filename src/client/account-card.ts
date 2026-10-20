@@ -469,7 +469,7 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
                 props.onSetAccountModels?.(account.ref, [...next]);
               },
             },
-            all ? props.t("models.hideGroup") : props.t("models.showGroup"),
+            all ? props.t("models.clearAll") : props.t("models.selectAll"),
           ),
           createElement(ChevronIcon, null),
         ),

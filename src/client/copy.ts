@@ -258,6 +258,15 @@ export type CopyKey =
   | "models.refreshAccount"
   | "models.freeGroup"
   | "models.otherCompany"
+  /**
+   * 一组模型的「全选 / 取消全选」。
+   *
+   * 用户 2026-10-20：「原来的显示模型可以改成 全选 这样更符合那个按钮的本来含义」。
+   * 以前的文案是「显示本组 / 隐藏本组」，读起来像「展开或收起这一段」，而它实际做的是
+   * **勾选这一组里所有模型**。改名后与复选框语义一致。
+   */
+  | "models.selectAll"
+  | "models.clearAll"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -563,6 +572,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.refreshAccount": "刷新此账号的模型",
     "models.freeGroup": "免费模型",
     "models.otherCompany": "其他",
+    "models.selectAll": "全选",
+    "models.clearAll": "取消全选",
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "点击打开用量面板",
@@ -863,6 +874,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.refreshAccount": "Refresh this account's models",
     "models.freeGroup": "Free models",
     "models.otherCompany": "Other",
+    "models.selectAll": "Select all",
+    "models.clearAll": "Clear all",
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Click to open the usage panel",
