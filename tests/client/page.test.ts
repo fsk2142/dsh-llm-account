@@ -381,13 +381,13 @@ it("合并视图把三家字段并进四张卡：共有字段只出现一次，�
   expect(fieldKeys).toContain("workspaceId");
 });
 
-it("保存条只在当前厂商有改动时出现", () => {
-  expect(elementsOf(render(createPageState(VENDORS, SNAPSHOTS))).filter((element) => element.props["data-save-bar"] !== undefined)).toHaveLength(0);
+it("底部永远没有保存条（改了就直接存，用户 2026-10-20 要求）", () => {
+  const clean = elementsOf(render(createPageState(VENDORS, SNAPSHOTS)));
+  expect(clean.filter((element) => element.props["data-save-bar"] !== undefined)).toHaveLength(0);
 
+  // 有未保存改动时也不再出现 —— 那种状态由容器立刻落盘消化掉。
   const dirty = setField(createPageState(VENDORS, SNAPSHOTS), "llm-commandcode", "apiBase", "https://b.example");
-  const bars = elementsOf(render(dirty)).filter((element) => element.props["data-save-bar"] !== undefined);
-  expect(bars).toHaveLength(1);
-  expect(textOf(bars[0])).toContain(COPY.en.save);
+  expect(elementsOf(render(dirty)).filter((element) => element.props["data-save-bar"] !== undefined)).toHaveLength(0);
 });
 
 it("保存失败时保存条显示可读原因（此前完全静默：用户以为保存成功了）", () => {
@@ -397,8 +397,10 @@ it("保存失败时保存条显示可读原因（此前完全静默：用户以�
   expect(elementsOf(render(dirty)).filter((element) => element.props["data-save-error"] !== undefined)).toEqual([]);
 
   const failed = noteSaveResult(dirty, "llm-commandcode", "SETTINGS_CONFLICT: revision 3 is stale");
-  const bar = elementsOf(render(failed)).find((element) => element.props["data-save-bar"] !== undefined)!;
-  const error = elementsOf(bar).find((element) => element.props["data-save-error"] !== undefined)!;
+  // 保存条已经不存在；错误挂在**卡片里**。
+  const all = elementsOf(render(failed));
+  expect(all.some((element) => element.props["data-save-bar"] !== undefined)).toBe(false);
+  const error = all.find((element) => element.props["data-save-error"] !== undefined)!;
   expect(error.props["data-save-error"]).toBe("llm-commandcode");
   // 界面上是通用文案；宿主的错误原文只在 data 属性上（对用户没有意义，但排查要用）。
   expect(textOf(error)).toContain(COPY.en["save.failed"]);

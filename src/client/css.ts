@@ -165,6 +165,12 @@ export const PAGE_CSS = `
 .dsl-field > input[type="text"], .dsl-field > input[type="password"] { flex: 0 0 240px; width: 240px; }
 .dsl-field > input[type="number"] { flex: 0 0 140px; width: 140px; }
 .dsl-field > select { flex: 0 0 180px; width: 180px; }
+/* 还有未保存输入的字段：左侧留一道提示条，让「卡片里那个保存按钮管哪几项」一眼可见。
+ * 自动保存没有进度暗示，这个标记是用户唯一能看出「我改的东西还在草稿里」的线索。 */
+.dsl-field[data-field-pending="true"] { position: relative; }
+.dsl-field[data-field-pending="true"]::before { content: ""; position: absolute; left: -6px;
+  top: 50%; transform: translateY(-50%); width: 2px; height: 16px; border-radius: 999px;
+  background: var(--dsw-alias-state-business-primary); }
 
 /* ═══ 开关（appearance:none 画出来的滑轨，比默认复选框更符合「开/关」语义） ═══ */
 .dsl-toggle { appearance: none; -webkit-appearance: none; position: relative; flex: none;
@@ -512,12 +518,18 @@ export const PAGE_CSS = `
 .dsl-boundary > h2 { margin: 0; font-size: 14px; line-height: 20px; color: var(--dsw-alias-label-primary); }
 .dsl-boundary > button { align-self: flex-start; }
 
-/* ═══ 底部保存条（有改动才出现；放在内容末尾，不浮动遮挡） ═══ */
+/* ═══ 卡片内的保存条（只在有未保存输入时出现；放在卡片末尾，不浮动遮挡） ═══
+ * 用户 2026-10-20：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
+ * 它现在住在**卡片里**（data-card-save），不再是页面底部那条 —— 所以这里只负责
+ * 「一行按钮 + 一行小字」的排布，像一条分隔线，而不是一条横贯页面的操作栏。
+ */
 .dsl-save { position: static; display: flex; flex-direction: row;
   align-items: center; gap: 12px; box-sizing: border-box; margin-top: 12px; padding: 10px 14px;
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-bg-layer-2); }
+  background: var(--dsw-alias-bg-layer-1); }
 .dsl-save > small { flex: 1 1 auto; min-width: 0; }
+/* 一行按钮不该被卡片（纵向 flex）拉成通栏，也不该把两个厂商名挤掉。 */
+.dsl-save > button { align-self: flex-start; flex: none; }
 
 /* ═══ 侧边栏额度卡（紧凑一档） ═══
  * 宿主侧边栏收起时，「sidebar.footer.action」 槽位只有约 35px 宽；整张卡片塞不进去会向左溢出到

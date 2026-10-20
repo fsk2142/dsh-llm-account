@@ -155,7 +155,7 @@ describe("设置页容器仿真", () => {
     expect(text).not.toContain("页面渲染失败");
   });
 
-  it("字段编辑 → 保存 → 写的是命中的行名；opencode 写行 id 而不是命名空间", async () => {
+  it("字段编辑 → 卡片里的保存 → 写的是命中的行名；opencode 写行 id 而不是命名空间", async () => {
     const mini = await runtime();
     await freshSeams();
     const host = fakeHost(mini);
@@ -168,50 +168,48 @@ describe("设置页容器仿真", () => {
     expect(baseUrl, "opencode 的 baseURL 字段应带归属标记").toBeDefined();
     fireSim(find(page.tree(), "data-field-input", "baseURL"), "onChange", { target: { value: "https://new.example" } });
     await settleSim(mini);
-    expect(findSim(page.tree(), "data-save-bar")).toBeDefined();
-
-    click(page.tree(), "data-save", "llm-opencode-go");
+    // 输入类是草稿：还没落盘，但这张卡片底部出现了保存按钮（2026-10-20 第二轮要求）。
+    expect(host.mutations).toHaveLength(0);
+    fireSim(find(page.tree(), "data-save", "llm-opencode-go"), "onClick");
     await settleSim(mini);
 
     // 写的是行 id `opencode-go`（宿主按条目 id 寻址；写命名空间会落空）。
     expect(host.mutations).toHaveLength(1);
     expect(host.mutations[0]!.row).toBe("opencode-go");
     expect(host.mutations[0]!.ops).toEqual([{ op: "set", path: ["baseURL"], value: "https://new.example" }]);
-    // 保存成功：保存条消失（基线以宿主为准），宿主文档已更新。
-    expect(findSim(page.tree(), "data-save-bar")).toBeUndefined();
+    // 保存成功：保存按钮消失（基线以宿主为准），宿主文档已更新。
+    expect(findSim(page.tree(), "data-save")).toBeUndefined();
     expect(host.rows.get("opencode-go")!.value.baseURL).toBe("https://new.example");
   });
 
-  it("保存失败时保存条显示可读原因，而不是静默失败（杀掉存活变异的那条）", async () => {
+  it("写入失败时错误显示在卡片里，再点一次保存就重试成功（不能静默失败）", async () => {
     const mini = await runtime();
     await freshSeams();
     const host = fakeHost(mini);
     const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
 
+    host.failOnce = "the credentials service rejected the write";
     fireSim(find(page.tree(), "data-field-input", "apiBase"), "onChange", { target: { value: "https://edited.example" } });
     await settleSim(mini);
-
-    host.failOnce = "the credentials service rejected the write";
-    click(page.tree(), "data-save", "llm-commandcode");
+    fireSim(find(page.tree(), "data-save", "llm-commandcode"), "onClick");
     await settleSim(mini);
 
     // 界面上有失败提示（通用文案），宿主的原文在 data 属性上供排查。
     const error = find(page.tree(), "data-save-error", "llm-commandcode");
     expect(textsOfSim(page.tree())).toContain("保存失败，请重试。");
     expect(error.props["data-save-error-reason"]).toBe("the credentials service rejected the write");
-    // 草稿与保存条都在（用户可以改完重试）。
-    expect(findSim(page.tree(), "data-save-bar")).toBeDefined();
+    // 底部没有保存条（用户 2026-10-20 要求去掉）——错误挂在卡片里。
+    expect(findSim(page.tree(), "data-save-bar")).toBeUndefined();
 
-    // 重试成功：错误与保存条一起消失。
-    click(page.tree(), "data-save", "llm-commandcode");
+    // 再点一次保存（重试）：这次写成功，错误消失。
+    fireSim(find(page.tree(), "data-save", "llm-commandcode"), "onClick");
     await settleSim(mini);
     expect(findSim(page.tree(), "data-save-error")).toBeUndefined();
-    expect(findSim(page.tree(), "data-save-bar")).toBeUndefined();
     expect(host.rows.get("llm-commandcode")!.value.apiBase).toBe("https://edited.example");
   });
 
-  it("修订号冲突后自动重读重放：第二次保存成功（乐观修订号猜不得）", async () => {
+  it("修订号冲突后自动重读：再点一次保存成功（乐观修订号猜不得）", async () => {
     const mini = await runtime();
     await freshSeams();
     const host = fakeHost(mini, { conflictOnce: true });
@@ -220,15 +218,15 @@ describe("设置页容器仿真", () => {
 
     fireSim(find(page.tree(), "data-field-input", "apiBase"), "onChange", { target: { value: "https://first.example" } });
     await settleSim(mini);
-    click(page.tree(), "data-save", "llm-commandcode");
+    fireSim(find(page.tree(), "data-save", "llm-commandcode"), "onClick");
     await settleSim(mini);
 
-    // 并发写者把修订号 +1：这次保存必须失败并提示（而不是带着旧修订号静默丢写）。
+    // 并发写者把修订号 +1：这次写入必须失败并提示（而不是带着旧修订号静默丢写）。
     expect(findSim(page.tree(), "data-save-error", "llm-commandcode")).toBeDefined();
     expect(host.rows.get("llm-commandcode")!.value.apiBase).toBe("https://api.commandcode.ai");
 
-    // 用户再点一次保存：保存后重读过宿主，修订号是新的 → 成功。
-    click(page.tree(), "data-save", "llm-commandcode");
+    // 重读过宿主，修订号是新的 → 再点保存成功。
+    fireSim(find(page.tree(), "data-save", "llm-commandcode"), "onClick");
     await settleSim(mini);
     expect(findSim(page.tree(), "data-save-error")).toBeUndefined();
     expect(host.rows.get("llm-commandcode")!.value.apiBase).toBe("https://first.example");
@@ -508,9 +506,8 @@ describe("侧边栏卡片容器仿真", () => {
     // 设置页自己的状态读（页面要显示额度），与卡片无关 —— 记下基线再比增量。
     const baseline = host.statusCalls.length;
 
+    // 改了就存（2026-10-20）：拨开开关即落盘，卡片跟着出现。
     fireSim(find(page.tree(), "data-field-input", "showSidebarQuota"), "onChange", { target: { checked: true } });
-    await settleSim(mini);
-    click(page.tree(), "data-save", "llm-commandcode");
     await settleSim(mini);
     expect(host.rows.get("llm-commandcode")!.value.showSidebarQuota).toBe(true);
 

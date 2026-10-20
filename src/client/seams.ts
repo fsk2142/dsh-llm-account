@@ -29,7 +29,7 @@ import { SidebarCard } from "./sidebar-card";
 import {
   closeAction,
   createPageState,
-  dirtyFields,
+  draftsAfterChange,
   FEATURE_TAB_NS,
   noteCredentialChange,
   noteSaveResult,
@@ -43,6 +43,7 @@ import {
   sidebarTargetsOf,
   sidebarVendorOf,
   sidebarScopeOf,
+  specOf,
   toggleExpanded,
   type AccountAction,
   type PageState,
@@ -52,7 +53,7 @@ import type { LoginView } from "./account-card";
 import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/search-keys";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
-import type { VendorEntry } from "./registry";
+import { savesImmediately, type VendorEntry } from "./registry";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
 import { AccountUsageBlock } from "./usage-card";
 
@@ -940,7 +941,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [modelCatalogs, setModelCatalogs] = useState<Record<string, CatalogModelsResult | undefined>>({});
     /** 目录读取中（按厂商）。 */
     const [modelCatalogLoading, setModelCatalogLoading] = useState<Record<string, boolean | undefined>>({});
-    /** 正在保存的命名空间（保存按钮立即反馈）。 */
+    /** 正在保存的命名空间（卡片级保存按钮的即时反馈）。 */
     const [savingNs, setSavingNs] = useState<string | undefined>(undefined);
     /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
     const [accountRevision, setAccountRevision] = useState(0);
@@ -991,9 +992,101 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         }
         return;
       }
+      // 写入队列读修订号用这份同步镜像（`state` 在异步回调里是旧闭包，见 `saveRow`）。
+      latestSnapshots.current = Object.fromEntries(snapshots.map((snapshot) => [snapshot.ns, snapshot]));
       noteSidebarSnapshots(entries, snapshots);
       setState((current) => createPageState(allEntries, snapshots, current, problem));
     };
+
+    /**
+     * 设置写入的**串行队列**（每次写入完成前，下一次排队等它）。
+     *
+     * 为什么必须有：宿主用修订号做并发围栏（`mutate(row, ops, expectedRevision)`），而每次成功
+     * 写入都会把修订号 +1。用户快速拨两个开关（或点两次「填入」）时，第二次调用若拿着**渲染时**
+     * 那份快照的修订号，就会撞上自己前一次写入刚产生的新修订号 —— 表现是「刚改的又被改回去」
+     * 或界面上冒出一条莫名其妙的冲突错误。排队保证：任何时刻只有一次写入在途，且它用的永远是
+     * **最近一次**读到的修订号。
+     */
+    const writeQueue = useRef<Promise<void>>(Promise.resolve());
+    /**
+     * 每次读取/写入后的最新快照（同步可读）。
+     *
+     * `state` 是渲染时的闭包变量，异步回调里读到的永远是**那一刻**的值。写入排队后必须要拿到
+     * 「轮到我的时候」的修订号与行名，所以另存一份同步镜像，由 `adopt` 与写入结果共同维护。
+     */
+    const latestSnapshots = useRef<Record<string, VendorSnapshot>>({});
+    /** 正在保存的行（同一个 ns 不并发发两份写）。 */
+    const savingRowInFlight = useRef<Set<string>>(new Set());
+    /**
+     * 最新草稿的**同步镜像**（按 ns）。`state` 在异步回调/排队回调里是旧闭包，见 `saveRow`。
+     * 由渲染期（每次渲染都写）与 `setField` 的结果共同维护。
+     */
+    const latestDrafts = useRef<Record<string, Record<string, unknown>>>({});
+
+    /**
+     * 把**某一家**的全部草稿写入设置文档（卡片底部的保存按钮）。
+     *
+     * 串行队列 + 每次现取修订号（见 {@link writeQueue}）：
+     * 1. 排队期间用户又改了别的字段 —— 轮到执行时重新读一次草稿，写进去的是**最新**那一份；
+     * 2. 修订号在轮到执行时才取，所以连续两次保存不会撞上自己上一次写入产生的修订号。
+     *
+     * 失败不静默：原因进 `saveErrors`，页面在**对应卡片里**显示。
+     * 成功与失败都重读设置文档：成功是为了拿到新修订号，失败更是必须 —— 用户再点一次保存时，
+     * 若基线还停在旧修订号，那次重试会撞上同一个冲突，看起来像「怎么存都存不上」。
+     * @param ns - 设置命名空间（页面身份，也是错误归属的键）。
+     * @returns 这次写入的完成信号（调用方通常不 await）。
+     */
+    const saveRow = (ns: string): Promise<void> => {
+      // 已经有一轮保存/写在途：直接把这一轮排到它后面，不并发发两份。
+      if (savingRowInFlight.current.has(ns)) return writeQueue.current;
+      const snapshot = latestSnapshots.current[ns];
+      if (snapshot === undefined) {
+        // 这一行还没读到：没有修订号可做并发围栏。不发注定失败的请求，但要让用户知道它没存上
+        // （静默失败会让人以为改成功了）。
+        setState((current) => noteSaveResult(current, ns, "this namespace has not been read yet"));
+        return Promise.resolve();
+      }
+      savingRowInFlight.current.add(ns);
+      setSavingNs(ns);
+      writeQueue.current = writeQueue.current
+        .then(async () => {
+          // 轮到我了：**现读**草稿与修订号（排队期间可能都变了）。
+          const fields = draftFieldsOf(ns);
+          if (fields.length === 0) return; // 已经存上或改回原值：没有可写的
+          const latest = latestSnapshots.current[ns] ?? snapshot;
+          const error = await saveSettings(ctx, latest.row ?? ns, fields, latest.revision);
+          // 失败时记下**是哪几个字段**没存上：页面靠它把错误印在对应的卡里（只印一处）。
+          setState((current) => noteSaveResult(current, ns, error, fields.map((field) => field.key)));
+          // 重读：失败也要（见方法注释）。重读结果经 `adopt` 同步进 `latestSnapshots`。
+          adopt(await discoverVendors(ctx, entries));
+        })
+        .catch((error: unknown) => {
+          // 装配层故障（宿主抛错）：同样不能静默 —— 用户点了保存，界面上必须有个交代。
+          setState((current) =>
+            noteSaveResult(current, ns, error instanceof Error ? error.message : String(error)),
+          );
+        })
+        .then(() => {
+          savingRowInFlight.current.delete(ns);
+          // 只有当没有别的行在途时才熄灯：否则会把后一行的「保存中…」提前抹掉。
+          if (savingRowInFlight.current.size === 0) setSavingNs(undefined);
+        });
+      return writeQueue.current;
+    };
+
+    /**
+     * 某一家当前的草稿字段（**同步**，从最新的页面状态取）。
+     *
+     * 不能读渲染闭包里的 `state`：`saveRow` 是排队的，轮到它时闭包已经过期了。
+     * @param ns - 设置命名空间。
+     * @returns 待写的字段；没有草稿时为空数组。
+     */
+    const draftFieldsOf = (ns: string): { key: string; value: unknown }[] =>
+      Object.entries(latestDrafts.current[ns] ?? {}).map(([key, value]) => ({ key, value }));
+
+    // 草稿镜像每次渲染同步一次（纯赋值，不引入 Hook，所以不影响 Hook 顺序）。
+    // 排队中的 `saveRow` 读的就是这一份 —— 它比任何渲染闭包都新。
+    latestDrafts.current = state.drafts as Record<string, Record<string, unknown>>;
 
     useEffect(() => {
       let alive = true;
@@ -1709,21 +1802,38 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       t,
       accounts,
       mergeTabs: true,
-      saving: savingNs === state.activeNs,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
-      onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
-      onSave: (ns) => {
-        const fields = dirtyFields(state, ns);
-        if (fields.length === 0) return;
-        setSavingNs(ns);
-        // 写**命中的行名**（opencode 的行 id 与命名空间不同，用 ns 会写到一个不存在的条目上）。
-        const snapshot = state.snapshots[ns];
-        void saveSettings(ctx, snapshot?.row ?? ns, fields, snapshot?.revision ?? 0).then((error) => {
-          setState((current) => noteSaveResult(current, ns, error));
-          setSavingNs(undefined);
-          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
-        });
+      onSetField: (ns, key, value) => {
+        // 用户 2026-10-20 的两条要求，合成一条规则（判据在 `registry.ts` 的 `savesImmediately`）：
+        //
+        // 1. 「任何选项修改了就是直接保存，不需要那个保存按钮了」→ 开关/下拉：改了就落盘；
+        // 2. 「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」
+        //    → 文本/数字/时长：只更新草稿，等卡片底部的保存按钮。
+        //
+        // 输入类**不能**每敲一个字符就写：中间态会进设置文档（`https://` 会短暂成为生效值），
+        // 而且打字比一次往返快得多 —— 后一次写入拿着过期修订号，撞上自己刚写出来的冲突。
+        //
+        // 草稿镜像在这里**同步**更新：`setState` 要等重渲染才生效，而落盘紧接着就要读草稿
+        // （见 `saveRow`）。两条通道用同一个纯函数算，规则不会分叉。
+        //
+        // 入参取自**镜像**而不是闭包 `state`：同一拍里连拨两个开关时，第二次事件的闭包还停在
+        // 第一次之前，用它算会把第一处改动丢掉（实测：只写进了最后那一个）。
+        const baseline = latestSnapshots.current[ns]?.value;
+        const next = draftsAfterChange(latestDrafts.current[ns], baseline, key, value);
+        const drafts = { ...latestDrafts.current };
+        if (next === undefined) delete drafts[ns];
+        else drafts[ns] = next;
+        latestDrafts.current = drafts;
+        setState((current) => setField(current, ns, key, value));
+        const kind = specOf(state, ns, key)?.kind;
+        if (kind === undefined || !savesImmediately(kind)) return;
+        // 开关/下拉：写这一家的**全部**草稿（若用户先改了输入框再拨开关，那一份输入也跟着落盘 ——
+        // 否则它会莫名其妙地留在草稿里，而用户以为自己刚保存了）。
+        void saveRow(ns);
       },
+      // 卡片底部的保存按钮：只保存这一家尚未落盘的输入。
+      onSave: (ns) => void saveRow(ns),
+      ...(savingNs === undefined ? {} : { savingNs }),
       ...(credentialStatus === undefined ? {} : { credentialStatus }),
       secretDraft,
       secretSaving,

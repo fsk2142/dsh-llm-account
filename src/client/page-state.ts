@@ -97,6 +97,14 @@ export interface PageState {
    */
   readonly saveErrors: Readonly<Record<string, string>>;
   /**
+   * 上一次保存失败涉及**哪些字段**（ns → 字段名）。
+   *
+   * 存在理由：错误归属于「某一家」，但页面把三家的字段合并进四张卡 —— 只看 ns 的话，一条失败会
+   * 在 commandcode 有字段的每张卡里各印一遍（实测三处）。有这份清单，错误就只出现在**用户刚填的
+   * 那个字段**所在的卡里。缺省（老状态/测试直接构造）时退化为「该家的第一张卡只印一次」。
+   */
+  readonly saveErrorFields: Readonly<Record<string, readonly string[]>>;
+  /**
    * 厂商发现的失败原因；`undefined` 表示发现成功（或还没有发现过）。
    *
    * 与 `saveErrors` 同理：没有它，「没有可显示的厂商」这一句话对应四种完全不同的病因
@@ -217,6 +225,7 @@ export function createPageState(
     expandedVendor: previous?.expandedVendor,
     // 保存失败的原因同样跨刷新保留：它描述的还是当前这份草稿的问题，下一次保存才可能改变它。
     saveErrors: previous?.saveErrors ?? {},
+    saveErrorFields: previous?.saveErrorFields ?? {},
     // 发现成功即清空失败原因：上一次「读不到」不该在恢复后继续显示。
     discovery,
   };
@@ -227,15 +236,29 @@ export function createPageState(
  * @param state - 当前状态。
  * @param ns - 设置命名空间。
  * @param error - 失败原因；`undefined` 表示保存成功。
+ * @param fields - 这次失败涉及哪些字段（缺省沿用上一次；成功时清空）。
  * @returns 新状态；结果没有变化时是恒等变换。
  */
-export function noteSaveResult(state: PageState, ns: string, error: string | undefined): PageState {
+export function noteSaveResult(
+  state: PageState,
+  ns: string,
+  error: string | undefined,
+  fields?: readonly string[],
+): PageState {
   const current = state.saveErrors[ns];
+  const previousFields = state.saveErrorFields[ns];
   if (error === undefined ? current === undefined : current === error) return state;
   const saveErrors = { ...state.saveErrors };
-  if (error === undefined) delete saveErrors[ns];
-  else saveErrors[ns] = error;
-  return { ...state, saveErrors };
+  const saveErrorFields = { ...state.saveErrorFields };
+  if (error === undefined) {
+    delete saveErrors[ns];
+    delete saveErrorFields[ns];
+  } else {
+    saveErrors[ns] = error;
+    const keys = fields ?? previousFields;
+    if (keys !== undefined && keys.length > 0) saveErrorFields[ns] = [...keys];
+  }
+  return { ...state, saveErrors, saveErrorFields };
 }
 
 /**
@@ -315,12 +338,33 @@ export function selectTab(state: PageState, ns: string): PageState {
  * @param value - 新值。
  * @returns 新状态。
  */
+/**
+ * 改一个字段之后，`ns` 那一份草稿应该长什么样（纯函数，**不**动状态）。
+ *
+ * 单独暴露的理由：容器在事件回调里立刻要一份「最新的草稿」去落盘，而此刻 React 还没重渲染
+ * （`state` 闭包是旧的）。用同一个函数算，渲染与落盘就不会各算一套规则。
+ * @param draft - `ns` 现有的草稿（**调用方给最新那份**，不要传旧闭包里的）。
+ * @param baseline - 该 `ns` 已存储的值（判断「改回原值」的依据）。
+ * @param key - 字段名。
+ * @param value - 新值。
+ * @returns 新草稿；与基线一致时返回 `undefined`（这条草稿应当消失）。
+ */
+export function draftsAfterChange(
+  draft: Readonly<Record<string, unknown>> | undefined,
+  baseline: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+  value: unknown,
+): Record<string, unknown> | undefined {
+  const next: Record<string, unknown> = { ...(draft ?? {}) };
+  if (Object.is(baseline?.[key], value)) delete next[key];
+  else next[key] = value;
+  return Object.keys(next).length === 0 ? undefined : next;
+}
+
 export function setField(state: PageState, ns: string, key: string, value: unknown): PageState {
-  const draft: Record<string, unknown> = { ...(state.drafts[ns] ?? {}) };
-  if (Object.is(state.snapshots[ns]?.value[key], value)) delete draft[key];
-  else draft[key] = value;
+  const draft = draftsAfterChange(state.drafts[ns], state.snapshots[ns]?.value, key, value);
   const drafts = { ...state.drafts };
-  if (Object.keys(draft).length === 0) delete drafts[ns];
+  if (draft === undefined) delete drafts[ns];
   else drafts[ns] = draft;
   return { ...state, drafts };
 }

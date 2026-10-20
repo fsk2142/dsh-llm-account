@@ -63,6 +63,13 @@ function rng(seed: number): () => number {
 
 const TABS = ["llm-commandcode", "llm-opencode-go", "llm-opendesign"] as const;
 
+/** 厂商 id → 宿主设置行名（`data-field-vendor` 归属比对用；opencode/opendesign 的行 id ≠ 命名空间）。 */
+const VENDOR_ROWS: Readonly<Record<string, string>> = {
+  commandcode: "llm-commandcode",
+  "dsh-opencode-go": "opencode-go",
+  opendesign: "opendesign",
+};
+
 /**
  * 按标签页顺序（宿主设置里的行顺序）取第一家**已存储**开关为真的厂商。
  *
@@ -111,7 +118,7 @@ describe("随机操作序列仿真", () => {
       });
 
       const card = mini.mount(cardComponent);
-      const page = mini.mount(pageComponent);
+      let page: Mounted = mini.mount(pageComponent);
       let panel: Mounted = mini.mount(panelComponent);
       await settleSim(mini);
 
@@ -155,7 +162,12 @@ describe("随机操作序列仿真", () => {
         },
         () => {
           // 设置页卸载又挂回来（用户关掉设置页再打开）。
+          //
+          // **必须真的挂回来**：只 `unmount` 的话下面所有 `page.tree()` 读到的都是卸载前那一帧，
+          // 于是「界面值 vs 宿主文档」会拿旧树比新文档（实测误报过）。
+          const next = mini.mount(pageComponent);
           page.unmount();
+          page = next;
         },
       ];
 
@@ -188,10 +200,20 @@ describe("随机操作序列仿真", () => {
           if (newReads > 0) throw new Error(`${where}: ${newReads} status reads happened while every toggle was off`);
         }
 
-        // ③ 保存错误只在有保存条时出现（不会出现「只有错误没有保存条」的悬空提示）。
-        const hasBar = findSim(page.tree(), "data-save-bar") !== undefined;
-        const errored = elementsOfSim(page.tree()).some((element) => typeof element.props["data-save-error"] === "string");
-        if (errored && !hasBar) throw new Error(`${where}: a save error is rendered without a save bar`);
+        // ③ 保存错误必须**有地方显示**（不会出现「有错但界面上找不到」的静默失败）。
+        //    2026-10-20 起底部保存条没了（改了就存），错误挂在卡片里 ——
+        //    所以这里改钉两件事：错误行保留宿主原文（排查要用），且保存条永远不再出现。
+        const errored = elementsOfSim(page.tree()).filter(
+          (element) => typeof element.props["data-save-error"] === "string",
+        );
+        for (const element of errored) {
+          if (element.props["data-save-error-reason"] === undefined) {
+            throw new Error(`${where}: a save error lost its reason attribute`);
+          }
+        }
+        if (findSim(page.tree(), "data-save-bar") !== undefined) {
+          throw new Error(`${where}: the save bar came back`);
+        }
 
         // ④ 三棵树里都不出现未翻译的键名 / undefined / NaN / 对象字符串。
         const visible = [...textsOfSim(page.tree()), ...textsOfSim(card.tree()), ...textsOfSim(panel.tree())];
@@ -199,14 +221,57 @@ describe("随机操作序列仿真", () => {
           if (visible.some((item) => item.includes(token))) throw new Error(`${where}: the UI shows "${token}"`);
         }
 
-        // ⑤ 已落盘的字段值一定是宿主文档里的值（没有「界面显示 A、文档是 B」的漂移）。
-        for (const mutation of host.mutations) {
-          for (const op of mutation.ops) {
-            const field = op.path[0];
-            if (field === undefined || op.op !== "set") continue;
-            const stored = host.rows.get(mutation.row)?.value[field];
-            if (!Object.is(stored, op.value)) throw new Error(`${where}: ${mutation.row}.${field} drifted from the document`);
+        // ⑤ 界面显示的值与宿主文档一致（没有「界面显示 A、文档是 B」的漂移）。
+        //
+        // 不能拿**历史**写入序列去比：这个仿真会模拟「宿主外部改设置」（patch 文件/别的工具），
+        // 那之后文档里是外部写的值，而早先那些成功写入自然不再等于当前文档 —— 那不是漂移。
+        // 正确的判据是**当下这一帧**：每个字段显示的值，要么等于它所属那一家的文档值，要么是
+        // 用户尚未提交的草稿（那种情况必须能看到保存按钮，见 ⑩）。
+        //
+        // 必须**按字段逐棵子树**比对：`baseURL` 在 opencode 与 opendesign 各有一个，拿第一个
+        // 输入框去比第一份文档会把两家配错（实测误报过）。
+        for (const field of elementsOfSim(page.tree())) {
+          const key = field.props["data-field"];
+          if (typeof key !== "string") continue;
+          const control = elementsOfSim(field).find((item) => item.props["data-field-input"] === key);
+          if (control === undefined) continue; // 不是输入类控件（时长是三段输入）
+          if (field.props["data-field-pending"] === "true") continue; // 草稿：由 ⑩ 负责
+          const shown = control.props["value"] ?? control.props["checked"];
+          const vendor = field.props["data-field-vendor"];
+          // 带归属的只比它那一家；共有字段（无归属）比任意一家。
+          const rows =
+            vendor === undefined
+              ? [...host.rows.values()]
+              : [host.rows.get(VENDOR_ROWS[vendor as string] ?? String(vendor))].filter(
+                  (row): row is NonNullable<typeof row> => row !== undefined,
+                );
+          const matches = rows.some((row) => {
+            const stored = row.value[key];
+            return shown === undefined ? stored === undefined : Object.is(stored, shown);
+          });
+          // `number` 控件的显示值被 `String()` 过（`"1"` vs `1`）：按字符串再比一次，
+          // 否则每个数字字段都会被误判成漂移。
+          const matchesLoosely =
+            matches || rows.some((row) => key in row.value && String(row.value[key]) === String(shown));
+          // 文档里没有这个键时，界面显示的是「空」或字段声明的默认值 —— 那是设计，不是漂移
+          // （`autoSwitchModelOnQuota` 默认 false，`quotaRefreshMinutes` 默认 1，从不写进没配过的文档）。
+          const absent = rows.every((row) => !(key in row.value));
+          const declared = VENDORS.flatMap((entry) => entry.cards.flatMap((group) => group.fields)).find(
+            (spec) => spec.key === key,
+          )?.fallback;
+          const showsAbsentState =
+            absent && (shown === "" || shown === false || Object.is(shown, declared) || String(shown) === String(declared));
+          if (!matchesLoosely && !showsAbsentState) {
+            throw new Error(`${where}: the ${key} field shows ${String(shown)} but no document holds it`);
           }
+        }
+
+        // ⑩ 草稿必须有出口：有未提交输入时，卡片里必须有保存按钮（否则用户填的东西无处可存）。
+        const pendingField = elementsOfSim(page.tree()).find(
+          (element) => element.props["data-field-pending"] === "true",
+        );
+        if (pendingField !== undefined && findSim(page.tree(), "data-save") === undefined) {
+          throw new Error(`${where}: an unsaved input has no save button`);
         }
 
         // ⑥ 设置镜像必须已启动（否则外部改设置卡片永远不跟随）。

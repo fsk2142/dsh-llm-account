@@ -13,8 +13,9 @@ import { createElement, Fragment, type ReactElement, type ReactNode } from "reac
 import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon, RemoveIcon } from "./icons";
-import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
+import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, specOf, type DraftField, type PageState } from "./page-state";
 import { parseSecretRefs, summarizeKeyStatus, validateSecretInput } from "../core/switching/search-keys";
+import { savesImmediately } from "./registry";
 import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
@@ -26,8 +27,22 @@ export interface PageShellProps {
   /** 取词函数（`ctx.locale.bind("settings.llm-account")` 或测试字典）。 */
   t: (key: string) => string;
   onSelectTab: (ns: string) => void;
+  /**
+   * 改一个字段。
+   *
+   * 该不该立刻落盘由**容器**决定（判据是控件种类，见 `registry.ts` 的 `savesImmediately`）：
+   * 开关/下拉改了就存；输入类只更新草稿，等卡片上的保存按钮。页面是纯渲染层，不判断存不存。
+   */
   onSetField: (ns: string, key: string, value: unknown) => void;
+  /**
+   * 保存**一张卡片**里某一家尚未落盘的输入（卡片底部的「保存」按钮）。
+   *
+   * 用户 2026-10-20：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
+   * @param ns - 要保存的那一家（宿主按条目 id 寻址，容器负责把 ns 换成行名）。
+   */
   onSave: (ns: string) => void;
+  /** 正在保存的那一家（只禁用它对应的按钮，并显示「保存中…」）。 */
+  savingNs?: string;
   /**
    * 常驻的合并账户面板（标签页之上）。
    *
@@ -44,8 +59,6 @@ export interface PageShellProps {
   renderVendorCards?: (ns: string) => ReactNode;
   /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
   mergeTabs?: boolean;
-  /** 当前是否正在保存（保存按钮的即时反馈）。 */
-  saving?: boolean;
   /**
    * 凭据引用名 → 是否**真的**配置了（界面用来显示「已添加 / 未添加」）。
    *
@@ -145,11 +158,8 @@ function pageBody(props: PageShellProps): ReactElement {
     // 卡片**永远都在**：主开关（启用自动切换 / 启用网页搜索）关掉时只把下方配置置灰，
     // 卡片不消失 —— 用户随时能重新打开，也不会分不清「自己关掉了」还是「坏了」。
     ...SETTINGS_CARDS.map((card) => settingsCardElement(props, vendors, card)),
-    // 保存条：**任何一行**有未保存改动时出现（含功能页 —— 它的字段也存在承载行文档里）。
-    // 只看厂商行会让「启用自动切换」这类开关改了之后没有保存按钮（2026-10-20 报障）。
-    vendors.some((entry) => isDirty(props.state, entry.ns))
-      ? mergedSaveBar(props, vendors)
-      : null,
+    // 底部**不再有保存条**（用户 2026-10-20：「任何选项修改了就是直接保存，不需要那个保存
+    // 按钮了」）。改动由容器在 `onSetField` 里立刻落盘；失败原因挂在**各自卡片里**显示。
   );
 }
 
@@ -205,6 +215,31 @@ function settingsCardElement(
   // 所以这里直接从承载行的值读，而不是通过字段声明。
   if (card.id === "search") nodes.push(secretBlockOf(props, vendors));
 
+  // 4) 保存条：**本卡有未保存输入时**才出现（用户 2026-10-20：「一个卡片保留一个保存按钮，
+  // 点完保存后按钮消失，如果复原则不显示保存」）。开关/下拉改了就存，不产生草稿，所以它们
+  // 永远不点亮这根按钮 —— 只有输入类（文本/数字/时长）会。
+  const pending = pendingSavesOf(props, vendors, card);
+  const saveBar = cardSaveBar(props, card, pending);
+  if (saveBar !== null) nodes.push(saveBar);
+
+  // 5) 保存失败原因：挂在**卡片里**（错误必须能看见 —— 静默失败会让人以为改成功了）。
+  //
+  // 只挂在本卡**确实承载了那家字段**的时候：否则四张卡会把同一条错误各印一遍，看起来像四处都坏了。
+  for (const item of cardErrorsOf(props, vendors, card)) {
+    nodes.push(
+      createElement(
+        "small",
+        {
+          key: `save-error-${item.ns}`,
+          "data-save-error": item.ns,
+          "data-save-error-reason": item.error,
+          className: CSS_CLASS.failure,
+        },
+        t("save.failed"),
+      ),
+    );
+  }
+
   if (nodes.length === 0) return null;
 
   // 原生 `<details>` 自带可收起语义（与页面里其它卡片一致，不需要额外状态）。
@@ -234,6 +269,134 @@ function labelOf(props: PageShellProps, entry: VendorEntry): string {
 }
 
 /**
+ * 这张卡片里**有未保存输入**的那些厂商行。
+ *
+ * 判据只有一条：本卡承载的字段里，存在**留在草稿中**且属于输入类的键。
+ * 于是三种情况自动成立，不需要额外状态：
+ * - 开关/下拉 → 改了立刻落盘 → 草稿被容器消化 → 不进这个清单（保存按钮不出现）；
+ * - 输入类改了 → 进清单 → 卡片底部出现保存按钮；
+ * - 用户把输入改回原值 → `setField` 删掉草稿条目（与基线相同）→ 退出清单 → 按钮自己消失。
+ *
+ * **不能用 `DraftField.changed` 判断**：它把「文档里没有这个键」与「声明的默认值」也算成改动，
+ * 于是每家都会命中（实测：只改 commandcode 的 apiBase，三家各冒出一根按钮）。
+ * @param props - 页面属性。
+ * @param vendors - 参与合并的厂商行。
+ * @param card - 卡片声明。
+ * @returns 未保存输入的归属（ns + 展示名），按厂商顺序。
+ */
+function pendingSavesOf(
+  props: PageShellProps,
+  vendors: readonly VendorEntry[],
+  card: SettingsCard,
+): { ns: string; label: string }[] {
+  const out: { ns: string; label: string }[] = [];
+  for (const entry of vendors) {
+    const draft = props.state.drafts[entry.ns];
+    if (draft === undefined) continue;
+    const dirty = Object.keys(draft).some((key) => {
+      const spec = specOf(props.state, entry.ns, key);
+      // 只认输入类；开关/下拉是「改了就存」，它们此刻还在草稿里说明写入尚未回来或失败了，
+      // 那种情况由下面第四步的错误提示负责，不该再给一个保存按钮。
+      if (spec === undefined || savesImmediately(spec.kind)) return false;
+      // 这个字段归本卡吗（共有字段算承载它的第一家）。
+      return cardCarries(card, vendors, entry, key);
+    });
+    if (dirty) out.push({ ns: entry.ns, label: labelOf(props, entry) });
+  }
+  return out;
+}
+
+/**
+ * 一个字段是否由「这一家 × 这一张卡」渲染。
+ *
+ * 共有字段只渲染一次（承载者是厂商顺序里的第一家），所以只有那一家算数 —— 否则三家会各出一根
+ * 按钮、各印一条错误。专属字段看本卡的声明。
+ * @param card - 卡片声明。
+ * @param vendors - 参与合并的厂商行。
+ * @param entry - 字段所属厂商行。
+ * @param key - 字段名。
+ * @returns 是否归这张卡的这一家。
+ */
+function cardCarries(
+  card: SettingsCard,
+  vendors: readonly VendorEntry[],
+  entry: VendorEntry,
+  key: string,
+): boolean {
+  if (card.shared.includes(key)) {
+    const owner = vendors.find((candidate) => specOfFor(candidate, key) !== undefined);
+    return owner?.ns === entry.ns;
+  }
+  return card.specific.some((declared) => declared.key === key && declared.vendor === entry.providerId);
+}
+
+/** 某一家是否声明了这个字段（与 `specOf` 同义，但只需要「有没有」，不需要状态）。 */
+function specOfFor(entry: VendorEntry, key: string): true | undefined {
+  return fieldsOfKeys(entry).includes(key) ? true : undefined;
+}
+
+/** 一家声明过的全部字段名。 */
+function fieldsOfKeys(entry: VendorEntry): string[] {
+  return cardGroupsOf(entry).flatMap((group) => group.fields.map((field) => field.key));
+}
+
+/**
+ * 这张卡片该显示哪些保存失败原因。
+ *
+ * 判据是「本卡**是否承载**了这一家的字段」：三家字段合并渲染，一条失败只该出现在用户刚动过
+ * 那一项的那张卡下面。全部无条件显示的话，四张卡会把同一条错误各印一遍 —— 用户会以为自己
+ * 弄坏了四张卡。找不到归属时（该家字段都不在本卡）不显示，而不是猜一张。
+ * @param props - 页面属性。
+ * @param vendors - 参与合并的厂商行。
+ * @param card - 卡片声明。
+ * @returns 该显示的失败原因（ns + 可读原因）。
+ */
+function cardErrorsOf(
+  props: PageShellProps,
+  vendors: readonly VendorEntry[],
+  card: SettingsCard,
+): { ns: string; error: string }[] {
+  const out: { ns: string; error: string }[] = [];
+  for (const entry of vendors) {
+    const error = props.state.saveErrors[entry.ns];
+    if (typeof error !== "string" || error === "") continue;
+    // 优先按**失败的字段**归属：那条错误只该出现在用户刚填的那一项所在的卡里。
+    const failed = props.state.saveErrorFields[entry.ns];
+    const carries =
+      failed !== undefined && failed.length > 0
+        ? failed.some((key) => cardCarries(card, vendors, entry, key))
+        : // 没有字段清单（老状态/直接构造的状态）：退化为「只在该家的第一张卡里印一次」。
+          isFirstCarryingCard(vendors, entry, card);
+    if (carries) out.push({ ns: entry.ns, error });
+  }
+  return out;
+}
+
+/**
+ * 这张卡是不是「该家在页面上出现的第一张」。
+ *
+ * 没有失败字段清单时的退化归属：至少保证一条错误只印一次，而不是在有该家字段的每张卡里各印一遍。
+ * @param vendors - 参与合并的厂商行。
+ * @param entry - 出错的厂商行。
+ * @param card - 卡片声明。
+ * @returns 是否是第一张承载该家字段的卡。
+ */
+function isFirstCarryingCard(
+  vendors: readonly VendorEntry[],
+  entry: VendorEntry,
+  card: SettingsCard,
+): boolean {
+  const keys = fieldsOfKeys(entry);
+  for (const candidate of SETTINGS_CARDS) {
+    const carries = [...candidate.shared, ...candidate.specific.map((item) => item.key)].some(
+      (key) => keys.includes(key) && cardCarries(candidate, vendors, entry, key),
+    );
+    if (carries) return candidate.id === card.id;
+  }
+  return false;
+}
+
+/**
  * 搜索密钥那一块：**输入框 + 添加按钮 + 已添加列表**。
  *
  * 用户 2026-10-20：「只保留保存密钥那个，没添加一个就自动显示添加了一个，然后还可以点 x
@@ -252,11 +415,15 @@ function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): 
   const save = props.onSaveSecret;
   if (save === undefined) return null;
   const { t } = props;
-  // 引用名列表住在承载行（功能页）的设置文档里，但它**不是**用户可编辑的字段，
-  // 所以直接从快照读，不走 `fieldsOf`（那条路要求字段已被声明）。
-  const raw = vendors
-    .map((entry) => props.state.snapshots[entry.ns]?.value?.["searchApiKeyRefs"])
-    .find((value) => value !== undefined);
+  // 引用名列表住在承载行的设置文档里，但它**不是**用户可编辑的字段，所以不走 `fieldsOf`。
+  //
+  // **必须先看草稿**：添加/删除写的是草稿（还没落盘）。只看快照就等于「点了没反应」——
+  // 用户的改动要等下一次宿主重读才进快照，而那期间界面已经渲染过一轮了。
+  const pick = (entry: VendorEntry): unknown => {
+    const draft = props.state.drafts[entry.ns]?.["searchApiKeyRefs"];
+    return draft !== undefined ? draft : props.state.snapshots[entry.ns]?.value?.["searchApiKeyRefs"];
+  };
+  const raw = vendors.map(pick).find((value) => value !== undefined);
   const refs = Array.isArray(raw)
     ? raw.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim())
     : parseSecretRefs(typeof raw === "string" ? raw : "");
@@ -351,68 +518,6 @@ function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): 
   );
 }
 
-/**
- * 合并视图的保存条：三家共用一条。
- *
- * 为什么要合并：四张卡片里三家字段是混排的，若每家各一条保存条，用户会看到三根按钮却分不清
- * 哪一根管哪一行。这里一次性提交**所有脏行**。
- * @param props - 页面属性。
- * @param vendors - 厂商行。
- * @returns 保存条元素。
- */
-function mergedSaveBar(props: PageShellProps, vendors: readonly VendorEntry[]): ReactElement {
-  const { t } = props;
-  // 功能页与承载行（`rowIds[0]`，本插件是 `llm-commandcode`）**共用同一份设置文档**。
-  // 功能页字段的草稿存在 `FEATURE_TAB_NS` 下，但保存必须落到承载行上 ——
-  // 否则那些开关永远存不下去（2026-10-20 报障「点了没反应」的深层原因之一）。
-  const carrierNs = vendors.find((entry) => entry.ns === FEATURE_TAB_NS)?.rowIds[0];
-  const dirty = vendors.filter((entry) => {
-    if (entry.ns !== FEATURE_TAB_NS) return isDirty(props.state, entry.ns);
-    // 功能页：只有承载行自己没脏时才替它出按钮（避免同一份文档出现两根保存按钮）。
-    return (
-      carrierNs !== undefined &&
-      !vendors.some((other) => other.ns === carrierNs && isDirty(props.state, other.ns)) &&
-      isDirty(props.state, entry.ns)
-    );
-  });
-  const saving = props.saving === true;
-  return createElement(
-    "div",
-    { "data-save-bar": "true", className: CSS_CLASS.save },
-    ...dirty.map((entry) => {
-      // 功能页的按钮写的是承载行（宿主按条目 id 寻址，功能页没有自己的行）。
-      const target = entry.ns === FEATURE_TAB_NS && carrierNs !== undefined ? carrierNs : entry.ns;
-      return createElement(
-        "button",
-        {
-          key: entry.ns,
-          type: "button",
-          "data-save": target,
-          className: CSS_CLASS.buttonPrimary,
-          disabled: saving,
-          onClick: () => props.onSave(target),
-        },
-        saving ? t("saving") : t("save"),
-      );
-    }),
-    createElement("small", null, t("saveHint")),
-    ...dirty
-      .filter((entry) => props.state.saveErrors[entry.ns] !== undefined)
-      .map((entry) =>
-        createElement(
-          "small",
-          {
-            key: `error-${entry.ns}`,
-            // 值与旧版一致：**命名空间**（调用方与测试都靠它定位是哪一家失败了）。
-            "data-save-error": entry.ns,
-            "data-save-error-reason": props.state.saveErrors[entry.ns],
-            className: CSS_CLASS.failure,
-          },
-          t("save.failed"),
-        ),
-      ),
-  );
-}
 
 /**
  * 一组通用字段卡片。
@@ -450,6 +555,13 @@ function fieldElement(
   const credentialBadge = credentialBadgeOf(props, field);
   // 说明放在**标签下面**，与控件同一行的只有标签本身：否则一段长说明会和输入框一起
   // 把标签列挤到只剩一两个字宽（真机截图里「用量刷新间隔（分钟）」就是竖排的）。
+  //
+  // 有未落盘的输入时标出来：卡片级保存按钮是「还在草稿里」的唯一线索，这个标记让用户看得出
+  // 是哪几个字段没存（按钮只说「这张卡有东西没存」）。
+  //
+  // 判据是**草稿里有这个键**，不是 `field.changed`：后者会把「文档没写这个键、界面用了声明默认值」
+  // 也算成改动（`autoSwitchModelOnQuota` 默认 false 就会永远亮着）。
+  const pending = Object.hasOwn(props.state.drafts[entry.ns] ?? {}, spec.key);
   return createElement(
     "label",
     {
@@ -457,6 +569,7 @@ function fieldElement(
       "data-field": spec.key,
       // 厂商专属字段带上归属，便于排查「这项只对某家生效」。
       ...(vendorLabel === undefined ? {} : { "data-field-vendor": entry.providerId }),
+      ...(pending ? { "data-field-pending": "true" } : {}),
       className: CSS_CLASS.field,
     },
     createElement(
@@ -477,6 +590,54 @@ function fieldElement(
       hint,
     ),
     control,
+  );
+}
+
+/**
+ * 一张卡片底部的保存按钮：**只有真有未落盘的输入时才渲染**。
+ *
+ * 用户 2026-10-20：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
+ *
+ * 三条都由这里保证：
+ * 1. 没有未保存的输入 → 返回 `null`（按钮不出现，页面不常驻一根没用的按钮）；
+ * 2. 保存中 → 显示「保存中…」并禁用（避免连点），保存成功后草稿与基线一致，下一帧按钮自己消失；
+ * 3. 用户改回原值 → `setField` 会把草稿条目删掉（与基线相同），于是这里又是 `null`。
+ *
+ * 为什么按**厂商行**分别出一根按钮，而不是全页一根：四张卡里的字段来自三家，而保存是写某一家的
+ * 设置文档（宿主按条目 id 寻址）。一根按钮要跨三家写，失败时也说不清是哪家失败了。同一张卡里
+ * 若两家都有未保存输入，就并排出现两根（各自带厂商名，不会认错）。
+ * @param props - 页面属性。
+ * @param card - 卡片声明。
+ * @param pending - 这张卡里**未保存输入**的归属（ns + 展示名）。
+ * @returns 保存条元素；没有任何未保存输入时为 `null`。
+ */
+function cardSaveBar(
+  props: PageShellProps,
+  card: SettingsCard,
+  pending: readonly { ns: string; label: string }[],
+): ReactElement | null {
+  if (pending.length === 0) return null;
+  const { t } = props;
+  const busy = props.savingNs !== undefined && pending.some((item) => item.ns === props.savingNs);
+  return createElement(
+    "div",
+    { key: "save", "data-card-save": card.id, className: CSS_CLASS.save },
+    ...pending.map((item) =>
+      createElement(
+        "button",
+        {
+          key: item.ns,
+          type: "button",
+          "data-save": item.ns,
+          className: CSS_CLASS.buttonPrimary,
+          disabled: props.savingNs !== undefined,
+          onClick: () => props.onSave(item.ns),
+        },
+        busy && props.savingNs === item.ns ? t("saving") : t("save"),
+        // 两家同时有未保存输入时才标厂商名：只有一家时那是废话。
+        pending.length > 1 ? createElement("small", { key: "vendor" }, item.label) : null,
+      ),
+    ),
   );
 }
 
