@@ -120,29 +120,29 @@ it("账号平铺在同一列表：没有供应商分组标题，账号名后跟�
   expect(elementsOf(tree).filter((element) => element.props["data-accounts-group"] !== undefined)).toEqual([]);
 });
 
-it("全局添加入口：Command Code 与 OpenCode 各自路由到自己的厂商", () => {
+it("全局添加入口只剩「网页登录」：每家一个，各自路由到自己的厂商", () => {
   const { tree, props } = render();
-  const addCc = elementsOf(tree).find((element) => element.props["data-action"] === "add");
-  const addOc = elementsOf(tree).find((element) => element.props["data-action"] === "add-dsh-opencode-go");
-  fire(addCc, "onClick");
-  fire(addOc, "onClick");
-  expect(props.onOpenAction).toHaveBeenNthCalledWith(1, "commandcode", { kind: "add" });
-  expect(props.onOpenAction).toHaveBeenNthCalledWith(2, "dsh-opencode-go", { kind: "add" });
+  // 2026-10-20 用户要求去掉「使用 API Key」入口（官方入口已提供 API 添加）。
+  expect(elementsOf(tree).some((element) => element.props["data-add-for"] !== undefined)).toBe(false);
+  const loginCc = elementsOf(tree).find((element) => element.props["data-login-for"] === "commandcode");
+  const loginOc = elementsOf(tree).find((element) => element.props["data-login-for"] === "dsh-opencode-go");
+  fire(loginCc, "onClick");
+  fire(loginOc, "onClick");
+  expect(props.onLoginBegin).toHaveBeenNthCalledWith(1, "commandcode");
+  expect(props.onLoginBegin).toHaveBeenNthCalledWith(2, "dsh-opencode-go");
 });
 
-it("添加入口按厂商分组：每家一个小标题 + 两个动作（2026-10-18 操作逻辑）", () => {
+it("添加入口按厂商分组：每家一个小标题 + 一个「网页登录」动作（2026-10-20 收敛）", () => {
   const { tree } = render();
   const groups = elementsOf(tree).filter((element) => element.props["data-add-vendor-group"] !== undefined);
   expect(groups.map((element) => element.props["data-add-vendor-group"])).toEqual(["commandcode", "dsh-opencode-go"]);
-  // 平铺四个按钮时「往哪家加」只在按钮文字的前缀里；现在每家一块，标题就是厂商名。
+  // 平铺按钮时「往哪家加」只在按钮文字的前缀里；现在每家一块，标题就是厂商名。
   expect(textsOf(groups[0]).join(" ")).toContain("Command Code");
-  expect(textsOf(groups[0]).join(" ")).toContain("使用 API Key");
   expect(textsOf(groups[0]).join(" ")).toContain("网页登录");
+  // 「使用 API Key」不再出现（用户要求只保留网页授权）。
+  expect(textsOf(groups[0]).join(" ")).not.toContain("使用 API Key");
   // 按钮文字不再重复厂商名（标题已经写了），厂商在 data-* 上，自动化与测试都能直接定位。
   expect(textsOf(groups[0]).join(" ")).not.toContain("Command Code · ");
-  expect(
-    elementsOf(groups[1]).some((element) => element.props["data-add-for"] === "dsh-opencode-go"),
-  ).toBe(true);
   expect(
     elementsOf(groups[1]).some((element) => element.props["data-login-for"] === "dsh-opencode-go"),
   ).toBe(true);

@@ -235,76 +235,6 @@ describe("设置页容器仿真", () => {
     expect(host.rows.get("llm-commandcode")!.value.apiBase).toBe("https://first.example");
   });
 
-  it("账户操作经容器走到远程命名空间：填名称与密钥 → 添加 → addAccount(vendor, {label, key})", async () => {
-    const mini = await runtime();
-    await freshSeams();
-    const host = fakeHost(mini);
-    // 生产路径：账户表在标签页上方的合并面板里。
-    const page = mini.mount(await pageContainer(host));
-    await settleSim(mini);
-
-    // 底部「添加账户」：点入口展开表单 → 填名称 + 密钥 → 点提交。
-    click(page.tree(), "data-action", "add");
-    await settleSim(mini);
-    fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: " work " } });
-    fireSim(find(page.tree(), "data-add-key"), "onChange", { target: { value: " sk-new\n" } });
-    await settleSim(mini);
-    click(page.tree(), "data-action", "confirmAdd");
-    await settleSim(mini);
-
-    // 走到远程命名空间；名称/密钥在派发边界上 trim 过（派发本身由 seams.test.ts 覆盖）。
-    expect(host.usageCalls).toEqual([{ method: "addAccount", vendor: "commandcode", input: { label: "work", key: "sk-new" } }]);
-  });
-
-  it("点「添加账户」会展开表单（回归：入口与提交曾是同一个按钮，空提交毫无反应）", async () => {
-    const mini = await runtime();
-    await freshSeams();
-    const host = fakeHost(mini);
-    const page = mini.mount(await pageContainer(host));
-    await settleSim(mini);
-
-    // 收起时只有入口，没有输入框：点它才展开。
-    expect(findSim(page.tree(), "data-add-label")).toBeUndefined();
-    click(page.tree(), "data-action", "add");
-    await settleSim(mini);
-    // 表单已打开 → 输入框出现，且受控（值来自状态，容器不留本地状态）。
-    expect(findSim(page.tree(), "data-add-label")).toBeDefined();
-    fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "typed only" } });
-    await settleSim(mini);
-    expect(find(page.tree(), "data-add-label").props["value"]).toBe("typed only");
-    // 表单已打开 → 出现取消与提交按钮。
-    expect(findSim(page.tree(), "data-action", "cancel")).toBeDefined();
-    expect(findSim(page.tree(), "data-action", "confirmAdd")).toBeDefined();
-  });
-
-  it("空名称点「确定」不再毫无反应：表单里给出原因，且一条调用都不发（2026-10-18 操作逻辑）", async () => {
-    const mini = await runtime();
-    await freshSeams();
-    const host = fakeHost(mini);
-    const page = mini.mount(await pageContainer(host));
-    await settleSim(mini);
-
-    click(page.tree(), "data-action", "add");
-    await settleSim(mini);
-    click(page.tree(), "data-action", "confirmAdd");
-    await settleSim(mini);
-
-    // 规矩不变：空名称不发调用（防住误写一个空账号）……
-    expect(host.usageCalls).toEqual([]);
-    // ……变的是这一次点击有可见结果：表单里写着为什么（以前是死按钮，用户无从判断）。
-    expect(textsOfSim(page.tree())).toContain("请先填写账户名称。");
-
-    // 一开始输入，原因就消失（不残留上一次的错）。
-    fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "work" } });
-    await settleSim(mini);
-    expect(findSim(page.tree(), "data-action-error")).toBeUndefined();
-
-    // 名称有了、密钥留空：仍然可以提交（「先建条目、稍后补密钥」是允许的路径），表单收起来。
-    click(page.tree(), "data-action", "confirmAdd");
-    await settleSim(mini);
-    expect(host.usageCalls).toEqual([{ method: "addAccount", vendor: "commandcode", input: { label: "work" } }]);
-    expect(findSim(page.tree(), "data-add-label")).toBeUndefined();
-  });
 
   it("按账户刷新模型：点账号行的刷新只重读**那一家**的目录（2026-10-18 用户要求）", async () => {
     const mini = await runtime();
@@ -438,13 +368,11 @@ describe("设置页容器仿真", () => {
     await settleSim(mini);
     expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
 
-    // 添加账号 → 成功后修订号 +1 → 三家状态重读（新账号的额度必须现问，不能吃缓存）。
-    click(page.tree(), "data-action", "add");
-    await settleSim(mini);
-    fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "work" } });
-    fireSim(find(page.tree(), "data-add-key"), "onChange", { target: { value: "sk-new" } });
-    await settleSim(mini);
-    click(page.tree(), "data-action", "confirmAdd");
+    // 一次账号操作 → 成功后修订号 +1 → 三家状态重读（缓存不能盖住刚发生的变更）。
+    //
+    // 2026-10-20 起「新增账号（API key）」入口已去掉，所以这里改用**仍然存在**的
+    // 「移除账号」来触发同一条机制 —— 被测的是「操作后强制现读」，不是那个具体入口。
+    click(page.tree(), "data-action", "remove");
     await settleSim(mini);
     expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go", "opendesign"]);
   });
@@ -1009,7 +937,7 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
     vi.unstubAllGlobals();
   });
 
-  it("再点一次「新增账户」：还开着的添加表单与等待中的登录一起收掉", async () => {
+  it("再点一次「新增账户」：等待中的登录被收掉", async () => {
     const mini = await runtime();
     await freshSeams();
     const host = fakeHost(mini);
@@ -1017,10 +945,8 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
     await settleSim(mini);
     stubBrowserWindow();
 
-    // 先摆出两个"未完成"：一个添加表单 + 一个等待中的登录。
-    click(page.tree(), "data-action", "add");
-    await settleSim(mini);
-    expect(findSim(page.tree(), "data-add-label")).toBeDefined();
+    // 2026-10-20：「新增账号（API key）」入口已去掉，所以这里只剩「等待中的登录」这一种
+    // 未完成状态要收。被测的是「收起区块 = 后退一步」，与具体有几种表单无关。
     click(page.tree(), "data-action", "login");
     await settleSim(mini);
     expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
@@ -1029,38 +955,40 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
     fireSim(find(page.tree(), "data-add-chooser"), "onToggle", { currentTarget: { open: false } });
     await settleSim(mini);
 
-    expect(findSim(page.tree(), "data-add-label"), "添加表单应被收掉").toBeUndefined();
     expect(findSim(page.tree(), "data-login-panel"), "等待中的登录应被取消").toBeUndefined();
     expect(host.loginCalls).toContainEqual({ method: "loginCancel", vendor: "commandcode" });
     page.unmount();
     vi.unstubAllGlobals();
   });
-});
 
-it("加完账号后模型目录自动重读：加之前读不到（401），加之后读到（目录要鉴权）", async () => {
+  it("网页登录完成后模型目录自动重读：登录前读不到（401），登录后读到（目录要鉴权）", async () => {
   const mini = await runtime();
   await freshSeams();
-  const host = fakeHost(mini);
-  // 加账号之前：目录读不到（Open Design 的 /v1/models 不带密钥就是 401）。失败读数不进缓存。
+  vi.useFakeTimers();
+  const host = fakeHost(mini, { login: { status: () => ({ state: "success" }) } });
+  // 登录之前：目录读不到（Open Design 的 /v1/models 不带密钥就是 401）。失败读数不进缓存。
   host.modelFailures = ["models: opendesign read failed (401 missing_api_key)"];
   const page = mini.mount(await pageContainer(host));
   await settleSim(mini);
   const before = host.modelCalls.length;
-  expect(before).toBeGreaterThanOrEqual(3);
-
-  // 账号加进来之后目录就能读了（同一把密钥）。
+  // 登录之后目录就正常了（同一把密钥）：把失败项清掉再触发重读。
   host.modelFailures = [];
-  click(page.tree(), "data-action", "add");
+  expect(before).toBeGreaterThanOrEqual(3);
+  stubBrowserWindow();
+
+  // 2026-10-20：「新增账号（API key）」入口已去掉，改由**网页登录完成**触发同一条重读链。
+  // 被测的是「账号变了就重读目录」，不是某个具体入口。
+  click(page.tree(), "data-action", "login");
   await settleSim(mini);
-  fireSim(find(page.tree(), "data-add-label"), "onChange", { target: { value: "work" } });
-  fireSim(find(page.tree(), "data-add-key"), "onChange", { target: { value: "sk-new" } });
-  await settleSim(mini);
-  click(page.tree(), "data-action", "confirmAdd");
+  vi.advanceTimersByTime(1_500);
   await settleSim(mini);
 
   // 账号修订号变化 → 目录重读（否则界面会一直停在挂载时那次空目录上）。
   expect(host.modelCalls.length).toBeGreaterThan(before);
   page.unmount();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  });
 });
 
 it("侧边栏不再轮播：时间推进不会换账号（用户 2026-10-19 明确要求去掉轮播）", async () => {

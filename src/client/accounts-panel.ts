@@ -133,8 +133,7 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
     0,
   );
   const addVendor = vendors.find((group) => group.action?.kind === "add");
-  const addProps = addVendor === undefined ? undefined : accountPropsFor(props, addVendor);
-  // 只要还有一家在首次读取中，就不说「还没有添加任何账户」——那句话描述的是读完之后
+  const addProps = addVendor === undefined ? undefined : accountPropsFor(props, addVendor);  // 只要还有一家在首次读取中，就不说「还没有添加任何账户」——那句话描述的是读完之后
   // 的事实；加载中就说「正在读取」，两句话同时出现是自相矛盾（本机实测见过）。
   const anyLoading = vendors.some((group) => group.loading === true);
 
@@ -183,8 +182,15 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
       },
       createElement("summary", { className: CSS_CLASS.addSummary }, t("account.addAccount")),
       createElement("small", { className: CSS_CLASS.note }, t("account.addAccount.hint")),
-      // 按厂商分组（2026-10-18 用户要求「新增账号那个地方优化一下操作逻辑」）：平铺四个按钮
-      // 时「往哪家加」只在按钮文字的前缀里，扫一眼分不出来；现在每家一个小标题 + 两个动作。
+      // 每家只有一个入口：**网页登录**（2026-10-20 用户要求）。
+      //
+      // 为什么去掉「新增账号（填 API key）」：用户原话「API 登录基本没什么用处，毕竟官方入口
+      // 也留了 API 添加」。核对下来对 Open Design 尤其成立 —— 纯 API key 账号拿不到套餐、
+      // workspaceId 与周期额度（账单只走 vela 控制面，而控制面凭据只有网页登录产物产出）。
+      //
+      // 底层的 `addAccount` 能力**没有删**：官方入口与命令行仍在用，以后想加回来不必重写；
+      // 已用 API key 建好的账号也还能「更换密钥」（那类账号唯一的维修路径）。
+      // 按厂商分组只是为了让用户知道「这一家的登录是这一家」，不是可选填 API key。
       createElement(
         "div",
         { "data-account-add-actions": "true", className: CSS_CLASS.addGroup },
@@ -196,18 +202,6 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
             createElement(
               "div",
               { className: CSS_CLASS.actions },
-              createElement(
-                "button",
-                {
-                  key: `${group.entry.providerId}-add`,
-                  type: "button",
-                  "data-action": group.entry.providerId === "commandcode" ? "add" : `add-${group.entry.providerId}`,
-                  "data-add-for": group.entry.providerId,
-                  className: CSS_CLASS.buttonSecondary,
-                  onClick: () => props.onOpenAction(group.entry.providerId, { kind: "add" }),
-                },
-                t("account.addFor"),
-              ),
               createElement(
                 "button",
                 {
