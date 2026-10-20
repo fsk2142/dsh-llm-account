@@ -404,6 +404,13 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     // 额度用尽后是否自动换模型（用户 2026-10-19：**默认关闭**）。
     // 关着时账号全被限额拒绝就直接报错，不替用户换。
     autoSwitchModel: () => document()["autoSwitchModelOnQuota"] === true,
+    // **图片字节**（2026-10-20）：宿主的 `ImageBlock` 只有 durable ref，字节要从
+    // `attachments` 服务取。服务缺席（老宿主 / 未装附件插件）时返回 undefined，
+    // 图片随之降级成文字占位 —— 不是静默丢弃。
+    //
+    // 每次请求现取服务：`ctx.get` 在服务可用之前返回 undefined，而插件可能在附件服务
+    // 挂载之前就已加载（与 `resolveAttachments?.()` 的官方写法同一意图）。
+    resolveImage: (ref, signal) => readImageBytes(ctx, ref, signal),
   };
   const adapter = createOpenDesignAdapter(deps);
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。
@@ -782,4 +789,48 @@ function waitForExit(child: ReturnType<typeof spawn>): Promise<number | null> {
     child.on("exit", (code) => resolve(code));
     child.on("error", () => resolve(null));
   });
+}
+
+/**
+ * 从宿主的 **attachment 服务**取一张图片的编码字节。
+ *
+ * 为什么需要这一层：宿主的 `ImageBlock` 只带 durable ref（`attachmentId`），**不含字节**。
+ * 官方适配器（`dsh-llm-deepseek`）走的是同一条路：`ctx.get("attachments")` →
+ * `readImageRequest(ref, target, signal)` → 拿到 `{ data, mediaType, width, height }`。
+ *
+ * 三处刻意的保守：
+ * 1. **服务缺席就返回 `undefined`**（老宿主 / 附件插件未装）—— 图片降级成文字占位，
+ *    不抛错、不假装发出去；
+ * 2. **target 用宽高上限兜底**：拿不到原图尺寸时给一个足够大的目标，让附件服务自己按
+ *    编码器的最优质量档降采样（`maxBytes` 给 5MB，远高于任何网关的内联上限）；
+ * 3. 任何异常都吞掉并返回 `undefined`：一张图读失败不该让整次对话失败。
+ * @param ctx - 插件上下文（用来 `get("attachments")`）。
+ * @param ref - 宿主给的持久化图片引用。
+ * @param signal - 请求取消信号。
+ * @returns 编码后的字节与 MIME；拿不到时 `undefined`。
+ */
+async function readImageBytes(
+  ctx: unknown,
+  ref: { attachmentId: string },
+  signal?: AbortSignal,
+): Promise<{ attachmentId: string; data: Uint8Array; mediaType: string } | undefined> {
+  try {
+    const get = (ctx as { get?: (name: string) => unknown }).get;
+    const attachments = typeof get === "function" ? get.call(ctx, "attachments") : undefined;
+    if (!isRecord(attachments) && typeof attachments !== "object") return undefined;
+    const read = (attachments as { readImageRequest?: unknown }).readImageRequest;
+    if (typeof read !== "function") return undefined;
+    // 目标尺寸交给编码器自己收敛：`width/height` 给源图上限量级，`maxBytes` 高于内联上限。
+    const target = { width: 4096, height: 4096, maxBytes: 5 * 1024 * 1024 };
+    const result: unknown = await (
+      read as (r: unknown, t: unknown, s?: AbortSignal) => Promise<unknown>
+    ).call(attachments, ref, target, signal);
+    if (!isRecord(result)) return undefined;
+    const data = result.data;
+    const mediaType = result.mediaType;
+    if (!(data instanceof Uint8Array) || typeof mediaType !== "string" || mediaType === "") return undefined;
+    return { attachmentId: ref.attachmentId, data, mediaType };
+  } catch {
+    return undefined;
+  }
 }

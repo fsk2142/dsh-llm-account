@@ -57,7 +57,7 @@ import {
   decodeStream,
   generateRequest,
 } from "./protocol";
-import type { BodyFacts } from "./protocol";
+import type { BodyFacts, RequestImageBytes } from "./protocol";
 
 /**
  * 调用方中止的错误码。宿主 `LlmRuntime` 用同一个字符串判定「这次请求是被取消的」；
@@ -149,6 +149,24 @@ export interface OpenDesignAdapterDeps {
   resolveEnvironment?: (name: string) => string | undefined;
   /** 普通对话请求前的切换钩子；辅助调用（compaction/session-title）不调用。 */
   beforeRequest?: (input: { sessionId?: string; purpose?: string }) => Promise<void>;
+  /**
+   * **图片字节解析**（可选；接上宿主 `attachments` 服务后才有）。
+   *
+   * 宿主的 `ImageBlock` 只带 durable ref（`attachmentId`），**不含字节**；要发图必须经
+   * `AttachmentStore.readImageRequest(ref, target, signal)` 把它编码成请求版本。
+   * 装配层（`index.ts`）用 `ctx.get("attachments")` 拿到该服务后注入这里 ——
+   * 协议层保持纯函数，不依赖宿主服务。
+   *
+   * 缺席（宿主没有 attachments 服务 / 老宿主）= 不发图：图片降级成文字占位，
+   * 与宿主自己对纯文本模型的处理一致（**绝不静默丢弃**）。
+   * @param ref - 宿主给的持久化图片引用。
+   * @param signal - 请求取消信号。
+   * @returns 编码后的字节与 MIME；拿不到时 `undefined`。
+   */
+  resolveImage?: (
+    ref: { attachmentId: string },
+    signal?: AbortSignal,
+  ) => Promise<{ attachmentId: string; data: Uint8Array; mediaType: string } | undefined>;
   /**
    * 用量采集端口（可选）。成功与失败都记 —— 只记成功会让成功率永远是 100%。
    * 端口实现必须不阻塞、不抛错（见 `core/usage-port`）。
@@ -553,11 +571,43 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     const wire = generateRequest({
       base: config.apiBase,
       key,
-      body: JSON.stringify(buildRequestBody(options, facts)),
+      body: JSON.stringify(buildRequestBody(options, facts, await this.#imagesOf(options))),
     });
     const init: RequestInit = { method: "POST", headers: wire.headers, body: wire.body };
     if (options.signal !== undefined) init.signal = options.signal;
     return this.#deps.fetchImpl(wire.url, init);
+  }
+
+  /**
+   * 收集本请求里出现过的图片字节（按 attachment id 索引，同一张图只读一次）。
+   *
+   * 宿主的 `ImageBlock` 只有 durable ref，字节要经注入的 `resolveImage` 去附件服务取。
+   * **一遍失败不影响其它图片**，也不让整次请求失败：取不到的那张会降级成文字占位
+   * （见 `openAiUserContent`）—— 用户至少知道「这里本该有一张图」。
+   * @param options - 宿主的完整请求。
+   * @returns attachment id → 字节；没有图片或没有解析器时为空 Map。
+   */
+  async #imagesOf(options: GenerateOptions): Promise<ReadonlyMap<string, RequestImageBytes>> {
+    const resolve = this.#deps.resolveImage;
+    const images = new Map<string, RequestImageBytes>();
+    if (resolve === undefined) return images;
+    const wanted = new Set<string>();
+    for (const message of options.messages) {
+      for (const block of message.content) {
+        if (block.type !== "image") continue;
+        const id = block.attachment?.attachmentId;
+        if (typeof id === "string" && id !== "") wanted.add(id);
+      }
+    }
+    for (const id of wanted) {
+      try {
+        const resolved = await resolve({ attachmentId: id }, options.signal);
+        if (resolved !== undefined) images.set(id, resolved);
+      } catch {
+        // 单张图读失败：留给文字占位，不打断整次请求。
+      }
+    }
+    return images;
   }
 
   /**

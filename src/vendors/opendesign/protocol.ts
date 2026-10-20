@@ -134,11 +134,73 @@ export interface BodyFacts {
   reasoningEffort?: string;
 }
 
-/** 把一段内容压成纯文本（文件/图片块属于后续期次，这里只取文本块）。 */
+/** 把一段内容压成纯文本（文件块仍属后续期次；图片见 {@link openAiUserContent}）。 */
 function textOf(content: readonly ContentBlock[]): string {
   const parts: string[] = [];
   for (const block of content) if (block.type === "text") parts.push(block.text);
   return parts.join("");
+}
+
+/**
+ * 一张已编码好的请求图片（由适配器从附件服务取到字节后传进来）。
+ *
+ * 为什么不在本模块里读附件：读图片需要宿主的 attachment 服务（`readImageRequest`），
+ * 而那是**异步 I/O + 宿主服务**，属于适配器装配层的事。协议层只负责把字节拼成
+ * OpenAI 形状 —— 这样纯函数可测，也不会把宿主依赖带进协议模块。
+ */
+export interface RequestImageBytes {
+  /** 附件 id（同一张图在历史里出现多次时用于去重/复用）。 */
+  attachmentId: string;
+  /** 编码后的图片字节。 */
+  data: Uint8Array;
+  /** MIME 类型（`image/png` / `image/jpeg` / …）。 */
+  mediaType: string;
+}
+
+/**
+ * 把 user 消息的内容转成 OpenAI 形状。
+ *
+ * 文本 + 图片混排时用 **content 数组**（`[{type:"text"},{type:"image_url"}]`）；
+ * 只有文本时仍然发纯字符串 —— 那是绝大多数请求，也避免给所有上游塞一个数组。
+ *
+ * 图片按 `image_url` 发 data URL（OpenAI 兼容网关的通用形状）。**取不到字节的图片
+ * 会降级成文字占位**，绝不静默丢弃：用户至少能看到「这里本该有一张图」。
+ * @param content - 一条 user 消息的内容块。
+ * @param images - 已取到字节的图片，按 attachment id 索引。
+ * @returns OpenAI 形状的 `content`（字符串或内容数组）。
+ */
+export function openAiUserContent(
+  content: readonly ContentBlock[],
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): unknown {
+  const hasImage = content.some((block) => block.type === "image");
+  // 没有图片：保持纯字符串（与另两家、与旧实现完全一样）。
+  if (!hasImage) return textOf(content);
+  const parts: unknown[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      // 空文本块不发（OpenAI 对空字符串的 content part 处理不一致）。
+      if (block.text !== "") parts.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type !== "image") continue;
+    const id = block.attachment?.attachmentId;
+    const bytes = typeof id === "string" ? images?.get(id) : undefined;
+    if (bytes === undefined) {
+      // 取不到字节 → 文字占位（与宿主 `textOnlyImageText` 同一意图：让模型知道有图）。
+      parts.push({ type: "text", text: `[图片未能发送：${typeof id === "string" ? id : "未知附件"}]` });
+      continue;
+    }
+    parts.push({ type: "image_url", image_url: { url: dataUrlOf(bytes) } });
+  }
+  // 全部块都被过滤掉时给一个空文本，避免 content 变成空数组（部分网关会拒）。
+  return parts.length === 0 ? "" : parts;
+}
+
+/** 把编码后的字节拼成 data URL。 */
+function dataUrlOf(image: RequestImageBytes): string {
+  const base64 = Buffer.from(image.data).toString("base64");
+  return `data:${image.mediaType};base64,${base64}`;
 }
 
 /** 把 `tool.parameters` 包成对象（宿主已保证它是对象）。 */
@@ -147,12 +209,16 @@ function toolSchema(parameters: Record<string, unknown>): Record<string, unknown
 }
 
 /** Chat Completions 的 messages 数组（OpenAI 形状：user / assistant(+tool_calls) / tool）。 */
-function openAiMessages(messages: readonly RequestMessage[]): unknown[] {
+function openAiMessages(
+  messages: readonly RequestMessage[],
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): unknown[] {
   const out: unknown[] = [];
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
     if (message.role === "user") {
-      out.push({ role: "user", content: textOf(message.content) });
+      // 图片只在 user 消息里（宿主的 `ImageBlock` 注释：当前生产适配器只声明纯文本输出）。
+      out.push({ role: "user", content: openAiUserContent(message.content, images) });
       continue;
     }
     if (message.role === "assistant") {
@@ -187,13 +253,17 @@ function openAiMessages(messages: readonly RequestMessage[]): unknown[] {
  * @param facts - 由适配器算出的请求事实。
  * @returns 可 `JSON.stringify` 的请求体。
  */
-export function buildRequestBody(options: GenerateOptions, facts: BodyFacts): unknown {
+export function buildRequestBody(
+  options: GenerateOptions,
+  facts: BodyFacts,
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): unknown {
   const tools: readonly ToolSchema[] = options.tools ?? [];
   return {
     model: options.model,
     messages: [
       ...(facts.systemText === "" ? [] : [{ role: "system", content: facts.systemText }]),
-      ...openAiMessages(options.messages),
+      ...openAiMessages(options.messages, images),
     ],
     ...(tools.length === 0
       ? {}
