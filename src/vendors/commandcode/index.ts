@@ -64,6 +64,7 @@ import { createCommandCodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { applyAutoContinue } from "../auto-continue";
 import { applySearch } from "../search";
+import { gatewayAccessOf } from "../gateway-access";
 import { registerSearchProvider } from "../search-provider";
 import { probeSearchKey } from "../search-api";
 import { normalizeSearchKeyRefs } from "../../core/switching/search-keys";
@@ -407,18 +408,10 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
             const value = document()["searchStrategy"];
             return typeof value === "string" && value !== "" ? value : "gateway-first";
           },
-          gatewayAccess: async (provider) => {
-            // 只有本插件托管的 opendesign 有网关路；密钥用它自己的账号端口解析。
-            if (provider !== "opendesign") return undefined;
-            const ref = typeof document()["apiKeyEnv"] === "string" ? (document()["apiKeyEnv"] as string) : undefined;
-            if (ref === undefined) return undefined;
-            const key = await credentials.resolve(ref);
-            if (key === undefined) return undefined;
-            const base = typeof document()["apiBase"] === "string" && (document()["apiBase"] as string) !== ""
-              ? (document()["apiBase"] as string)
-              : "https://amr-link.open-design.ai/v1";
-            return { baseURL: base, key };
-          },
+          // 网关访问走**跨行注册表**（`gateway-access`）：数据在 opendesign 行登记，
+          // 不在本行。以前这里读本行的 `apiKeyEnv` / `apiBase`，等于拿着 commandcode 的
+          // 密钥打 commandcode 的端点（实测 400）—— 2026-10-20 审计修掉。
+          gatewayAccess: (provider) => gatewayAccessOf(provider),
           // 多 key：按用户填的顺序依次解析，解析不到的跳过（不算失败 —— 用户可能只填了一条）。
           resolveApiKeys: async () => {
             const refs = normalizeSearchKeyRefs(document()["searchApiKeyRefs"]);

@@ -37,6 +37,8 @@ function dataRows(csv: string): number {
 }
 
 describe("导出不静默截断", () => {
+  // 显式给长超时：这个用例要往真实台账追加 1500 条（真文件 I/O，单跑约 900ms），
+  // 全量并行时会超过缺省 5 秒 —— 与断言语义无关，但一套发红的测试会掩盖真回归。
   it("台账 1500 条时，不传 limit 的导出必须给全 1500 条", async () => {
     const directory = process.env.DSH_LLM_ACCOUNT_USAGE_DIR ?? "";
     expect(directory).not.toBe("");
@@ -58,7 +60,7 @@ describe("导出不静默截断", () => {
     expect(records.length).toBe(1_500);
     // 不传上限 = 导出全部（`usageExportCsv()` 的实现契约）。
     expect(dataRows(ledgerCsvOf(records))).toBe(1_500);
-  });
+  }, 30_000);
 
   it("显式给了上限才截断，且截的是尾部（最近的）", () => {
     const records = [record({ at: 1 }), record({ at: 2 }), record({ at: 3 })];

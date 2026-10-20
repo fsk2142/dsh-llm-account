@@ -220,9 +220,22 @@ function statusOf(error: unknown): number | undefined {
 }
 
 /**
+ * 这个错误是「用户取消」吗。
+ *
+ * `fetch` 遇到 abort 抛的是 `DOMException`（`name: "AbortError"`），不是 `SearchApiError` ——
+ * 所以轮替判定必须单独认出它，否则取消会被当成「这把 key 有问题」。
+ * @param error - 捕获到的错误。
+ * @returns 是否是取消。
+ */
+function isAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  return (error as { name?: unknown }).name === "AbortError";
+}
+
+/**
  * 这个失败是否「换一把 key 就有可能好」。
  *
- * 三类都属于：
+ * 三类属于：
  * 1. **401/402**：这把 key 无效或余额不足（原本就有的判定）；
  * 2. **压根没发出请求**（没有状态码）：实测最典型的是密钥里混进了中文 —— fetch 在构造请求头时
  *    就抛 `Cannot convert argument to a ByteString`。这把 key 永远用不了，但**别的 key 可能好好
@@ -232,10 +245,15 @@ function statusOf(error: unknown): number | undefined {
  * 这条判据来自 2026-10-20 的真机数据：用户把一段中文误存成 `DEEPSEEK_API_KEY`，而真正能用的
  * `DEEPSEEK_API_KEY_2` 排在后面；旧逻辑因为「没有状态码 → 不换 key」既没试到好 key，
  * 也没回退网关，搜索直接不可用。
+ *
+ * **取消是第四类，且优先级最高**：用户按了停止，就该立刻停。旧代码把 `AbortError` 归进
+ * 「没有状态码」那一类，于是拿着同一个已 abort 的信号把剩下每把 key 都试一遍（每把都瞬间失败），
+ * 最后还给用户一句「已尝试 N 个密钥」—— 取消压根不是密钥的问题。
  * @param error - 捕获到的错误。
  * @returns 是否该换下一把 key。
  */
 function worthAnotherKey(error: unknown): boolean {
+  if (isAbortError(error)) return false; // 用户取消：到此为止
   const status = statusOf(error);
   if (status === undefined) return true; // 请求根本没发出去：换一把
   return status === 401 || status === 402;
@@ -304,6 +322,9 @@ export function createSearchProvider(deps: SearchProviderDeps): {
         if (apiKeys.length === 0) throw new SearchUnavailableError("没有解析到 DeepSeek API key");
         const failure = await searchWithApiKeys(apiKeys, request, deps.fetchImpl, signal);
         if (failure.kind === "ok") return { sources: failure.sources };
+        // **用户取消了**：到此为止。不回退网关（那个请求同样带着已 abort 的信号，只会再失败一次），
+        // 也不把取消说成「密钥不可用」—— 那会让人去换一把没问题的 key。
+        if (signal?.aborted === true) throw new SearchUnavailableError("搜索已取消");
         // API 路试完全部 key 仍失败。**`*-first` 是可回退的**（见 `chooseSearchRoute`：
         // `api-first` = 「优先但可回退」），所以还有网关就走网关；`api-only` 或网关不可用
         // 时明确失败，并把 API 侧的真实原因带出去（否则用户只看到一句「搜索不可用」）。
@@ -325,17 +346,25 @@ export function createSearchProvider(deps: SearchProviderDeps): {
         // **工具类型必须是这个版本串**：写裸 `web_search` 会被当成普通工具（实测 0 结果）。
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
       };
-      const response = await deps.fetchImpl(`${baseURL.replace(/\/$/, "")}/messages`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": key,
-          authorization: `Bearer ${key}`,
-          "anthropic-version": API_VERSION,
-        },
-        body: JSON.stringify(body),
-        ...(signal === undefined ? {} : { signal }),
-      });
+      let response: Response;
+      try {
+        response = await deps.fetchImpl(`${baseURL.replace(/\/$/, "")}/messages`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": key,
+            authorization: `Bearer ${key}`,
+            "anthropic-version": API_VERSION,
+          },
+          body: JSON.stringify(body),
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } catch (error) {
+        // 取消可能发生在请求在途的那一刻（不是开始前）：同样给一句干净的话，
+        // 别把一个 DOMException 原样抛给宿主。
+        if (isAbortError(error)) throw new SearchUnavailableError("搜索已取消");
+        throw new SearchUnavailableError(`搜索请求没能发出：${error instanceof Error ? error.message : String(error)}`);
+      }
       if (!response.ok) {
         throw new SearchUnavailableError(`搜索请求失败：HTTP ${response.status}`);
       }

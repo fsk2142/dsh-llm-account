@@ -25,6 +25,7 @@ import type { AccountView, SettingsOp } from "../../src/core/adapter";
 import { resetCatalogSources } from "../../src/vendors/model-catalog-registry";
 import * as commandcode from "../../src/vendors/commandcode/index";
 import * as opencode from "../../src/vendors/opencode/index";
+import * as opendesign from "../../src/vendors/opendesign/index";
 
 /**
  * 每个用例后清掉**跨厂商模型注册表**。
@@ -972,4 +973,105 @@ it("限额时换到同名模型：目录里先记下候选，配一个能服务�
   noteCatalogModels("commandcode", [{ id: "deepseek-v4.1-flash" }, { id: "deepseek-v4.1-flash-2" }]);
   expect(cachedModelCandidates()?.map((item) => item.model)).toContain("deepseek-v4.1-flash");
   resetCatalogSources();
+});
+
+// —— 搜索的网关路：数据必须来自 opendesign 行（2026-10-20 审计修掉的真 bug）——
+
+/** 搜索 provider 的最小形状（本用例只用到 `search`）。 */
+interface SearchProviderLike {
+  search(request: { query: string }, signal?: AbortSignal): Promise<unknown>;
+}
+
+/** 被 commandcode 行注册出来的那个搜索 provider（`web.registerSearchProvider` 捕获）。 */
+let capturedProvider: SearchProviderLike | undefined;
+
+it("网关路用 opendesign 行的基地址与密钥（provider 只在 commandcode 行注册）", async () => {
+  // 旧 bug：`gatewayAccess` 读 commandcode **自己行**的 `apiKeyEnv` / `apiBase` ——
+  // 会话在 opendesign + DeepSeek 模型上时，搜索拿着 commandcode 的密钥打 commandcode
+  // 的端点（实测 400：那个端点只收 Claude 系），而网关路是默认策略的第一选择、
+  // 失败还不回退 API key。这个用例把两行装进同一个宿主，钉住数据来源。
+  const requests: { url: string; authorization: string | undefined; apiKey: string | undefined }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    (async (input: unknown, init?: { headers?: Record<string, string> }) => {
+      requests.push({
+        url: String(input),
+        // 头名按**小写**读：provider 发的就是小写（真实 fetch 大小写不敏感，直接取属性敏感）。
+        authorization: init?.headers?.["authorization"],
+        apiKey: init?.headers?.["x-api-key"],
+      });
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "web_search_tool_result", content: [{ title: "A", url: "https://a.example/x" }] }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch,
+  );
+  try {
+    const settings = fakeSettings([
+      { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE }, revision: 1 },
+      {
+        ns: "opendesign",
+        value: { enabled: true, apiKeyEnv: "OPENDESIGN_API_KEY", baseURL: "https://amr-link.example/v1" },
+        revision: 1,
+      },
+    ]);
+    const credentials = fakeCredentials({
+      // commandcode 行的账号密钥：**不该**被搜索用到（旧 bug 正是用了它）。
+      COMMANDCODE_API_KEY: "sk-commandcode",
+      // opendesign 行的账号密钥：搜索该用这把。
+      OPENDESIGN_API_KEY: "sk-opendesign",
+    });
+    const host = fakeHost({
+      settings: settings.service,
+      credentials: credentials.service,
+      web: {
+        registerSearchProvider: (provider: unknown) => {
+          capturedProvider = provider as SearchProviderLike;
+          return () => undefined;
+        },
+      },
+      // 会话路由：宿主 `agents.currentInitiator()` 的形状（实测确认有这两个字段）。
+      agents: {
+        currentInitiator: () => ({
+          session: { requestContext: () => ({ provider: "opendesign", model: "deepseek-v4-pro" }) },
+        }),
+      },
+    });
+    // 假 ctx 补一个 `inject`：搜索 provider 与远程面都经它注册。语义与 cordis 一致 ——
+    // 请求的服务缺席时**不回调**（所以缺 typert 时远程面静默不注册，不影响本用例）。
+    (host.ctx as unknown as { inject: unknown }).inject = (
+      deps: readonly string[],
+      callback: (injected: Record<string, unknown>) => unknown,
+    ) => {
+      const injected: Record<string, unknown> = {};
+      for (const dep of deps) {
+        const service = (host.ctx as unknown as { get(name: string): unknown }).get(dep);
+        if (service === undefined) return undefined;
+        injected[dep] = service;
+      }
+      return callback(injected);
+    };
+
+    // 两行装进同一个宿主（顺序无关：注册表用时现取）。
+    opendesign.apply(
+      host.ctx,
+      opendesign.Config({ apiKeyEnv: "OPENDESIGN_API_KEY", baseURL: "https://amr-link.example/v1" }),
+    );
+    commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+
+    expect(capturedProvider, "commandcode 行应该注册了搜索 provider").toBeDefined();
+    const result = (await capturedProvider!.search({ query: "你好" })) as { sources: { url: string }[] };
+
+    expect(result.sources.map((source) => source.url)).toEqual(["https://a.example/x"]);
+    // 请求打在 **opendesign 行**的基地址上，用的是 **opendesign 行**的密钥。
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe("https://amr-link.example/v1/messages");
+    expect(requests[0]!.apiKey).toBe("sk-opendesign");
+    expect(requests[0]!.authorization).toBe("Bearer sk-opendesign");
+    expect(requests[0]!.apiKey).not.toBe("sk-commandcode");
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

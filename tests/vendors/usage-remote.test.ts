@@ -92,6 +92,7 @@ function vendorDeps(options: {
   pinnedRef?: () => string | null;
   quotaRef?: () => string | undefined;
   login?: LoginPort;
+  probeSearchKey?: UsageVendorDeps["probeSearchKey"];
 }): UsageVendorDeps {
   const engine = options.engine ?? new RotationEngine({ order: ["a", "b"], pinned: null, rules: [] });
   return {
@@ -104,6 +105,7 @@ function vendorDeps(options: {
     pinnedRef: options.pinnedRef ?? (() => "a"),
     quotaRef: options.quotaRef ?? (() => "a"),
     ...(options.login === undefined ? {} : { login: options.login }),
+    ...(options.probeSearchKey === undefined ? {} : { probeSearchKey: options.probeSearchKey }),
   };
 }
 
@@ -453,4 +455,29 @@ it("排序与 autoSwitch：端口缺方法的厂商报明确错误（不是静�
   const { service } = await mount([vendorDeps({ vendor: "commandcode" })]);
   await expect(service.moveAccount("commandcode", "a", 1)).rejects.toThrow(/reordering/);
   await expect(service.setAutoSwitch("commandcode", true)).rejects.toThrow(/auto-switch/);
+});
+
+it("密钥实测：第一家没实现、第二家实现了 —— 照样能用（不因加载顺序静默降级）", async () => {
+  // 2026-10-20 审计：旧实现取 `vendorDeps` 的**第一家**的 `probeSearchKey`，而目前只有
+  // commandcode 行传它。哪天加载顺序变了（或某行没传），实测就整体变成「这个版本不支持」。
+  // 探针只依赖凭据库与 Search API，与哪一行注册的无关 —— 应该找第一个实现了的。
+  const probe = vi.fn(async (ref: string) => ({ ref, state: "ok" as const }));
+  const { service } = await mount([
+    // opencode 先注册，且**不传** probe（现状：另两家都没传）。
+    vendorDeps({ vendor: "dsh-opencode-go" }),
+    vendorDeps({ vendor: "commandcode", probeSearchKey: probe }),
+  ]);
+
+  const rows = await service.probeSearchCredential(["K1"]);
+  expect(rows).toEqual([{ ref: "K1", state: "ok" }]);
+  expect(probe).toHaveBeenCalledWith("K1");
+});
+
+it("密钥实测：一家都没实现时如实说「没能判定」，不谎称已验证", async () => {
+  const { service } = await mount([vendorDeps({ vendor: "commandcode" })]);
+  const rows = await service.probeSearchCredential(["K1", "K2"]);
+  expect(rows).toEqual([
+    { ref: "K1", state: "unknown", reason: "这个版本不支持密钥实测" },
+    { ref: "K2", state: "unknown", reason: "这个版本不支持密钥实测" },
+  ]);
 });

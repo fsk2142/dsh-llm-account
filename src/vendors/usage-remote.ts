@@ -713,7 +713,11 @@ export class LlmAccountUsageService extends TypertRemoteService {
    * @returns 逐条结论（顺序与入参一致）。
    */
   async probeSearchCredential(refs: readonly string[]): Promise<{ ref: string; state: "ok" | "invalid" | "unknown"; reason?: string }[]> {
-    const probe = [...this.vendorDeps.values()][0]?.probeSearchKey;
+    // 取**第一个实现了实测的**厂商，而不是「第一个厂商」：探针只依赖凭据库与
+    // Search API（与哪一行注册的无关），但目前只有 commandcode 行传了它。用 `[0]` 的话，
+    // 哪天加载顺序变了（或某行没传），实测就整体静默降级成「这个版本不支持」——
+    // 而另外两行其实能测（2026-10-20 审计）。
+    const probe = [...this.vendorDeps.values()].find((deps) => deps.probeSearchKey !== undefined)?.probeSearchKey;
     if (probe === undefined) {
       // 没实现实测（老装配）：如实说「没能判定」，界面据此只显示「已保存」。
       return refs.map((ref) => ({ ref, state: "unknown" as const, reason: "这个版本不支持密钥实测" }));

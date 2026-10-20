@@ -152,3 +152,90 @@ describe("选路", () => {
     await expect(provider.search({ query: "hello" })).rejects.toThrow(/HTTP 400/);
   });
 });
+
+describe("取消（用户按了停止）", () => {
+  /** 造一个「已取消」的信号：`aborted` 为真，且 fetch 一律抛 AbortError。 */
+  function abortedSignal(): AbortSignal {
+    const controller = new AbortController();
+    controller.abort();
+    return controller.signal;
+  }
+
+  /** 假 fetch：抛 AbortError（真实 fetch 对已取消的信号就是这个行为），并记账。 */
+  function abortingFetch() {
+    const calls: string[] = [];
+    const impl = (async (url: unknown) => {
+      calls.push(String(url));
+      const error = new Error("This operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  }
+
+  it("API 路取消：只发一次请求，不拿取消的信号去试剩下的 key", async () => {
+    const { impl, calls } = abortingFetch();
+    const provider = createSearchProvider(
+      deps({
+        fetchImpl: impl,
+        sessionRoute: () => ({ provider: "commandcode", model: "deepseek/x" }), // 非网关路 → API 路
+        resolveApiKeys: async () => [
+          { ref: "DEEPSEEK_API_KEY", key: "sk-1" },
+          { ref: "DEEPSEEK_API_KEY_2", key: "sk-2" },
+        ],
+      }),
+    );
+    await expect(provider.search({ query: "hello" }, abortedSignal())).rejects.toThrow("搜索已取消");
+    // 关键：第二把 key 一次都没试（取消不是密钥的问题）。
+    expect(calls).toHaveLength(1);
+  });
+
+  it("API 路取消：不回退网关（那个请求同样会被取消，只会再烧一次）", async () => {
+    const { impl, calls } = abortingFetch();
+    const provider = createSearchProvider(
+      deps({
+        fetchImpl: impl,
+        // 策略 api-first：API 路失败本会回退网关 —— 取消时必须例外。
+        strategy: () => "api-first",
+        sessionRoute: () => ({ provider: "opendesign", model: "deepseek-v4.1-flash" }),
+        resolveApiKeys: async () => [{ ref: "DEEPSEEK_API_KEY", key: "sk-1" }],
+      }),
+    );
+    await expect(provider.search({ query: "hello" }, abortedSignal())).rejects.toThrow("搜索已取消");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("网关路在途取消：一句「搜索已取消」，不把 DOMException 原样抛出去", async () => {
+    const { impl } = abortingFetch();
+    const provider = createSearchProvider(deps({ fetchImpl: impl }));
+    await expect(provider.search({ query: "hello" }, abortedSignal())).rejects.toBeInstanceOf(SearchUnavailableError);
+    await expect(provider.search({ query: "hello" }, abortedSignal())).rejects.toThrow("搜索已取消");
+  });
+
+  it("没有 signal（老宿主不传）时行为不变：401 换下一把 key", async () => {
+    // 防回归：上面的取消判定不能把「换 key」这条路一起弄坏。
+    const statuses = [401, 200];
+    const calls: string[] = [];
+    const impl = (async (url: unknown) => {
+      calls.push(String(url));
+      const status = statuses.shift() ?? 200;
+      if (status !== 200) {
+        return new Response(JSON.stringify({ error: { message: "invalid key" } }), { status, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ results: [{ title: "A", url: "https://a.example/x" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const provider = createSearchProvider(
+      deps({
+        fetchImpl: impl,
+        sessionRoute: () => ({ provider: "commandcode", model: "deepseek/x" }),
+        resolveApiKeys: async () => [
+          { ref: "K1", key: "sk-1" },
+          { ref: "K2", key: "sk-2" },
+        ],
+      }),
+    );
+    const result = await provider.search({ query: "hello" });
+    expect(result.sources).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+  });
+});

@@ -74,6 +74,7 @@ import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort, localSpendBetween } from "../usage-store";
 import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
+import { registerGatewayAccess } from "../gateway-access";
 import { SwitchingController } from "../switching";
 import { VELA_PREFLIGHT_TIMEOUT_MS, createOpenDesignLogin, discoverWorkspaceId, findVelaBinary } from "./login";
 
@@ -431,6 +432,27 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     // 跨厂商换模型的执行入口：别家要换到这家时，由**这家的 adapter** 自己发请求
     // （宿主的路由是固定的，adapter 不能以别家身份发）。
     stream: (options) => adapter.stream(options as Parameters<typeof adapter.stream>[0]),
+  });
+
+  // 登记本家的**网关访问**（搜索的网关路用）。与上面的目录读口同一形状：provider 只在
+  // commandcode 行注册（三行都注册会撞宿主的 `WEB_DUPLICATE_PROVIDER`），但网关的密钥与
+  // 基地址在本行 —— 各自 apply 时登记进跨行注册表，搜索时现取。
+  //
+  // 2026-10-20 审计修掉的真 bug：以前 commandcode 的 `gatewayAccess("opendesign")` 读的是
+  // **自己行**的 `apiKeyEnv` / `apiBase`，于是 opendesign 会话里的搜索拿着 commandcode 的
+  // 密钥打 commandcode 的端点（实测 400：那个端点只收 Claude 系）—— 网关路等于从来没通过，
+  // 而它是默认策略的第一选择，且失败不回退 API key。
+  registerGatewayAccess(PROVIDER_ID, async () => {
+    const doc = document();
+    // 与适配器同一份基地址优先级：文档 `baseURL` > `apiBase` > 内置默认。
+    const baseURL = normalizeKey(doc.baseURL) ?? normalizeKey(doc.apiBase) ?? DEFAULT_BASE_URL;
+    // 账号顺序与适配器选账号同源（顶层当前账号 + accounts 条目，按全局顺序）；
+    // 第一个解析到密钥的就是这次搜索要用的（密钥在凭据库或启动环境里）。
+    for (const ref of orderOf(doc)) {
+      const key = await resolveAccountKey(ctx, credentials, ref);
+      if (key !== undefined) return { baseURL, key };
+    }
+    return undefined;
   });
 
   /**
