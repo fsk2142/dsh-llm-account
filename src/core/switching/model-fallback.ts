@@ -149,7 +149,6 @@ export function pickFallbackModel(
 ): FallbackCandidate | undefined {
   const excludeOfficial = options.excludeOfficial !== false;
   const random = options.random ?? Math.random;
-  const currentKey = modelKeyOf(current.model);
 
   // 1) 过滤掉不合格的：官方直连、自己、空 id。
   const usable = candidates.filter((candidate) => {
@@ -188,7 +187,6 @@ export function pickFallbackModel(
           return scored.filter((item) => item.distance === min).map((item) => item.candidate);
         })()
       : pool;
-  void currentKey;
   const index = Math.min(narrowed.length - 1, Math.max(0, Math.floor(random() * narrowed.length)));
   return narrowed[index];
 }
