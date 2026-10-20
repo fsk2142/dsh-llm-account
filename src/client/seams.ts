@@ -994,6 +994,24 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       }
       // 写入队列读修订号用这份同步镜像（`state` 在异步回调里是旧闭包，见 `saveRow`）。
       latestSnapshots.current = Object.fromEntries(snapshots.map((snapshot) => [snapshot.ns, snapshot]));
+      // 功能页的虚拟条目：`discoverVendors` **不产出它**（它不是厂商），它的快照是由
+      // `createPageState` 按承载行（`rowIds[0]`）借出来的。这里补一份进镜像，否则
+      // `saveRow(FEATURE_TAB_NS)` 会判定「这一行还没读到」并直接返回 —— 症状正是
+      // 「密钥加了删不掉、改了不落盘」（2026-10-20 报障）。
+      //
+      // 必须查 `allEntries`：本容器里的 `entries` 是**已剔除功能页**的列表（见函数开头），
+      // 用它永远找不到功能页条目。
+      const carrier = allEntries.find((entry) => entry.ns === FEATURE_TAB_NS)?.rowIds[0];
+      const carrierRow = carrier === undefined ? undefined : latestSnapshots.current[carrier];
+      if (carrierRow !== undefined) {
+        latestSnapshots.current[FEATURE_TAB_NS] = {
+          ns: FEATURE_TAB_NS,
+          // 写回**承载行**（不是虚拟 ns）：宿主按条目 id 寻址。
+          row: carrierRow.row,
+          value: { ...carrierRow.value },
+          revision: carrierRow.revision,
+        };
+      }
       noteSidebarSnapshots(entries, snapshots);
       setState((current) => createPageState(allEntries, snapshots, current, problem));
     };
@@ -1083,6 +1101,48 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      */
     const draftFieldsOf = (ns: string): { key: string; value: unknown }[] =>
       Object.entries(latestDrafts.current[ns] ?? {}).map(([key, value]) => ({ key, value }));
+
+    /**
+     * 立刻写**一个**字段并重读（不经过草稿，也不等卡片上的保存按钮）。
+     *
+     * 用于那些「本身就是一次完整动作」的设置写入 —— 目前只有搜索密钥的引用名列表：
+     * 加钥匙 / 删钥匙都是一个已经完成的决定，没有「填完再点保存」的中间状态。
+     * 走同一条串行队列，所以不会与用户同时拨的开关撞修订号。
+     * @param ns - 设置命名空间。
+     * @param key - 字段名。
+     * @param value - 新值。
+     * @returns 这次写入的完成信号。
+     */
+    const saveOneField = (ns: string, key: string, value: unknown): Promise<void> => {
+      // 先同步进草稿镜像：界面立刻反映，且排队期间若有别的写入合并读取，看到的是新值。
+      const baseline = latestSnapshots.current[ns]?.value;
+      const next = draftsAfterChange(latestDrafts.current[ns], baseline, key, value);
+      const drafts = { ...latestDrafts.current };
+      if (next === undefined) delete drafts[ns];
+      else drafts[ns] = next;
+      latestDrafts.current = drafts;
+      setState((current) => setField(current, ns, key, value));
+      return saveRow(ns);
+    };
+
+    /**
+     * 承载行当前的密钥引用名（**草稿优先**）。
+     *
+     * 为什么先看草稿：用户刚添加一条，列表先进草稿，`adopt` 要等一次往返才把它吸收进快照。
+     * 期间点删除（或紧接着再加一条）若只读快照，就会看不见刚刚那条 —— 症状是「点了 × 没反应」。
+     * @returns 引用名列表。
+     */
+    const currentKeyRefsOf = (): string[] => {
+      const raw = latestDrafts.current[FEATURE_TAB_NS]?.["searchApiKeyRefs"]
+        ?? latestSnapshots.current[FEATURE_TAB_NS]?.value?.["searchApiKeyRefs"]
+        ?? state.snapshots[FEATURE_TAB_NS]?.value?.["searchApiKeyRefs"];
+      if (Array.isArray(raw)) {
+        return raw
+          .filter((item): item is string => typeof item === "string" && item.trim() !== "")
+          .map((item) => item.trim());
+      }
+      return parseSecretRefs(typeof raw === "string" ? raw : "");
+    };
 
     // 草稿镜像每次渲染同步一次（纯赋值，不引入 Hook，所以不影响 Hook 顺序）。
     // 排队中的 `saveRow` 读的就是这一份 —— 它比任何渲染闭包都新。
@@ -1257,27 +1317,10 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     //
     // 用户报障：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个输入框填的是
     // **引用名**，真 key 在凭据库里 —— 不查一次，界面就只能沉默。
-    /** 承载行里现有的搜索密钥引用名（数组或逗号分隔的字符串都认）。 */
-    const keyRefsOf = (current: PageState): string[] => {
-      const value = current.snapshots[FEATURE_TAB_NS]?.value?.["searchApiKeyRefs"];
-      if (Array.isArray(value)) {
-        return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
-      }
-      return parseSecretRefs(typeof value === "string" ? value : "");
-    };
-    const credentialRefs = (() => {
-      const raw = state.snapshots[FEATURE_TAB_NS]?.value ?? {};
-      const text = raw["searchApiKeyRefs"];
-      if (typeof text !== "string") return [];
-      return [
-        ...new Set(
-          text
-            .split(/[,，\s]+/)
-            .map((item) => item.trim())
-            .filter((item) => item !== ""),
-        ),
-      ];
-    })();
+    //
+    // 读取走 `currentKeyRefsOf()`（草稿优先，见那里的注释）：刚添加的那条还在草稿里，
+    // 只看快照会把它当成「不存在」，于是徽标和删除都对不上。
+    const credentialRefs = currentKeyRefsOf();
     const credentialKey = credentialRefs.join(",");
 
     // 查凭据是否真的配置了。依赖里用 `credentialKey`（字符串）而不是数组：
@@ -1850,14 +1893,16 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
               setSecretSaving(true);
               setSecretError(undefined);
               try {
-                const existing = keyRefsOf(state);
+                const existing = currentKeyRefsOf();
                 const ref = nextKeyRef(existing);
                 const result = await callRemote(() => usage.setCredential!(ref, secret));
                 const unwrapped = unwrapRemote(await result);
                 if (!unwrapped.ok) return unwrapped.error;
-                const appended = [...existing, ref];
-                setState((current) => setField(current, FEATURE_TAB_NS, "searchApiKeyRefs", appended));
                 setSecretDraft("");
+                // 引用名列表是**设置文档**里的一份数据，必须落盘 —— 只写草稿的话，刷新页面就没了，
+                // 而密钥其实已经在凭据库里（用户会看到「列表空了但还能用」）。
+                // 这里走 `saveOneField`：它不依赖输入类字段的「卡片保存按钮」那条路。
+                await saveOneField(FEATURE_TAB_NS, "searchApiKeyRefs", [...existing, ref]);
                 setState((current) => ({ ...current, credentialRevision: current.credentialRevision + 1 }));
                 return undefined;
               } catch (error) {
@@ -1867,8 +1912,13 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
               }
             },
       onRemoveSecret: (ref: string) => {
-        const remaining = removeKeyRef(keyRefsOf(state), ref);
-        setState((current) => setField(current, FEATURE_TAB_NS, "searchApiKeyRefs", remaining));
+        // 从**草稿**里算：刚添加、还没被 `adopt` 吸收的那一条也在草稿里（读快照会漏掉它）。
+        const current = currentKeyRefsOf();
+        void saveOneField(
+          FEATURE_TAB_NS,
+          "searchApiKeyRefs",
+          removeKeyRef(current, ref),
+        ).then(() => setState((s) => ({ ...s, credentialRevision: s.credentialRevision + 1 })));
       },
     });
   };

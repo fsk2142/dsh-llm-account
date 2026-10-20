@@ -40,6 +40,14 @@ export interface FakeHost {
   modelCalls: string[];
   /** 网页登录调用记录（按厂商；`begin`/`status`/`cancel` 三个动作）。 */
   loginCalls: { method: "loginBegin" | "loginStatus" | "loginCancel"; vendor: string }[];
+  /** 凭据库里「确实存在」的引用名（`setCredential` 会往里加；`credentialStatus` 按它回答）。 */
+  credentials: Set<string>;
+  /** 写进凭据库的调用（引用名 + 明文；明文只在这里出现，便于断言「没写空密钥」）。 */
+  credentialWrites: { ref: string; secret: string }[];
+  /** `credentialStatus` 被问过的引用名（断言「添加后确实重新查了一次」）。 */
+  credentialStatusCalls: string[][];
+  /** 让下一次 `setCredential` 被宿主拒绝（凭据服务报错）。 */
+  failCredentialOnce: string | undefined;
   /**
    * 下一次/后续 `models()` 要带的失败项（空 = 正常）。可随时改写：
    * 「加账号前目录读不到、加账号后读到」这条链要靠它复现（失败的读数不进缓存）。
@@ -110,12 +118,31 @@ export function fakeHost(
       begin?: (vendor: string) => unknown;
       status?: (vendor: string) => unknown;
     };
+    /**
+     * 凭据服务的形状。`false` = **老宿主**（不提供 `setCredential`/`credentialStatus`），
+     * 于是搜索卡的密钥区整块不渲染 —— 两条降级路径都要能测。
+     */
+    credentials?: boolean;
+    /** 凭据库里预先存在的引用名（页面据此显示「已添加」）。 */
+    credentialsInitially?: readonly string[];
+    /**
+     * 承载行里预先存在的搜索密钥引用名（`searchApiKeyRefs`）。
+     * 缺省不给：真实用户第一次打开时这个字段本来就不存在。
+     */
+    secretRefs?: readonly string[];
   } = {},
 ): FakeHost {
   const rows = new Map<string, HostRow>([
     [
       "llm-commandcode",
-      { value: { showSidebarQuota: options.commandcodeToggle ?? false, apiBase: "https://api.commandcode.ai" }, revision: 5 },
+      {
+        value: {
+          showSidebarQuota: options.commandcodeToggle ?? false,
+          apiBase: "https://api.commandcode.ai",
+          ...(options.secretRefs === undefined ? {} : { searchApiKeyRefs: [...options.secretRefs] }),
+        },
+        revision: 5,
+      },
     ],
     [
       "opencode-go",
@@ -140,6 +167,10 @@ export function fakeHost(
     modelCalls: [],
     loginCalls: [],
     modelFailures: [],
+    credentials: new Set(options.credentialsInitially ?? []),
+    credentialWrites: [],
+    credentialStatusCalls: [],
+    failCredentialOnce: undefined,
     conflictOnce: options.conflictOnce ?? false,
     failOnce: undefined,
     ctx: {},
@@ -223,6 +254,27 @@ export function fakeHost(
       host.loginCalls.push({ method: "loginCancel", vendor });
       return mini.track(undefined);
     },
+    // 搜索密钥：凭据库的读口与写口。有它们，搜索卡才渲染「添加密钥」与已添加列表
+    // （缺省时整块不渲染 —— 那是老宿主的降级路径，两个方向都要能测，所以做成可关）。
+    ...(options.credentials === false
+      ? {}
+      : {
+          /** 凭据库里「确实存在」的引用名（`credentialStatus` 的回答）。 */
+          credentialStatus: (refs: readonly string[]): Promise<unknown> => {
+            host.credentialStatusCalls.push([...refs]);
+            return mini.track(refs.filter((ref) => host.credentials.has(ref)).map((ref) => ({ ref, configured: true })));
+          },
+          setCredential: (ref: string, secret: string): Promise<unknown> => {
+            host.credentialWrites.push({ ref, secret });
+            if (host.failCredentialOnce !== undefined) {
+              const reason = host.failCredentialOnce;
+              host.failCredentialOnce = undefined;
+              return mini.track({ ok: false, error: reason });
+            }
+            host.credentials.add(ref);
+            return mini.track(undefined);
+          },
+        }),
   });
 
   const settings = {

@@ -441,7 +441,14 @@ function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): 
           const configured = props.credentialStatus?.[ref];
           return createElement(
             "div",
-            { key: ref, "data-secret-row": ref, className: CSS_CLASS.field },
+            {
+              key: ref,
+              "data-secret-row": ref,
+              // 紧凑一档：这些是**列表项**，不是设置行。沿用 `dsl-field` 的 14px 字号 + 上下 8px
+              // 内边距会让每条占将近 40px，两三条就把「高级/搜索」卡片撑得很长（用户反馈「默认名
+              // 占的位置太宽，降低一下高度」）。类名另给，不靠覆盖去压设置行的规则。
+              className: `${CSS_CLASS.field} ${CSS_CLASS.secretRow}`,
+            },
             createElement(
               "span",
               { className: CSS_CLASS.fieldText },
