@@ -334,6 +334,17 @@ export type CopyKey =
   | "account.vela.step3"
   | "account.vela.command"
   | "account.vela.retry"
+  /**
+   * 插件更新后需要**刷新页面**的提示（用户 2026-10-20：「如果我不重启，侧边栏就无法出来，
+   * 是否可以提示刷新页面的方式，这样就不需要我重启了」）。
+   *
+   * 为什么插件自己解决不了：侧边栏卡片属于宿主的**客户端启动图** —— 启动图在页面加载那一刻
+   * 就确定了，之后新装/更新的插件不会自动进图（除非重启宿主）。而「刷新页面」会让浏览器重新
+   * 走一遍启动图，插件随即被加载，效果与重启等价但成本低得多。
+   */
+  | "update.title"
+  | "update.body"
+  | "update.action"
   | "account.reason.no-signin"
   | "account.reason.config-invalid"
   | "account.reason.error"
@@ -655,6 +666,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.vela.step3": "③ 装完回到这里点「网页登录」重试；若 vela 不在 PATH 里，可设环境变量 VELA_BIN 指向它的完整路径，然后重启 DSH",
     "account.vela.command": "npm i -g @powerformer/vela-cli",
     "account.vela.retry": "重试网页登录",
+    "update.title": "插件已更新",
+    "update.body":
+      "新装的插件要等页面重新加载后才会出现在界面上（侧边栏卡片、中台面板都是）。刷新一下本页即可，不用重启 DSH。",
+    "update.action": "刷新页面",
     "account.reason.no-signin": "浏览器里没有完成授权（vela 已退出）。请重试并在浏览器里批准。",
     "account.reason.config-invalid": "本机的登录产物形状不认识（缺少 runtime key）。请重新登录一次。",
     "account.reason.error": "登录失败。",
@@ -968,6 +983,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.vela.step3": "③ Then come back and press “Sign in with browser” again. If vela is not on PATH, set VELA_BIN to its full path and restart DSH.",
     "account.vela.command": "npm i -g @powerformer/vela-cli",
     "account.vela.retry": "Retry browser sign-in",
+    "update.title": "The plugin was updated",
+    "update.body":
+      "A newly installed plugin only shows up after the page reloads (sidebar card, middle panel). Reload this page — no need to restart DSH.",
+    "update.action": "Reload page",
     "account.reason.no-signin": "The browser never finished signing in (vela exited). Try again and approve in the browser.",
     "account.reason.config-invalid": "The local sign-in data has an unrecognised shape (no runtime key). Sign in again.",
     "account.reason.error": "Sign-in failed.",

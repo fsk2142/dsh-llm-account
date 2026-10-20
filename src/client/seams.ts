@@ -1891,6 +1891,16 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       t,
       accounts,
       mergeTabs: true,
+      // 「插件已更新，刷新页面」提示（用户 2026-10-20）。
+      //
+      // 判据：本页已经能渲染设置页，说明客户端 bundle 跑过了；但共享界面**没有**注册成功
+      // （`apply` 的注册那一步没跑 / 抛错），或者侧边栏槽位在本页压根没被宿主渲染。
+      // 这两种情况刷新一次页面都能解决，不必重启宿主。
+      ...(sharedSurfacesReady() ? {} : { reloadHint: true }),
+      // 「刷新页面」按钮：只是重载本页，不碰任何数据。
+      onReload: () => {
+        reloadPage();
+      },
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => {
         // 用户 2026-10-20 的两条要求，合成一条规则（判据在 `registry.ts` 的 `savesImmediately`）：
@@ -2782,6 +2792,9 @@ export function registerSharedSurfaces(options: {
       },
     }),
   });
+  // 注册成功：页面据此判断「侧边栏卡片本该在」。注册抛错时这个标记保持 false，
+  // 设置页会显示「刷新页面」的提示而不是让用户以为插件坏了。
+  noteSharedSurfacesRegistered();
   return () => {
     disposeSidebar();
     disposePanel();
@@ -3023,6 +3036,51 @@ const sidebarVendorListeners = new Set<(vendor: string | undefined) => void>();
 /** 设置值变化的监听者（刷新间隔等，即使厂商没变也要让轮询器重排）。 */
 const sidebarSettingsListeners = new Set<() => void>();
 
+/**
+ * 刷新本页（等价于用户按 F5）。
+ *
+ * **为什么插件需要它**：宿主把客户端启动图在页面加载那一刻定下来，之后新装/更新的插件不会
+ * 自动进图 —— 侧边栏卡片与中台面板于是「不出现」，只有重启宿主才行。刷新页面会让浏览器重走
+ * 一遍启动图，效果与重启等价、成本却低得多（用户 2026-10-20 的要求）。
+ *
+ * 非浏览器环境（测试 / SSR）是空操作：`location` 不存在时什么也不做。
+ * @returns 是否真的发起了刷新。
+ */
+export function reloadPage(): boolean {
+  const location = (globalThis as { location?: { reload?: () => void } }).location;
+  if (location === undefined || typeof location.reload !== "function") return false;
+  location.reload();
+  return true;
+}
+
+/**
+ * 侧边栏槽位是否已经**在本页**注册过。
+ *
+ * 判据只有一条：「设置页已经渲染出来」本身就证明本插件的客户端 bundle 已被加载并执行过
+ * `apply`。而 `apply` 里设置页与侧边栏是**同一次**注册的（见 `index.ts` 的 apply 顺序），
+ * 所以只要 `apply` 跑过、`registerSharedSurfaces` 没有抛错，侧边栏卡片就应该在。
+ *
+ * 于是「设置页在、卡片不在」只可能是宿主侧没把这个槽位渲染出来（启动图早于插件安装，
+ * 或者槽位在页面加载时已经定型）。这种情况下**刷新页面**是唯一不需要重启的解法。
+ */
+let sharedSurfacesRegistered = false;
+
+/** 记一次共享界面注册成功（`registerSharedSurfaces` 末尾调用）。 */
+export function noteSharedSurfacesRegistered(): void {
+  sharedSurfacesRegistered = true;
+}
+
+/**
+ * 共享界面（侧边栏卡片 / 中台面板）是否注册过。
+ *
+ * 页面用它决定要不要显示「刷新页面」的提示：`false` 意味着 `apply` 还没跑到注册那一步
+ * （或注册抛错），此时用户的正确动作是刷新页面而不是重启宿主。
+ * @returns 是否注册过。
+ */
+export function sharedSurfacesReady(): boolean {
+  return sharedSurfacesRegistered;
+}
+
 /** 当前侧边栏卡片该显示的厂商；存储是冷的时为 `undefined`。 */
 export function sidebarVendor(): string | undefined {
   return sidebarVendorValue;
@@ -3205,6 +3263,8 @@ export function resetSeams(): void {
   sharedUsage?.dispose();
   sharedUsage = undefined;
   usageReadyListeners.clear();
+  // 注册标记也要复位：否则上一条用例注册过，下一条的「该不该提示刷新」会误判。
+  sharedSurfacesRegistered = false;
   sidebarVendorValue = undefined;
   // 轮播相关的三份模块级状态也必须复位，否则上一条用例里「开了哪几家」「勾了哪些账号」
   // 会漏到下一条（实测：单独跑能过、连跑就失败 —— 典型的跨用例污染）。

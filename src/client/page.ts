@@ -89,6 +89,15 @@ export interface PageShellProps {
   keyProbes?: Readonly<Record<string, CredentialProbe>>;
   /** 正在测试哪一把（按钮禁用 + 换文案）。 */
   keyProbing?: string;
+  /**
+   * 是否显示「插件已更新，刷新页面」的提示条。
+   *
+   * 由容器判定：设置页已经能打开、但侧边栏卡片没挂上 —— 那正是「插件没进客户端启动图」的
+   * 可观测症状。这种情况下页面自己刷新一次就能修好，不必重启宿主。
+   */
+  reloadHint?: boolean;
+  /** 「刷新页面」的动作（缺省时按钮仍显示，但点了没反应 —— 生产总会传）。 */
+  onReload?: () => void;
   /** 正在写密钥（按钮禁用 + 换文案）。 */
   secretSaving?: boolean;
   /** 密码框的当前值（受控：页面是纯函数，草稿由容器持有）。 */
@@ -116,9 +125,42 @@ export function PageShell(props: PageShellProps): ReactElement {
   }
 }
 
+/**
+ * 「插件已更新，刷新页面即可」的提示条（用户 2026-10-20 要求）。
+ *
+ * 为什么需要它：宿主把**客户端启动图**在页面加载那一刻就定下来了，之后新装/更新的插件不会
+ * 自动进图 —— 于是侧边栏卡片、中台面板都「不出现」，只有重启宿主才行。而**刷新页面**会让
+ * 浏览器重走一遍启动图，效果与重启等价。
+ *
+ * 什么时候显示：由容器判断（`reloadHint`）。判据是「设置页已经能打开、但侧边栏卡片没挂上」——
+ * 那正是「插件没进启动图」的可观测症状。页面层只负责渲染，不自己猜。
+ * @param props - 页面属性。
+ * @param t - 取词函数。
+ * @returns 提示条；不需要提示时 `null`。
+ */
+function reloadNotice(props: PageShellProps, t: (key: string) => string): ReactElement | null {
+  if (props.reloadHint !== true) return null;
+  return createElement(
+    "div",
+    { "data-reload-hint": "true", className: CSS_CLASS.notice },
+    createElement("strong", { className: CSS_CLASS.noticeTitle }, t("update.title")),
+    createElement("small", null, t("update.body")),
+    createElement(
+      "button",
+      {
+        type: "button",
+        "data-reload-now": "true",
+        className: `${CSS_CLASS.buttonPrimary} ${CSS_CLASS.buttonSm}`,
+        // 页面是纯函数：真正的刷新由容器给的回调做（测试里可以注入替身）。
+        onClick: () => props.onReload?.(),
+      },
+      t("update.action"),
+    ),
+  );
+}
+
 /** 渲染失败时的兜底：**不调用 `t()`**（取词本身可能就是抛错的原因）。 */
-function renderErrorPanel(error: unknown): ReactElement {
-  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+function renderErrorPanel(error: unknown): ReactElement {  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
   return createElement(
     "div",
     { "data-page": "llm-account", className: CSS_CLASS.root },
@@ -128,8 +170,7 @@ function renderErrorPanel(error: unknown): ReactElement {
 }
 
 /** 外壳本体（假定不抛；抛了由 {@link PageShell} 接住）。 */
-function pageBody(props: PageShellProps): ReactElement {
-  const { state, entries, t } = props;
+function pageBody(props: PageShellProps): ReactElement {  const { state, entries, t } = props;
   // 「一个厂商都没发现」是**页面级**的事实，与选中哪个设置对象无关（功能页常驻之后
   // `active` 几乎不再为 undefined）。
   const noVendor = !state.tabs.some((tab) => tab.ns !== FEATURE_TAB_NS);
@@ -146,6 +187,7 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("h1", null, t("title")),
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
+    reloadNotice(props, t),
     props.accounts === undefined ? null : props.accounts,
     // 空态提示：独立于任何选择显示一次（见上面 noVendor 的说明）。
     noVendor

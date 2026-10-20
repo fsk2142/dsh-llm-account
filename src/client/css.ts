@@ -194,6 +194,20 @@ export const PAGE_CSS = `
 [data-secret-rows] { gap: 0; padding: 2px 10px; }
 [data-secret-rows] > small { font-size: 12px; line-height: 18px; }
 
+/* ═══ 「插件已更新，刷新页面」提示条（2026-10-20） ═══
+ * 只在「设置页打得开、侧边栏卡片却没挂上」时出现。用提示色而不是错误色：这不是故障，
+ * 是一次正常的安装/更新需要浏览器重新走一遍启动图。
+ */
+.dsl-notice { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box;
+  padding: 10px 12px; border: .5px solid var(--dsw-alias-border-l2);
+  border-left: 2px solid var(--dsw-alias-state-business-primary);
+  border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-layer-2); }
+.dsl-notice-title { font-size: 13px; line-height: 20px; font-weight: 600;
+  color: var(--dsw-alias-label-primary); }
+.dsl-notice > small { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+/* 按钮不该被纵向 flex 拉成通栏。 */
+.dsl-notice > button { align-self: flex-start; }
+
 /* ═══ vela 缺失时的安装指引（只在这一种登录失败时出现） ═══
  * 三档可执行路径 + 一行可复制的命令。刻意用内嵌面板（dsl-inset）而不是一句话：
  * 用户 2026-10-20 要的是「如何快速安装环境」，不是「请先安装」。
@@ -722,6 +736,9 @@ export const CSS_CLASS = {
   inset: "dsl-inset",
   /* vela 缺失时的安装指引块标题（2026-10-20）。 */
   velaGuideTitle: "dsl-vela-guide-title",
+  /* 「插件已更新，刷新页面」提示条（2026-10-20）。 */
+  notice: "dsl-notice",
+  noticeTitle: "dsl-notice-title",
   empty: "dsl-empty",
   note: "dsl-note",
   actions: "dsl-actions",
