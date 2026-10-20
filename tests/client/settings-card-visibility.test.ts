@@ -62,7 +62,7 @@ describe("四张卡片仍然齐全（功能没有被删掉）", () => {
 
   it("搜索设置里仍有网关优先与 API key 引用", () => {
     const search = SETTINGS_CARDS.find((card) => card.id === "search");
-    expect(search?.shared).toContain("searchPreferGateway");
+    expect(search?.shared).toContain("searchStrategy");
     expect(search?.shared).toContain("searchApiKeyEnv");
   });
 });

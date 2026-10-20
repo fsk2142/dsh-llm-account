@@ -35,7 +35,7 @@ describe("四张卡片", () => {
     expect(shared).toContain("autoContinueOnError");
     expect(shared).toContain("autoContinueOnTruncate");
     expect(shared).toContain("autoContinueMaxAttempts");
-    expect(shared).toContain("searchPreferGateway");
+    expect(shared).toContain("searchStrategy");
     expect(shared).toContain("searchApiKeyEnv");
     expect(shared).toContain("requestTimeoutMs");
     expect(shared).toContain("streamIdleTimeoutMs");
