@@ -364,6 +364,8 @@ export type CopyKey =
    * 把它说成「已是最新」会让用户等一个永远不来的按钮。
    */
   | "update.check"
+  /** 还没查过更新（首次进设置页的默认状态）—— 给一句说明 + 检查按钮，不是空白。 */
+  | "update.notChecked"
   | "update.checking"
   | "update.section"
   | "update.start"
@@ -702,6 +704,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
       "新装的插件要等页面重新加载后才会出现在界面上（侧边栏卡片、中台面板都是）。刷新一下本页即可，不用重启 DSH。",
     "update.action": "刷新页面",
     "update.check": "检查更新",
+    "update.notChecked": "还没检查过。点「检查更新」看有没有新版本。",
     "update.checking": "正在检查…",
     "update.section": "插件更新",
     "update.start": "更新到新版本",
@@ -1033,6 +1036,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
       "A newly installed plugin only shows up after the page reloads (sidebar card, middle panel). Reload this page — no need to restart DSH.",
     "update.action": "Reload page",
     "update.check": "Check for updates",
+    "update.notChecked": "Not checked yet. Click \"Check for updates\" to see if a newer version exists.",
     "update.checking": "Checking…",
     "update.section": "Plugin update",
     "update.start": "Update to the new version",

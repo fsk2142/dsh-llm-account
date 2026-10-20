@@ -129,6 +129,25 @@ interface ResolvedConfig {
 }
 
 /**
+ * 宿主 `ImageAttachmentRef` 的结构子集。
+ *
+ * **五个字段缺一不可**（2026-10-20 真机报障）：宿主的 `readImageRequest` 会用
+ * `mediaType` / `bytes` / `width` / `height` 校验引用与存储内容是否一致；只给
+ * `attachmentId` 会被拒绝，表现就是界面上那句「图片未能发送」。
+ *
+ * 声明成结构类型而不是 import 宿主的类型：适配器不该依赖 `@deepseek-ai/dsh-attachment`
+ * 的包形状（那是宿主内部约定），只要字段对得上就能用。
+ */
+export interface ImageRefLike {
+  attachmentId: string;
+  mediaType?: string;
+  bytes?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+}
+
+/**
  * 适配器的依赖。四个来源读取函数都是注入点：本模块不直接依赖 `ctx`（宿主服务在 `index.ts`
  * 接线），测试可以给假实现。
  */
@@ -164,7 +183,7 @@ export interface OpenDesignAdapterDeps {
    * @returns 编码后的字节与 MIME；拿不到时 `undefined`。
    */
   resolveImage?: (
-    ref: { attachmentId: string },
+    ref: ImageRefLike,
     signal?: AbortSignal,
   ) => Promise<{ attachmentId: string; data: Uint8Array; mediaType: string } | undefined>;
   /**
@@ -598,17 +617,21 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     const resolve = this.#deps.resolveImage;
     const images = new Map<string, RequestImageBytes>();
     if (resolve === undefined) return images;
-    const wanted = new Set<string>();
+    // **必须传完整的 `ImageAttachmentRef`**（2026-10-20 真机报障）：宿主的
+    // `readImageRequest` 会用 `mediaType` / `bytes` / `width` / `height` 做引用校验，
+    // 只给 `attachmentId` 会被拒绝，表现就是「图片未能发送」的占位。
+    const wanted = new Map<string, ImageRefLike>();
     for (const message of options.messages) {
       for (const block of message.content) {
         if (block.type !== "image") continue;
-        const id = block.attachment?.attachmentId;
-        if (typeof id === "string" && id !== "") wanted.add(id);
+        const ref = block.attachment as ImageRefLike | undefined;
+        const id = ref?.attachmentId;
+        if (typeof id === "string" && id !== "") wanted.set(id, ref as ImageRefLike);
       }
     }
-    for (const id of wanted) {
+    for (const [id, ref] of wanted) {
       try {
-        const resolved = await resolve({ attachmentId: id }, options.signal);
+        const resolved = await resolve(ref, options.signal);
         if (resolved !== undefined) images.set(id, resolved);
       } catch {
         // 单张图读失败：留给文字占位，不打断整次请求。

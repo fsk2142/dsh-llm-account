@@ -811,7 +811,7 @@ function waitForExit(child: ReturnType<typeof spawn>): Promise<number | null> {
  */
 async function readImageBytes(
   ctx: unknown,
-  ref: { attachmentId: string },
+  ref: { attachmentId: string; mediaType?: string; bytes?: number; width?: number; height?: number },
   signal?: AbortSignal,
 ): Promise<{ attachmentId: string; data: Uint8Array; mediaType: string } | undefined> {
   try {

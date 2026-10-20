@@ -19,6 +19,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { RotationEngine } from "../../src/core/switching/rotation";
+import { createOpenDesignAdapter } from "../../src/vendors/opendesign/adapter";
 import { buildRequestBody, openAiUserContent } from "../../src/vendors/opendesign/protocol";
 import type { RequestImageBytes } from "../../src/vendors/opendesign/protocol";
 
@@ -112,5 +114,58 @@ describe("buildRequestBody：图片进 messages", () => {
     const body = buildRequestBody(options, facts) as { messages: unknown[] };
     const user = body.messages.find((m) => (m as { role: string }).role === "user") as { content: unknown };
     expect(JSON.stringify(user.content)).toContain("图片未能发送");
+  });
+});
+
+describe("图片引用：必须带完整 ImageAttachmentRef（2026-10-20 真机报障）", () => {
+  it("**适配器把完整 ref 交给解析器**，不是只给 attachmentId", async () => {
+    // 线上症状：界面上出现「图片未能发送：sha256:…」的占位。
+    // 根因是宿主的 `readImageRequest` 会用 mediaType/bytes/width/height 校验引用，
+    // 只给 attachmentId 会被拒绝。这条测试钉住「五个字段都传下去」。
+    const seen: unknown[] = [];
+    const adapter = createOpenDesignAdapter({
+      config: () => ({ apiBase: "https://api.example.test" }),
+      rotation: new RotationEngine({ order: ["a"], rules: [], pinned: null }),
+      quota: { snapshot: async () => ({ windows: [], failures: [] }) } as never,
+      accounts: { list: async () => [], on: () => () => undefined } as never,
+      fetchImpl: (async () =>
+        new Response(
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        )) as typeof fetch,
+      resolveStored: async () => "sk-a",
+      resolveImage: async (ref) => {
+        seen.push(ref);
+        return undefined; // 本用例只关心「传了什么」
+      },
+    });
+    const fullRef = {
+      attachmentId: "sha256:c949b973",
+      mediaType: "image/png",
+      bytes: 1234,
+      width: 800,
+      height: 600,
+    };
+    const request = {
+      provider: "opendesign",
+      model: "deepseek-v4.1-flash",
+      messages: [{ role: "user", content: [{ type: "image", attachment: fullRef }] }],
+    } as never;
+    // 流会失败（没有可用响应体），这里只要求它确实尝试过解析图片。
+    await (async () => {
+      for await (const _chunk of adapter.stream(request)) {
+        // 消费掉
+      }
+    })().catch(() => undefined);
+
+    expect(seen).toHaveLength(1);
+    // 关键：不是 `{ attachmentId: "sha256:c949b973" }`，而是完整对象。
+    expect(seen[0]).toMatchObject({
+      attachmentId: "sha256:c949b973",
+      mediaType: "image/png",
+      bytes: 1234,
+      width: 800,
+      height: 600,
+    });
   });
 });

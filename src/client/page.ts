@@ -185,22 +185,33 @@ function reloadNotice(props: PageShellProps, t: (key: string) => string): ReactE
  */
 function updateBlock(props: PageShellProps, t: (key: string) => string): ReactElement | null {
   const state = props.update;
-  if (state === undefined) return null;
+  // **`undefined` 也要渲染**（2026-10-20 用户报障：「这个页面看不到更新」）。
+  //
+  // 原来的写法是 `state === undefined → return null`，本意是「老宿主别留死按钮」；但
+  // 容器的初值就是 `undefined`（首次进入不自动查更新），两个设计叠在一起的结果是
+  // **整块永远不出现**、用户根本没有入口去点「检查更新」—— 一个功能被自己的防御性
+  // 判断完全藏起来了。
+  //
+  // 现在：没有结论时显示一句「还没检查」+「检查更新」按钮。容器没提供回调时
+  // （`onCheckUpdate` 缺席）才真的不渲染 —— 那才是「宿主不支持」的判据。
+  if (state === undefined && props.onCheckUpdate === undefined) return null;
   const replace = (template: string, values: Record<string, string>): string =>
     template.replace(/\{(\w+)\}/g, (whole, name: string) => values[name] ?? whole);
 
-  const canUpdate = state.kind === "available";
+  const canUpdate = state?.kind === "available";
   const label =
-    state.kind === "available"
-      ? replace(t("update.available"), { installed: state.installed, latest: state.latest })
-      : state.kind === "current"
-        ? replace(t("update.current"), { installed: state.installed })
-        : state.kind === "not-applicable"
-          ? replace(t("update.notApplicable"), { installed: state.installed })
-          : replace(t("update.unknown"), { reason: state.kind === "unknown" ? state.reason : "" });
+    state === undefined
+      ? t("update.notChecked")
+      : state.kind === "available"
+        ? replace(t("update.available"), { installed: state.installed, latest: state.latest })
+        : state.kind === "current"
+          ? replace(t("update.current"), { installed: state.installed })
+          : state.kind === "not-applicable"
+            ? replace(t("update.notApplicable"), { installed: state.installed })
+            : replace(t("update.unknown"), { reason: state.kind === "unknown" ? state.reason : "" });
   return createElement(
     "div",
-    { "data-update-block": state.kind, className: CSS_CLASS.notice },
+    { "data-update-block": state?.kind ?? "unchecked", className: CSS_CLASS.notice },
     createElement("strong", { className: CSS_CLASS.noticeTitle }, t("update.section")),
     createElement("small", null, props.updateBusy === true ? t("update.checking") : label),
     // 「更新」只在**真的有新版**时出现（`not-applicable` / `current` 都不画一个点不动的按钮）。
