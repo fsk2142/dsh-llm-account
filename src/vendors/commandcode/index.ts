@@ -63,6 +63,8 @@ import type { CommandCodeProtocol } from "./protocol";
 import { createCommandCodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { applyAutoContinue } from "../auto-continue";
+import { applySearch } from "../search";
+import { registerSearchProvider } from "../search-provider";
 import { createUsagePort } from "../usage-store";
 import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
@@ -369,6 +371,54 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
       onError: document()["autoContinueOnError"] === true,
       onTruncate: document()["autoContinueOnTruncate"] === true,
       maxAttempts: typeof document()["autoContinueMaxAttempts"] === "number" ? (document()["autoContinueMaxAttempts"] as number) : 3,
+    },
+  );
+
+  // 统一搜索（用户 2026-10-20）：网关订阅额度优先，没有则用 API key。
+  //
+  // 为什么在这里注册：搜索是**全局**能力（一台会话用一次），不需要三家各注册一份
+  // —— 重复注册会撞宿主的 `WEB_DUPLICATE_PROVIDER`。
+  //
+  // 选路依据是**当前会话的路由**：宿主 `agents.currentInitiator()` 给出正在跑的 agent，
+  // 它的 `session.requestContext()` 是最近一次 `request/context` 事件
+  // （`{ provider, model, ... }`，实测确认有这两个字段）。
+  applySearch(
+    ctx as unknown as Parameters<typeof applySearch>[0],
+    {
+      enabled: () => document()["featureSearchEnabled"] !== false,
+      register: (webCtx) =>
+        registerSearchProvider(webCtx, {
+          fetchImpl: globalThis.fetch.bind(globalThis),
+          sessionRoute: () => {
+            // 读不到就返回空路由：选路会保守地退回 API key（不猜网关）。
+            const agents = (ctx as unknown as { get?: (name: string) => unknown }).get?.("agents") as
+              | { currentInitiator?: () => { session?: { requestContext?: () => unknown } } | undefined }
+              | undefined;
+            const context = agents?.currentInitiator?.()?.session?.requestContext?.();
+            const record = typeof context === "object" && context !== null ? (context as Record<string, unknown>) : {};
+            return {
+              provider: typeof record.provider === "string" ? record.provider : undefined,
+              model: typeof record.model === "string" ? record.model : undefined,
+            };
+          },
+          preferGateway: () => document()["searchPreferGateway"] !== false,
+          gatewayAccess: async (provider) => {
+            // 只有本插件托管的 opendesign 有网关路；密钥用它自己的账号端口解析。
+            if (provider !== "opendesign") return undefined;
+            const ref = typeof document()["apiKeyEnv"] === "string" ? (document()["apiKeyEnv"] as string) : undefined;
+            if (ref === undefined) return undefined;
+            const key = await credentials.resolve(ref);
+            if (key === undefined) return undefined;
+            const base = typeof document()["apiBase"] === "string" && (document()["apiBase"] as string) !== ""
+              ? (document()["apiBase"] as string)
+              : "https://amr-link.open-design.ai/v1";
+            return { baseURL: base, key };
+          },
+          resolveApiKey: async () => {
+            const ref = typeof document()["searchApiKeyEnv"] === "string" ? (document()["searchApiKeyEnv"] as string) : "DEEPSEEK_API_KEY";
+            return await credentials.resolve(ref);
+          },
+        }),
     },
   );
 
