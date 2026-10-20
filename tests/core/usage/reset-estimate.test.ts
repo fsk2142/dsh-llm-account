@@ -155,4 +155,15 @@ describe("接入额度端口：只补端点没给的窗口", () => {
     expect(monthly?.resetAt).toBeUndefined();
     expect(monthly?.resetEstimated).toBeUndefined();
   });
+
+  it("锚点表有上限：大量账号反复读写不泄漏、也不串数据", async () => {
+    // 宿主是常驻进程，账号会被反复增删。若锚点 Map 无上限，长期运行就会一直长。
+    // 这里用 100 个不同账号各读一次：每个账号独立建立自己的锚点，互不影响。
+    const { quote } = quotaWith({ fiveHour: { used: 1, cap: 14 } });
+    for (let index = 0; index < 100; index += 1) {
+      const snapshot = await quote.snapshot(`acct-${index}`);
+      const fiveHour = snapshot.windows.find((window: { key: string }) => window.key === "fiveHour");
+      expect(fiveHour?.resetAt, `acct-${index}`).toBe(T0 + 5 * HOUR);
+    }
+  });
 });
