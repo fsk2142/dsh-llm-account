@@ -9,7 +9,7 @@
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
-import type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
+import type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching/settings";
 import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";

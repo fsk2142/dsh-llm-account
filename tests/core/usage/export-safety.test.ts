@@ -9,10 +9,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { ledgerCsvOf } from "../../src/core/usage-export";
-import type { UsageRecord } from "../../src/core/usage-stats";
-import { createUsageLedger } from "../../src/core/usage-ledger";
-import { LlmAccountUsageService } from "../../src/vendors/usage-remote";
+import { ledgerCsvOf } from "../../../src/core/usage/export";
+import type { UsageRecord } from "../../../src/core/usage/stats";
+import { createUsageLedger } from "../../../src/core/usage/ledger";
+import { LlmAccountUsageService } from "../../../src/vendors/usage-remote";
 
 /** 造一条记录。 */
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {

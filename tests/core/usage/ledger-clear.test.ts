@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { createUsageLedger } from "../../src/core/usage-ledger";
+import { createUsageLedger } from "../../../src/core/usage/ledger";
 
 /** 测试用的台账目录（`tests/setup-usage-dir.ts` 已指向临时目录）。 */
 function directory(): string {

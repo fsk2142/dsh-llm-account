@@ -37,11 +37,11 @@ import type {
 import type { AccountPort, AccountView, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
-import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/model-fallback";
+import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
-import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
-import { MAX_TRIED, RotationEngine } from "../../core/rotation";
+import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
+import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { parseCatalog } from "./catalog";
 import { allowedEffortsIn, effortsFor, nearestAllowedEffort } from "./efforts";

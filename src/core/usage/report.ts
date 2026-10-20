@@ -12,7 +12,7 @@
  */
 import { periodAt, periodKindOf, planPeriodAt, type BillingPeriod } from "./billing-period";
 import { officialPriceOf, vendorPriceOf } from "./pricing";
-import { aggregateUsage, withinWindow, windowStart, type UsageBucket, type UsageRecord, type UsageWindow } from "./usage-stats";
+import { aggregateUsage, withinWindow, windowStart, type UsageBucket, type UsageRecord, type UsageWindow } from "./stats";
 
 /** 一个账号在它自己周期内的用量。 */
 export interface AccountUsage {

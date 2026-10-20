@@ -13,7 +13,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { expect, it, vi } from "vitest";
 
 import type { AccountPort, AccountState, AccountView, LoginPort, QuotaSnapshot, VendorCapabilities, VendorId } from "../../src/core/adapter";
-import { RotationEngine } from "../../src/core/rotation";
+import { RotationEngine } from "../../src/core/switching/rotation";
 import type { RotationAccess } from "../../src/vendors/assembly";
 import {
   applyUsageRemote,

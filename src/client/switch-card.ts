@@ -6,7 +6,7 @@
  */
 import { createElement, type ReactElement } from "react";
 
-import type { SwitchRuntimeState } from "../core/switching";
+import type { SwitchRuntimeState } from "../core/switching/settings";
 import { CSS_CLASS } from "./css";
 import { countdownPartsOf } from "./duration";
 

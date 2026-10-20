@@ -20,7 +20,7 @@ import type { GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/
 import { expect, it, vi } from "vitest";
 
 import type { AccountPort, AccountView, QuotaPort } from "../../src/core/adapter";
-import { RotationEngine } from "../../src/core/rotation";
+import { RotationEngine } from "../../src/core/switching/rotation";
 import { createOpenDesignAdapter } from "../../src/vendors/opendesign/adapter";
 import type { OpenDesignAdapterDeps } from "../../src/vendors/opendesign/adapter";
 import { decodeStream } from "../../src/vendors/opendesign/protocol";

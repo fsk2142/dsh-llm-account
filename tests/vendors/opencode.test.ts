@@ -10,7 +10,7 @@ import type { GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/
 import { expect, it, vi } from "vitest";
 
 import type { AccountPort, QuotaPort } from "../../src/core/adapter";
-import { MAX_TRIED, RotationEngine } from "../../src/core/rotation";
+import { MAX_TRIED, RotationEngine } from "../../src/core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT } from "../../src/core/transport";
 import { createOpencodeAdapter } from "../../src/vendors/opencode/adapter";
 import { parseModels } from "../../src/vendors/opencode/catalog";

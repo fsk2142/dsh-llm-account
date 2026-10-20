@@ -7,7 +7,7 @@
  * 2. 价格随厂商调整。这里集中一处，改价只改这个文件；每条都写明来源与取价日期。
  * @module dsh-llm-account/src/core/pricing
  */
-import type { TokenPrice } from "./usage-stats";
+import type { TokenPrice } from "./stats";
 
 /** 一组计价表：模型 id（**小写**比较）→ 每 100 万 token 的美元价。 */
 export type PriceTable = Readonly<Record<string, TokenPrice>>;

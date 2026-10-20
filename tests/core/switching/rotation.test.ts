@@ -1,12 +1,12 @@
 import { expect, it } from "vitest";
 
-import { rejection } from "../../src/core/failures";
+import { rejection } from "../../../src/core/failures";
 import {
   MAX_SWITCH_NOTICES,
   MAX_TRIED,
   RATE_LIMIT_COOLDOWN_MS,
   RotationEngine,
-} from "../../src/core/rotation";
+} from "../../../src/core/switching/rotation";
 
 it("按模型规则优先选择账号", () => {
   const e = new RotationEngine({ order: ["a", "b"], pinned: null, rules: [{ models: ["m1"], account: "b" }] });

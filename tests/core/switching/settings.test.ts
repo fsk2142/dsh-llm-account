@@ -5,8 +5,8 @@
  */
 import { expect, it } from "vitest";
 
-import type { QuotaSnapshot } from "../../src/core/adapter";
-import { chooseSwitch, isDue, quotaExhausted, remainingFraction, switchSettingsOf } from "../../src/core/switching";
+import type { QuotaSnapshot } from "../../../src/core/adapter";
+import { chooseSwitch, isDue, quotaExhausted, remainingFraction, switchSettingsOf } from "../../../src/core/switching/settings";
 
 /** 只带一个窗口的快照。 */
 function snapshot(window: Partial<QuotaSnapshot["windows"][number]>): QuotaSnapshot {

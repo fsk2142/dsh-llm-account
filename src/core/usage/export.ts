@@ -12,8 +12,8 @@
  *    一个带逗号的账号名就会把整张表错列。
  * @module dsh-llm-account/src/core/usage-export
  */
-import { modelKeyOf } from "./model-fallback";
-import type { UsageRecord } from "./usage-stats";
+import { modelKeyOf } from "../switching/model-fallback";
+import type { UsageRecord } from "./stats";
 
 /** CSV 的列顺序（固定：Excel 打开时列不跳）。 */
 export const LEDGER_CSV_COLUMNS: readonly (keyof UsageRecord)[] = [

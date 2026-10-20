@@ -10,7 +10,7 @@
  * - 一条失败都没有时返回**空数组**，不返回一条全 0 的行（界面据此不渲染这一块）。
  * @module dsh-llm-account/src/core/usage-failures
  */
-import type { UsageRecord } from "./usage-stats";
+import type { UsageRecord } from "./stats";
 
 /** 没有分类名时的归类键（不是空串：界面要能对它取词）。 */
 export const UNKNOWN_FAILURE_KIND = "unknown";

@@ -5,7 +5,7 @@
 import { expect, it, vi } from "vitest";
 
 import type { AccountView, QuotaSnapshot } from "../../src/core/adapter";
-import { RotationEngine } from "../../src/core/rotation";
+import { RotationEngine } from "../../src/core/switching/rotation";
 import type { RotationAccess } from "../../src/vendors/assembly";
 import { SwitchingController, isTurnEndEvent } from "../../src/vendors/switching";
 

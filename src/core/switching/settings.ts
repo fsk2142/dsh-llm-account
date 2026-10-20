@@ -5,7 +5,7 @@
  * 时钟、网络、设置写入都在 `src/vendors/switching.ts` 的控制器里；本模块无 I/O，可完整单测。
  * @module dsh-llm-account/src/core/switching
  */
-import type { QuotaSnapshot, QuotaWindow } from "./adapter";
+import type { QuotaSnapshot, QuotaWindow } from "../adapter";
 
 /** 切换策略：`order` 手动顺序（只在耗尽时切），`best-quota` 额度优先，`scheduled` 定时切换。 */
 export type SwitchStrategy = "order" | "best-quota" | "scheduled";

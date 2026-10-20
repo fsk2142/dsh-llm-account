@@ -9,10 +9,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { createUsageLedger, USAGE_DIR_NAME, type UsageLedger } from "../core/usage-ledger";
-import { officialPriceOf } from "../core/pricing";
-import { aggregateUsage, type UsageRecord } from "../core/usage-stats";
-import type { UsagePort, UsageSample } from "../core/usage-port";
+import { createUsageLedger, USAGE_DIR_NAME, type UsageLedger } from "../core/usage/ledger";
+import { officialPriceOf } from "../core/usage/pricing";
+import { aggregateUsage, type UsageRecord } from "../core/usage/stats";
+import type { UsagePort, UsageSample } from "../core/usage/port";
 
 /** 单例台账。 */
 let sharedLedger: UsageLedger | undefined;

@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { planPeriodAt } from "../../src/core/billing-period";
+import { planPeriodAt } from "../../../src/core/usage/billing-period";
 
 const DAY = 86_400_000;
 

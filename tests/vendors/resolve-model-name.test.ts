@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AccountPort, QuotaPort } from "../../src/core/adapter";
-import { RotationEngine } from "../../src/core/rotation";
+import { RotationEngine } from "../../src/core/switching/rotation";
 import { createCommandCodeAdapter } from "../../src/vendors/commandcode/adapter";
 import { createOpencodeAdapter } from "../../src/vendors/opencode/adapter";
 import { createOpenDesignAdapter } from "../../src/vendors/opendesign/adapter";

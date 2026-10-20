@@ -9,8 +9,8 @@
  * 名称不参与比较。引擎只做比较，不生成 ref（生成在 Task 4 的 `accountRef()`）。
  * @module dsh-llm-account/src/core/rotation
  */
-import type { AccountState, FailureKind, ModelRule, Rejection } from "./adapter";
-import type { TransientFailureKind } from "./failures";
+import type { AccountState, FailureKind, ModelRule, Rejection } from "../adapter";
+import type { TransientFailureKind } from "../failures";
 
 /**
  * 单次请求内的尝试上限。**由调用方执行**（请求内核在 `tried.size` 达到该值时停止

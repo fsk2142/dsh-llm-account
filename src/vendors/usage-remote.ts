@@ -29,7 +29,7 @@ import type {
   VendorId,
 } from "../core/adapter";
 import type { RotationAccess } from "./assembly";
-import type { SwitchDecision, SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
+import type { SwitchDecision, SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching/settings";
 import {
   USAGE_NAMESPACE,
   USAGE_PACKAGE,
@@ -46,10 +46,10 @@ import {
   type VendorUsageStatus,
 } from "../client/usage-contract";
 import { lastUsedAccountOf } from "../core/last-used";
-import { ledgerCsvOf, exportTailOf } from "../core/usage-export";
-import { failureBreakdownOf, failureBreakdownPerAccount } from "../core/usage-failures";
-import { buildUsageReport } from "../core/usage-report";
-import { withinWindow, type UsageRecord } from "../core/usage-stats";
+import { ledgerCsvOf, exportTailOf } from "../core/usage/export";
+import { failureBreakdownOf, failureBreakdownPerAccount } from "../core/usage/failures";
+import { buildUsageReport } from "../core/usage/report";
+import { withinWindow, type UsageRecord } from "../core/usage/stats";
 import { sharedUsageLedger } from "./usage-store";
 
 /**

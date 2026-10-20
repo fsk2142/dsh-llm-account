@@ -6,7 +6,7 @@
  * 具体怎么归属账号/周期由装配层决定 —— adapter 不需要知道记账周期的存在。
  * @module dsh-llm-account/src/core/usage-port
  */
-import type { RequestOutcome } from "./usage-stats";
+import type { RequestOutcome } from "./stats";
 
 /** 一次请求的采集入参。 */
 export interface UsageSample {

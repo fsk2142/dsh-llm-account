@@ -10,9 +10,9 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { failureBreakdownOf, groupFailuresByKind } from "../../src/core/usage-failures";
-import { exportTailOf, ledgerCsvOf, modelKeyOfRecord } from "../../src/core/usage-export";
-import type { UsageRecord } from "../../src/core/usage-stats";
+import { failureBreakdownOf, groupFailuresByKind } from "../../../src/core/usage/failures";
+import { exportTailOf, ledgerCsvOf, modelKeyOfRecord } from "../../../src/core/usage/export";
+import type { UsageRecord } from "../../../src/core/usage/stats";
 
 /** 造一条记录；默认是一次成功的请求。 */
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {

@@ -6,9 +6,9 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { periodAt, periodKindOf, planPeriodAt } from "../../src/core/billing-period";
-import { DEEPSEEK_OFFICIAL_PRICES, lookupPrice, officialPriceOf, vendorPriceOf } from "../../src/core/pricing";
-import { buildUsageReport } from "../../src/core/usage-report";
+import { periodAt, periodKindOf, planPeriodAt } from "../../../src/core/usage/billing-period";
+import { DEEPSEEK_OFFICIAL_PRICES, lookupPrice, officialPriceOf, vendorPriceOf } from "../../../src/core/usage/pricing";
+import { buildUsageReport } from "../../../src/core/usage/report";
 import {
   aggregateUsage,
   costOf,
@@ -17,7 +17,7 @@ import {
   windowStart,
   withinWindow,
   type UsageRecord,
-} from "../../src/core/usage-stats";
+} from "../../../src/core/usage/stats";
 
 /** 造一条记录（默认「一次成功、100 输入、50 输出、无缓存」）。 */
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {

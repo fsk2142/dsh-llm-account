@@ -9,8 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { isModelIdVisible, normalizeVisibility, selectVisible } from "../../src/core/catalog";
-import { pickFallbackModel } from "../../src/core/model-fallback";
+import { isModelIdVisible, normalizeVisibility, selectVisible } from "../../../src/core/catalog";
+import { pickFallbackModel } from "../../../src/core/switching/model-fallback";
 
 /** 造一个目录条目（只要 id 就够本文件用）。 */
 function entry(id: string): { id: string; name: string; inputModalities: readonly ["text"] } {

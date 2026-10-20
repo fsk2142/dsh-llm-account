@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_FRESH_TTL_MS, isLastUsedFresh, lastUsedAccountOf } from "../../src/core/last-used";
 import { sidebarCurrentTarget, type SidebarTarget } from "../../src/client/page-state";
-import type { UsageRecord } from "../../src/core/usage-stats";
+import type { UsageRecord } from "../../src/core/usage/stats";
 
 /** 造一条台账记录。 */
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {

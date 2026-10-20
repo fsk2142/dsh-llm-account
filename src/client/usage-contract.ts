@@ -21,7 +21,7 @@
  * @module dsh-llm-account/src/client/usage-contract
  */
 import type { AccountView, CatalogModelsResult, FailureKind, QuotaWindow, VendorCapabilities } from "../core/adapter";
-import type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
+import type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching/settings";
 
 // 客户端其它模块（页面、接缝）需要这几个形状时也从这里取，不必各自去 import `src/core/**`：
 // 这个模块是客户端侧唯一允许提到 core 的地方，而且是**纯类型**导入（`verbatimModuleSyntax`
@@ -36,7 +36,7 @@ export type {
   QuotaWindow,
   VendorCapabilities,
 } from "../core/adapter";
-export type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching";
+export type { SwitchRuntimeState, SwitchSettingsWrite } from "../core/switching/settings";
 
 import type { ModelRule } from "../core/adapter";
 

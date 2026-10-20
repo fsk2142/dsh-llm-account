@@ -9,10 +9,10 @@
  */
 import { expect, it } from "vitest";
 
-import { createUsageLedger, type UsageLedger } from "../../src/core/usage-ledger";
-import { exportTailOf, ledgerCsvOf } from "../../src/core/usage-export";
-import { failureBreakdownOf } from "../../src/core/usage-failures";
-import type { UsageRecord } from "../../src/core/usage-stats";
+import { createUsageLedger, type UsageLedger } from "../../src/core/usage/ledger";
+import { exportTailOf, ledgerCsvOf } from "../../src/core/usage/export";
+import { failureBreakdownOf } from "../../src/core/usage/failures";
+import type { UsageRecord } from "../../src/core/usage/stats";
 
 /** 造一条记录。 */
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {

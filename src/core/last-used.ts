@@ -22,7 +22,7 @@
  * 文案必须说清这一点，不能假装它是实时跟随。
  * @module dsh-llm-account/src/core/last-used
  */
-import type { UsageRecord } from "./usage-stats";
+import type { UsageRecord } from "./usage/stats";
 
 /** 一次「最近使用的账号」读数。 */
 export interface LastUsedAccount {

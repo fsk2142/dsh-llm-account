@@ -22,7 +22,7 @@ import {
   type SwitchCandidate,
   type SwitchDecision,
   type SwitchRuntimeState,
-} from "../core/switching";
+} from "../core/switching/settings";
 import type { RotationAccess } from "./assembly";
 
 /** 额度读数的复用窗口；到期后重新读（避免每个请求都打额度端点）。 */

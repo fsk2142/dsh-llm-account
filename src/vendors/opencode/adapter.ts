@@ -23,13 +23,13 @@ import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from "@de
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, TokenUsage } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
-import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/model-fallback";
+import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
-import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage-port";
+import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
-import { MAX_TRIED, RotationEngine } from "../../core/rotation";
+import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
 import { OAUTH_PREFIX, resolveOAuthCredential } from "./oauth";

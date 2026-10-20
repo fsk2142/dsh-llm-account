@@ -17,11 +17,11 @@ import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
 import type { SettingsDescriptor, SettingsForms } from "@deepseek-ai/dsh-settings";
 
 import type { AccountState, CredentialPort, ModelRule, SettingsOp, SettingsPort, SettingsSnapshot } from "../core/adapter";
-import type { SwitchSettingsWrite } from "../core/switching";
+import type { SwitchSettingsWrite } from "../core/switching/settings";
 import { normalizeKey } from "../core/credentials";
 import { IntentLog } from "../core/recovery";
 import type { AccountIntent, AccountIntentKind, IntentStore } from "../core/recovery";
-import { RotationEngine } from "../core/rotation";
+import { RotationEngine } from "../core/switching/rotation";
 
 /**
  * 一次设置写入的修订号冲突重试上限。冲突是并发写的正常结果（重读即可推进），给上限只是

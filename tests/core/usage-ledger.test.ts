@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
 
-import { createUsageLedger } from "../../src/core/usage-ledger";
+import { createUsageLedger } from "../../src/core/usage/ledger";
 
 /** 临时目录（每个用例一个，互不干扰）。 */
 const directories: string[] = [];

@@ -14,7 +14,7 @@
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { RequestOutcome, UsageRecord } from "./usage-stats";
+import type { RequestOutcome, UsageRecord } from "./stats";
 
 /** 一天一条文件（`usage-2026-10-19.jsonl`），避免单文件无限增长。 */
 function fileNameOf(at: number): string {

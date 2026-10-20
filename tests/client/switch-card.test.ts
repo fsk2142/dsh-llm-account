@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 
 import { dictionaryOf } from "../../src/client/copy";
 import { SwitchCard, countdownText } from "../../src/client/switch-card";
-import type { SwitchRuntimeState } from "../../src/core/switching";
+import type { SwitchRuntimeState } from "../../src/core/switching/settings";
 import type { StubElement } from "../support/react-stub";
 
 /** 展平元素树。 */

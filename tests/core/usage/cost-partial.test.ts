@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { aggregateUsage, type UsageRecord, type TokenPrice } from "../../src/core/usage-stats";
+import { aggregateUsage, type UsageRecord, type TokenPrice } from "../../../src/core/usage/stats";
 
 /** 造一条记录。 */
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {

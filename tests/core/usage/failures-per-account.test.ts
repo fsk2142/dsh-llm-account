@@ -11,8 +11,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { failureBreakdownOf, failureBreakdownPerAccount } from "../../src/core/usage-failures";
-import type { UsageRecord } from "../../src/core/usage-stats";
+import { failureBreakdownOf, failureBreakdownPerAccount } from "../../../src/core/usage/failures";
+import type { UsageRecord } from "../../../src/core/usage/stats";
 
 /** 造一条记录。 */
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {

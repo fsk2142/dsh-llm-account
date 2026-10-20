@@ -15,7 +15,7 @@ import {
   modelKeyOf,
   pickFallbackModel,
   type FallbackCandidate,
-} from "../../src/core/model-fallback";
+} from "../../../src/core/switching/model-fallback";
 
 /** 造一个候选。 */
 function at(provider: string, model: string, extra: Partial<FallbackCandidate> = {}): FallbackCandidate {

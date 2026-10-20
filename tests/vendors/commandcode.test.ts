@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 
 import type { AccountPort, QuotaPort } from "../../src/core/adapter";
-import { RotationEngine } from "../../src/core/rotation";
+import { RotationEngine } from "../../src/core/switching/rotation";
 import { createCommandCodeAdapter } from "../../src/vendors/commandcode/adapter";
 import { parseCatalog } from "../../src/vendors/commandcode/catalog";
 import { classifyCommandCodeFailure } from "../../src/vendors/commandcode/failures";

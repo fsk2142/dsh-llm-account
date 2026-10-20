@@ -13,7 +13,7 @@
  * @module dsh-llm-account/src/vendors/model-catalog-registry
  */
 
-import { isOfficialProvider } from "../core/model-fallback";
+import { isOfficialProvider } from "../core/switching/model-fallback";
 
 /** 一家的目录读口 **+ 流式委托**。 */
 export interface CatalogSource {
