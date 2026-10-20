@@ -276,6 +276,11 @@ export function buildRequestBody(
     max_tokens: facts.maxTokens,
     temperature: options.temperature ?? 0.3,
     stream: true,
+    // **停止序列**（2026-10-20 对齐官方实现）：宿主在 `LlmCallConfig.stop` 里传下来，
+    // 官方适配器是直接透传（`...options.stop === void 0 ? {} : { stop_sequences: options.stop }`）。
+    // 少传它 = 模型只能自己停：代码生成/工具调用会一路写到 `max_tokens`，白烧 token。
+    // OpenAI 兼容网关用 `stop`（Anthropic Messages 才叫 `stop_sequences`）。
+    ...(options.stop === undefined || options.stop.length === 0 ? {} : { stop: [...options.stop] }),
     ...(facts.reasoningEffort === undefined ? {} : { reasoning_effort: facts.reasoningEffort }),
   };
 }

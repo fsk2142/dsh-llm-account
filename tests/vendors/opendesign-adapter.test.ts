@@ -370,13 +370,30 @@ it("stream：400 是请求级失败 → 不换账号（换号不可能改变结�
   expect(fetchImpl.calls.map((call) => call.key)).toEqual(["sk-a"]);
 });
 
-it("stream：宿主不支持的 stop 序列直接拒绝（不发请求）", async () => {
-  const fetchImpl = scriptedFetch([]);
+it("**stop 序列会发到请求体**（2026-10-20 对齐官方：不再拒绝）", async () => {
+  // 官方 `dsh-llm-deepseek` 直接透传 `options.stop`；旧实现在这里抛 UNSUPPORTED_OPTION
+  // 是因为当时没实现。现在实现了，宿主传下来的 stop 必须真的到达上游 ——
+  // 少传它，模型只能自己停（代码生成会一路写到 max_tokens）。
+  const fetchImpl = scriptedFetch([
+    () => sseResponse(['{"choices":[{"delta":{"content":"ok"}}]}', '{"choices":[{"delta":{},"finish_reason":"stop"}]}', "[DONE]"]),
+  ]);
   const adapter = createOpenDesignAdapter(adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }));
 
-  const error = await collect(adapter.stream({ ...request(), stop: ["STOP"] })).catch((reason: unknown) => reason);
-  expect((error as LlmError).code).toBe("UNSUPPORTED_OPTION");
-  expect(fetchImpl.calls).toHaveLength(0);
+  await collect(adapter.stream({ ...request(), stop: ["STOP", "\n\nUser:"] })).catch(() => undefined);
+  expect(fetchImpl.calls.length).toBeGreaterThan(0);
+  const body = fetchImpl.calls[0]!.body as { stop?: string[] };
+  // OpenAI 兼容形状的字段名是 `stop`（不是 Anthropic 的 `stop_sequences`）。
+  expect(body.stop).toEqual(["STOP", "\n\nUser:"]);
+});
+
+it("没有 stop 时不发这个字段（不给绝大多数请求塞空数组）", async () => {
+  const fetchImpl = scriptedFetch([
+    () => sseResponse(['{"choices":[{"delta":{"content":"ok"}}]}', '{"choices":[{"delta":{},"finish_reason":"stop"}]}', "[DONE]"]),
+  ]);
+  const adapter = createOpenDesignAdapter(adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }));
+  await collect(adapter.stream(request())).catch(() => undefined);
+  const body = fetchImpl.calls[0]!.body as { stop?: unknown };
+  expect(body.stop).toBeUndefined();
 });
 
 it("解码：delta.tool_calls 拼成一个工具块（缺 id 时补一个，finish 为 tool-calls）", async () => {

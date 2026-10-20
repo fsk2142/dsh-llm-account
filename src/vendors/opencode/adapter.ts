@@ -322,6 +322,18 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       inputModalities: entry?.inputModalities ?? ["text"],
       ...(contextWindow === undefined ? {} : { context: { contextWindow } }),
       ...(maxTokens === undefined ? {} : { defaultMaxTokens: maxTokens }),
+      // **能力声明**（2026-10-20 对齐官方实现）：官方 `dsh-llm-deepseek` 在模型目录里
+      // 硬编码等同的两项（`systemPromptUpdate: "in-history"`, `toolUpdate: "addition-only"`）。
+      //
+      // 它们**不是用户选项**，而是告诉宿主「这个模型怎么读中途变化的系统提示与工具声明」：
+      // - `in-history`：模型会把任意位置的 `system` 消息读作最新系统提示，于是改提示文
+      //   只需要追加一条，不必重写 message 0（省缓存）；
+      // - `addition-only`：模型认 `deferLoading` + 后续 `tool-addition` 块，新增工具可以
+      //   跟在缓存历史之后，不必每轮重发完整声明列表。
+      //
+      // opencode 走 Anthropic Messages（`pi-ai`），两者都是该协议的既有语义。
+      systemPromptUpdate: "in-history",
+      toolUpdate: "addition-only",
       ...(efforts.length === 0
         ? {}
         : { reasoning: { efforts: efforts.map((effort) => ({ id: ReasoningEffortId(effort), name: effort })) } }),

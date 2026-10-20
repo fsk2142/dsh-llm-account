@@ -348,8 +348,7 @@ function bodyCapturingFetch(): { fetchImpl: typeof fetch; bodies: Record<string,
   return { fetchImpl, bodies };
 }
 
-it("resolveModel 声明静态档位表里的档位；表外的模型不声明（2026-10-18 报障根因）", async () => {
-  const adapter = createCommandCodeAdapter({
+it("resolveModel 声明静态档位表里的档位；表外的模型不声明（2026-10-18 报障根因）", async () => {  const adapter = createCommandCodeAdapter({
     config: () => ({ apiBase: "https://api.example.test" }),
     rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
     quota: stubQuota(),
@@ -368,6 +367,36 @@ it("resolveModel 声明静态档位表里的档位；表外的模型不声明（
   // 表外模型：**不声明**档位（不猜；自动思考的模型本来就没有可选档位）。
   const outside = await adapter.resolveModel("commandcode", "not-in-the-table");
   expect(outside.reasoning).toBeUndefined();
+});
+
+it("**stop 序列按传输各用各的字段名**（2026-10-20 对齐官方：不再拒绝）", async () => {
+  // 官方 `dsh-llm-deepseek` 直接透传 `options.stop`。Command Code 有两种 HTTP 传输，
+  // 字段名不同：OpenAI 叫 `stop`、Anthropic Messages 叫 `stop_sequences`。
+  // 旧实现在 stream 入口抛 UNSUPPORTED_OPTION 是因为当时没实现，现在实现了必须去掉。
+  //
+  // 断言方式：直接构造请求体（`buildRequestBody` 是纯函数），不依赖假 SSE 能否被两种
+  // 协议各自解出来 —— 那会让「字段有没有发出去」这件事被流解析问题掩盖。
+  const facts = { maxTokens: 100, systemText: "", selectableEffort: false } as never;
+  const options = { ...request(), stop: ["END"] } as never;
+  expect((buildRequestBody("openai", options, facts) as { stop?: string[] }).stop).toEqual(["END"]);
+  expect((buildRequestBody("messages", options, facts) as { stop_sequences?: string[] }).stop_sequences).toEqual(["END"]);
+  // CLI 传输没有停止序列这个概念（本地命令行），不该出现这两个字段。
+  const cli = buildRequestBody("cli", options, { ...(facts as object), workingDir: "/tmp" } as never) as Record<string, unknown>;
+  expect(JSON.stringify(cli)).not.toContain("END");
+});
+
+it("**声明 systemPromptUpdate / toolUpdate**（与官方适配器同一组能力声明）", async () => {
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test" }),
+    rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl: (async () => new Response("{}")) as typeof fetch,
+  });
+  const resolved = await adapter.resolveModel("commandcode", "deepseek/deepseek-v4.1-flash");
+  // 这两项影响「中途改系统提示 / 增删工具」时的缓存策略，不是用户选项。
+  expect(resolved.systemPromptUpdate).toBe("in-history");
+  expect(resolved.toolUpdate).toBe("addition-only");
 });
 
 it("请求路径按静态表收口：表内档位照发，表外的（含未声明的 off）一律不发字段", async () => {

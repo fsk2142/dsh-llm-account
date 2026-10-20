@@ -397,6 +397,9 @@ export function buildRequestBody(protocol: CommandCodeProtocol, options: Generat
       max_tokens: facts.maxTokens,
       temperature: options.temperature ?? 0.3,
       stream: true,
+      // **停止序列**（2026-10-20 对齐官方）：宿主在 `LlmCallConfig.stop` 里传下来，
+      // OpenAI 形状叫 `stop`，Anthropic Messages 叫 `stop_sequences` —— 两个都要传。
+      ...(options.stop === undefined || options.stop.length === 0 ? {} : { stop: [...options.stop] }),
       ...(facts.reasoningEffort === undefined ? {} : { reasoning_effort: facts.reasoningEffort }),
     };
   }
@@ -405,6 +408,7 @@ export function buildRequestBody(protocol: CommandCodeProtocol, options: Generat
       model: options.model,
       max_tokens: facts.maxTokens,
       stream: true,
+      ...(options.stop === undefined || options.stop.length === 0 ? {} : { stop_sequences: [...options.stop] }),
       // 这个端点只认 `{ type: "adaptive" }`（`enabled` / `disabled` 都会被拒，旧插件第
       // 6593-6597 行的线上实测），而档位（`output_config.effort`）只有开了它才起作用。
       ...(facts.selectableEffort === true ? { thinking: { type: "adaptive" } } : {}),

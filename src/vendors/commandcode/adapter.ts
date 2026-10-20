@@ -343,6 +343,12 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       inputModalities: entry?.inputModalities ?? ["text"],
       ...(entry?.contextWindow === undefined ? {} : { context: { contextWindow: entry.contextWindow } }),
       ...(entry?.maxTokens === undefined ? {} : { defaultMaxTokens: entry.maxTokens }),
+      // **能力声明**（2026-10-20 对齐官方实现）：官方 `dsh-llm-deepseek` 在目录里硬编码
+      // 等同的两项。它们影响「中途改系统提示 / 增删工具」时的缓存策略，不是用户选项：
+      // - `in-history`：任意位置的 `system` 消息都读作最新系统提示，改提示只需追加；
+      // - `addition-only`：认 `deferLoading` + `tool-addition`，新工具不必重发完整列表。
+      systemPromptUpdate: "in-history",
+      toolUpdate: "addition-only",
       ...(efforts.length === 0
         ? {}
         : { reasoning: { efforts: efforts.map((effort) => ({ id: ReasoningEffortId(effort), name: effort })) } }),
@@ -355,10 +361,10 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @returns 与线上同序的 chunk 流。
    */
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    if (options.stop !== undefined && options.stop.length > 0) {
-      // 宿主契约：不支持的 stop 序列由适配器拒绝（旧插件第 7398 行的同一条）。
-      throw new LlmError("Command Code adapter does not support stop sequences", "UNSUPPORTED_OPTION");
-    }
+    // **停止序列已支持**（2026-10-20 对齐官方）：两种 HTTP 传输各自映射到自己的字段 ——
+    // OpenAI 传输 `stop`、Messages 传输 `stop_sequences`（见 `protocol.ts` 的
+    // `buildRequestBody`）。旧实现在这里抛 `UNSUPPORTED_OPTION`，是因为当时没实现；
+    // 现在实现了，那个拒绝必须去掉，否则宿主传下来的 stop 依然被自己挡掉。
     // 账号切换策略：在选号之前决定要不要换当前账号（辅助调用直接跳过）。
     await this.#deps.beforeRequest?.({
       ...(options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) }),
