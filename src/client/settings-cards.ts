@@ -68,9 +68,9 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     id: "search",
     labelKey: "card.search",
     hintKey: "card.search.hint",
-    // 「搜索方式」（四选一）+ API key 引用。字段名必须与 `shell.ts` 的声明**逐字一致**
-    // —— 卡片按名字匹配，写错一个字母就整项不渲染（2026-10-20 报障根因）。
-    shared: ["searchStrategy", "searchApiKeyRefs"],
+    // 「搜索方式」四选一。密钥列表**不再是设置字段**（2026-10-20 用户要求：
+    // 「只保留保存密钥那个」）—— 它由搜索卡里的「添加/删除」动作维护。
+    shared: ["searchStrategy"],
     specific: [],
   },
   {

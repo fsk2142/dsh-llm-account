@@ -94,6 +94,9 @@ export type CopyKey =
   | "field.searchApiKeyRefs"
   | "field.searchApiKeyRefs.hint"
   | "options.searchOff"
+  | "search.secretAdd"
+  | "search.secretRemove"
+  | "search.secretEmpty"
   | "search.secretSave"
   | "search.secretSaving"
   | "search.secretPlaceholder"
@@ -399,6 +402,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchApiKeyRefs": "DeepSeek API key 引用名",
     "field.searchApiKeyRefs.hint": "凭据库里的引用名（不是明文）。多个用逗号分隔，按顺序轮替：前一个无效或余额不足时自动换下一个。",
     "options.searchOff": "不启用网页搜索",
+    "search.secretAdd": "添加密钥",
+    "search.secretRemove": "删除",
+    "search.secretEmpty": "还没有添加密钥。",
     "search.secretSave": "保存密钥",
     "search.secretSaving": "保存中…",
     "search.secretPlaceholder": "粘贴 DeepSeek API key",
@@ -696,6 +702,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.searchOff": "Web search off",
     "field.searchApiKeyRefs": "DeepSeek API key references",
     "field.searchApiKeyRefs.hint": "Credential reference names, not literal secrets. Separate several with commas; they are tried in order when one is invalid or out of balance.",
+    "search.secretAdd": "Add key",
+    "search.secretRemove": "Remove",
+    "search.secretEmpty": "No keys added yet.",
     "search.secretSave": "Save key",
     "search.secretSaving": "Saving…",
     "search.secretPlaceholder": "Paste the DeepSeek API key",

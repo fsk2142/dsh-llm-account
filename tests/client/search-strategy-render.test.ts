@@ -45,6 +45,9 @@ function render(): StubElement[] {
       onSelectTab: () => undefined,
       onSetField: () => undefined,
       onSave: () => undefined,
+      // 密钥管理块只在宿主支持写凭据时渲染（老宿主不显示死按钮）。
+      onSaveSecret: async () => undefined,
+      onRemoveSecret: () => undefined,
     }),
   );
 }
@@ -77,14 +80,17 @@ describe("搜索设置卡里的控件", () => {
     ]);
   });
 
-  it("两个关系到「第三方 API / 网关」的项都在同一张卡里（搜索方式 + API key 引用）", () => {
+  it("两张与「搜索走哪条路」有关的项都在同一张卡里（搜索方式 + 密钥管理）", () => {
     const all = render();
     const searchCard = all.find((element) => element.props["data-card"] === "search");
     expect(searchCard).toBeDefined();
     const inside = elementsOf(searchCard);
-    const fields = inside.filter((element) => element.props["data-field"] !== undefined).map((element) => element.props["data-field"]);
+    const fields = inside
+      .filter((element) => element.props["data-field"] !== undefined)
+      .map((element) => element.props["data-field"]);
     expect(fields).toContain("searchStrategy");
-    expect(fields).toContain("searchApiKeyRefs");
+    // 密钥列表不是设置字段（2026-10-20 用户要求），而是卡片里挂的「密钥管理」块。
+    expect(inside.some((element) => element.props["data-secret-block"] !== undefined)).toBe(true);
   });
 
   it("选项文案是可读的人话（不是键名）", () => {

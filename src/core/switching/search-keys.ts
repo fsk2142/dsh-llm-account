@@ -143,3 +143,32 @@ export function validateSecretInput(secret: string, refs: readonly string[]): st
   if (/\s/.test(secret.trim())) return "密钥里不能有空格，请检查是否粘错。";
   return undefined;
 }
+
+/**
+ * 给「再加一把密钥」分配一个没用过的引用名。
+ *
+ * 用户不再自己填名字（2026-10-20：「只保留保存密钥那个」），所以名字要自动生成：
+ * 第一个用基础名，之后依次 `_2`、`_3`……
+ *
+ * **会复用空洞**：删掉中间那条之后再加，名字回到那个空洞（`{基础名, 基础名_3}` → `_2`）。
+ * 这样编号不会越涨越大 —— 用户删了再加，看到的是「还是那几个名字」而不是一路涨到 `_17`。
+ * @param existing - 已有的引用名。
+ * @param base - 基础名（缺省 `DEEPSEEK_API_KEY`）。
+ * @returns 可用的引用名。
+ */
+export function nextKeyRef(existing: readonly string[], base = "DEEPSEEK_API_KEY"): string {
+  if (!existing.includes(base)) return base;
+  let index = 2;
+  while (existing.includes(`${base}_${index}`)) index += 1;
+  return `${base}_${index}`;
+}
+
+/**
+ * 从列表里摘掉一条。
+ * @param refs - 当前列表。
+ * @param ref - 要删除的引用名。
+ * @returns 新列表（删不存在的条目是无操作）；不修改入参。
+ */
+export function removeKeyRef(refs: readonly string[], ref: string): string[] {
+  return refs.filter((item) => item !== ref);
+}

@@ -329,16 +329,6 @@ export const VENDORS: readonly VendorEntry[] = [
             ],
             fallback: "gateway-first",
           },
-          {
-            // 多 key：一行一个引用名，按顺序轮替（401/402 换下一条）。
-            // 用 `text` + 逗号/换行分隔，因为字段控件没有「列表」这种 kind。
-            key: "searchApiKeyRefs",
-            kind: "text",
-            labelKey: "field.searchApiKeyRefs",
-            hintKey: "field.searchApiKeyRefs.hint",
-            // 一个引用名；多个用逗号分隔（控件是单行文本框，换行会被吃掉）。
-            fallback: "DEEPSEEK_API_KEY",
-          },
         ],
       },
     ],

@@ -36,7 +36,7 @@ describe("四张卡片", () => {
     expect(shared).toContain("autoContinueOnTruncate");
     expect(shared).toContain("autoContinueMaxAttempts");
     expect(shared).toContain("searchStrategy");
-    expect(shared).toContain("searchApiKeyRefs");
+    
     expect(shared).toContain("requestTimeoutMs");
     expect(shared).toContain("streamIdleTimeoutMs");
     // 2026-10-20 用户去掉了「启用自动切换 / 开启网页搜索」两个界面开关

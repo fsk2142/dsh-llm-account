@@ -51,14 +51,15 @@ describe("卡片声明与厂商声明必须对得上", () => {
     expect(search?.shared).not.toContain("searchPreferGateway");
   });
 
-  it("搜索卡里也包含 API key 引用（两条路之一需要它）", () => {
+  it("搜索卡里不再声明 API key 引用字段（密钥由添加/删除动作维护）", () => {
     const search = SETTINGS_CARDS.find((card) => card.id === "search");
-    expect(search?.shared).toContain("searchApiKeyRefs");
+    // 2026-10-20 用户要求「只保留保存密钥那个」：引用名列表不再是用户编辑的字段。
+    expect(search?.shared).not.toContain("searchApiKeyRefs");
   });
 
   it("每个已声明的搜索相关字段都被卡片收录（没有漏掉的新字段）", () => {
     const searchKeys = SETTINGS_CARDS.find((card) => card.id === "search")?.shared ?? [];
-    for (const key of ["searchStrategy", "searchApiKeyRefs"]) {
+    for (const key of ["searchStrategy"]) {
       expect(searchKeys, key).toContain(key);
     }
   });

@@ -49,6 +49,7 @@ import {
   type VendorSnapshot,
 } from "./page-state";
 import type { LoginView } from "./account-card";
+import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/search-keys";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import type { VendorEntry } from "./registry";
@@ -1163,6 +1164,14 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     //
     // 用户报障：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个输入框填的是
     // **引用名**，真 key 在凭据库里 —— 不查一次，界面就只能沉默。
+    /** 承载行里现有的搜索密钥引用名（数组或逗号分隔的字符串都认）。 */
+    const keyRefsOf = (current: PageState): string[] => {
+      const value = current.snapshots[FEATURE_TAB_NS]?.value?.["searchApiKeyRefs"];
+      if (Array.isArray(value)) {
+        return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
+      }
+      return parseSecretRefs(typeof value === "string" ? value : "");
+    };
     const credentialRefs = (() => {
       const raw = state.snapshots[FEATURE_TAB_NS]?.value ?? {};
       const text = raw["searchApiKeyRefs"];
@@ -1700,6 +1709,21 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       t,
       accounts,
       mergeTabs: true,
+      saving: savingNs === state.activeNs,
+      onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
+      onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
+      onSave: (ns) => {
+        const fields = dirtyFields(state, ns);
+        if (fields.length === 0) return;
+        setSavingNs(ns);
+        // 写**命中的行名**（opencode 的行 id 与命名空间不同，用 ns 会写到一个不存在的条目上）。
+        const snapshot = state.snapshots[ns];
+        void saveSettings(ctx, snapshot?.row ?? ns, fields, snapshot?.revision ?? 0).then((error) => {
+          setState((current) => noteSaveResult(current, ns, error));
+          setSavingNs(undefined);
+          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
+        });
+      },
       ...(credentialStatus === undefined ? {} : { credentialStatus }),
       secretDraft,
       secretSaving,
@@ -1712,14 +1736,17 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       onSaveSecret:
         usage?.setCredential === undefined
           ? undefined
-          : async (ref: string, secret: string) => {
+          : async (_ref: string, secret: string) => {
               setSecretSaving(true);
               setSecretError(undefined);
               try {
+                const existing = keyRefsOf(state);
+                const ref = nextKeyRef(existing);
                 const result = await callRemote(() => usage.setCredential!(ref, secret));
                 const unwrapped = unwrapRemote(await result);
                 if (!unwrapped.ok) return unwrapped.error;
-                // 写完立刻清掉草稿并重查状态：徽标要马上变成「已添加」。
+                const appended = [...existing, ref];
+                setState((current) => setField(current, FEATURE_TAB_NS, "searchApiKeyRefs", appended));
                 setSecretDraft("");
                 setState((current) => ({ ...current, credentialRevision: current.credentialRevision + 1 }));
                 return undefined;
@@ -1729,45 +1756,9 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                 setSecretSaving(false);
               }
             },
-      saving: savingNs === state.activeNs,
-      onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
-      onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),
-      onSave: (ns) => {
-        const fields = dirtyFields(state, ns);
-        if (fields.length === 0) return;
-        setSavingNs(ns);
-        // 写**命中的行名**（opencode 的行 id 与命名空间不同，用 ns 会写到一个不存在的条目上）。
-        const snapshot = state.snapshots[ns];
-        void saveSettings(ctx, snapshot?.row ?? ns, fields, snapshot?.revision ?? 0).then((error) => {
-          // 成败都记下来：失败时保存条显示可读原因（此前完全静默 —— 用户以为保存成功了）；
-          // 成功即清除。随后一律重读一遍宿主：基线以宿主为准，不猜修订号（紧接着的第二次
-          // 保存不会带着猜出来的围栏再次失败），已落盘的草稿条目随之清掉。
-          setState((current) => noteSaveResult(current, ns, error));
-          setSavingNs(undefined);
-          void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
-        });
-        // 切换策略 / 自动切换是**全局**设置：在一家保存后把同样的字段镜像到另一家，
-        // 两家控制器读各自的文档，但看到的是同一套策略。模型与其余字段不镜像。
-        const sharedKeys = new Set([
-          "switchStrategy",
-          "switchIntervalMinutes",
-          "switchAtTurnEnd",
-          "autoSwitch",
-          "showSidebarQuota",
-          "quotaRefreshMinutes",
-        ]);
-        const shared = fields.filter((field) => sharedKeys.has(field.key));
-        if (shared.length > 0) {
-          for (const entry of entries) {
-            if (entry.ns === ns) continue;
-            const other = state.snapshots[entry.ns];
-            if (other === undefined) continue;
-            void saveSettings(ctx, other.row ?? entry.ns, shared, other.revision).then((otherError) => {
-              setState((current) => noteSaveResult(current, entry.ns, otherError));
-              void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
-            });
-          }
-        }
+      onRemoveSecret: (ref: string) => {
+        const remaining = removeKeyRef(keyRefsOf(state), ref);
+        setState((current) => setField(current, FEATURE_TAB_NS, "searchApiKeyRefs", remaining));
       },
     });
   };
