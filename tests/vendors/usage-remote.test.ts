@@ -173,6 +173,7 @@ it("服务注册到固定键与命名空间，并登记三个远程方法", asyn
     "usageClear",
     "usageExportCsv",
     "credentialStatus",
+    "setCredential",
   ]);
   // 每个描述符都声明自己属于哪个服务与命名空间（旧插件同一形状）。
   for (const entry of contribution.invocations) {

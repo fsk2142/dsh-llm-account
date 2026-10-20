@@ -106,3 +106,40 @@ export function summarizeKeyStatus(rows: readonly KeyStatus[]): KeyStatusSummary
     total === 0 ? "none" : configured === 0 ? "missing" : configured === total ? "configured" : "partial";
   return { state, configured, total, missing };
 }
+
+/**
+ * 从「引用名」字段的文本里解析出要写入的引用名列表。
+ *
+ * **只按逗号切分**，不按空白：引用名本身不允许空格，所以 `bad key` 是一个**写错的条目**，
+ * 不能被切成 `bad` 与 `key` 两个合法名字 —— 那会把密钥写进两个错误的凭据槽。
+ * 形状非法的条目直接丢掉，并保留顺序去重。
+ * @param text - 用户填的引用名文本。
+ * @returns 合法的引用名（去重、保序）。
+ */
+export function parseSecretRefs(text: string): string[] {
+  const out: string[] = [];
+  for (const item of text.split(/[,，\n\r]+/)) {
+    const ref = item.trim();
+    if (ref === "" || !isResolvableKeyRef(ref)) continue;
+    if (!out.includes(ref)) out.push(ref);
+  }
+  return out;
+}
+
+/**
+ * 校验「保存密钥」这个动作的输入。
+ *
+ * 三条拒绝理由都是真实会踩的：
+ * - 空 key：写空等于清掉密钥，不该用这个按钮做；
+ * - 没有引用名：不知道往哪个槽写；
+ * - key 里带空格：几乎必然是粘错（把两段粘在一起）。
+ * @param secret - 用户贴进来的密钥。
+ * @param refs - 目标引用名。
+ * @returns 拒绝原因（人话）；合格时为 `undefined`。
+ */
+export function validateSecretInput(secret: string, refs: readonly string[]): string | undefined {
+  if (secret.trim() === "") return "请先填写密钥。";
+  if (refs.length === 0) return "请先在上面填写凭据引用名（例如 DEEPSEEK_API_KEY）。";
+  if (/\s/.test(secret.trim())) return "密钥里不能有空格，请检查是否粘错。";
+  return undefined;
+}

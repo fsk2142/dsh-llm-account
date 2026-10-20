@@ -677,6 +677,22 @@ export class LlmAccountUsageService extends TypertRemoteService {
     return refs.map((ref) => ({ ref, configured: described[ref]?.configured === true }));
   }
 
+  /**
+   * 往凭据库里写一把密钥。
+   *
+   * 与账号卡片的「更换密钥」走**同一条路径**（`credentials.set`）：密钥只经凭据服务进出，
+   * 设置文档里永远不落明文（项目全局约束）。
+   * @param ref - 凭据引用名。
+   * @param secret - 密钥（空值在边界上已被拒绝）。
+   */
+  async setCredential(ref: string, secret: string): Promise<void> {
+    const credentials = [...this.vendorDeps.values()][0]?.credentials;
+    if (credentials === undefined) {
+      throw new Error("dsh-llm-account: 凭据服务不可用，无法写入密钥（请在宿主的凭据页添加）");
+    }
+    await credentials.set(ref, secret);
+  }
+
   /** 取一家厂商的读口；没登记过就吵出来（静默返回空结果会伪装成「没有账号」）。 */
   private requireVendor(vendor: VendorId): UsageVendorDeps {
     const deps = this.vendorDeps.get(vendor);

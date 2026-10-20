@@ -1370,6 +1370,10 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * （用户 2026-10-20 报障：加完 key 之后界面没有任何反馈）。
      */
     const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean> | undefined>(undefined);
+    /** 「保存密钥」的草稿 / 进行中 / 失败原因（搜索卡里那一块）。 */
+    const [secretDraft, setSecretDraft] = useState<string>("");
+    const [secretSaving, setSecretSaving] = useState(false);
+    const [secretError, setSecretError] = useState<string | undefined>(undefined);
     /**
      * 定时重读计数：设置页会开着好一会儿，30 秒一次让数字跟上。
      *
@@ -1697,6 +1701,34 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       accounts,
       mergeTabs: true,
       ...(credentialStatus === undefined ? {} : { credentialStatus }),
+      secretDraft,
+      secretSaving,
+      onSecretDraftChange: (value: string) => {
+        setSecretDraft(value);
+        setSecretError(undefined); // 一改就清掉上一次的错
+      },
+      onSecretError: (error: string | undefined) => setSecretError(error),
+      ...(secretError === undefined ? {} : { secretError }),
+      onSaveSecret:
+        usage?.setCredential === undefined
+          ? undefined
+          : async (ref: string, secret: string) => {
+              setSecretSaving(true);
+              setSecretError(undefined);
+              try {
+                const result = await callRemote(() => usage.setCredential!(ref, secret));
+                const unwrapped = unwrapRemote(await result);
+                if (!unwrapped.ok) return unwrapped.error;
+                // 写完立刻清掉草稿并重查状态：徽标要马上变成「已添加」。
+                setSecretDraft("");
+                setState((current) => ({ ...current, credentialRevision: current.credentialRevision + 1 }));
+                return undefined;
+              } catch (error) {
+                return error instanceof Error ? error.message : String(error);
+              } finally {
+                setSecretSaving(false);
+              }
+            },
       saving: savingNs === state.activeNs,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),

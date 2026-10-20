@@ -94,6 +94,11 @@ export type CopyKey =
   | "field.searchApiKeyRefs"
   | "field.searchApiKeyRefs.hint"
   | "options.searchOff"
+  | "search.secretSave"
+  | "search.secretSaving"
+  | "search.secretPlaceholder"
+  | "search.secretHint"
+  | "search.secretNeedRef"
   | "search.keyConfigured"
   | "search.keyMissing"
   | "field.searchApiKeyEnv"
@@ -394,6 +399,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchApiKeyRefs": "DeepSeek API key 引用名",
     "field.searchApiKeyRefs.hint": "凭据库里的引用名（不是明文）。多个用逗号分隔，按顺序轮替：前一个无效或余额不足时自动换下一个。",
     "options.searchOff": "不启用网页搜索",
+    "search.secretSave": "保存密钥",
+    "search.secretSaving": "保存中…",
+    "search.secretPlaceholder": "粘贴 DeepSeek API key",
+    "search.secretHint": "密钥只写入本机凭据库，设置文件里不留明文。",
+    "search.secretNeedRef": "先在上面填一个凭据引用名，这里才能保存密钥。",
     "search.keyConfigured": "已添加",
     "search.keyMissing": "未添加",
     "card.display": "显示设置",
@@ -686,6 +696,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.searchOff": "Web search off",
     "field.searchApiKeyRefs": "DeepSeek API key references",
     "field.searchApiKeyRefs.hint": "Credential reference names, not literal secrets. Separate several with commas; they are tried in order when one is invalid or out of balance.",
+    "search.secretSave": "Save key",
+    "search.secretSaving": "Saving…",
+    "search.secretPlaceholder": "Paste the DeepSeek API key",
+    "search.secretHint": "The key is written to the local credential store; the settings file never holds it.",
+    "search.secretNeedRef": "Fill in a credential reference name above first, then you can save the key here.",
     "search.keyConfigured": "added",
     "search.keyMissing": "not added",
     "card.display": "Display",

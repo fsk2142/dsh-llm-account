@@ -14,7 +14,7 @@ import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
-import { summarizeKeyStatus } from "../core/switching/search-keys";
+import { parseSecretRefs, summarizeKeyStatus, validateSecretInput } from "../core/switching/search-keys";
 import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
@@ -53,6 +53,23 @@ export interface PageShellProps {
    * 缺省（还没读到）时**不显示任何徽标** —— 不猜「未添加」，那会误报。
    */
   credentialStatus?: Readonly<Record<string, boolean>>;
+  /**
+   * 写入一把密钥到凭据库（搜索设置卡的「保存密钥」）。
+   *
+   * 为什么需要：那个「引用名」输入框只写**名字**，真 key 必须另有一条通道进凭据库 ——
+   * 否则用户填完名字点保存，库里仍然没有 key（2026-10-20 报障的根因）。
+   * 缺省表示宿主不支持（老宿主）：那时整块密钥输入不渲染。
+   * @returns `undefined` 表示成功；否则是人话原因。
+   */
+  onSaveSecret?: (ref: string, secret: string) => Promise<string | undefined>;
+  /** 正在写密钥（按钮禁用 + 换文案）。 */
+  secretSaving?: boolean;
+  /** 密码框的当前值（受控：页面是纯函数，草稿由容器持有）。 */
+  secretDraft?: string;
+  onSecretDraftChange?: (value: string) => void;
+  /** 上一次写密钥的结果（`undefined`/空串 = 成功；否则是人话原因）。 */
+  onSecretError?: (error: string | undefined) => void;
+  secretError?: string | undefined;
 }
 
 /**
@@ -182,6 +199,9 @@ function settingsCardElement(
     }
   }
 
+  // 3) 搜索卡额外挂一块「保存密钥」：引用名输入框只写名字，真 key 得另行入库。
+  if (card.id === "search") nodes.push(secretBlockOf(props, sharedField("searchApiKeyRefs")?.field));
+
   if (nodes.length === 0) return null;
 
   // 原生 `<details>` 自带可收起语义（与页面里其它卡片一致，不需要额外状态）。
@@ -208,6 +228,75 @@ function settingsCardElement(
 /** 厂商的展示名（用于「这一项只对某家生效」的标注）。 */
 function labelOf(props: PageShellProps, entry: VendorEntry): string {
   return props.t(entry.labelKey);
+}
+
+/**
+ * 「保存密钥」那一块：密码框 + 按钮。
+ *
+ * 为什么必须单独一块：搜索卡的「引用名」是个**设置字段**，点保存只把名字写进
+ * `cordis.patch.yml`；真 key 要走凭据服务。少了这一块，用户填完名字点保存，
+ * 库里仍然没有 key，徽标一直显示「未添加」（2026-10-20 报障的根因）。
+ *
+ * 输入框**不带 `data-field`**：那是设置字段的标记，带上它会和设置草稿/保存条共用一条通道，
+ * 而这个值绝不能进设置文档。
+ * @param props - 页面属性。
+ * @param refsField - 引用名字段（用它当前的值决定写到哪个槽）；没有该字段时整块不渲染。
+ * @returns 元素；宿主不支持写凭据（`onSaveSecret` 缺省）时为 `null`。
+ */
+function secretBlockOf(props: PageShellProps, refsField: DraftField | undefined): ReactNode {
+  const save = props.onSaveSecret;
+  if (save === undefined || refsField === undefined) return null;
+  const { t } = props;
+  const refs = parseSecretRefs(String(refsField.value ?? ""));
+  const ref = refs[0];
+  if (ref === undefined) {
+    // 还没有引用名：说清楚要先填上面那一项（否则这个按钮点了也不知道往哪写）。
+    return createElement(
+      "div",
+      { key: "secret", "data-secret-block": "no-ref", className: CSS_CLASS.inset },
+      createElement("small", { className: CSS_CLASS.note }, t("search.secretNeedRef")),
+    );
+  }
+  return createElement(
+    "div",
+    { key: "secret", "data-secret-block": ref, className: CSS_CLASS.inset },
+    createElement(
+      "div",
+      { className: CSS_CLASS.actions },
+      createElement("input", {
+        "data-secret-input": ref,
+        type: "password",
+        // 受控值由容器持有（页面是纯函数，不留状态）。
+        value: props.secretDraft ?? "",
+        placeholder: t("search.secretPlaceholder"),
+        autoComplete: "off",
+        onChange: (event: { target?: { value?: string } }) => props.onSecretDraftChange?.(event.target?.value ?? ""),
+      }),
+      createElement(
+        "button",
+        {
+          type: "button",
+          "data-secret-save": ref,
+          className: CSS_CLASS.buttonPrimary,
+          disabled: props.secretSaving === true,
+          onClick: () => {
+            const secret = props.secretDraft ?? "";
+            const problem = validateSecretInput(secret, refs);
+            if (problem !== undefined) {
+              props.onSecretError?.(problem);
+              return;
+            }
+            void save(ref, secret.trim()).then((error) => props.onSecretError?.(error));
+          },
+        },
+        props.secretSaving === true ? t("search.secretSaving") : t("search.secretSave"),
+      ),
+    ),
+    createElement("small", { className: CSS_CLASS.note }, t("search.secretHint")),
+    props.secretError === undefined || props.secretError === ""
+      ? null
+      : createElement("small", { "data-secret-error": true, className: CSS_CLASS.failure }, props.secretError),
+  );
 }
 
 /**

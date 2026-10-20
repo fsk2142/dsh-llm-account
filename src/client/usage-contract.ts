@@ -86,6 +86,7 @@ export const USAGE_METHODS = [
   "usageExportCsv",
   // 凭据状态（只回布尔，不回密钥）
   "credentialStatus",
+  "setCredential",
 ] as const;
 
 /** 一个方法名。 */
@@ -679,6 +680,11 @@ const REF_PARAM: ParamSpec = { name: "ref", typeSymbol: "AccountRef", parse: par
 const MODELS_PARAM: ParamSpec = { name: "models", typeSymbol: "AccountModels", parse: parseStringArray };
 /** 凭据引用名数组参数（查询它们是否真的配置了）。 */
 const REFS_PARAM: ParamSpec = { name: "refs", typeSymbol: "CredentialRefs", parse: parseStringArray };
+/** 密钥本身（只在这一条上行，绝不回读）。 */
+const SECRET_PARAM: ParamSpec = { name: "secret", typeSymbol: "CredentialSecret", parse: (endpoint, value) => {
+  if (typeof value !== "string" || value.trim() === "") throw boundaryError(endpoint, "expected a non-empty secret");
+  return value;
+} };
 /**
  * 用量窗口参数（`today` / `7d` / `30d` / `all`）。
  *
@@ -809,6 +815,8 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     // 凭据状态：界面要能回答「我填的那个引用名，库里真的有一把 key 吗」。
     // 只回**布尔**，绝不回密钥本身 —— 这条边界与账号卡片的「已配置」徽标同一来源。
     makeDescriptor("credentialStatus", "CredentialStatusList", parseCredentialStatus, [REFS_PARAM]),
+    // 写入一把密钥：搜索设置卡里的「保存密钥」走这条（与账号卡片「更换密钥」同一条路径）。
+    makeDescriptor("setCredential", "Void", parseVoid, [REF_PARAM, SECRET_PARAM]),
   ];
 }
 
@@ -845,6 +853,12 @@ export interface UsageNamespace {
    * 只回布尔，**绝不回密钥**。
    */
   credentialStatus?(refs: readonly string[]): Promise<unknown>;
+  /**
+   * 往凭据库里写一把密钥（搜索设置卡的「保存密钥」）。
+   *
+   * 返回 `unknown`：真实值是信封，必须 `unwrapRemote`。
+   */
+  setCredential?(ref: string, secret: string): Promise<unknown>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   models?(vendor: string): Promise<CatalogModelsResult>;
