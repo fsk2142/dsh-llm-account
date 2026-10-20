@@ -410,3 +410,36 @@ it("本行一个账号都解析不到密钥时，登记项如实回答不可用"
   opendesign.apply(host.ctx, opendesign.Config(SHAPE));
   expect(await gatewayAccessOf("opendesign")).toBeUndefined();
 });
+
+// —— 多账号兼容：工作区必须逐账号存（2026-10-20）——
+
+it("**重新登录第二个账号不会覆盖第一个的工作区**（顶层字段不再被写）", async () => {
+  // 旧实现把登录发现的工作区写进**顶层** `workspaceId`，而顶层是所有账号共用的回退：
+  // 第二个账号登录后会把顶层改成它自己的工作区，第一个账号（自己没配）就会拿到
+  // 第二个账号的工作区 —— 额度显示错人。
+  const settings = fakeSettings([
+    {
+      ns: "llm-opendesign",
+      value: {
+        apiKeyEnv: "OPENDESIGN_API_KEY",
+        workspaceId: "ws-of-first",
+        accounts: [
+          { id: "a1", name: "first", apiKeyEnv: "OPENDESIGN_ACC_1", workspaceId: "ws-of-first" },
+        ],
+      },
+    },
+  ]);
+  const credentials = fakeCredentials({ OPENDESIGN_ACC_1: "sk-1" });
+  const host = fakeHost({ settings: settings.service, credentials: credentials.service });
+  const bundle = opendesign.apply(host.ctx, opendesign.Config(SHAPE));
+
+  const accounts = bundle.accounts as unknown as {
+    setWorkspace(ref: string, ws: string): Promise<void>;
+  };
+  await accounts.setWorkspace("OPENDESIGN_ACC_1", "ws-updated");
+  // 顶层维持原样 —— 这是关键：顶层是所有账号共用的回退，写它等于污染别人。
+  expect(settings.valueOf("llm-opendesign")?.["workspaceId"]).toBe("ws-of-first");
+  // 条目被更新（作用在该账号自己身上）。
+  const entry = (settings.valueOf("llm-opendesign")?.["accounts"] as { workspaceId?: string }[])[0];
+  expect(entry?.workspaceId).toBe("ws-updated");
+});

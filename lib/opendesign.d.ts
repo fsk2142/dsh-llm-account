@@ -1,4 +1,4 @@
-import { a as AccountView, c as QuotaPort, i as AccountPort, l as VendorCapabilities, n as RotationAccess, o as CredentialPort, r as IntentLog, t as PluginConfigSchema } from "./assembly-lkbonDlq.js";
+import { a as AccountView, c as QuotaPort, i as AccountPort, l as VendorCapabilities, n as RotationAccess, o as CredentialPort, r as IntentLog, t as PluginConfigSchema } from "./assembly-Blb2ydKj.js";
 import { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import { Context } from "@deepseek-ai/cordis";
 //#region src/vendors/opendesign/accounts.d.ts
@@ -19,6 +19,12 @@ interface OpenDesignAccountInput {
  */
 type OpenDesignAccounts = Omit<AccountPort, "add"> & {
   add(input: OpenDesignAccountInput): Promise<AccountView>;
+  /**
+   * 把工作区写进**这个账号自己的条目**（2026-10-20，多账号兼容）。
+   *
+   * 不在 `AccountPort` 里：那是三家共用的最小契约，工作区只有这一家有这个概念。
+   */
+  setWorkspace(ref: string, workspaceId: string): Promise<void>;
 };
 //#endregion
 //#region src/vendors/opendesign/index.d.ts

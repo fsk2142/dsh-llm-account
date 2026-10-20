@@ -30,12 +30,19 @@ export type AccountIntentKind =
   | "replace-key"
   | "select"
   | "move"
-  | "auto-switch";
+  | "auto-switch"
+  /**
+   * 把工作区写进某个账号的条目（2026-10-20）。
+   *
+   * 单独一种意图而不是复用 `rename`：两者改的是不同字段，恢复时各自重放；混在一起会让
+   * 「改名」的幂等判断把工作区也带上，反之亦然。
+   */
+  | "set-workspace";
 
 /**
  * 一条待提交的账号操作意图。字段按 `kind` 取用（与 `AccountPort` 的参数一一对应）：
  * `add`/`rename` 用 `label`，`remove`/`rename`/`replace-key`/`select`/`move` 用 `ref`，
- * `move` 用 `toIndex`，`auto-switch` 用 `value`。
+ * `move` 用 `toIndex`，`auto-switch` 用 `value`，`set-workspace` 用 `workspaceId`。
  */
 export interface AccountIntent {
   /** 意图标识，同一份日志内唯一（`settle`/去重都按它定位）。 */
@@ -50,6 +57,8 @@ export interface AccountIntent {
   toIndex?: number;
   /** `auto-switch` 的目标开关值。 */
   value?: boolean;
+  /** `set-workspace` 要写入的工作区 id（2026-10-20，逐账号存）。 */
+  workspaceId?: string;
   /** 入队时刻（epoch 毫秒），仅供展示与排查，不参与排序。 */
   createdAt: number;
 }

@@ -38,6 +38,9 @@ const INTENT_KINDS = [
   "select",
   "move",
   "auto-switch",
+  // 2026-10-20：逐账号写工作区（多账号兼容）。**必须与 `AccountIntentKind` 同步** ——
+  // 这里漏一个，那种意图在读日志时会被当成非法条目丢掉，恢复时就不会重放。
+  "set-workspace",
 ] as const satisfies readonly AccountIntentKind[];
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */

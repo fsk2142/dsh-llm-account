@@ -68,7 +68,7 @@ import {
   opendesignControlRef,
   opendesignWorkspaceId,
 } from "./accounts";
-import type { OpenDesignAccounts } from "./accounts";
+import type { OpenDesignAccountInput, OpenDesignAccounts } from "./accounts";
 import { DEFAULT_BASE_URL } from "./protocol";
 import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
@@ -225,7 +225,62 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     OPENDESIGN_SETTINGS_NS,
     createSettingsIntentStore(settings, OPENDESIGN_SETTINGS_NS, INTENTS_FIELD, warn),
   );
-  const accounts = createOpenDesignAccounts({ settings, credentials, intents });
+
+  /**
+   * 账号端口外面包一层：**新增账号时自动补上 workspaceId**（用户 2026-10-20
+   * 「新增账户的时候要自动配置，不能通过你每次修改来配置才可以」）。
+   *
+   * 为什么必须自动：周期额度（5 小时 / 每周）只来自 `vela billing preflight`，而它需要
+   * `workspaceId`。以前只有**网页登录**那条路会探一次工作区；手动填 API Key 添加的账号
+   * 永远没有它 → 那部分额度永远不显示，只能靠手改配置。
+   *
+   * 两条纪律：
+   * 1. **已经给了就不动**（`input.workspaceId` 显式优先）；
+   * 2. **身份不一致就不写**：`vela team-projects list` 报的是**本机 vela 登录态**的工作区，
+   *    把它写给另一个人的账号，后续 preflight 会拿那个工作区查 —— 虽然额度端口还有一道
+   *    身份闸门兜着，但**在数据里写错的值本身就是错的**。所以先核对再写。
+   *
+   * 实现用**原型委托**而不是对象展开：`createOpenDesignAccounts` 返回的是类实例，
+   * 方法在原型上，`{ ...base }` 只会拷到自有属性 —— 展开后 `list()` / `remove()` 全没了。
+   */
+  const accountsBase = createOpenDesignAccounts({ settings, credentials, intents });
+  /**
+   * 包一层只改写 `add`。
+   *
+   * 为什么用**实例自有的方法**覆盖，而不是 `{ ...base }` 或 `Object.create`：
+   * - `{ ...base }` 只拷自有属性，原型上的方法全部丢失（`list()` / `remove()` 变成 undefined）；
+   * - `Object.create(proto, desc)` 造出来的对象**不是这个类的实例**，类里用 `#deps` 私有字段的
+   *   方法会抛 `Cannot read private member #deps from an object whose class did not declare it`。
+   *
+   * 实例自有属性优先于原型方法，且对象身份不变 —— 私有字段照常可用。
+   */
+  const accounts: OpenDesignAccounts = accountsBase;
+  const baseAdd = accountsBase.add.bind(accountsBase);
+  (accounts as { add: OpenDesignAccounts["add"] }).add = async (input) => {
+    const provided = normalizeKey(input.workspaceId);
+    if (provided !== undefined) return await baseAdd(input);
+    const discovered = await discoverAccountWorkspace(input);
+    return await baseAdd(discovered === undefined ? input : { ...input, workspaceId: discovered });
+  };
+
+  /**
+   * 给**即将添加的账号**探一次工作区；只有确认是本机 vela 登录态那个人时才返回。
+   * @param input - 待添加账号的输入（用它的密钥核对身份）。
+   * @returns 工作区 id，或 `undefined`（不写）。
+   */
+  async function discoverAccountWorkspace(input: OpenDesignAccountInput): Promise<string | undefined> {
+    const workspaceId = await discoverWorkspaceId();
+    if (workspaceId === undefined) return undefined;
+    const accountId = await accountIdentityViaApi(
+      normalizeKey(input.controlKey) ?? normalizeKey(input.key),
+      normalizeKey(document().walletBase) ?? DEFAULT_WALLET_BASE_URL,
+    );
+    const velaId = await velaIdentityViaCli();
+    // 两侧都读得到且一致才写。读不到就**不写**：宁可这个账号暂时没有周期额度，
+    // 也不在数据里留一个可能属于别人的工作区。
+    if (accountId === undefined || velaId === undefined || accountId !== velaId) return undefined;
+    return workspaceId;
+  }
   const rotation = createRotationAccess(() => accountStateOf(document()));
 
   /**
@@ -363,8 +418,12 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         if (input.controlKey !== undefined) {
           await credentials.set(opendesignControlRef(document(), existing.ref), input.controlKey);
         }
-        // 工作区没有端口方法可改，但顶层字段是现成的回退：条目没配时它就生效。
-        if (workspaceId !== undefined) await fillTopLevelWorkspace(workspaceId);
+        // **工作区写进这个账号自己的条目**（2026-10-20 多账号兼容的关键修复）。
+        //
+        // 旧实现写的是**顶层** `workspaceId`，而顶层是所有账号共用的回退：第二个账号登录后
+        // 会把顶层改成它自己的工作区，于是第一个账号（自己没配）回退到顶层，拿到的是
+        // **第二个账号的工作区** —— 额度就显示错了人。
+        if (workspaceId !== undefined) await accounts.setWorkspace(existing.ref, workspaceId);
         return;
       }
       await accounts.add({
@@ -902,7 +961,9 @@ async function readImageBytes(
   try {
     const get = (ctx as { get?: (name: string) => unknown }).get;
     const attachments = typeof get === "function" ? get.call(ctx, "attachments") : undefined;
-    if (!isRecord(attachments) && typeof attachments !== "object") return undefined;
+    // `isRecord` 已经排除 `null`（旧写法 `!isRecord(x) && typeof x !== "object"` 对 `null`
+    // 不成立 —— 那会落到下一行读属性并抛错，只靠外层 try/catch 兜住，读起来像覆盖了却漏了）。
+    if (!isRecord(attachments)) return undefined;
     const read = (attachments as { readImageRequest?: unknown }).readImageRequest;
     if (typeof read !== "function") return undefined;
     // 目标尺寸交给编码器自己收敛：`width/height` 给源图上限量级，`maxBytes` 高于内联上限。

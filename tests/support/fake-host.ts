@@ -65,6 +65,17 @@ export interface FakeHost {
   modelFailures: string[];
   /** 让接下来的一次 mutate 撞上修订号冲突（并发写者的模拟）。 */
   conflictOnce: boolean;
+  /**
+   * 让写入**挂起**直到 `releaseMutation()`（2026-10-20）。
+   *
+   * 默认 `mutate` 同步 resolve，于是「写入在途」这个窗口在测试里不存在 —— 想验证
+   * 「一次往返内连两次写入都不丢」就必须能把写入停在半路。
+   */
+  holdMutation: boolean;
+  /** 挂起中的写入的放行回调（由 `releaseMutation` 消费）。 */
+  mutationWaiters: (() => void)[];
+  /** 放行一个挂起的写入；返回是否真的放行了一个。 */
+  releaseMutation(): boolean;
   /** 让接下来的一次 mutate 以普通错误失败。 */
   failOnce: string | undefined;
   /** 广播一次设置文档失效信号（外部改设置后宿主会做的事）。 */
@@ -187,6 +198,14 @@ export function fakeHost(
     accountsOverride: undefined,
     describeReturnsEmptyOnce: false,
     conflictOnce: options.conflictOnce ?? false,
+    holdMutation: false,
+    mutationWaiters: [],
+    releaseMutation: () => {
+      const next = host.mutationWaiters.shift();
+      if (next === undefined) return false;
+      next();
+      return true;
+    },
     failOnce: undefined,
     ctx: {},
     emitDocumentUpdated: () => {
@@ -323,6 +342,18 @@ export function fakeHost(
     mutate: async (row: string, ops: readonly { op: string; path: readonly string[]; value: unknown }[], expected: number): Promise<unknown> => {
       const state = rows.get(row);
       if (state === undefined) throw new Error(`No configurable plugin entry "${row}"`);
+      /**
+       * **让写入停在半路**（2026-10-20 为「一次往返内连两次写入」的回归测试加）。
+       *
+       * 默认 `mutate` 是同步 resolve 的，于是「在途」这个窗口在测试里根本不存在 ——
+       * 两次点击会串行跑完，测不出「在途时第二次被吞」的缺陷（变异检验会漏掉）。
+       * 设了这个闸门，写入会挂起直到测试调用 `releaseMutation()`。
+       */
+      if (host.holdMutation) {
+        await new Promise<void>((resolve) => {
+          host.mutationWaiters.push(resolve);
+        });
+      }
       if (host.conflictOnce) {
         host.conflictOnce = false;
         state.revision += 1; // 并发写者抢先提交

@@ -1046,6 +1046,18 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     /** 正在保存的行（同一个 ns 不并发发两份写）。 */
     const savingRowInFlight = useRef<Set<string>>(new Set());
     /**
+     * 「在途期间又被要求写一次」的行（2026-10-20 独立审查发现 1）。
+     *
+     * 修的是这个缺陷：旧实现在在途时**提前返回**在途的 promise 而**不排队**，注释却写着
+     * 「把这一轮排到它后面」—— 于是同一行的第二次写入既没落盘、也没有任何提示。
+     * 可达路径：搜索密钥的删除按钮没有 busy 守卫，一次往返内点两个删除，第二个就被静默吞掉
+     * （磁盘上的 `searchApiKeyRefs` 仍留着用户以为已经删掉的引用名）。
+     *
+     * 现在：在途时只做标记，由在途那轮**收尾时再排一轮**，那一轮会现读最新草稿 ——
+     * 两次点击的效果都能落盘。
+     */
+    const saveRowPending = useRef<Set<string>>(new Set());
+    /**
      * 最新草稿的**同步镜像**（按 ns）。`state` 在异步回调/排队回调里是旧闭包，见 `saveRow`。
      * 由渲染期（每次渲染都写）与 `setField` 的结果共同维护。
      */
@@ -1065,8 +1077,12 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * @returns 这次写入的完成信号（调用方通常不 await）。
      */
     const saveRow = (ns: string): Promise<void> => {
-      // 已经有一轮保存/写在途：直接把这一轮排到它后面，不并发发两份。
-      if (savingRowInFlight.current.has(ns)) return writeQueue.current;
+      // 已经有一轮写在途：**记下待写**，等那轮收尾时再排一轮（不是提前返回）。
+      // 提前返回会让「一次往返内的第二次修改」静默丢失 —— 见 `saveRowPending` 的注释。
+      if (savingRowInFlight.current.has(ns)) {
+        saveRowPending.current.add(ns);
+        return writeQueue.current;
+      }
       const snapshot = latestSnapshots.current[ns];
       if (snapshot === undefined) {
         // 这一行还没读到：没有修订号可做并发围栏。不发注定失败的请求，但要让用户知道它没存上
@@ -1098,6 +1114,9 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           savingRowInFlight.current.delete(ns);
           // 只有当没有别的行在途时才熄灯：否则会把后一行的「保存中…」提前抹掉。
           if (savingRowInFlight.current.size === 0) setSavingNs(undefined);
+          // 在途期间又被要求写过：现在补一轮。那一轮会**现读最新草稿**，所以两次点击的
+          // 效果都在（这正是「一次往返内连点两个删除」能正确落盘的原因）。
+          if (saveRowPending.current.delete(ns)) void saveRow(ns);
         });
       return writeQueue.current;
     };

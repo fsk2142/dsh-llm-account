@@ -377,6 +377,12 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
       registration = undefined;
     }
   }, "dsh-llm-account: commandcode provider route");
+  // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判
+  // （2026-10-20 补齐：opencode / opendesign 早有这条，唯独本行没有 ——
+  //  后果是手改 profile 的 `enabled: false` 要重载宿主才生效）。
+  ctx.on("loader/volatile-update", () => {
+    applyRoute();
+  });
 
   // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
   // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。

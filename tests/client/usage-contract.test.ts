@@ -255,6 +255,49 @@ describe("边界校验器的性质", () => {
     expect(parsed.failures).toEqual([]);
   });
 
+  it("**窗口元素逐项清洗**：字符串 used/cap 归缺失，坏 key 整条丢弃（2026-10-20 审查发现 2）", () => {
+    // 下游 `quotaAmount` 在 `unit === "usd"` 时调 `value.toFixed(2)` —— 字符串没有
+    // `toFixed`，一个坏元素就能让整块额度面板降级成「面板失败 + 重试」。
+    const statusDescriptor = usageDescriptors().find((descriptor) => descriptor.method === "status")!;
+    const parse = parserOf(statusDescriptor);
+    const parsed = parse({
+      vendor: "commandcode",
+      capabilities: {},
+      accounts: [
+        {
+          ref: "a",
+          label: "A",
+          configured: true,
+          quota: {
+            windows: [
+              // 坏数字：归缺失（不是 0，也不是原样保留）。
+              { key: "5h", used: "3.5", cap: 10, unit: "usd" },
+              // 坏 key：整条丢掉（没有键就没有标签可显示）。
+              { used: 1, cap: 2 },
+              { key: "  ", used: 1 },
+              // NaN 不是有限数字。
+              { key: "weekly", used: Number.NaN, cap: 100 },
+              // 正常的一条原样保留。
+              { key: "monthly", used: 5, cap: 50, unit: "usd", resetAt: 1_800_000_000_000 },
+            ],
+            failures: [],
+          },
+        },
+      ],
+    }) as { accounts: { quota: { windows: Record<string, unknown>[] } }[] };
+
+    const windows = parsed.accounts[0]!.quota.windows;
+    // 只有 key 合法的两条活下来。
+    expect(windows.map((window) => window["key"])).toEqual(["5h", "weekly", "monthly"]);
+    // 字符串 used 被丢掉（缺失），cap 保留了。
+    expect(windows[0]).toEqual({ key: "5h", cap: 10, unit: "usd" });
+    expect("used" in windows[0]!).toBe(false);
+    // NaN 被丢掉。
+    expect("used" in windows[1]!).toBe(false);
+    // 正常的一条完整保留。
+    expect(windows[2]).toEqual({ key: "monthly", used: 5, cap: 50, unit: "usd", resetAt: 1_800_000_000_000 });
+  });
+
   it("每个结果的解析器：结构不对就抛边界错误，绝不返回 undefined 冒充成功", () => {
     for (const descriptor of usageDescriptors()) {
       const parse = parserOf(descriptor);

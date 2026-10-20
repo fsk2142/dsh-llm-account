@@ -137,6 +137,12 @@ export interface OpenDesignAccountInput {
  */
 export type OpenDesignAccounts = Omit<AccountPort, "add"> & {
   add(input: OpenDesignAccountInput): Promise<AccountView>;
+  /**
+   * 把工作区写进**这个账号自己的条目**（2026-10-20，多账号兼容）。
+   *
+   * 不在 `AccountPort` 里：那是三家共用的最小契约，工作区只有这一家有这个概念。
+   */
+  setWorkspace(ref: string, workspaceId: string): Promise<void>;
 };
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
@@ -454,6 +460,38 @@ class OpenDesignAccountsImpl implements OpenDesignAccounts {
   }
 
   /**
+   * 把工作区写进**这个账号自己的条目**（多账号兼容的关键，2026-10-20）。
+   *
+   * 为什么必须逐账号：周期额度只来自 `vela billing preflight`，它按 `workspaceId` 查。
+   * 旧实现在「同账号重新登录」时把发现到的工作区写进**顶层**字段（`fillTopLevelWorkspace`），
+   * 而顶层是所有账号共用的回退 —— 第二个账号登录后会把顶层改成它自己的工作区，于是第一个
+   * 账号（自己没配）回退到顶层，拿到的是**第二个账号的工作区**，额度就显示错了人。
+   *
+   * 空值不写：`undefined` / 空串表示「这次没发现到」，不该把已有值擦掉。
+   * @param ref - 目标账号的 ref。
+   * @param workspaceId - 工作区 id。
+   */
+  async setWorkspace(ref: string, workspaceId: string): Promise<void> {
+    const next = normalizeKey(workspaceId);
+    if (next === undefined) return;
+    await this.#require(ref);
+    await this.#transaction("set-workspace", { ref, workspaceId: next }, () =>
+      this.#mutate((value) => ({
+        ops: [
+          {
+            op: "set",
+            path: [ACCOUNTS_FIELD],
+            value: rawAccounts(value).map((item) =>
+              refOf(item) === ref && isRecord(item) ? { ...item, [WORKSPACE_FIELD]: next } : item,
+            ),
+          },
+        ],
+        result: undefined,
+      })),
+    );
+  }
+
+  /**
    * 换推理密钥：只写凭据服务，设置文档一个字都不动（Global Constraints：文档里只允许出现
    * 凭据引用名）。与其它操作一样先写意图，凭据写入成功后才收尾。
    * @param ref - 目标账号的 ref。
@@ -608,7 +646,7 @@ class OpenDesignAccountsImpl implements OpenDesignAccounts {
    */
   async #transaction<T>(
     kind: AccountIntentKind,
-    fields: { ref?: string; label?: string; toIndex?: number; value?: boolean },
+    fields: { ref?: string; label?: string; toIndex?: number; value?: boolean; workspaceId?: string },
     submit: (intent: AccountIntent) => Promise<T>,
   ): Promise<T> {
     const intent = this.#intent(kind, fields);

@@ -352,11 +352,54 @@ function parseVendorUsageStatus(endpoint: string, value: unknown): VendorUsageSt
     const quota = account.quota;
     // `quota` 本身不是对象 → 整个丢掉（界面按「没有额度读数」处理，与缺失同义）。
     if (!isRecord(quota)) return quota === null || quota === undefined ? account : { ...account, quota: undefined };
-    const windows = Array.isArray(quota.windows) ? quota.windows : [];
+    // **窗口元素也要逐项洗**（2026-10-20 独立审查发现 2）。
+    //
+    // 只保证 `windows` 是数组还不够：下游 `quotaAmount` 在 `unit === "usd"` 时调
+    // `value.toFixed(2)`，而字符串没有 `toFixed` —— 一个坏元素就能让整块额度面板降级成
+    // 「面板失败 + 重试」（有 `RenderBoundary` 兜底，不会白屏，但用户看不到额度）。
+    // 与 `parseCatalogModels` 同一纪律：边界上逐项收窄，让下游可以信任形状。
+    const windows = (Array.isArray(quota.windows) ? quota.windows : []).map(cleanQuotaWindow).filter(isDefined);
     const failures = Array.isArray(quota.failures) ? quota.failures : [];
     return { ...account, quota: { ...quota, windows, failures } };
   });
   return { ...value, accounts } as unknown as VendorUsageStatus;
+}
+
+/** 类型守卫：过滤掉 `undefined`。 */
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
+/**
+ * 洗一个额度窗口：只保留**形状正确**的字段。
+ *
+ * 数字字段必须是有限数字（`NaN` / 字符串 / `null` 一律归缺失 —— 缺失 ≠ 0，界面上
+ * 「没有这个数」与「这个数是零」是两回事）；`unit` 只认已知单位；`key` 必须是非空字符串。
+ * 认不出 `key` 的整条丢掉：没有键就没有标签可显示，留着只会渲染出一个空行。
+ * @param raw - 线上来的一个窗口元素。
+ * @returns 干净的窗口，或 `undefined`（连 key 都没有）。
+ */
+function cleanQuotaWindow(raw: unknown): QuotaWindow | undefined {
+  if (!isRecord(raw)) return undefined;
+  const key = raw.key;
+  if (typeof key !== "string" || key.trim() === "") return undefined;
+  const window: QuotaWindow = { key };
+  const number = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const used = number(raw.used);
+  if (used !== undefined) window.used = used;
+  const cap = number(raw.cap);
+  if (cap !== undefined) window.cap = cap;
+  const percent = number(raw.percent);
+  if (percent !== undefined) window.percent = percent;
+  const resetAt = number(raw.resetAt);
+  if (resetAt !== undefined) window.resetAt = resetAt;
+  if (raw.unit === "usd") window.unit = "usd";
+  if (raw.exceeded === true) window.exceeded = true;
+  if (raw.unlimited === true) window.unlimited = true;
+  if (raw.resetEstimated === true) window.resetEstimated = true;
+  if (raw.usedSource === "local" || raw.usedSource === "vendor") window.usedSource = raw.usedSource;
+  return window;
 }
 
 /** 校验账号行数组。 */
