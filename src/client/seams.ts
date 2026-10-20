@@ -55,6 +55,7 @@ import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import { savesImmediately, type VendorEntry } from "./registry";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type CredentialProbe, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
+import { checkForUpdate, pollUpdate, startUpdate, type UpdateState } from "./update-check";
 import { AccountUsageBlock } from "./usage-card";
 
 /**
@@ -1520,6 +1521,14 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [secretSaving, setSecretSaving] = useState(false);
     const [secretError, setSecretError] = useState<string | undefined>(undefined);
     /**
+     * 插件自身的更新状态（`undefined` = 还没查过）。
+     *
+     * **首次进入不自动查**：设置页很短，用户随时开开关关，每次进来都访问一次更新接口
+     * 是白耗。用户点「检查更新」才查；查到结论后留在 state 里，本页期内不再重复问。
+     */
+    const [updateState, setUpdateState] = useState<UpdateState | undefined>(undefined);
+    const [updateBusy, setUpdateBusy] = useState(false);
+    /**
      * 密钥实测结论（`ref → 结论`）与正在测试的那一把。
      *
      * 用户 2026-10-20：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话就进行提示」
@@ -1854,6 +1863,63 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * 失败本身不抛：结论进 `keyProbes`，界面上就是那一行的小标签。
      * @param ref - 凭据引用名。
      */
+    /**
+     * 查一次更新（用户点「检查更新」时）。
+     *
+     * 失败**不静默**：`checkForUpdate` 失败一律给 `unknown` + 可读原因，界面会把它显示出来。
+     * 「查不到」与「已是最新」是两件不同的事 —— 混为一谈会让用户以为没有新版本。
+     */
+    const runUpdateCheck = async (): Promise<void> => {
+      setUpdateBusy(true);
+      try {
+        setUpdateState(await checkForUpdate());
+      } finally {
+        setUpdateBusy(false);
+      }
+    };
+
+    /**
+     * 开始更新（只在真有新版时可用）。
+     *
+     * 走宿主官方插件入口的更新接口；**它自己会改 profile**，所以只在用户明确点击时调用。
+     * 成功后提示「刷新页面」——插件的新代码要页面重载才会加载（与 `reloadPage` 同一条理由）。
+     */
+    const runUpdate = async (): Promise<void> => {
+      setUpdateBusy(true);
+      try {
+        const started = await startUpdate();
+        if (!started.ok) {
+          setUpdateState({ kind: "unknown", reason: started.reason });
+          return;
+        }
+        // 轮询到终态：界面需要知道「装好了没有」，否则点了更新之后什么都没发生。
+        for (let tick = 0; tick < 60; tick += 1) {
+          const progress = await pollUpdate(started.operationId);
+          if (progress.state === "succeeded") {
+            // 装好了。新代码要页面重载才会生效（与「插件更新」提示同一条理由），
+            // 但**不自动刷新**：用户可能正在设置页做别的事。给出结论让他自己点。
+            setUpdateState({
+              kind: "current",
+              installed: "",
+              source: "",
+            });
+            return;
+          }
+          if (progress.state === "failed" || progress.state === "cancelled" || progress.state === "rolled-back") {
+            setUpdateState({
+              kind: "unknown",
+              reason: [progress.code, progress.message].filter((part) => typeof part === "string" && part !== "").join("：") || "更新没有完成",
+            });
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+        setUpdateState({ kind: "unknown", reason: "更新还在进行中，请稍后刷新页面确认" });
+      } finally {
+        setUpdateBusy(false);
+      }
+    };
+
     const testSecret = async (ref: string): Promise<void> => {
       const probe = usage?.probeSearchCredential;
       if (probe === undefined) return; // 老宿主：没有实测通道，界面也不渲染按钮
@@ -1900,6 +1966,21 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       // 「刷新页面」按钮：只是重载本页，不碰任何数据。
       onReload: () => {
         reloadPage();
+      },
+      // —— 插件自身的更新（用户 2026-10-20：git 链接安装，希望直接点更新而不是卸载重装）——
+      //
+      // 走宿主官方插件入口的公开更新 API（`/dsh-market/api/v1/*`）。它认 github 安装：
+      // 比的是仓库的 commit / 版本，所以对「git 链接安装」真的会有「有新版本」这个结论。
+      //
+      // 状态初值是 `checking` 之外的一个中性值：**首次进入不自动打网络**（设置页打开很频繁，
+      // 每次进来都问一遍是浪费）。用户点「检查更新」才查，或上次的结论还在就复用。
+      ...(updateState === undefined ? {} : { update: updateState }),
+      ...(updateBusy ? { updateBusy: true } : {}),
+      onCheckUpdate: () => {
+        void runUpdateCheck();
+      },
+      onUpdate: () => {
+        void runUpdate();
       },
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => {

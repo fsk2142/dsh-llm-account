@@ -350,6 +350,23 @@ export type CopyKey =
   | "update.title"
   | "update.body"
   | "update.action"
+  /**
+   * 插件自身的更新检查（用户 2026-10-20：「希望加一个更新，这样有新版本的时候直接更新就可以，
+   * 就不用每次卸载后重新装」）。
+   *
+   * 三种结论各有专门文案 —— 尤其是「链接安装」：那种装法**永远不会**通过更新按钮变化，
+   * 把它说成「已是最新」会让用户等一个永远不来的按钮。
+   */
+  | "update.check"
+  | "update.checking"
+  | "update.section"
+  | "update.start"
+  | "update.available"
+  | "update.current"
+  | "update.notApplicable"
+  | "update.unknown"
+  | "update.starting"
+  | "update.failed"
   | "account.reason.no-signin"
   | "account.reason.config-invalid"
   | "account.reason.error"
@@ -676,6 +693,17 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "update.body":
       "新装的插件要等页面重新加载后才会出现在界面上（侧边栏卡片、中台面板都是）。刷新一下本页即可，不用重启 DSH。",
     "update.action": "刷新页面",
+    "update.check": "检查更新",
+    "update.checking": "正在检查…",
+    "update.section": "插件更新",
+    "update.start": "更新到新版本",
+    "update.available": "有新版本：{installed} → {latest}",
+    "update.current": "已是最新版本（{installed}）。",
+    "update.notApplicable":
+      "当前是**本地链接安装**（{installed}），它跟着源码走，不会通过更新按钮变化 —— 改了代码刷新页面即可。要装发行版，请从插件市场重新安装一次。",
+    "update.unknown": "暂时查不到更新信息：{reason}",
+    "update.starting": "正在更新…",
+    "update.failed": "更新失败：{reason}",
     "account.reason.no-signin": "浏览器里没有完成授权（vela 已退出）。请重试并在浏览器里批准。",
     "account.reason.config-invalid": "本机的登录产物形状不认识（缺少 runtime key）。请重新登录一次。",
     "account.reason.error": "登录失败。",
@@ -994,6 +1022,17 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "update.body":
       "A newly installed plugin only shows up after the page reloads (sidebar card, middle panel). Reload this page — no need to restart DSH.",
     "update.action": "Reload page",
+    "update.check": "Check for updates",
+    "update.checking": "Checking…",
+    "update.section": "Plugin update",
+    "update.start": "Update to the new version",
+    "update.available": "New version: {installed} → {latest}",
+    "update.current": "You're on the latest version ({installed}).",
+    "update.notApplicable":
+      "This is a **linked local install** ({installed}); it follows the source tree and never changes through an update button — edit the code and reload the page. To use a release build, install it from the plugin market again.",
+    "update.unknown": "Could not check for updates: {reason}",
+    "update.starting": "Updating…",
+    "update.failed": "Update failed: {reason}",
     "account.reason.no-signin": "The browser never finished signing in (vela exited). Try again and approve in the browser.",
     "account.reason.config-invalid": "The local sign-in data has an unrecognised shape (no runtime key). Sign in again.",
     "account.reason.error": "Sign-in failed.",

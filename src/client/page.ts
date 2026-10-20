@@ -17,6 +17,7 @@ import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, specOf, type DraftField, type P
 import { parseSecretRefs, summarizeKeyStatus, validateSecretInput } from "../core/switching/search-keys";
 import { savesImmediately } from "./registry";
 import type { CredentialProbe } from "./usage-contract";
+import type { UpdateState } from "./update-check";
 import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
@@ -98,6 +99,19 @@ export interface PageShellProps {
   reloadHint?: boolean;
   /** 「刷新页面」的动作（缺省时按钮仍显示，但点了没反应 —— 生产总会传）。 */
   onReload?: () => void;
+  /**
+   * 插件自身的更新状态（缺省 = 容器没有提供，整块不渲染）。
+   *
+   * 三种结论由 `update-check.ts` 判定：`available` 才画「更新」按钮；
+   * `not-applicable`（本地链接安装）如实说明它不会更新 —— 那种装法跟着源码走。
+   */
+  update?: UpdateState;
+  /** 正在检查或正在更新（按钮禁用 + 换文案）。 */
+  updateBusy?: boolean;
+  /** 主动检查一次。 */
+  onCheckUpdate?: () => void;
+  /** 开始更新（只在 `available` 时可用）。 */
+  onUpdate?: () => void;
   /** 正在写密钥（按钮禁用 + 换文案）。 */
   secretSaving?: boolean;
   /** 密码框的当前值（受控：页面是纯函数，草稿由容器持有）。 */
@@ -159,6 +173,64 @@ function reloadNotice(props: PageShellProps, t: (key: string) => string): ReactE
   );
 }
 
+/**
+ * 「检查更新 / 更新」区块（用户 2026-10-20：「希望加一个更新，这样有新版本的时候直接更新
+ * 就可以，就不用每次卸载后重新装」）。
+ *
+ * 三种结论分别渲染，**尤其不把「链接安装」说成「已是最新」**：
+ * 后者会让用户等一个永远不会来的按钮（那种装法跟着源码走，本来就没有「新版本」这回事）。
+ * @param props - 页面属性。
+ * @param t - 取词函数。
+ * @returns 区块元素；容器没有提供更新状态时为 `null`（老宿主不渲染死按钮）。
+ */
+function updateBlock(props: PageShellProps, t: (key: string) => string): ReactElement | null {
+  const state = props.update;
+  if (state === undefined) return null;
+  const replace = (template: string, values: Record<string, string>): string =>
+    template.replace(/\{(\w+)\}/g, (whole, name: string) => values[name] ?? whole);
+
+  const canUpdate = state.kind === "available";
+  const label =
+    state.kind === "available"
+      ? replace(t("update.available"), { installed: state.installed, latest: state.latest })
+      : state.kind === "current"
+        ? replace(t("update.current"), { installed: state.installed })
+        : state.kind === "not-applicable"
+          ? replace(t("update.notApplicable"), { installed: state.installed })
+          : replace(t("update.unknown"), { reason: state.kind === "unknown" ? state.reason : "" });
+  return createElement(
+    "div",
+    { "data-update-block": state.kind, className: CSS_CLASS.notice },
+    createElement("strong", { className: CSS_CLASS.noticeTitle }, t("update.section")),
+    createElement("small", null, props.updateBusy === true ? t("update.checking") : label),
+    // 「更新」只在**真的有新版**时出现（`not-applicable` / `current` 都不画一个点不动的按钮）。
+    canUpdate
+      ? createElement(
+          "button",
+          {
+            type: "button",
+            "data-update-start": "true",
+            className: `${CSS_CLASS.buttonPrimary} ${CSS_CLASS.buttonSm}`,
+            disabled: props.updateBusy === true,
+            onClick: () => props.onUpdate?.(),
+          },
+          props.updateBusy === true ? t("update.starting") : t("update.start"),
+        )
+      : // 其余情况给「检查一次」：用户随时可以主动问，而不是等它自己刷新。
+        createElement(
+          "button",
+          {
+            type: "button",
+            "data-update-check": "true",
+            className: `${CSS_CLASS.buttonSecondary} ${CSS_CLASS.buttonSm}`,
+            disabled: props.updateBusy === true,
+            onClick: () => props.onCheckUpdate?.(),
+          },
+          t("update.check"),
+        ),
+  );
+}
+
 /** 渲染失败时的兜底：**不调用 `t()`**（取词本身可能就是抛错的原因）。 */
 function renderErrorPanel(error: unknown): ReactElement {  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
   return createElement(
@@ -189,6 +261,7 @@ function pageBody(props: PageShellProps): ReactElement {  const { state, entries
     ),
     reloadNotice(props, t),
     props.accounts === undefined ? null : props.accounts,
+    updateBlock(props, t),
     // 空态提示：独立于任何选择显示一次（见上面 noVendor 的说明）。
     noVendor
       ? createElement(
