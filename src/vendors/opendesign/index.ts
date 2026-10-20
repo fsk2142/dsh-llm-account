@@ -160,7 +160,7 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueOnError: z.boolean().default(false),
       autoContinueOnTruncate: z.boolean().default(false),
       autoContinueMaxAttempts: z.number().default(3),
-      searchPreferGateway: z.boolean().default(true),
+      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only"]).default("gateway-first"),
       searchApiKeyEnv: z.string().role("credential-ref").default("DEEPSEEK_API_KEY"),
     /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */
     workspaceId: z.string().default(""),

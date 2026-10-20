@@ -314,11 +314,18 @@ export const VENDORS: readonly VendorEntry[] = [
           },
           // —— 搜索 ——
           {
-            key: "searchPreferGateway",
-            kind: "boolean",
-            labelKey: "field.searchPreferGateway",
-            hintKey: "field.searchPreferGateway.hint",
-            fallback: true,
+            key: "searchStrategy",
+            kind: "select",
+            labelKey: "field.searchStrategy",
+            hintKey: "field.searchStrategy.hint",
+            // 两条路的成本结构不同（网关路按 token、API 路按请求次数），让用户选。
+            options: [
+              { value: "gateway-first", labelKey: "options.searchGatewayFirst" },
+              { value: "api-first", labelKey: "options.searchApiFirst" },
+              { value: "gateway-only", labelKey: "options.searchGatewayOnly" },
+              { value: "api-only", labelKey: "options.searchApiOnly" },
+            ],
+            fallback: "gateway-first",
           },
           {
             key: "searchApiKeyEnv",

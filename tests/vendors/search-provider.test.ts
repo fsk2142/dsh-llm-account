@@ -48,12 +48,12 @@ function fakeFetch(body: unknown, status = 200) {
   return { impl, calls };
 }
 
-/** 一组默认依赖：网关可用、API key 也在。 */
+/** 一组默认依赖：网关可用、API key 也在（缺省策略 = 网关优先）。 */
 function deps(overrides: Partial<Parameters<typeof createSearchProvider>[0]> = {}) {
   return {
     fetchImpl: fakeFetch(searchResponse()).impl,
     sessionRoute: () => ({ provider: "opendesign" as string | undefined, model: "deepseek-v4.1-flash" as string | undefined }),
-    preferGateway: () => true,
+    strategy: () => "gateway-first",
     gatewayAccess: async () => ({ baseURL: "https://amr-link.open-design.ai/v1", key: "sk-gw" }),
     resolveApiKey: async () => "sk-api",
     ...overrides,
@@ -96,17 +96,25 @@ describe("选路", () => {
     expect((calls[0]?.init?.headers as Record<string, string>)["x-api-key"]).toBe("sk-gw");
   });
 
-  it("非 DeepSeek 模型 → 回退 API 基地址、带 API key", async () => {
-    const { impl, calls } = fakeFetch(searchResponse());
+  it("非 DeepSeek 模型 → 回退 API 路，打 /v1/tools/search、带 Bearer", async () => {
+    // API 路要的是 `results[]` 形状（与网关路的 content 块不同）。
+    const { impl, calls } = fakeFetch({
+      results: [
+        { title: "Result A", url: "https://a.example/x" },
+        { title: "Result B", url: "https://b.example/y" },
+      ],
+    });
     const provider = createSearchProvider(
       deps({
         fetchImpl: impl,
         sessionRoute: () => ({ provider: "opendesign", model: "glm-5.3-flash" }),
       }),
     );
-    await provider.search({ query: "hello" });
-    expect(calls[0]?.url).toBe("https://api.deepseek.com/anthropic/v1/messages");
-    expect((calls[0]?.init?.headers as Record<string, string>)["x-api-key"]).toBe("sk-api");
+    const result = await provider.search({ query: "hello" });
+    // API 路走**独立的 Search 接口**（不吃对话 token），不是网关的 messages 端点。
+    expect(calls[0]?.url).toBe("https://api.deepseek.com/v1/tools/search");
+    expect((calls[0]?.init?.headers as Record<string, string>).authorization).toBe("Bearer sk-api");
+    expect(result.sources.map((source) => source.url)).toEqual(["https://a.example/x", "https://b.example/y"]);
   });
 
   it("两条路都不可用 → 抛错并说明原因（不发请求）", async () => {

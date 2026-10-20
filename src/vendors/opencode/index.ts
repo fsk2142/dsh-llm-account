@@ -179,7 +179,7 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueOnError: z.boolean().default(false),
       autoContinueOnTruncate: z.boolean().default(false),
       autoContinueMaxAttempts: z.number().default(3),
-      searchPreferGateway: z.boolean().default(true),
+      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only"]).default("gateway-first"),
       searchApiKeyEnv: z.string().role("credential-ref").default("DEEPSEEK_API_KEY"),
     baseURL: z.string().default(DEFAULT_BASE_URL),
     requestTimeoutMs: z.number(),

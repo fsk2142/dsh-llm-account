@@ -143,7 +143,7 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueMaxAttempts: z.number().default(3),
       /** 功能页的两台开关：关掉只隐藏界面那一块，不影响已配置的能力。 */
       /** 搜索：是否优先用网关订阅额度（默认是；没有可用网关时回退 API key）。 */
-      searchPreferGateway: z.boolean().default(true),
+      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only"]).default("gateway-first"),
       /** 搜索用的 API key 凭据引用名（配在凭据服务里，不是明文）。 */
       searchApiKeyEnv: z.string().role("credential-ref").default("DEEPSEEK_API_KEY"),
       accounts: z.array(
@@ -401,7 +401,10 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
               model: typeof record.model === "string" ? record.model : undefined,
             };
           },
-          preferGateway: () => document()["searchPreferGateway"] !== false,
+          strategy: () => {
+            const value = document()["searchStrategy"];
+            return typeof value === "string" && value !== "" ? value : "gateway-first";
+          },
           gatewayAccess: async (provider) => {
             // 只有本插件托管的 opendesign 有网关路；密钥用它自己的账号端口解析。
             if (provider !== "opendesign") return undefined;

@@ -85,8 +85,14 @@ export type CopyKey =
   | "field.autoContinueOnTruncate.hint"
   | "field.autoContinueMaxAttempts"
   | "field.autoContinueMaxAttempts.hint"
-  | "field.searchPreferGateway"
-  | "field.searchPreferGateway.hint"
+  | "field.searchStrategy"
+  | "field.searchStrategy.hint"
+  | "options.searchGatewayFirst"
+  | "options.searchApiFirst"
+  | "options.searchGatewayOnly"
+  | "options.searchApiOnly"
+  | "field.searchApiKeyEnv"
+  | "field.searchApiKeyEnv.hint"
   | "field.searchApiKeyEnv"
   | "field.searchApiKeyEnv.hint"
   | "card.display"
@@ -376,10 +382,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.autoContinueOnTruncate.hint": "只在达到输出上限（finish=length）时补一句「继续」；正常结束不会多说话。",
     "field.autoContinueMaxAttempts": "每轮最多自动继续次数",
     "field.autoContinueMaxAttempts.hint": "两个开关共用这个上限，防止无限续写烧额度。缺省 3。",
-    "field.searchPreferGateway": "搜索优先用网关额度",
-    "field.searchPreferGateway.hint": "当前会话走 opendesign 且是 DeepSeek 模型时用订阅额度搜索；其余情况回退到下面的 API key。",
-    "field.searchApiKeyEnv": "搜索用的 API key 引用名",
-    "field.searchApiKeyEnv.hint": "填凭据库里的引用名（不是明文密钥）。缺省 DEEPSEEK_API_KEY，可在设置页的凭据区写入。",
+    "field.searchStrategy": "搜索方式",
+    "field.searchStrategy.hint": "网关路：模型在对话里调用服务端搜索工具，按 token 计费（一次搜索等于一次模型调用）。API 路：直连 /v1/tools/search，按请求次数计费、不烧 token，但需要下面填的那个 key。",
+    "options.searchGatewayFirst": "网关优先（省 API 余额）",
+    "options.searchApiFirst": "API 优先（省 token）",
+    "options.searchGatewayOnly": "只用网关",
+    "options.searchApiOnly": "只用 API",
+    "field.searchApiKeyEnv": "DeepSeek API key 引用名",
+    "field.searchApiKeyEnv.hint": "凭据库里的引用名（不是明文）。只走 API 路时需要；可在设置页的凭据区写入。",
     "card.display": "显示设置",
     "card.display.hint": "侧边栏额度卡片要不要显示、多久刷新一次。三家共用。",
     "card.switching": "切换设置",
@@ -661,10 +671,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.autoContinueOnTruncate.hint": "Only when the answer hit the output limit (finish=length); normal endings are untouched.",
     "field.autoContinueMaxAttempts": "Max auto-continues per turn",
     "field.autoContinueMaxAttempts.hint": "Shared by both switches, so a loop cannot burn quota forever. Default 3.",
-    "field.searchPreferGateway": "Prefer gateway quota for search",
-    "field.searchPreferGateway.hint": "Uses subscription quota when the session runs opendesign with a DeepSeek model; otherwise falls back to the API key below.",
-    "field.searchApiKeyEnv": "Search API key reference",
-    "field.searchApiKeyEnv.hint": "A credential reference name, not a literal secret. Defaults to DEEPSEEK_API_KEY.",
+    "field.searchStrategy": "Search route",
+    "field.searchStrategy.hint": "Gateway: the model calls the server-side search tool; billed per token (one search = one model call). API: calls /v1/tools/search directly; billed per request, no tokens, needs the key below.",
+    "options.searchGatewayFirst": "Gateway first (save API balance)",
+    "options.searchApiFirst": "API first (save tokens)",
+    "options.searchGatewayOnly": "Gateway only",
+    "options.searchApiOnly": "API only",
+    "field.searchApiKeyEnv": "DeepSeek API key reference",
+    "field.searchApiKeyEnv.hint": "A credential reference name, not a literal secret. Needed for the API route; write it in the credentials section.",
     "card.display": "Display",
     "card.display.hint": "Whether the sidebar quota card shows, and how often it refreshes. Shared by all vendors.",
     "card.switching": "Switching",

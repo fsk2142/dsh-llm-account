@@ -24,10 +24,28 @@
 export type SearchRoute =
   /** 用网关订阅额度（`baseURL` 是那家网关、`key` 是它账号的推理密钥）。 */
   | { kind: "gateway"; provider: string }
-  /** 用用户写入的 DeepSeek API key。 */
+  /** 用用户写入的 DeepSeek API key（直连 `/v1/tools/search`）。 */
   | { kind: "api" }
   /** 两条路都不可用：**明确失败**，绝不发一个注定 400 或静默无为的请求。 */
   | { kind: "unavailable" };
+
+/**
+ * 搜索优先策略（用户可选）。
+ *
+ * 两条路的成本结构完全不同，所以必须让用户选：
+ * - `gateway` 走「模型在对话里调服务端搜索工具」，按 **token** 计费 ——
+ *   一次搜索就是一次完整模型调用；
+ * - `api` 走 `POST /v1/tools/search`，按**请求次数**计费（每 1000 次 5 元），不烧 token。
+ *
+ * `*-first` 是「优先但可回退」，`*-only` 是「不许回退，不可用就明确失败」。
+ */
+export type SearchStrategy = "gateway-first" | "api-first" | "gateway-only" | "api-only";
+
+/** 全部策略（渲染下拉与校验都用这一份，避免两处各写一遍）。 */
+export const SEARCH_STRATEGIES: readonly SearchStrategy[] = ["gateway-first", "api-first", "gateway-only", "api-only"];
+
+/** 缺省策略：网关优先 —— 用订阅额度，不额外花钱。 */
+export const DEFAULT_SEARCH_STRATEGY: SearchStrategy = "gateway-first";
 
 /** 选路的输入。 */
 export interface SearchRouteInput {
@@ -35,10 +53,17 @@ export interface SearchRouteInput {
   provider: string | undefined;
   /** 当前会话的模型 id；首帧可能还没有。 */
   model: string | undefined;
-  /** 用户是否允许「优先用网关额度」。 */
-  preferGateway: boolean;
+  /** 用户选的优先策略（形状不可信）。 */
+  strategy: SearchStrategy | string;
   /** 是否解析到了 API key。 */
   hasApiKey: boolean;
+  /**
+   * 网关路是否真的可用（有 opendesign 账号且能解析出密钥）。
+   *
+   * 与 `provider === "opendesign"` 分开：会话在 opendesign 上不等于**这个插件**配了账号，
+   * 只看 provider 名会在「有 opendesign 会话但没配账号」时选中一条发不出去的路。
+   */
+  hasGateway: boolean;
 }
 
 /** 支持服务端搜索的网关（实测只有这家）。 */
@@ -61,13 +86,30 @@ export function isDeepSeekModel(model: string | undefined): boolean {
 
 /**
  * 判定一次搜索该走哪条路。
- * @param input - 会话路由、开关与凭据可用性。
+ * @param input - 会话路由、策略与两条路各自是否可用。
  * @returns 选路结果。
  */
 export function chooseSearchRoute(input: SearchRouteInput): SearchRoute {
-  const gatewayCapable =
-    input.preferGateway && input.provider === SEARCH_CAPABLE_GATEWAY && isDeepSeekModel(input.model);
-  if (gatewayCapable) return { kind: "gateway", provider: input.provider! };
-  if (input.hasApiKey) return { kind: "api" };
-  return { kind: "unavailable" };
+  // 网关路：会话在支持的网关上、模型属于 DeepSeek 系、且插件确实配了那家的账号。
+  const gatewayReady = input.hasGateway && input.provider === SEARCH_CAPABLE_GATEWAY && isDeepSeekModel(input.model);
+  const apiReady = input.hasApiKey;
+  // 不认识的策略按「网关优先」处理：那是最保守的一档（不额外花钱）。
+  const strategy = SEARCH_STRATEGIES.includes(input.strategy as SearchStrategy)
+    ? (input.strategy as SearchStrategy)
+    : DEFAULT_SEARCH_STRATEGY;
+
+  switch (strategy) {
+    case "gateway-only":
+      // 用户明确要求只用网关：不可用时**明确失败**，不偷偷改用 API 烧他的余额。
+      return gatewayReady ? { kind: "gateway", provider: SEARCH_CAPABLE_GATEWAY } : { kind: "unavailable" };
+    case "api-only":
+      return apiReady ? { kind: "api" } : { kind: "unavailable" };
+    case "api-first":
+      if (apiReady) return { kind: "api" };
+      return gatewayReady ? { kind: "gateway", provider: SEARCH_CAPABLE_GATEWAY } : { kind: "unavailable" };
+    case "gateway-first":
+    default:
+      if (gatewayReady) return { kind: "gateway", provider: SEARCH_CAPABLE_GATEWAY };
+      return apiReady ? { kind: "api" } : { kind: "unavailable" };
+  }
 }

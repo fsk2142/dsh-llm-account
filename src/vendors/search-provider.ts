@@ -25,7 +25,8 @@
  * @module dsh-llm-account/src/vendors/search-provider
  */
 
-import { chooseSearchRoute, isDeepSeekModel, type SearchRoute } from "../core/switching/search-route";
+import { chooseSearchRoute, type SearchRoute } from "../core/switching/search-route";
+import { searchViaApi } from "./search-api";
 
 /** 本 provider 的稳定 id（宿主注册表的键）。 */
 export const SEARCH_PROVIDER_ID = "llm-account-deepseek";
@@ -55,8 +56,8 @@ export interface SearchProviderDeps {
   fetchImpl: typeof fetch;
   /** 当前会话的路由（`provider` / `model`）；宿主可能还没有信息。 */
   sessionRoute: () => { provider: string | undefined; model: string | undefined };
-  /** 用户是否允许优先用网关额度。 */
-  preferGateway: () => boolean;
+  /** 用户选的优先策略（见 `core/switching/search-route`）。 */
+  strategy: () => string;
   /**
    * 解析「某家网关」的推理密钥与基地址。
    * @param provider - 网关 id。
@@ -65,12 +66,7 @@ export interface SearchProviderDeps {
   gatewayAccess: (provider: string) => Promise<{ baseURL: string; key: string } | undefined>;
   /** 解析 API key（凭据服务里的引用）。 */
   resolveApiKey: () => Promise<string | undefined>;
-  /** API 路用的基地址；缺省 `https://api.deepseek.com/anthropic/v1`。 */
-  apiBaseURL?: string;
 }
-
-/** 默认 API 基地址（与宿主同一条）。 */
-const DEFAULT_API_BASE = "https://api.deepseek.com/anthropic/v1";
 
 /** 辅助搜索请求的模型（与宿主同一档）。 */
 const SEARCH_MODEL = "deepseek-v4-flash";
@@ -161,57 +157,69 @@ export function createSearchProvider(deps: SearchProviderDeps): {
   available(): boolean;
   search(request: SearchRequest, signal?: AbortSignal): Promise<SearchResult>;
 } {
-  const apiBase = deps.apiBaseURL ?? DEFAULT_API_BASE;
+  /** 网关路是否可用（异步：要解析那家的密钥）。 */
+  const gatewayReady = async (provider: string | undefined): Promise<{ baseURL: string; key: string } | undefined> => {
+    if (provider !== "opendesign") return undefined;
+    return await deps.gatewayAccess(provider);
+  };
 
-  /** 当前该走哪条路（不发网络请求，只做判定）。 */
-  const route = async (): Promise<SearchRoute> => {
+  /** 当前该走哪条路（只解析凭据，不发搜索请求）。 */
+  const route = async (): Promise<{ chosen: SearchRoute; apiKey?: string; access?: { baseURL: string; key: string } }> => {
     const { provider, model } = deps.sessionRoute();
     const apiKey = await deps.resolveApiKey();
-    return chooseSearchRoute({
+    const access = await gatewayReady(provider);
+    const chosen = chooseSearchRoute({
       provider,
       model,
-      preferGateway: deps.preferGateway(),
+      strategy: deps.strategy(),
       hasApiKey: apiKey !== undefined,
+      hasGateway: access !== undefined,
     });
+    return { chosen, ...(apiKey === undefined ? {} : { apiKey }), ...(access === undefined ? {} : { access }) };
   };
 
   return {
     id: SEARCH_PROVIDER_ID,
     /**
-     * 宿主拿它做选路。**必须廉价**：这里只做本地判定，绝不发网络请求
-     * （两次凭据解析是本地读，可接受；网关可用性用它自己那句「密钥解析得到吗」判断）。
+     * 宿主拿它做选路。**必须廉价**：不发网络请求。
+     *
+     * 这里不做完整判定（那要解析凭据，是异步的）：只要可能存在一条路就报告可用，
+     * 真正的失败在 `search()` 里给出可读原因。
      */
     available(): boolean {
-      const { provider, model } = deps.sessionRoute();
-      // 只要能确定一条路就报告可用；真正的失败在 search() 里给出可读原因。
-      if (deps.preferGateway() && provider === "opendesign" && isDeepSeekModel(model)) return true;
-      // API 路：不在这里解析凭据（那是异步的），交给 search() 判定。
       return true;
     },
     async search(request: SearchRequest, signal?: AbortSignal): Promise<SearchResult> {
-      const chosen = await route();
+      const { chosen, apiKey, access } = await route();
       if (chosen.kind === "unavailable") {
         throw new SearchUnavailableError(
-          "没有可用的搜索凭据：当前模型走不了网关搜索，且没有配置 DeepSeek API key（搜索设置里的 API key 引用）",
+          "没有可用的搜索凭据：当前策略下两条路都不可用。请在功能页选择搜索策略，并配好 DeepSeek API key（或 opendesign 账号）",
         );
       }
 
-      let baseURL: string;
-      let key: string;
-      if (chosen.kind === "gateway") {
-        const access = await deps.gatewayAccess(chosen.provider);
-        if (access === undefined) {
-          throw new SearchUnavailableError(`网关 ${chosen.provider} 的推理密钥不可用，搜索无法走订阅额度`);
-        }
-        baseURL = access.baseURL;
-        key = access.key;
-      } else {
-        const apiKey = await deps.resolveApiKey();
+      // —— API 路：直连 /v1/tools/search（不吃对话 token）——
+      if (chosen.kind === "api") {
         if (apiKey === undefined) throw new SearchUnavailableError("没有解析到 DeepSeek API key");
-        baseURL = apiBase;
-        key = apiKey;
+        try {
+          const result = await searchViaApi({
+            query: request.query,
+            key: apiKey,
+            ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
+            fetchImpl: deps.fetchImpl,
+            ...(signal === undefined ? {} : { signal }),
+          });
+          return { sources: result.sources };
+        } catch (error) {
+          // 把 Search API 的错误翻成宿主认识的 provider 错误（保留原因）。
+          throw new SearchUnavailableError(error instanceof Error ? error.message : String(error));
+        }
       }
 
+      // —— 网关路：模型在对话里调用服务端搜索工具 ——
+      if (access === undefined) {
+        throw new SearchUnavailableError("网关联署密钥不可用，搜索无法走订阅额度");
+      }
+      const { baseURL, key } = access;
       const body = {
         model: SEARCH_MODEL,
         max_tokens: 4_096,
