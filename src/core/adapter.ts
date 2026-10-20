@@ -145,6 +145,17 @@ export interface QuotaWindow {
   percent?: number;
   /** 重置时刻（epoch 毫秒）。 */
   resetAt?: number;
+  /**
+   * `resetAt` 是**估算出来的**，不是厂商公布的事实。
+   *
+   * 2026-10-20：Command Code 的 `windowLimits` 只给 `used` 与 `cap`，**不给 `resetAt`**，
+   * 于是 5 小时/周窗口的重置时间一直是空的。用户要求「没有提供就给出估算值」，估算依据是
+   * 「第一次观测到 `used` 从 0 变正的时刻 + 窗口长度」（见 `core/usage/reset-estimate`）。
+   *
+   * 这个标记存在的唯一目的：**界面必须把估算值显示成「约」**，绝不能让它看起来像厂商数据
+   * —— 一次估算很可能与真实重置差几分钟到几十分钟。
+   */
+  resetEstimated?: boolean;
   /** 是否已超出。 */
   exceeded?: boolean;
   /**

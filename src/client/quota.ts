@@ -216,11 +216,21 @@ export function quotaResetText(t: (key: string) => string, window: QuotaWindow):
  * 统一成绝对日期后两行格式一致、宽窄稳定。
  *
  * 跨年时带上年份 —— 否则 `01-05` 会让人以为已经过去。
+ *
+ * **估算值要带「约」**（2026-10-20）：Command Code 的 5 小时/周窗口不公布重置时间，我们用
+ * 「`used` 首次变正 + 窗口长度」推算。推算值必须一眼可辨，否则用户会把它当成厂商给的
+ * 精确时刻去安排事情。`estimated` 由 `QuotaWindow.resetEstimated` 传进来。
  * @param at - 重置时刻（epoch 毫秒）。
  * @param now - 现在（判断是否需要年份；缺省 `Date.now()`）。
- * @returns `MM-DD HH:mm`（同年）或 `YYYY-MM-DD HH:mm`（跨年）；时刻不可用时 `undefined`。
+ * @param estimated - 这个时刻是不是估算出来的（是则加「约」）。
+ * @returns `MM-DD HH:mm`（同年）或 `YYYY-MM-DD HH:mm`（跨年）；估算时前缀「约 」；
+ *   时刻不可用时 `undefined`。
  */
-export function quotaResetDateText(at: number | undefined, now: number = Date.now()): string | undefined {
+export function quotaResetDateText(
+  at: number | undefined,
+  now: number = Date.now(),
+  estimated = false,
+): string | undefined {
   if (at === undefined || !Number.isFinite(at) || at <= 0) return undefined;
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return undefined;
@@ -229,7 +239,8 @@ export function quotaResetDateText(at: number | undefined, now: number = Date.no
   const day = pad(date.getDate());
   const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   const sameYear = date.getFullYear() === new Date(now).getFullYear();
-  return sameYear ? `${month}-${day} ${time}` : `${date.getFullYear()}-${month}-${day} ${time}`;
+  const text = sameYear ? `${month}-${day} ${time}` : `${date.getFullYear()}-${month}-${day} ${time}`;
+  return estimated ? `约 ${text}` : text;
 }
 
 /**

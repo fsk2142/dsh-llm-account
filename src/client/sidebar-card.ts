@@ -263,7 +263,7 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
   const level = unlimited ? "unlimited" : remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
   // 日期格式（`10-19 20:00`）而不是「今天/明天」：两行上下并排时相对说法对不齐，
   // 也不好比较（用户 2026-10-19：「小时那个也用日期表示，不用明天这种」）。
-  const reset = quotaResetDateText(window.resetAt) ?? t("quota.resetUnknown");
+  const reset = quotaResetDateText(window.resetAt, Date.now(), window.resetEstimated === true) ?? t("quota.resetUnknown");
   const bar =
     meter === undefined || unlimited
       ? null

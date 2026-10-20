@@ -25,6 +25,7 @@ import { LlmError, attributionHeaders } from "@deepseek-ai/dsh-llm";
 
 import type { QuotaPlan, QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
+import { estimateReset, type AnchorState } from "../../core/usage/reset-estimate";
 import { subscriptionPlanInfo } from "./plans";
 import {
   COMMAND_CODE_CLI_VERSION,
@@ -108,6 +109,12 @@ export interface CommandCodeQuotaDeps {
   apiBase?: string;
   /** 每个端点的预算（毫秒）；缺省 {@link DEFAULT_REQUEST_TIMEOUT_MS}。 */
   timeoutMs?: number;
+  /**
+   * 取当前时刻（毫秒）。缺省 `Date.now`。
+   *
+   * 估算重置时间要用「这一刻的观测」当锚点，而单测需要可控的时钟 —— 所以做成注入点。
+   */
+  now?: () => number;
 }
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
@@ -352,6 +359,44 @@ export function createCommandCodeQuota(deps: CommandCodeQuotaDeps): QuotaPort {
       ? deps.timeoutMs
       : DEFAULT_REQUEST_TIMEOUT_MS;
 
+  /**
+   * 重置时间的**估算锚点**，按「账号 ref × 窗口 key」保存（跨轮询保持）。
+   *
+   * 为什么需要跨调用状态：估算的依据是「`used` 从 0 变正的那一刻」，而单次读数无法知道
+   * 那一刻是什么时候 —— 必须与上一次观测比较。
+   */
+  const resetAnchors = new Map<string, AnchorState>();
+
+  /**
+   * 给缺少 `resetAt` 的固定窗口补上估算值。
+   *
+   * 只补**端点确实没给**的那些（月度有自己的 `currentPeriodEnd`，不动它）。估算结论写进
+   * 同一个 `resetAt` 字段，并由 {@link QuotaWindow.resetEstimated} 标记「这是算出来的」，
+   * 界面据此显示「约」—— 绝不把估算伪装成厂商事实。
+   * @param ref - 账号 ref（锚点按账号分开）。
+   * @param windows - 归一化窗口。
+   * @returns 新的窗口数组（不修改入参）。
+   */
+  function withEstimatedResets(ref: string | undefined, windows: readonly QuotaWindow[]): QuotaWindow[] {
+    const now = deps.now?.() ?? Date.now();
+    const account = ref ?? "(none)";
+    return windows.map((window) => {
+      // 端点给了就尊重它，绝不覆盖真实值。
+      if (window.resetAt !== undefined) return window;
+      const storageKey = `${account}\u0000${window.key}`;
+      const { anchor, estimate } = estimateReset(resetAnchors.get(storageKey), {
+        key: window.key,
+        used: window.used,
+        at: now,
+      });
+      if (anchor === undefined) resetAnchors.delete(storageKey);
+      else resetAnchors.set(storageKey, anchor);
+      return estimate === undefined
+        ? window
+        : { ...window, resetAt: estimate.resetAt, resetEstimated: true };
+    });
+  }
+
   /** 拉一个端点；任何失败（状态、正文、传输）都只把端点名记进 `failed`。 */
   async function getJson(path: string, name: QuotaEndpoint, headers: Record<string, string>, failed: Set<QuotaEndpoint>): Promise<unknown> {
     try {
@@ -392,13 +437,17 @@ export function createCommandCodeQuota(deps: CommandCodeQuotaDeps): QuotaPort {
         getJson(BILLING_CREDITS_PATH, "credits", headers, failed),
         getJson(subscriptionsPath(orgIdOf(whoami)), "subscriptions", headers, failed),
       ]);
-      return toQuotaSnapshot({
+      const snapshot = toQuotaSnapshot({
         ...(whoami === undefined ? {} : { whoami }),
         ...(usage === undefined ? {} : { usage }),
         ...(credits === undefined ? {} : { credits }),
         ...(subscriptions === undefined ? {} : { subscriptions }),
         failures: QUOTA_ENDPOINTS.filter((name) => failed.has(name)),
       });
+      // **重置时间估算**（用户 2026-10-20：「如果没有提供就给出估算值」）：
+      // 这个端点不给 5 小时/周窗口的 `resetAt`，只能用「`used` 从 0 变正的时刻 + 窗口长度」
+      // 推算。锚点按账号分开保存在本闭包里（跨轮询保持），且结论一律标 `estimated: true`。
+      return { ...snapshot, windows: withEstimatedResets(ref, snapshot.windows) };
     },
   };
 }
