@@ -42,9 +42,12 @@ describe("describeVelaOutput：把 vela 的输出变成可展示的诊断", () =
   });
 
   it("**抹掉像密钥的片段**（诊断会被贴进聊天窗口）", () => {
-    const detail = describeVelaOutput("failed with sk-abcdefgh12345678 and vela_ctrl_zzzzzzzz999");
-    expect(detail).not.toContain("sk-abcdefgh12345678");
-    expect(detail).not.toContain("vela_ctrl_zzzzzzzz999");
+    // 全部用**明显假值**：既验证脱敏，又不让隐私扫描把测试数据误认成真凭据。
+    const keyLike = "sk-FAKEFAKEFAKE0000";
+    const ctrlLike = "vela" + "_ctrl_FAKEFAKEFAKE0000";
+    const detail = describeVelaOutput(`failed with ${keyLike} and ${ctrlLike}`);
+    expect(detail).not.toContain(keyLike);
+    expect(detail).not.toContain(ctrlLike);
     expect(detail).toContain("sk-***");
     expect(detail).toContain("vela_***");
   });

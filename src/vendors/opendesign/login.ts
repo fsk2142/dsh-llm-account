@@ -76,13 +76,40 @@ export interface VelaChild {
 /** 启动 vela 的方式（注入点；生产是 {@link defaultSpawn}）。 */
 export type VelaSpawn = (command: string, args: readonly string[]) => VelaChild;
 
-/** 默认的启动方式：两个输出流都接管道，Windows 下不弹控制台窗口。 */
+/**
+ * 默认的启动方式：两个输出流都接管道，Windows 下不弹控制台窗口。
+ *
+ * **`.cmd`/`.bat` 必须走 shell**（2026-10-20 真机）：Windows 的 `cmd` 包装脚本不是可执行映像，
+ * `spawn` 直接起会得到 `EINVAL`/`ENOENT` 且**没有任何输出** —— 那正是「没有输出」那条诊断的
+ * 来源。`.exe` 走 shell 反而多一层 cmd.exe 转义风险，所以按扩展名分流。
+ */
 function defaultSpawn(command: string, args: readonly string[]): VelaChild {
-  return nodeSpawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const isScript = /\.(cmd|bat)$/i.test(command);
+  return nodeSpawn(command, [...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    // 只在包装脚本上启用 shell：它由 cmd.exe 解释执行。
+    ...(isScript ? { shell: true } : {}),
+  });
 }
 
-/** vela 候选可执行文件名（Windows 优先 `.exe`）。 */
-const VELA_FILE_NAMES: readonly string[] = ["vela.exe", "vela"];
+/**
+ * vela 候选可执行文件名（Windows 优先 `.exe`，其次 npm 包装）。
+ *
+ * **`.cmd`/`.bat` 是必须的**（2026-10-20 真机）：用 `npm i -g @powerformer/vela-cli` 装的话，
+ * Windows 上生成的是 `vela.cmd`（外加 `.ps1` 与一个**无扩展名**的 sh 脚本），**没有 `.exe`**。
+ * 只找 `.exe` / `vela` 的旧清单会命中那个无扩展名的 sh 脚本 —— 而 Windows 不能直接执行它，
+ * `spawn` 于是触发 `error` 事件、一个字节都不输出，界面上就是
+ * 「vela 没有任何输出（命令可能没能启动）」。
+ *
+ * 顺序有意义：`.exe` 优先（官方安装器给的是原生二进制）；`.cmd` 次之（npm 包装，能跑）；
+ * 最后才是无扩展名的 `vela`（那是 POSIX shell 脚本，Windows 上基本跑不了，但保留给
+ * Git Bash / MSYS 之类的环境）。
+ */
+const VELA_FILE_NAMES: readonly string[] =
+  process.platform === "win32"
+    ? ["vela.exe", "vela.cmd", "vela.bat", "vela"]
+    : ["vela"];
 
 /** 桌面端内置 vela 的相对路径（计划 §0 的 `%LOCALAPPDATA%\Programs\Open Design\…`）。 */
 const DESKTOP_VELA_RELATIVE: readonly string[] = ["Programs", "Open Design", "resources", "open-design", "bin", "vela.exe"];
@@ -527,6 +554,7 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
    */
   async #promptWithin(child: VelaChild, signal: AbortSignal, timeoutMs: number): Promise<{ prompt?: VelaPrompt; output: string }> {
     let text = "";
+    let failure = "";
     let resolveFound: ((prompt: VelaPrompt | undefined) => void) | undefined;
     const found = new Promise<VelaPrompt | undefined>((resolve) => {
       resolveFound = resolve;
@@ -542,17 +570,25 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
     child.on("exit", onEnd);
-    child.on("error", onEnd);
+    // `error` 是**启动失败**（ENOENT / EINVAL / 权限），此时 stdout 一个字节都不会有。
+    // 不把它记下来，「命令没能启动」就只剩下「没有任何输出」这一句毫无指向性的话
+    // （2026-10-20 真机：npm 装的 `vela.cmd` 就是这么静默失败的）。
+    child.on("error", (...rest: unknown[]) => {
+      const error = rest[0];
+      failure = `vela 启动失败：${error instanceof Error ? error.message : String(error ?? "未知错误")}`;
+      onEnd();
+    });
     const timedOut = this.#sleep(timeoutMs, signal).then(
       () => undefined,
       () => undefined,
     );
     const prompt = await Promise.race([found, timedOut]);
-    // **总是把累计输出带出去**：调用方在「没解析到网址」时要把它当作诊断信息交给用户，
-    // 否则真实的错误（命令崩了 / 输出格式变了 / 什么都不打印）会被一句「超时」吞掉。
+    // **总是把累计输出（含启动失败原因）带出去**：调用方在「没解析到网址」时要把它当作诊断
+    // 信息交给用户，否则真实的错误会被一句「超时」吞掉。
+    const diagnostic = [failure, text].filter((part) => part !== "").join("\n");
     return prompt !== undefined && prompt.authUrl !== undefined
-      ? { prompt, output: text }
-      : { output: text };
+      ? { prompt, output: diagnostic }
+      : { output: diagnostic };
   }
 
   /**

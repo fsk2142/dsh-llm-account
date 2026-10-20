@@ -270,6 +270,20 @@ it("vela 解析顺序：VELA_BIN 直接采信，桌面端内置按 LOCALAPPDATA 
   expect(findVelaBinary({}, () => false)).toBeUndefined();
 });
 
+it("能用 **npm 装出来的 `vela.cmd`**（2026-10-20 真机：只找 .exe 会漏掉它）", () => {
+  // `npm i -g @powerformer/vela-cli` 在 Windows 上生成 vela.cmd / vela.ps1 / 无扩展名 vela，
+  // **没有 .exe**。旧清单只找 vela.exe 与 vela —— 后者是 POSIX shell 脚本，Windows 起不来，
+  // 于是 spawn 静默失败、零输出（正是「vela 没有任何输出」那条诊断）。
+  const onlyCmd = findVelaBinary({ PATH: "C:\\npm" }, (path) => path.toLowerCase().endsWith("vela.cmd"));
+  if (process.platform === "win32") {
+    expect(onlyCmd, "windows 上必须能找到 .cmd 包装").toContain("npm");
+    expect(onlyCmd!.toLowerCase()).toContain("vela.cmd");
+  }
+  // `.exe` 仍然优先于 `.cmd`（官方安装器的原生二进制更可靠）。
+  const both = findVelaBinary({ PATH: "C:\\bin" }, (path) => /vela\.(exe|cmd)$/i.test(path));
+  if (process.platform === "win32") expect(both!.toLowerCase()).toMatch(/vela\.exe$/);
+});
+
 // —— 工作区发现：登录产物通常只有两把密钥，工作区要问 vela（2026-10-18 本机实测） ——
 
 /**
