@@ -195,6 +195,13 @@ export interface LoginStatus {
   /** 等待的过期时刻（epoch 毫秒）。 */
   expiresAt?: number;
   reason?: string;
+  /**
+   * 失败时的**外部命令诊断原文**（`vela` 的 stdout/stderr 片段，已脱敏截断）。
+   *
+   * 界面上显示在失败原因下面：`reason` 只给一句稳定文案，这句才是真正的病因
+   * （命令没启动 / 崩了 / 输出格式变了 / 没有任何输出）。
+   */
+  detail?: string;
 }
 
 /** 「添加账户」的输入。`key` 缺省表示先建条目、稍后补密钥。 */

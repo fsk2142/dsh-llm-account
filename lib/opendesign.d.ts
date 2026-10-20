@@ -1,4 +1,4 @@
-import { a as AccountView, c as QuotaPort, i as AccountPort, l as VendorCapabilities, n as RotationAccess, o as CredentialPort, r as IntentLog, t as PluginConfigSchema } from "./assembly-BbZ1Kwh5.js";
+import { a as AccountView, c as QuotaPort, i as AccountPort, l as VendorCapabilities, n as RotationAccess, o as CredentialPort, r as IntentLog, t as PluginConfigSchema } from "./assembly-DJDU9XGc.js";
 import { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import { Context } from "@deepseek-ai/cordis";
 //#region src/vendors/opendesign/accounts.d.ts

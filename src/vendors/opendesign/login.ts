@@ -128,6 +128,32 @@ function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
+/** 诊断文本的最大长度：够看清原因，又不至于把界面撑爆。 */
+const VELA_DIAGNOSTIC_LIMIT = 600;
+
+/**
+ * 把 vela 的原始输出整理成一句可展示的诊断。
+ *
+ * 三条纪律：
+ * 1. **没有输出本身就是信息**（「命令没有任何输出」指向「启动失败」而非「格式变了」）；
+ * 2. **截断**到 `VELA_DIAGNOSTIC_LIMIT`，超长时明确标注被截断；
+ * 3. **抹掉像密钥的片段**：输出理论上不该含密钥，但诊断信息会被贴进聊天窗口，
+ *    宁可多一层过滤（`sk-…` / `vela_…` / 长十六进制串）。
+ * @param text - 累计的 stdout+stderr。
+ * @returns 诊断文本；完全没有输出时也给一句说明（`undefined` 表示不需要展示）。
+ */
+export function describeVelaOutput(text: string): string | undefined {
+  const cleaned = stripAnsi(text)
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-***")
+    .replace(/vela_[A-Za-z0-9_-]{8,}/g, "vela_***")
+    .trim();
+  if (cleaned === "") return "vela 没有任何输出（命令可能没能启动，或退出得比提示还快）";
+  const flat = cleaned.replace(/\s+/g, " ");
+  return flat.length <= VELA_DIAGNOSTIC_LIMIT
+    ? flat
+    : `${flat.slice(0, VELA_DIAGNOSTIC_LIMIT)}…（已截断，原长 ${flat.length} 字）`;
+}
+
 /** 输出块到文本（真实流给 `Buffer`；测试假实现可以直接给字符串）。 */
 function textOfChunk(chunk: unknown): string {
   if (typeof chunk === "string") return chunk;
@@ -449,12 +475,21 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
     this.#child = child;
     if (abort.signal.aborted || this.#cancelPending) return this.#settleCancelled();
 
-    const prompt = await this.#promptWithin(child, abort.signal, this.#parseTimeoutMs);
+    const { prompt, output } = await this.#promptWithin(child, abort.signal, this.#parseTimeoutMs);
     if (abort.signal.aborted || this.#cancelPending) return this.#settleCancelled();
     if (prompt?.authUrl === undefined) {
-      // 有界窗口内没等到激活提示：vela 起不来、或它的输出形状变了。收掉子进程再报超时。
+      // 有界窗口内没等到激活提示：vela 起不来、崩了、或它的输出形状变了。收掉子进程再报超时。
+      //
+      // **把 vela 的实际输出带出去**（2026-10-20）：这个分支以前只写 `reason: "timeout"`，
+      // 于是「命令没启动」「启动后崩了」「输出格式变了」「用户没批准」四种病因在界面上
+      // 全都是同一句「等待授权超时」，连排查都无从下手。users 手动跑 `vela login` 正常、
+      // 插件里却超时 —— 那种差异只有看真实输出才能定位。
       this.#teardown();
-      this.#statusValue = { state: "failed", reason: "timeout" };
+      this.#statusValue = {
+        state: "failed",
+        reason: "timeout",
+        ...(describeVelaOutput(output) === undefined ? {} : { detail: describeVelaOutput(output)! }),
+      };
       return { ...this.#statusValue };
     }
 
@@ -490,7 +525,7 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
    * @param timeoutMs - 解析窗口。
    * @returns 解析到的提示（可能只有一半），或 `undefined`（窗口用完）。
    */
-  async #promptWithin(child: VelaChild, signal: AbortSignal, timeoutMs: number): Promise<VelaPrompt | undefined> {
+  async #promptWithin(child: VelaChild, signal: AbortSignal, timeoutMs: number): Promise<{ prompt?: VelaPrompt; output: string }> {
     let text = "";
     let resolveFound: ((prompt: VelaPrompt | undefined) => void) | undefined;
     const found = new Promise<VelaPrompt | undefined>((resolve) => {
@@ -513,7 +548,11 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
       () => undefined,
     );
     const prompt = await Promise.race([found, timedOut]);
-    return prompt !== undefined && prompt.authUrl !== undefined ? prompt : undefined;
+    // **总是把累计输出带出去**：调用方在「没解析到网址」时要把它当作诊断信息交给用户，
+    // 否则真实的错误（命令崩了 / 输出格式变了 / 什么都不打印）会被一句「超时」吞掉。
+    return prompt !== undefined && prompt.authUrl !== undefined
+      ? { prompt, output: text }
+      : { output: text };
   }
 
   /**

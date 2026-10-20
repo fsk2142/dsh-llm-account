@@ -41,6 +41,13 @@ export interface LoginView {
   /** 等待的过期时刻（epoch 毫秒）。 */
   expiresAt?: number;
   reason?: string;
+  /**
+   * 失败时的外部命令诊断原文（`vela` 的输出片段）。
+   *
+   * 界面把它显示在失败原因**下面**：`reason` 只有一句稳定文案（「等待授权超时」），
+   * 而这句才能区分「命令没启动」「启动后崩了」「没有任何输出」这几种完全不同的病因。
+   */
+  detail?: string;
 }
 
 /** 卡片属性：全部数据与回调，卡片自己不持有任何状态。 */
@@ -746,6 +753,17 @@ function loginSection(props: AccountCardProps): ReactNode[] {
     detail.push(
       createElement("p", { key: "reason", "data-login-reason": login.reason ?? "error", className: CSS_CLASS.failure }, reasonText(t, login.reason)),
     );
+    // 诊断原文：一句「等待授权超时」背后有四种病因，只有 vela 的真实输出能区分它们。
+    // 界面上**照原样显示**（不再加包装文案）：这句话本身就是给用户/开发者看的线索。
+    if (login.detail !== undefined && login.detail !== "") {
+      detail.push(
+        createElement(
+          "pre",
+          { key: "detail", "data-login-detail": login.detail, className: CSS_CLASS.diagnostic },
+          login.detail,
+        ),
+      );
+    }
     // 缺环境是**唯一**一种用户自己就能修好的失败：给出可执行的安装步骤，而不是一句
     // 「请先安装」（用户 2026-10-20：「用户缺少环境的时候给出提示，如何快速安装环境」）。
     const guide = velaInstallGuide(t, login.reason, props.onLoginBegin === undefined ? undefined : () => props.onLoginBegin());

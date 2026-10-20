@@ -402,6 +402,18 @@ function loginNotes(props: AccountsPanelProps, vendor: string): ReactNode[] {
         reasonText(props.t, login.reason),
       ),
     );
+    // 诊断原文（`vela` 的实际输出）：只有它能区分「命令没启动 / 崩了 / 没有任何输出」。
+    // 挂在**这里**（`loginNotes`）而不是 `AccountCard` 的 `loginSection` —— 账户面板走的是
+    // `accountRows` + 本函数这条路，`AccountCard` 整组件不参与渲染（本轮实测踩过一次）。
+    if (login.detail !== undefined && login.detail !== "") {
+      notes.push(
+        createElement(
+          "pre",
+          { key: `${vendor}-login-detail`, "data-login-detail": login.detail, className: CSS_CLASS.diagnostic },
+          login.detail,
+        ),
+      );
+    }
     // 缺 vela 是**唯一**一种用户能自己修好的登录失败：给出可执行的安装步骤。
     //
     // 必须挂在这里（`loginNotes`）而不是 `AccountCard` 的 `loginSection`：账户面板走的是

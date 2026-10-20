@@ -151,6 +151,33 @@ it("有界窗口内没解析出授权提示：failed/timeout（vela 起不来或
   expect(await login.begin()).toMatchObject({ state: "failed", reason: "timeout" });
 });
 
+it("**超时时必须带上 vela 的输出原文**（2026-10-20：否则用户只看到一句「等待授权超时」）", async () => {
+  // 场景一：vela 什么都没打印。这条信息本身就能区分「命令没启动」与「格式变了」。
+  const silent = createOpenDesignLogin(loginDeps({ spawn: () => fakeChild() }));
+  const silentStatus = await silent.begin();
+  expect(silentStatus).toMatchObject({ state: "failed", reason: "timeout" });
+  expect(silentStatus.detail, "无输出也要给出说明").toContain("没有任何输出");
+
+  // 场景二：vela 打印了别的东西（例如报错）。原文必须出现在 detail 里。
+  const noisy = createOpenDesignLogin(
+    loginDeps({
+      spawn: () => fakeChild({ prompt: "error: cannot reach licensing server\n" }),
+    }),
+  );
+  const noisyStatus = await noisy.begin();
+  expect(noisyStatus).toMatchObject({ state: "failed", reason: "timeout" });
+  expect(noisyStatus.detail, "vela 的真实报错必须透出到界面").toContain("cannot reach licensing server");
+});
+
+it("诊断原文里不会带出密钥形状的片段（它会被贴进聊天窗口）", async () => {
+  const login = createOpenDesignLogin(
+    loginDeps({ spawn: () => fakeChild({ prompt: "auth failed for sk-livekey1234567890\n" }) }),
+  );
+  const status = await login.begin();
+  expect(status.detail).toBeDefined();
+  expect(status.detail).not.toContain("sk-livekey1234567890");
+});
+
 it("用户在浏览器里没批准（vela 正常退出却没留下产物）：failed/no-signin", async () => {
   const child = fakeChild({ prompt: VELA_PROMPT });
   const login = createOpenDesignLogin(
