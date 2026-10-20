@@ -1,42 +1,89 @@
 # 交接：dsh-llm-account 多账号额度插件
 
-**交接时间**：2026-10-20 00:0x（Asia/Shanghai）
-**仓库**：`D:\work\llm-acct-repo`（branch `main`，已推到 `origin/main` = `15f7d1a`）
-**工作树**：干净，只有一个未跟踪的临时脚本 `scripts/probe-lastused.mts`（可删，是调试残留）
+**交接时间**：2026-10-20 07:5x（Asia/Shanghai）
+**仓库**：`D:\work\llm-acct-repo`（branch `main`）
+**工作树**：干净（临时脚本已清）
 
 ---
 
-## 0. 先读这一段（当前未解决的事）
+## 0. 本轮已解决：「模型名称又不一致了」
 
-交接时用户报了**两个现象，都还没修**：
+### 根因（已用线上数据验证，不是推测）
 
-1. **「模型不可用了」**
-2. **「模型名称又不一致了」**
+同一个模型在三家网关的 id 与 name 写法都不同，而**只有 Open Design 走了名称规则**：
 
-### 已核实的证据（别重复查）
+| 网关 | 目录里的 id | 目录给的 name | 以前界面显示 |
+| --- | --- | --- | --- |
+| commandcode | `deepseek/deepseek-v4.1-flash` | `DeepSeek V4.1 Flash (CC)` | 照搬 → 带 `(CC)` |
+| opencode | `deepseek-v4.1-flash` | models.dev 的 `DeepSeek V4.1 Flash` | 照搬 → 空格写法 |
+| opendesign | `deepseek-v4.1-flash` | 无 | 规则生成 → `DeepSeek-V4.1-Flash` |
 
-- 台账 `C:\Users\me\.dsh\llm-account\usage\usage-2026-10-20.jsonl` 里，opendesign 的请求
-  **全部成功**（最近 5 条 `opendesign/deepseek-v4.1-flash` 都是 `success`）。
-- 同一台账里**没有** `deepseek-account`（官方直连）的任何记录。
-- 但会话的系统提示两次显示模型切换：
-  `→ deepseek-account/deepseek-flash`，随后又 `→ opendesign/deepseek-v4.1-flash`。
-- 桌面 profile 的 `agent-default-model` 是：
-  `provider: opendesign` / `model: deepseek-v4.1-flash` / `reasoningEffort: max`。
+同一个模型，宿主的模型选择器里有**三种写法**。此外还有两条同源路径：
 
-### 我的判断（**未验证，不要当成结论**）
+1. **目录读不到时 `resolveModel` 退回原始 slug**（`name: entry?.name ?? model`）——
+   而目录读不到是常态（网络抖动 / 密钥未配 / 5xx）。
+2. **归一后撞名**：`Qwen/Qwen3.8-Max` 与 `Qwen/Qwen3.8-Max-0902` 都变成 `Qwen3.8-Max`，
+   界面上两个一模一样、选哪个都不知道。
 
-台账记的是「走到 `stream` 的请求」，而会话提示记的是「宿主路由到哪个 provider」。
-两者不一致说明：**可能在请求进入本插件 adapter 之前就被宿主路由到官方 provider 了**，
-所以本插件既没发请求、也没记台账、更没机会拦截。
+### 修法（`src/core/model-names.ts` 单一规则）
 
-要验证这件事，下一步该查宿主侧：
-- 宿主为什么把请求路由到 `deepseek-account`（可能是模型选择回落到默认模型、
-  或 `deepseek/deepseek-v4.1-flash` 这个 id 被宿主认成了官方模型）；
-- 本插件的 `visibleModels` / `modelVisibility` 与宿主的模型列表是否对得上
-  （commandcode 配的是 `deepseek/deepseek-v4.1-flash`，opendesign 配的是
-  `deepseek-v4.1-flash`，**两个 id 写法不同**——这就是「名称不一致」的来源）。
+- **展示名一律由 id 派生**，与是哪个网关无关；厂商的 `name` 只用来判断这一行是否有效，
+  不再进界面（`commandcode/catalog.ts`、`opencode/catalog.ts` 都改了）。
+- opencode 的**合并步**也要重新派生：`createOpencodeCatalog` 的 `load()` 以前用 models.dev
+  的 `name` 把清单层刚统一好的名字盖了回去。元数据仍提供上下文/上限/档位/模态/协议。
+- `resolveModel` 的三处回退改成 `officialModelName(model)`，目录拉不到也同名。
+- **大小写不参与语义**：`meituan/LongCat-2.0` 与 `longcat-2.0` 必须同名（实测两家写出
+  `LongCat` / `Longcat` 两种）。
+- **`assignUniqueNames`**：同目录内撞名时借被规则吃掉的差异区分（`Qwen3.8-Max (0902)`、
+  `Ling-3.1-Flash (free)`），且**短名归没带快照后缀的那个 id** —— 否则 `Qwen3.8-Max`
+  会被它的日期变体挤成 `Qwen3.8-Max (2)`，跟别家又对不上。
+- 机器可读的 `:free` 限定不再印进名字（以前显示 `Ling-3.1-Flash:free`）。
 
-> ⚠️ 我上一轮刚因为「没验证就改」踩过坑（见 §4 的 `reportOf` 事故）。这次请**先拿证据再动手**。
+**验收**：三份真实目录（commandcode 85 / opencode 33 / opendesign 12）里 28 个跨网关同名
+模型**零不一致**；实测 `DeepSeek-V4.1-Flash`、`LongCat-2.0` 三家写法相同。
+
+测试：`tests/core/model-names-unified.test.ts`（11）、
+`tests/vendors/opencode-catalog-merge.test.ts`（3）、
+`tests/vendors/resolve-model-name.test.ts`（4）。
+
+---
+
+## 0.1 仍未解决：「模型不可用了」
+
+这条**不是名称问题**，本轮没动它。已核实的证据：
+
+- 台账里 opendesign 的请求**全部成功**；同一台账**没有** `deepseek-account` 的记录。
+- 会话的 `model/selection` 记录了两次**宿主侧**切到 `deepseek-account/deepseek-flash`：
+  `2026-10-19T15:42:48Z` 与 `2026-10-19T16:00:38Z`（后者紧接着切回 opendesign）。
+- 那两次之后紧跟的 `assistant/attempt` 都报
+  `CONTEXT_WINDOW_EXCEEDED`：`requested 1417839 tokens … 256000 in the completion`。
+
+**新线索**：报错里的 `maxTokens` 是 **256000**（宿主对 `deepseek-flash` 的默认输出预算），
+而会话上下文当时已经 110 万+ token。也就是说「模型不可用」的直接原因是**上下文 + 输出预算
+超过 1M 窗口**，与本插件无关（本插件的 adapter 根本没被调用）。要接着查宿主侧：
+
+- 为什么宿主把 `provider` 切到 `deepseek-account`（用户手动切？还是模型列表刷新后回落？）；
+- `maxTokens: 256000` 是谁给的（`adapterDefaults.maxTokens: true` 说明是适配器默认值）。
+
+---
+
+## 0.2 本轮顺带做的代码整理（用户批准 A + B）
+
+- **A：17 个全仓库零引用的导出符号已删**（`remainingOf`、`emptyReport`、`usageDirectoryOf`、
+  `ensureUsageDirectory`、`resetSharedUsageLedger`、`unregisterCatalogSource`、
+  `primeModelCandidates`、`AccountScopedFailureKind`、`OpencodeLoginReason`、
+  `OpenDesignLoginReason`、`SettingsIcon`、`BackIcon`、`VendorAdapter` + 只被它引用的
+  `CatalogPort` / `TransportPort`、`periodRemainingText` + 随之变死的 `emptyBucket`、
+  `usage.remaining` 文案键）。
+- **B：两张早已断线的卡片删除**：`models-card.ts`、`all-models-card.ts` 及其测试，
+  连带 `ConnectedPageOptions.renderVendorCards` 扩展点（`index.ts` 从来没传过它）、
+  `VendorCardsContext`、`modelCardContext`、`modelWriteModeOf`、`PageShellProps.catalogs`
+  （传了但从不读）、`vendorCardKinds`、模型编辑管线（`ModelEdit` / `applyModelEdit` /
+  `modelEditTarget` / `ModelEditPatch`）。`ModelsWriteMode` 类型搬到 `core/adapter.ts`。
+- 净删 **1863 行**，新增 197 行。`lib/client.js` 里已不含 `data-model-filter`
+  等标记（确认死代码没进产物）。
+
+**基线**：`typecheck` 干净、`893 passed (67 files)`、`build` 通过。
 
 ---
 
@@ -65,11 +112,11 @@ Set-Location D:\work\llm-acct-repo
 
 & $node $pnpm run typecheck      # tsc --noEmit
 & $node $pnpm vitest run tests/xxx.test.ts   # 单文件
-& $node $pnpm test               # 全量（66 文件 / 897 用例）
+& $node $pnpm test               # 全量（67 文件 / 893 用例）
 & $node $pnpm run build          # 必须跑，lib/ 是 gitignore 的，用户看不到未构建的改动
 ```
 
-**基线状态（交接时实测）**：`typecheck` 干净，`897 passed (66 files)`，`build` 通过。
+**基线状态（2026-10-20 实测）**：`typecheck` 干净，`893 passed (67 files)`，`build` 通过。
 
 ### PowerShell 坑（我踩了很多次，请避开）
 
@@ -175,7 +222,8 @@ Set-Location D:\work\llm-acct-repo
 1. **按模型用量统计** —— 台账有 `model` 字段。
    ⚠️ **必须先归一化 id**（复用 `modelKeyOf`）：实测同一模型存在两种写法
    （`deepseek-v4.1-flash` 1523 条 / `deepseek/deepseek-v4.1-flash` 1 条），
-   按原始 id 分组会把同一模型劈成两行。
+   按原始 id 分组会把同一模型劈成两行。要显示名字就用 `officialModelName`（与模型选择器
+   同一份规则，别另写一套，否则又是「名称不一致」）。
 2. **失败明细** —— 台账有 `failureKind`（实测出现过 `network`）。
 3. **台账导出**（CSV/JSON）—— 纯读，零风险。
 4. **错误诊断一键复制** —— 用户报障时最省事。
@@ -211,11 +259,12 @@ Set-Location D:\work\llm-acct-repo
 
 ## 9. 接手后的第一步建议
 
-**不要急着改代码。** 先把 §0 那两个现象的证据补齐：
+「模型名称不一致」已经修完（§0）。**剩下的只有「模型不可用了」，而且它大概率不在本仓库。**
 
-1. 让用户描述「模型不可用」的具体表现（哪一个模型、在哪选、报什么）；
-2. 查宿主为什么路由到 `deepseek-account`（本插件管不到那段）；
-3. 对比 `deepseek/deepseek-v4.1-flash`（commandcode 配置）与 `deepseek-v4.1-flash`
-   （opendesign 配置）这两个 id，确认「名称不一致」是否就是这两者混用导致。
+1. 先看 §0.1 的新线索：那两次失败都是 `CONTEXT_WINDOW_EXCEEDED`（110 万 token 的会话 +
+   256000 的输出预算 > 1M 窗口），而且**没走到本插件的 adapter**（台账没有记录）。
+2. 要复现就查宿主侧：谁把 `provider` 切到 `deepseek-account`、`maxTokens: 256000` 从哪来。
+3. 如果用户再报「不可用」，先确认是**报错**还是**这个模型选不到** —— 后者才可能是本插件的
+   `visibleModels` / `modelVisibility` 问题（名称已经不是问题了）。
 
-拿到证据再动手。**先写失败测试，再改**（`tests/` 下已有 66 个文件可参考写法）。
+改代码前**先写失败测试**（`tests/` 下已有 67 个文件可参考写法）。
