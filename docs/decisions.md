@@ -1,4 +1,13 @@
-# SDD ledger — plan: D:\work\llm-acct-repo\docs\superpowers\plans\2026-10-13-dsh-llm-account-phase1-host.md
+# 设计裁决记录（Ruling 1–46）
+
+施工期做出的 **46 条裁决**及其理由。代码与测试里有 **30 处**注释直接引用这里的编号
+（`Ruling 22` 一处就被引用 15 次）—— 这不是历史存档，是那些取舍的唯一书面依据。
+
+**新增裁决请继续编号追加，不要改写既有编号。**
+
+---
+
+## 第一期施工 ledger（2026-10-13）
 
 > **2026-10-20 注（文档清理时复核）**：本 ledger 引用的 1a 期计划与 `2026-10-13-host-smoke.md`
 > 已在清理时删除（描述的是已完成、且被后续多轮重构取代的阶段）。
@@ -251,4 +260,5 @@ Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-pha
 - **Ruling 13（流程，2026-10-13）**：**实现者运行期间不要提交控制器的文档改动**，否则任务的 diff 范围会被夹进无关提交（Task 7 已发生一次，靠 `-- <paths>` 限定范围解决）。**若判断错误**：无实质代价，只是复核包要多一步范围限定。
 - **Ruling 24（Task 9 fix round 3 范围，2026-10-13）**：不接受把两条 Minor 留给收尾，追加第 3 轮修复：**A** 空/截断响应不得伪装成正常收尾（旧插件抛可重试的 `EMPTY_RESPONSE`/`STREAM_CLOSED`，且我们自己的重试白名单里就有 `EMPTY_RESPONSE`）；**B** Messages 的 `tool_use` 块在 EOF 时未排空，导致补发的 finish 被宿主以 `invariant.js:53` 拒绝。依据：设计 §10「可重试错误交由宿主重试策略」+「明确错误而非静默成功」。**若判断错误**：用掉第 3 轮（上限 5），diff 仍在同一终止逻辑内。
 - **Ruling 35（Task 11 fix round 1 范围，2026-10-13）**：接受复核对 login 代际隔离缺陷的判定与修法 —— handler 绑定自己的 `attempt` 与 `server`，settle/close 前要求 `this.#server === server && this.#ownsAttempt(attempt)`，并补一条「重新 begin 后向旧端口投递回调」的回归测试。依据：这是**凭据写入路径**（被取代的旧连接可能把密钥写进 state 不匹配的新尝试、并关掉正在用的监听器），属于必须修而非可延期。**若判断错误**：修复 diff 很小、仅限 `login.ts` 的 handler 闭包。
+
 

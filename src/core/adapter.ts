@@ -8,7 +8,7 @@ import type { ModelModality } from "@deepseek-ai/dsh-llm";
 
 /**
  * 本包托管的三条 provider 路由 id（`commandcode` 与 `dsh-opencode-go` 是全局约束、
- * 不得更改；`opendesign` 是 2026-10-18 新增的第三家，见 `docs/superpowers/notes/2026-10-18-opendesign-plan.md`）。
+ * 不得更改；`opendesign` 是 2026-10-18 新增的第三家，见 `docs/vendors.md`）。
  */
 export type VendorId = "commandcode" | "dsh-opencode-go" | "opendesign";
 

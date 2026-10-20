@@ -2,7 +2,7 @@
 /**
  * Clear stale DSH Desktop local-host authentication cookies.
  *
- * Background (see docs/superpowers/notes/2026-10-19-desktop-welcome-crash-cookies.md):
+ * Background (see docs/operations.md):
  * every Desktop launch mints a cookie named `dsh-auth-<sha256(authority)>` where
  * authority is `127.0.0.1:<random port>`. Cookies persist for 30 days and the
  * port changes on every launch, so the Chromium cookie jar accumulates one row

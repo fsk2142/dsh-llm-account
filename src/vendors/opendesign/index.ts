@@ -1,7 +1,7 @@
 /**
  * Open Design 入口：一行装配（施工单 §2.8，逐句对照 `opencode/index.ts` 的顺序）。
  *
- * 厂商事实与命名见 `docs/superpowers/notes/2026-10-18-opendesign-plan.md`：推理走
+ * 厂商事实与命名见 `docs/vendors.md`：推理走
  * `amr-link.open-design.ai`（OpenAI Chat Completions，runtime key），额度/账单走
  * `amr-api.open-design.ai`（control key），周期额度（Coding Plan）走本机 `vela`。
  *

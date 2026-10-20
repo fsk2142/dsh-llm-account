@@ -2,7 +2,7 @@
  * `cordis.patch.yml` is this package's only attachment point to the host
  * Loader, and its row names are constrained by the host's `client-modules`
  * scan (measured 2026-10-17 on desktop 0.2.1-rc.1 — see
- * `docs/superpowers/notes/2026-10-17-client-boot-graph.md`):
+ * `docs/client.md`):
  *
  * - A **subpath** row name (`dsh-llm-account/opencode`) mounts on the host but
  *   never becomes a client source: the scan's `exactPackageSpecifier` returns

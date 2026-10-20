@@ -6,7 +6,7 @@
  * profile row, so `apply` may run twice against the same module instance. These
  * tests drive that shape with a fake client context (no browser, no host): the
  * seams are the call shapes recorded in
- * `docs/superpowers/notes/2026-10-13-host-seam-assumptions.md` §3 and mirrored
+ * `docs/operations.md` §3 and mirrored
  * from the legacy bundles (file:line cited in `src/client/shell.ts`).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

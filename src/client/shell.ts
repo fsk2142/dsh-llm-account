@@ -53,7 +53,7 @@ export const PAGE_ORDER = 12;
  * - opendesign declares `showSidebarQuota` / `quotaRefreshMinutes` / `workspaceId`
  *   (integrations) and `baseURL` / `walletBase` / `requestTimeoutMs` /
  *   `streamIdleTimeoutMs` (advanced) — 2026-10-18 第三家，施工单
- *   `docs/superpowers/notes/2026-10-18-opendesign-plan.md` §3.3。
+ *   `docs/vendors.md` §3.3。
  *
  * **No privacy group for either vendor** (Ruling 23): plan 1a deliberately left
  * `zdr` and `webSearch` out of the commandcode Config schema (see that entry's
@@ -424,7 +424,7 @@ let sharedSurfacesRegisteredFor = new WeakSet<object>();
 
 /**
  * How many times the host called `apply` (assumption ② in
- * `docs/superpowers/notes/2026-10-13-host-seam-assumptions.md`). Read it from
+ * `docs/operations.md`). Read it from
  * the browser console (`dsh-llm-account`), or assert it here.
  * @returns the current count.
  */
