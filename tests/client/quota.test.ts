@@ -145,6 +145,24 @@ it("重置时间：有值才写，resetAt 为 0 不显示 1970", () => {
   expect(quotaResetText(t, { key: "w", resetAt: base.getTime() + 86400_000 * 3 })).toContain("重置");
 });
 
+it("**估算的重置时间带「约」**（2026-10-20：估算值不能看起来像厂商数据）", () => {
+  const base = new Date();
+  const today = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 30, 0).getTime();
+  // 真实值：不带前缀。
+  const real = quotaResetText(t, { key: "w", resetAt: today })!;
+  expect(real.startsWith("约")).toBe(false);
+  // 估算值：带前缀（三条返回路径都要带 —— 今天 / 明天 / 更远）。
+  const estimatedToday = quotaResetText(t, { key: "w", resetAt: today, resetEstimated: true })!;
+  expect(estimatedToday.startsWith("约")).toBe(true);
+  const tomorrow = new Date(base.getFullYear(), base.getMonth(), base.getDate() + 1, 10, 0, 0).getTime();
+  expect(quotaResetText(t, { key: "w", resetAt: tomorrow, resetEstimated: true })!.startsWith("约")).toBe(true);
+  const far = base.getTime() + 86400_000 * 5;
+  expect(quotaResetText(t, { key: "w", resetAt: far, resetEstimated: true })!.startsWith("约")).toBe(true);
+  // 而且正文内容与非估算版一致（只多一个前缀，不是换了说法）。
+  // 用 `endsWith` 而不是 `slice`：前缀是「约 」（两个字符：汉字 + 空格）。
+  expect(estimatedToday.endsWith(real)).toBe(true);
+});
+
 it("进度条：单位是 0–100 的已用百分比，用得越多档位越糟，缺失与除零不画条", () => {
   // 单位是 0–100：20% 就是 20% 宽、判健康（不是「按 0–1 判阈值」也不是「永远满格」）。
   expect(quotaMeter({ key: "w", percent: 20 })).toEqual({ percent: 20, level: "ok" });

@@ -183,6 +183,10 @@ export function fallbackQuotaWindows(vendor: string): QuotaWindow[] {
 
 /**
  * 额度窗口的重置时间文案（本地时间；今天/明天用相对日）。
+ *
+ * **估算值要带「约」**（2026-10-20）：5 小时/周的重置时间是按「`used` 首次变正 + 窗口长度」
+ * 推算的，不是厂商给的。四条返回路径都必须带上这个前缀 —— 只在其中一条加会让同一个时刻
+ * 在不同界面上看起来可信度不同。
  * @param t - 取词函数。
  * @param window - 额度窗口。
  * @returns 文案；没有 resetAt 时为 `undefined`。
@@ -194,17 +198,18 @@ export function quotaResetText(t: (key: string) => string, window: QuotaWindow):
   if (Number.isNaN(date.getTime())) return undefined;
   const now = new Date();
   const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const approximate = window.resetEstimated === true ? t("quota.estimatedPrefix") : "";
   const sameDay =
     date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  if (sameDay) return t("quota.resetToday").replace("{time}", time);
+  if (sameDay) return approximate + t("quota.resetToday").replace("{time}", time);
   const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   const isTomorrow =
     date.getFullYear() === tomorrow.getFullYear() &&
     date.getMonth() === tomorrow.getMonth() &&
     date.getDate() === tomorrow.getDate();
-  if (isTomorrow) return t("quota.resetTomorrow").replace("{time}", time);
+  if (isTomorrow) return approximate + t("quota.resetTomorrow").replace("{time}", time);
   const day = date.toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
-  return t("quota.resetAtLong").replace("{date}", day).replace("{time}", time);
+  return approximate + t("quota.resetAtLong").replace("{date}", day).replace("{time}", time);
 }
 
 /**
@@ -303,7 +308,11 @@ export function quotaWindowDetail(t: (key: string) => string, window: QuotaWindo
   if (window.percent !== undefined) {
     parts.push(t("quota.usedPercent").replace("{percent}", formatNumber(window.percent)));
   }
-  if (window.resetAt !== undefined) parts.push(`${t("quota.resetAt")} ${new Date(window.resetAt).toLocaleString()}`);
+  // 估算值带「约」：这一行是纯文本摘要，没有别的地方能标注它是推算的。
+  const approximate = window.resetEstimated === true ? t("quota.estimatedPrefix") : "";
+  if (window.resetAt !== undefined) {
+    parts.push(`${approximate}${t("quota.resetAt")} ${new Date(window.resetAt).toLocaleString()}`);
+  }
   return parts.length === 0 ? "-" : parts.join(" · ");
 }
 

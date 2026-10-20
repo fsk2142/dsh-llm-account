@@ -224,6 +224,12 @@ export type CopyKey =
   | "usage.kind.week"
   | "usage.kind.month"
   | "quota.resetAt"
+  /**
+   * 估算值的「约」前缀（2026-10-20）：5 小时/周的重置时间由「`used` 首次变正 + 窗口长度」
+   * 推算，不是厂商公布的。**必须与真实值可区分** —— 否则用户会拿一个可能差几十分钟的
+   * 推算时刻去安排事情。
+   */
+  | "quota.estimatedPrefix"
   | "quota.window.fiveHour"
   | "quota.window.rolling"
   | "quota.window.daily"
@@ -534,6 +540,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.resetTomorrow": "明天 {time} 重置",
     "quota.resetAtLong": "{date} {time} 重置",
     "quota.resetUnknown": "重置时间未提供",
+    "quota.estimatedPrefix": "约 ",
     "quota.resetAt": "重置于",
     "quota.window.fiveHour": "5 小时",
     "quota.window.rolling": "滚动窗口",
@@ -867,6 +874,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "quota.resetTomorrow": "Resets tomorrow at {time}",
     "quota.resetAtLong": "Resets {date} {time}",
     "quota.resetUnknown": "Reset time not provided",
+    "quota.estimatedPrefix": "approx. ",
     "quota.resetAt": "Resets at",
     "quota.window.fiveHour": "5 hours",
     "quota.window.rolling": "Rolling window",
