@@ -1,8 +1,13 @@
 # SDD ledger — plan: D:\work\llm-acct-repo\docs\superpowers\plans\2026-10-13-dsh-llm-account-phase1-host.md
 
-> **2026-10-20 注**：本 ledger 引用的 1a 期计划与 `2026-10-13-host-smoke.md` 已在文档清理时删除
-> （描述的是已完成、且被后续多轮重构取代的阶段）。本文件保留是因为它记录了 **46 条裁决**
-> （Ruling 1–46）—— 那些判断理由至今仍是理解设计取舍的依据。需要被删文档的原文时从 git 历史取回。
+> **2026-10-20 注（文档清理时复核）**：本 ledger 引用的 1a 期计划与 `2026-10-13-host-smoke.md`
+> 已在清理时删除（描述的是已完成、且被后续多轮重构取代的阶段）。
+>
+> **本文件为什么不能删**：`src/` 与 `tests/` 里有 **30 处**注释直接引用这里的编号裁决
+> （`Ruling 1` / `2` / `16` / `19` / `22` / `23` / `34`，其中 `Ruling 22` 被引用 15 次）——
+> 那不是装饰，是那些代码取舍的**唯一书面依据**（例如 Ruling 22 解释了为什么测试用 React
+> 替身、为什么组件必须是无 Hook 的纯函数）。删掉本文件会让这 30 处引用变成悬空指路。
+> 需要被删文档的原文时从 git 历史取回。
 
 Spec: docs/superpowers/specs/2026-10-13-dsh-llm-account-design.md（已读，是绑定权威；计划与它有冲突时按 spec 裁决）
 Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-phase1-host\

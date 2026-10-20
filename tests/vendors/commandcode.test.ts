@@ -126,6 +126,33 @@ it("429 显式 reset 超出 30 天视野时丢弃 resetAt（裁决：两条路�
   expect(result?.resetAt).toBeUndefined();
 });
 
+it("**429 的 reset 落在过去 → 丢弃 resetAt**（否则冷却被静默绕过，2026-10-20 复审）", () => {
+  // 只查上界的旧实现会让「过去的时刻」通过校验。而 RotationEngine 看到
+  // `now >= expiresAt` 会当场删掉拒绝记录 —— 等于这次限流完全没有冷却、账号立刻被重试。
+  const now = Date.UTC(2026, 0, 1);
+  const pastSeconds = Math.floor((now - 60 * 60 * 1000) / 1000); // 一小时前
+  const result = classifyCommandCodeFailure(
+    429,
+    { error: { rateLimit: { window: "fiveHour", reset: pastSeconds } } },
+    now,
+  );
+  // 分类不变（仍是限流），但**不能**带一个过去的重置时刻。
+  expect(result?.kind).toBe("rate-limit");
+  expect(result?.resetAt).toBeUndefined();
+});
+
+it("429 文案里的 ISO 时间戳落在过去 → 同样丢弃 resetAt", () => {
+  const now = Date.UTC(2026, 0, 1);
+  const pastStamp = new Date(now - 60 * 60 * 1000).toISOString();
+  const result = classifyCommandCodeFailure(
+    429,
+    { error: { message: `usage limit for your plan exhausted; resets at ${pastStamp}` } },
+    now,
+  );
+  expect(result?.kind).toBe("rate-limit");
+  expect(result?.resetAt).toBeUndefined();
+});
+
 it("429 文案 ISO 时间戳超出 30 天视野时丢弃 resetAt（同一条视野）", () => {
   const now = Date.UTC(2026, 0, 1);
   const farStamp = new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString();

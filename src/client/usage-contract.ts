@@ -330,7 +330,16 @@ export function parseVendorId(value: unknown): string {
 }
 
 /**
- * 校验状态结果：只查结构（数据由宿主产生，深校验没有额外价值）。
+ * 校验状态结果：结构 + **逐项洗 `quota`**。
+ *
+ * 为什么不能只查顶层（2026-10-20 复审发现）：页面用 `quota?.windows?.length` 判「有没有
+ * 额度数据」—— 字符串也有 `length`，所以 `windows: "oops"` 会通过那个假值检查，紧接着
+ * `.map` 抛错。虽然三处卡片都有 `RenderBoundary` 兜底（不会白屏），但那块面板会降级成
+ * 「面板失败 + 重试」—— 一个坏字段换掉整个面板。
+ *
+ * 与 `parseCatalogModels` 同一条纪律：**边界上逐项清洗**，让下游可以信任形状。
+ * `windows` / `failures` 不是数组时直接归空数组（而不是丢掉整行）：账号本身还有
+ * `label` / `configured` 这些有用信息。
  * @param endpoint - 调用方端点名（错误消息要指名是哪条调用）。
  * @param value - 边界值。
  */
@@ -338,7 +347,16 @@ function parseVendorUsageStatus(endpoint: string, value: unknown): VendorUsageSt
   if (!isRecord(value) || !Array.isArray(value.accounts)) {
     throw boundaryError(endpoint, "expected an object with an accounts array");
   }
-  return value as unknown as VendorUsageStatus;
+  const accounts = value.accounts.map((account) => {
+    if (!isRecord(account)) return account;
+    const quota = account.quota;
+    // `quota` 本身不是对象 → 整个丢掉（界面按「没有额度读数」处理，与缺失同义）。
+    if (!isRecord(quota)) return quota === null || quota === undefined ? account : { ...account, quota: undefined };
+    const windows = Array.isArray(quota.windows) ? quota.windows : [];
+    const failures = Array.isArray(quota.failures) ? quota.failures : [];
+    return { ...account, quota: { ...quota, windows, failures } };
+  });
+  return { ...value, accounts } as unknown as VendorUsageStatus;
 }
 
 /** 校验账号行数组。 */

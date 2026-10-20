@@ -215,6 +215,11 @@ export async function discoverVendors(ctx: ClientSeamContext, entries: readonly 
   }
   const snapshots: VendorSnapshot[] = [];
   for (const row of rows) {
+    // **形状不可信**（2026-10-20 复审发现）：宿主的 `describe()` 数组里混进一个 `null`
+    // 或非对象时，直接读 `row.ns` 会抛 TypeError；而下面某些调用点没有 `.catch` ——
+    // 一个坏元素就能让设置页永远拿不到快照（症状：面板空白且没有任何提示）。
+    // 与 `completeReading` / `parseCredentialStatus` 同一条纪律：先验形状，再读字段。
+    if (typeof row !== "object" || row === null) continue;
     const rowName = [row.ns, row.id].find((candidate): candidate is string => typeof candidate === "string");
     if (rowName === undefined) continue;
     const entry = byRow.get(rowName);
@@ -224,7 +229,11 @@ export async function discoverVendors(ctx: ClientSeamContext, entries: readonly 
   }
   if (snapshots.length === 0) {
     const seen = rows
-      .map((row) => [row.ns, row.id].find((candidate): candidate is string => typeof candidate === "string"))
+      .map((row) =>
+        typeof row === "object" && row !== null
+          ? [row.ns, row.id].find((candidate): candidate is string => typeof candidate === "string")
+          : undefined,
+      )
       .filter((name): name is string => name !== undefined);
     const wanted = entries.flatMap((entry) => [entry.ns, ...entry.rowIds]);
     return {

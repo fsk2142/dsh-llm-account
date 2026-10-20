@@ -161,8 +161,13 @@ function readWindowLimitEvidence(parsed: ProviderError, now: number, rawText: st
         : undefined;
 
   // 统一的 30 天视野：超出视野的候选重置时刻一律丢弃（见 MAX_RESET_AHEAD_MS）。
+  //
+  // **下界同样必须查**（2026-10-20 复审发现）：厂商若回一个**过去**的时刻，只查上界会让它
+  // 通过校验、进入 `Rejection.resetAt`；而 `RotationEngine` 看到 `now >= expiresAt` 会当场
+  // 删掉拒绝记录 —— 等于这次限流**完全没有冷却**，账号立刻被重试。过去的时刻不是「证据」，
+  // 是坏数据：丢掉它，让调用方退回短冷却。
   const horizon = now + MAX_RESET_AHEAD_MS;
-  const withinHorizon = (value: number): boolean => Number.isFinite(value) && value <= horizon;
+  const withinHorizon = (value: number): boolean => Number.isFinite(value) && value > now && value <= horizon;
 
   // 优先采信供应商显式公布的秒数（单位是秒，×1000 转 epoch 毫秒）。
   const published = seconds !== undefined && seconds > 0 ? Math.round(seconds * 1000) : undefined;

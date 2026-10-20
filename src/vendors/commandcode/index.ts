@@ -24,7 +24,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Context } from "@deepseek-ai/cordis";
-import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
+import type { AdapterRegistrationHandle, LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
 import type { AccountPort, AccountState, AccountView, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
@@ -111,6 +111,14 @@ export const Config: PluginConfigSchema = z.object(
       apiBase: z.string(),
       workingDir: z.string(),
       protocol: z.union(["openai", "messages", "cli"]),
+      /**
+       * 是否注册这条 provider 路由。
+       *
+       * **三行对称**（2026-10-20 复审发现）：opencode 与 opendesign 早就有这个字段并据此
+       * 决定是否 `registerAdapter`，唯独 commandcode 没有 —— 于是用户手改 profile 把它配成
+       * `enabled: false` **不会生效**（另外两家会）。字段缺省读作启用；只有显式 `false` 才撤下。
+       */
+      enabled: z.boolean().default(true),
       requestTimeoutMs: z.number(),
       streamIdleTimeoutMs: z.number(),
       defaultMaxTokens: z.number(),
@@ -344,8 +352,31 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     "dsh-llm-account: commandcode login port",
   );
 
-  const registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
-  ctx.effect(() => () => registration(), "dsh-llm-account: commandcode provider route");
+  /**
+   * 当前这条路由注册的句柄；`enabled: false` 时是 `undefined`（行仍然挂载）。
+   *
+   * 三行对称（2026-10-20 复审）：opencode / opendesign 早就是这个形状，commandcode 原先
+   * **无条件注册** —— 用户把它配成 `enabled: false` 不会生效。用「释放 + 重新注册」而不是
+   * `handle.replace([])`：与另两行同一形状，也让撤下与 `ctx.effect` 的释放路径共用句柄。
+   */
+  let registration: AdapterRegistrationHandle | undefined;
+  /** 按**现读**的 `enabled` 校准路由：缺省（含非布尔值）读作启用，只有显式的 `false` 撤下。 */
+  const applyRoute = (): void => {
+    const enabled = document().enabled !== false;
+    if (enabled && registration === undefined) {
+      registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
+    } else if (!enabled && registration !== undefined) {
+      registration();
+      registration = undefined;
+    }
+  };
+  applyRoute();
+  ctx.effect(() => () => {
+    if (registration !== undefined) {
+      registration();
+      registration = undefined;
+    }
+  }, "dsh-llm-account: commandcode provider route");
 
   // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
   // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。

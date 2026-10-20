@@ -205,6 +205,56 @@ describe("边界校验器的性质", () => {
     }
   });
 
+  it("status 的边界擦洗：`quota.windows` 是字符串时归空数组，不让下游 `.map` 崩", () => {
+    // 2026-10-20 复审发现：页面用 `quota?.windows?.length` 判「有没有额度」——字符串也有
+    // length，于是 `windows: "oops"` 能通过那个假值检查，紧接着 `.map` 抛错。三处卡片都有
+    // 错误边界兜底（不白屏），但整块面板会降级成「面板失败 + 重试」。
+    const statusDescriptor = usageDescriptors().find((descriptor) => descriptor.method === "status")!;
+    const parse = parserOf(statusDescriptor);
+    const parsed = parse({
+      vendor: "commandcode",
+      capabilities: {},
+      accounts: [{ ref: "a", label: "A", configured: true, quota: { windows: "oops", failures: "also-bad" } }],
+    }) as { accounts: { quota: { windows: unknown[]; failures: unknown[] } }[] };
+    // 边界上已经洗成数组，下游可以安全 `.map` / `.length`。
+    expect(Array.isArray(parsed.accounts[0]!.quota.windows)).toBe(true);
+    expect(Array.isArray(parsed.accounts[0]!.quota.failures)).toBe(true);
+    expect(parsed.accounts[0]!.quota.windows).toEqual([]);
+  });
+
+  it("status 的边界擦洗：`quota` 本身不是对象时归为缺失（不是留个字符串给下游）", () => {
+    const statusDescriptor = usageDescriptors().find((descriptor) => descriptor.method === "status")!;
+    const parse = parserOf(statusDescriptor);
+    const parsed = parse({
+      vendor: "commandcode",
+      capabilities: {},
+      accounts: [{ ref: "a", label: "A", configured: true, quota: "not-an-object" }],
+    }) as { accounts: { quota?: unknown }[] };
+    expect(parsed.accounts[0]!.quota).toBeUndefined();
+  });
+
+  it("status 的边界擦洗不动正常数据（真形状原样通过）", () => {
+    const statusDescriptor = usageDescriptors().find((descriptor) => descriptor.method === "status")!;
+    const parse = parserOf(statusDescriptor);
+    const input = {
+      vendor: "commandcode",
+      capabilities: { reorder: false },
+      accounts: [
+        {
+          ref: "a",
+          label: "A",
+          configured: true,
+          quota: { windows: [{ key: "5h", used: 1, cap: 10 }], failures: [], plan: { id: "goat" } },
+        },
+      ],
+      failures: [],
+    };
+    const parsed = parse(input) as typeof input;
+    expect(parsed.accounts[0]!.quota.windows).toEqual([{ key: "5h", used: 1, cap: 10 }]);
+    expect(parsed.accounts[0]!.quota.plan).toEqual({ id: "goat" });
+    expect(parsed.failures).toEqual([]);
+  });
+
   it("每个结果的解析器：结构不对就抛边界错误，绝不返回 undefined 冒充成功", () => {
     for (const descriptor of usageDescriptors()) {
       const parse = parserOf(descriptor);

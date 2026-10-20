@@ -339,6 +339,28 @@ it("两个入口各注册一次自己的 provider 路由", () => {
   expect(opencode.name).toBe("llm-opencode-go");
 });
 
+it("**commandcode 的 enabled 同样管住路由**（三行对称，2026-10-20 复审）", () => {
+  // 复审判定：opencode / opendesign 早就有这个门，唯独 commandcode 无条件注册 ——
+  // 用户手改 profile 把它配成 `enabled: false` 不会生效（另外两家会）。
+  const disabledHost = fakeHost();
+  commandcode.apply(disabledHost.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, enabled: false }));
+  expect(disabledHost.registrations, "enabled: false 时不许注册路由").toHaveLength(0);
+  expect(disabledHost.liveRoutes()).toEqual([]);
+  // 行本身仍挂载：凭据订阅与 volatile 重判都还在。
+  expect(disabledHost.listenerCount("credentials/reference-updated")).toBe(1);
+
+  const enabledHost = fakeHost();
+  commandcode.apply(enabledHost.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, enabled: true }));
+  expect(enabledHost.liveRoutes()).toEqual([[commandcode.PROVIDER_ID]]);
+});
+
+it("**缺省（没写 enabled）按启用处理**，不会把老用户的命令行悄悄关掉", () => {
+  // 兼容性：存量 profile 里没有这个字段，缺省必须是启用。字段默认值是 `true`。
+  const host = fakeHost();
+  commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+  expect(host.liveRoutes()).toEqual([[commandcode.PROVIDER_ID]]);
+});
+
 it("opencode 的 enabled 为 false 时不注册路由，为 true 时注册一次", () => {
   const disabledHost = fakeHost();
   const disabled = opencode.apply(disabledHost.ctx, opencode.Config(OPENCODE_SHAPE));

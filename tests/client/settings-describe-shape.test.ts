@@ -42,15 +42,20 @@ function hostDescribe(
   const value = {
     writable: true,
     hasDocument: true,
-    namespaces: namespaces.map((entry, index) => ({
-      ns: entry.ns ?? `ns-${index}`,
-      autoGenerate: false,
-      schema: {},
-      value: entry.value,
-      applies: true,
-      secrets: [],
-      revision: entry.revision ?? 1,
-    })),
+    // **原样传递坏元素**：夹具自己要能表达「宿主发了 `null`」这种形状，否则就测不到
+    // 产品代码的守卫（2026-10-20 复审时这里自己先崩了，掩盖了真实行为）。
+    namespaces: namespaces.map((entry, index) => {
+      if (typeof entry !== "object" || entry === null) return entry;
+      return {
+        ns: entry.ns ?? `ns-${index}`,
+        autoGenerate: false,
+        schema: {},
+        value: entry.value,
+        applies: true,
+        secrets: [],
+        revision: entry.revision ?? 1,
+      };
+    }),
   };
   return ok ? { ok: true, value } : { ok: false, error: { code: "gateway/internal", message: "settings service absent" } };
 }
@@ -98,6 +103,30 @@ const ENTRIES: readonly VendorEntry[] = [
 ];
 
 describeSuite("remote.settings.describe() shape", () => {
+  it("**数组里混进 null / 非对象时不抛错**，照常返回能认的行（2026-10-20 复审）", async () => {
+    // 线上值形状不可信：宿主 `describe()` 的数组里混进一个 `null`，旧实现直接读 `row.ns`
+    // 会抛 TypeError；而某些调用点没有 `.catch` —— 一个坏元素就能让设置页永远拿不到快照，
+    // 症状是「面板空白且没有任何提示」。与 `completeReading` / `parseCredentialStatus`
+    // 同一条纪律：先验形状，再读字段。
+    const described = hostDescribe([
+      null as never,
+      { ns: "llm-commandcode", value: { showSidebarQuota: true } },
+      "not-an-object" as never,
+      { ns: "llm-opencode-go", value: {} },
+    ]);
+    const snapshots = await describeVendorSnapshots(contextWith(described), ENTRIES);
+    // 坏元素被跳过，好元素照常被发现。
+    expect(snapshots.map((s) => s.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
+  });
+
+  it("全部是坏元素时不抛错，读作「没匹配到」并给原因", async () => {
+    const described = hostDescribe([null as never, 42 as never]);
+    const snapshots = await describeVendorSnapshots(contextWith(described), ENTRIES);
+    expect(snapshots).toEqual([]);
+    const discovery = await discoverVendors(contextWith(described), ENTRIES);
+    expect(discovery.problem?.kind).toBe("no-match");
+  });
+
   it("discovers both vendors from the host's object shape", async () => {
     const described = hostDescribe([
       { ns: "llm-commandcode", value: { showSidebarQuota: true } },
@@ -109,8 +138,7 @@ describeSuite("remote.settings.describe() shape", () => {
     expect(snapshots[1]?.value).toEqual({ showSidebarQuota: false });
   });
 
-  it("identifies a namespace by its profile row id when ns differs (opencode)", async () => {
-    // The host may report either field; `opencode-go` is the row the settings
+  it("identifies a namespace by its profile row id when ns differs (opencode)", async () => {    // The host may report either field; `opencode-go` is the row the settings
     // service addresses, `llm-opencode-go` the namespace. Both must resolve to
     // the same vendor identity, and `row` must carry the name writes need.
     const byRowId = hostDescribe([{ ns: "opencode-go", value: { showSidebarQuota: true } }]);
