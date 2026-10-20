@@ -89,7 +89,6 @@ export type CopyKey =
   | "field.searchPreferGateway.hint"
   | "field.searchApiKeyEnv"
   | "field.searchApiKeyEnv.hint"
-  | "card.disabledHint"
   | "card.display"
   | "card.display.hint"
   | "card.switching"
@@ -99,10 +98,6 @@ export type CopyKey =
   | "card.advanced"
   | "card.advanced.hint"
   | "vendor.features"
-  | "field.featureSwitchEnabled"
-  | "field.featureSwitchEnabled.hint"
-  | "field.featureSearchEnabled"
-  | "field.featureSearchEnabled.hint"
   | "vendor.commandcode"
   | "vendor.opencodeGo"
   | "vendor.opendesign"
@@ -385,7 +380,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchPreferGateway.hint": "当前会话走 opendesign 且是 DeepSeek 模型时用订阅额度搜索；其余情况回退到下面的 API key。",
     "field.searchApiKeyEnv": "搜索用的 API key 引用名",
     "field.searchApiKeyEnv.hint": "填凭据库里的引用名（不是明文密钥）。缺省 DEEPSEEK_API_KEY，可在设置页的凭据区写入。",
-    "card.disabledHint": "上面那个开关关着，所以这些配置暂时不生效。打开后立即恢复。",
     "card.display": "显示设置",
     "card.display.hint": "侧边栏额度卡片要不要显示、多久刷新一次。三家共用。",
     "card.switching": "切换设置",
@@ -395,10 +389,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "card.advanced": "高级设置",
     "card.advanced.hint": "端点、超时与输出上限。带厂商徽标的项只对那一家生效。",
     "vendor.features": "切换与搜索",
-    "field.featureSwitchEnabled": "显示切换策略",
-    "field.featureSwitchEnabled.hint": "关掉后这一块隐藏，但选项卡保留 —— 你仍然可以从这里重新打开。",
-    "field.featureSearchEnabled": "显示网页搜索",
-    "field.featureSearchEnabled.hint": "关掉后这一块隐藏，但选项卡保留。",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",
     "field.workspaceId": "工作区 ID",
@@ -675,7 +665,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchPreferGateway.hint": "Uses subscription quota when the session runs opendesign with a DeepSeek model; otherwise falls back to the API key below.",
     "field.searchApiKeyEnv": "Search API key reference",
     "field.searchApiKeyEnv.hint": "A credential reference name, not a literal secret. Defaults to DEEPSEEK_API_KEY.",
-    "card.disabledHint": "The switch above is off, so these settings do not apply. Turn it on to restore them.",
     "card.display": "Display",
     "card.display.hint": "Whether the sidebar quota card shows, and how often it refreshes. Shared by all vendors.",
     "card.switching": "Switching",
@@ -685,10 +674,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "card.advanced": "Advanced",
     "card.advanced.hint": "Endpoints, timeouts and output limits. Items with a vendor badge apply to that vendor only.",
     "vendor.features": "Switching & Search",
-    "field.featureSwitchEnabled": "Show switching strategy",
-    "field.featureSwitchEnabled.hint": "Hides this block; the tab stays so you can turn it back on.",
-    "field.featureSearchEnabled": "Show web search",
-    "field.featureSearchEnabled.hint": "Hides this block; the tab stays.",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",
     "field.workspaceId": "Workspace ID",

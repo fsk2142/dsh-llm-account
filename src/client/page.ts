@@ -14,7 +14,7 @@ import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
-import { isConfigEnabled, primarySwitchOf, SETTINGS_CARDS, subordinateFieldsOf, type SettingsCard } from "./settings-cards";
+import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
 /** 页面外壳的属性。全部是数据与回调：外壳自己不留状态。 */
@@ -84,8 +84,6 @@ function pageBody(props: PageShellProps): ReactElement {
   // 四张卡片把三家的字段合并渲染。功能页（切换/搜索）的字段也属于这几张卡，
   // 所以它**参与合并**，只是它没有自己的 tab 了。
   const vendors = entries;
-  /** 合并后的设置值：判定主开关状态用（草稿优先于基线）。 */
-  const merged = cardSettingsValue(props, vendors);
 
   return createElement(
     "div",
@@ -119,7 +117,7 @@ function pageBody(props: PageShellProps): ReactElement {
     //
     // 卡片**永远都在**：主开关（启用自动切换 / 启用网页搜索）关掉时只把下方配置置灰，
     // 卡片不消失 —— 用户随时能重新打开，也不会分不清「自己关掉了」还是「坏了」。
-    ...SETTINGS_CARDS.map((card) => settingsCardElement(props, vendors, card, merged)),
+    ...SETTINGS_CARDS.map((card) => settingsCardElement(props, vendors, card)),
     // 保存条：**任何一行**有未保存改动时出现（含功能页 —— 它的字段也存在承载行文档里）。
     // 只看厂商行会让「启用自动切换」这类开关改了之后没有保存按钮（2026-10-20 报障）。
     vendors.some((entry) => isDirty(props.state, entry.ns))
@@ -128,56 +126,27 @@ function pageBody(props: PageShellProps): ReactElement {
   );
 }
 
-/**
- * 合并后的设置值：用于判断「显示切换策略 / 显示网页搜索」这两个开关。
- *
- * 三个来源按优先级叠加，与控件本身的读法一致：
- * 1. 各家的**基线**（宿主文档）；
- * 2. 各家的**草稿**（用户刚点、还没保存）。
- *
- * 为什么按顺序覆盖而不是只取一家：功能页的开关存在承载行（commandcode）上，但用户也可能
- * 直接改那一行；取「最后一份非空」会在两家值不同时抖动，所以按「谁有值用谁」逐键合并 ——
- * 这些字段本来就该三家一致（写回时会镜像）。
- * @param props - 页面属性。
- * @param vendors - 厂商行（含功能页，它的值代表承载行）。
- * @returns 合并后的值。
- */
-function cardSettingsValue(
-  props: PageShellProps,
-  vendors: readonly VendorEntry[],
-): Readonly<Record<string, unknown>> {
-  const merged: Record<string, unknown> = {};
-  for (const entry of vendors) {
-    const baseline = props.state.snapshots[entry.ns]?.value;
-    if (baseline !== undefined) Object.assign(merged, baseline);
-    const draft = props.state.drafts[entry.ns];
-    if (draft !== undefined) Object.assign(merged, draft);
-  }
-  return merged;
-}
 
 /**
  * 一张功能卡片：把三家（以及功能页）里属于这张卡的字段**合并去重**后渲染。
  *
- * 卡片的形状（用户 2026-10-20 澄清）：
- * 1. **主开关在最上面**（「启用自动切换」/「启用网页搜索」）—— 它是这张卡的重点；
- * 2. 主开关下面是**相关配置**；主开关关掉时这些配置变**禁用但仍在**（不隐藏）—— 隐藏会
- *    让整块消失、不留线索，用户也分不清是自己关掉了还是坏了；
- * 3. `specific` 字段只渲染它归属的那一家，并标注厂商徽标。
+ * 形状：
+ * 1. 共有字段只渲染**一次**（三家同名同义，写回时会镜像）；
+ * 2. `specific` 字段只渲染它归属的那一家，并标注厂商徽标；
+ * 3. 没有卡片级开关 —— 收起/展开由 `<details>` 的箭头负责（2026-10-20 用户要求去掉
+ *    「启用自动切换 / 开启网页搜索」两个界面开关：卡片本来就能收起，多一个开关反而
+ *    让人误以为关掉会禁用功能）。
  * @param props - 页面属性。
  * @param vendors - 参与合并的厂商行（含功能页，它的值代表承载行）。
  * @param card - 卡片声明。
- * @param value - 合并后的设置值（用于判定主开关状态）。
  * @returns 可折叠卡片元素。
  */
 function settingsCardElement(
   props: PageShellProps,
   vendors: readonly VendorEntry[],
   card: SettingsCard,
-  value: Readonly<Record<string, unknown>>,
 ): ReactNode {
   const { t } = props;
-  const enabled = isConfigEnabled(value, card.id);
   const nodes: ReactNode[] = [];
 
   /** 在合并后的厂商列表里找某个共有字段的声明（取第一家）。 */
@@ -189,49 +158,20 @@ function settingsCardElement(
     return undefined;
   };
 
-  // 1) 主开关：单独一块，排最上面（不从属任何「配置」组）。
-  const primaryKey = primarySwitchOf(card.id);
-  const primary = primaryKey === undefined ? undefined : sharedField(primaryKey);
-  if (primary !== undefined) {
-    nodes.push(
-      createElement(
-        "div",
-        { key: `${card.id}-primary`, "data-card-primary": card.id, className: CSS_CLASS.inset },
-        fieldElement(props, primary.owner, primary.field),
-      ),
-    );
-  }
-
-  // 2) 相关配置：主开关关掉时整体加一个 data 标记（样式据此置灰），但元素仍在。
-  const configNodes: ReactNode[] = [];
-  for (const key of subordinateFieldsOf(card.id)) {
+  // 1) 共有字段：第一次出现时渲染一次。
+  for (const key of card.shared) {
     const found = sharedField(key);
     if (found === undefined) continue;
-    configNodes.push(fieldElement(props, found.owner, found.field));
+    nodes.push(fieldElement(props, found.owner, found.field));
   }
-  // 3) 厂商专属字段。
+
+  // 2) 厂商专属字段：按厂商顺序渲染，并标注归属。
   for (const vendor of vendors) {
     for (const field of fieldsOf(props.state, vendor)) {
       const declared = card.specific.find((item) => item.key === field.spec.key && item.vendor === vendor.providerId);
       if (declared === undefined) continue;
-      configNodes.push(fieldElement(props, vendor, field, labelOf(props, vendor)));
+      nodes.push(fieldElement(props, vendor, field, labelOf(props, vendor)));
     }
-  }
-  if (configNodes.length > 0) {
-    nodes.push(
-      createElement(
-        "div",
-        {
-          key: `${card.id}-config`,
-          "data-card-config": card.id,
-          // 主开关关掉 → 配置区禁用（视觉置灰 + 说明），但**不隐藏**。
-          ...(enabled ? {} : { "data-card-disabled": "true" }),
-          className: CSS_CLASS.inset,
-        },
-        ...(enabled ? [] : [createElement("small", { key: "off", className: CSS_CLASS.note }, t("card.disabledHint"))]),
-        ...configNodes,
-      ),
-    );
   }
 
   if (nodes.length === 0) return null;

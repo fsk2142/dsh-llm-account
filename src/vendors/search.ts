@@ -39,7 +39,7 @@ export interface SearchAssemblyDeps {
  * @param deps - 启用判定与注册逻辑。
  */
 export function applySearch(ctx: SearchHostContext, deps: SearchAssemblyDeps): void {
-  if (!deps.enabled()) return; // 关掉即静默
+  if (!deps.enabled()) return;
   if (typeof ctx.inject !== "function") return;
   ctx.inject(["web"], (webCtx) => {
     if (webCtx.web === undefined) return;

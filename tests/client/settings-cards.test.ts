@@ -35,11 +35,14 @@ describe("四张卡片", () => {
     expect(shared).toContain("autoContinueOnError");
     expect(shared).toContain("autoContinueOnTruncate");
     expect(shared).toContain("autoContinueMaxAttempts");
-    expect(shared).toContain("featureSearchEnabled");
     expect(shared).toContain("searchPreferGateway");
     expect(shared).toContain("searchApiKeyEnv");
     expect(shared).toContain("requestTimeoutMs");
     expect(shared).toContain("streamIdleTimeoutMs");
+    // 2026-10-20 用户去掉了「启用自动切换 / 开启网页搜索」两个界面开关
+    // （卡片本来就能用箭头收起）。
+    expect(shared).not.toContain("featureSwitchEnabled");
+    expect(shared).not.toContain("featureSearchEnabled");
   });
 
   it("厂商专属字段带明确的归属（只对那一家生效）", () => {

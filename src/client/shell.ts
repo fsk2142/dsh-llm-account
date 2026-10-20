@@ -287,21 +287,8 @@ export const VENDORS: readonly VendorEntry[] = [
       {
         group: "switch",
         fields: [
-          {
-            key: "featureSwitchEnabled",
-            kind: "boolean",
-            labelKey: "field.featureSwitchEnabled",
-            hintKey: "field.featureSwitchEnabled.hint",
-            // 默认开：这两台是插件的主体能力，藏起来会让人以为没有。
-            fallback: true,
-          },
-          {
-            key: "featureSearchEnabled",
-            kind: "boolean",
-            labelKey: "field.featureSearchEnabled",
-            hintKey: "field.featureSearchEnabled.hint",
-            fallback: true,
-          },
+          // 2026-10-20 用户去掉了「启用自动切换 / 开启网页搜索」两个界面开关：
+          // 卡片本来就能用箭头收起，多一个开关反而让人误以为关掉会禁用功能。
           // —— 自动继续（两台开关，默认都关）——
           {
             key: "autoContinueOnError",

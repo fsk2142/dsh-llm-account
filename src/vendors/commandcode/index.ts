@@ -142,8 +142,6 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueOnTruncate: z.boolean().default(false),
       autoContinueMaxAttempts: z.number().default(3),
       /** 功能页的两台开关：关掉只隐藏界面那一块，不影响已配置的能力。 */
-      featureSwitchEnabled: z.boolean().default(true),
-      featureSearchEnabled: z.boolean().default(true),
       /** 搜索：是否优先用网关订阅额度（默认是；没有可用网关时回退 API key）。 */
       searchPreferGateway: z.boolean().default(true),
       /** 搜索用的 API key 凭据引用名（配在凭据服务里，不是明文）。 */
@@ -385,7 +383,9 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   applySearch(
     ctx as unknown as Parameters<typeof applySearch>[0],
     {
-      enabled: () => document()["featureSearchEnabled"] !== false,
+      // 搜索能力**总是启用**：2026-10-20 用户去掉了「开启网页搜索」界面开关
+      // （卡片用箭头收起即可）。宿主没有 `web` 服务时 `applySearch` 会自行静默跳过。
+      enabled: () => true,
       register: (webCtx) =>
         registerSearchProvider(webCtx, {
           fetchImpl: globalThis.fetch.bind(globalThis),
