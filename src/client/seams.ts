@@ -1159,6 +1159,60 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     );
     const modelVendorKey = availableEntries.map((entry) => entry.providerId).join(",");
 
+    // 搜索 key 的引用名（逗号/空白分隔）→ 查一次「库里到底有没有」。
+    //
+    // 用户报障：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个输入框填的是
+    // **引用名**，真 key 在凭据库里 —— 不查一次，界面就只能沉默。
+    const credentialRefs = (() => {
+      const raw = state.snapshots[FEATURE_TAB_NS]?.value ?? {};
+      const text = raw["searchApiKeyRefs"];
+      if (typeof text !== "string") return [];
+      return [
+        ...new Set(
+          text
+            .split(/[,，\s]+/)
+            .map((item) => item.trim())
+            .filter((item) => item !== ""),
+        ),
+      ];
+    })();
+    const credentialKey = credentialRefs.join(",");
+
+    // 查凭据是否真的配置了。依赖里用 `credentialKey`（字符串）而不是数组：
+    // 数组每次渲染都是新引用，会让这个 effect 每帧都重跑。
+    useEffect(() => {
+      // 收窄之后再存进局部常量：TS 不会把外层的判空带进回调里。
+      const api = usage;
+      const status = api?.credentialStatus;
+      if (status === undefined) return;
+      if (credentialKey === "") {
+        setCredentialStatus({});
+        return;
+      }
+      let alive = true;
+      const ask: (refs: readonly string[]) => Promise<unknown> = status;
+      const keyNow: string = credentialKey;
+      // `callRemote` 可能返回 `undefined`（调用本身抛错时已转成 rejected promise，
+      // 但签名上是联合类型），交给 `remoteValue` 摊平并解包信封。
+      void remoteValue<{ ref?: unknown; configured?: unknown }[]>(callRemote(() => ask(keyNow.split(","))))
+        .then((rows) => {
+          if (!alive) return;
+          // 读不到（`undefined`）时保持原状态：徽标不出现，而不是错误地显示「未添加」。
+          if (!Array.isArray(rows)) return;
+          const next: Record<string, boolean> = {};
+          for (const row of rows) {
+            if (typeof row?.ref === "string") next[row.ref] = row.configured === true;
+          }
+          setCredentialStatus(next);
+        })
+        .catch(() => {
+          // 读失败时保持 `undefined`：徽标不出现，而不是错误地显示「未添加」。
+        });
+      return () => {
+        alive = false;
+      };
+    }, [usage, credentialKey, state.credentialRevision]);
+
     // 读**所有**可用厂商的未过滤模型目录：全局模型卡要把两家放在一起；只读当前标签页会让
     // 另一家的模型在切换标签页前一直缺一块。刷新走 {@link refreshVendorCatalog}（按账户
     // 逐个读），不在这里靠计数器重跑 —— 见那里的说明。
@@ -1309,6 +1363,13 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     // 渲染体顶部，顺序在每次渲染之间不变。
     const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
     const [usageStatsProblem, setUsageStatsProblem] = useState<string | undefined>(undefined);
+    /**
+     * 凭据引用名 → 是否真的配置了（搜索 key 的「已添加 / 未添加」徽标）。
+     *
+     * 缺省 `undefined` 表示**还没读到**：那时页面不显示任何徽标，而不是猜「未添加」
+     * （用户 2026-10-20 报障：加完 key 之后界面没有任何反馈）。
+     */
+    const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean> | undefined>(undefined);
     /**
      * 定时重读计数：设置页会开着好一会儿，30 秒一次让数字跟上。
      *
@@ -1635,6 +1696,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       t,
       accounts,
       mergeTabs: true,
+      ...(credentialStatus === undefined ? {} : { credentialStatus }),
       saving: savingNs === state.activeNs,
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => setState((current) => setField(current, ns, key, value)),

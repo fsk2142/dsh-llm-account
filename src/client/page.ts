@@ -14,6 +14,7 @@ import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
+import { summarizeKeyStatus } from "../core/switching/search-keys";
 import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
@@ -45,6 +46,13 @@ export interface PageShellProps {
   mergeTabs?: boolean;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */
   saving?: boolean;
+  /**
+   * 凭据引用名 → 是否**真的**配置了（界面用来显示「已添加 / 未添加」）。
+   *
+   * 为什么由容器传进来：判断要读宿主的凭据服务，那是远程调用；页面外壳是纯函数。
+   * 缺省（还没读到）时**不显示任何徽标** —— 不猜「未添加」，那会误报。
+   */
+  credentialStatus?: Readonly<Record<string, boolean>>;
 }
 
 /**
@@ -293,6 +301,12 @@ function fieldElement(
   const control = fieldControl(props, entry, field);
   if (control === undefined) return null;
   const hint = spec.hintKey === undefined ? null : createElement("small", { "data-field-hint": spec.key }, t(spec.hintKey));
+  // 凭据类字段的「已添加 / 未添加」徽标。
+  //
+  // 用户报障：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个框填的是**引用名**，
+  // 真 key 在凭据库里 —— 填了名字不等于库里有 key，所以必须去查一次并显示出来。
+  // 查不到（还没读回来）时**什么都不显示**：猜「未添加」会误报。
+  const credentialBadge = credentialBadgeOf(props, field);
   // 说明放在**标签下面**，与控件同一行的只有标签本身：否则一段长说明会和输入框一起
   // 把标签列挤到只剩一两个字宽（真机截图里「用量刷新间隔（分钟）」就是竖排的）。
   return createElement(
@@ -316,10 +330,51 @@ function fieldElement(
               t(spec.labelKey),
               createElement("small", { key: "vendor", className: CSS_CLASS.vendorBadge }, vendorLabel),
             ]),
+        // 「已添加 / 未添加」徽标（只在凭据类字段上出现）。
+        ...(credentialBadge === null ? [] : [credentialBadge]),
       ),
       hint,
     ),
     control,
+  );
+}
+
+/**
+ * 凭据类字段的「已添加 / 未添加」徽标。
+ *
+ * 只对**引用名类**字段生效（搜 key 的那个），值可能是逗号分隔的多个引用名：
+ * 逐个查库，全部配好才说「已添加」，部分配置说「部分已添加」并点名缺哪个。
+ * @param props - 页面属性（含容器传进来的状态表）。
+ * @param field - 字段的控件状态。
+ * @returns 徽标元素；不适用或状态还没读回来时为 `null`。
+ */
+function credentialBadgeOf(props: PageShellProps, field: DraftField): ReactNode {
+  const status = props.credentialStatus;
+  if (status === undefined) return null; // 还没读回来：不猜
+  const spec = field.spec;
+  if (spec.kind !== "text" || !/KeyRefs?$|ApiKey/i.test(spec.key)) return null;
+  const refs = String(field.value ?? "")
+    .split(/[,，\s]+/)
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+  if (refs.length === 0) return null;
+  const rows = refs.map((ref) => ({ ref, configured: status[ref] === true }));
+  const summary = summarizeKeyStatus(rows);
+  const label =
+    summary.state === "configured"
+      ? props.t("search.keyConfigured")
+      : summary.state === "partial"
+        ? `${props.t("search.keyConfigured")} ${summary.configured}/${summary.total}`
+        : props.t("search.keyMissing");
+  return createElement(
+    "small",
+    {
+      key: "credential",
+      "data-credential-status": summary.state,
+      "data-credential-missing": summary.missing.join(","),
+      className: summary.state === "configured" ? CSS_CLASS.mark : CSS_CLASS.failure,
+    },
+    label,
   );
 }
 

@@ -160,8 +160,8 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueOnError: z.boolean().default(false),
       autoContinueOnTruncate: z.boolean().default(false),
       autoContinueMaxAttempts: z.number().default(3),
-      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only"]).default("gateway-first"),
-      searchApiKeyEnv: z.string().role("credential-ref").default("DEEPSEEK_API_KEY"),
+      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only", "off"]).default("gateway-first"),
+      searchApiKeyRefs: z.array(z.string().role("credential-ref")).default(["DEEPSEEK_API_KEY"]),
     /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */
     workspaceId: z.string().default(""),
     /** 推理网关基地址（Chat Completions）。 */
@@ -478,6 +478,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   // 把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
   applyUsageRemote(ctx, {
     vendor: PROVIDER_ID,
+    credentials,
     rotation,
     accounts,
     quota,

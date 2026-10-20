@@ -20,6 +20,7 @@ import type {
   AccountView,
   CatalogModel,
   CatalogModelsResult,
+  CredentialPort,
   LoginPort,
   LoginStatus,
   ModelRule,
@@ -155,6 +156,13 @@ export interface UsageVendorDeps {
    * 隐藏的模型不在里面；这个返回厂商的全量目录，页面才能在「隐藏」之后重新勾上。
    */
   readonly models?: () => Promise<CatalogModel[]>;
+  /**
+   * 凭据端口（**可选**）：只用于 `credentialStatus` 回答「这个引用名真的配了吗」。
+   *
+   * 三家都会传同一个实现（都代理到宿主的 credentials 服务），所以只需要登记一次。
+   * 缺省时 `credentialStatus` 如实回答「都没配」—— 不猜。
+   */
+  readonly credentials?: CredentialPort;
   /** 设置文档里的全局顺序（`vendor:ref` 键；两家相同）。 */
   readonly accountOrder?: () => readonly string[];
   /** 把同一份全局顺序写进两家文档。 */
@@ -645,6 +653,28 @@ export class LlmAccountUsageService extends TypertRemoteService {
    */
   async usageClear(): Promise<void> {
     await sharedUsageLedger().clear();
+  }
+
+  /**
+   * 查询一组凭据引用名是否**真的**配置了。
+   *
+   * 为什么需要：界面上「搜索 API key」填的是**引用名**，真 key 在凭据库里 ——
+   * 填了名字不等于库里有那把 key，而界面从来不去查，用户无从判断自己加没加成功
+   * （2026-10-20 报障「添加 API KEY 后没有显示是否已添加」）。
+   *
+   * **只回布尔，绝不回密钥**：密钥一旦进了浏览器内存就多一条泄漏途径，
+   * 而界面只需要「有没有」这一个事实。
+   * @param refs - 要查询的引用名。
+   * @returns 逐条 `{ ref, configured }`（顺序与入参一致）。
+   */
+  async credentialStatus(refs: readonly string[]): Promise<{ ref: string; configured: boolean }[]> {
+    // 凭据端口是**厂商级**的，但实现完全一致（都代理到宿主的 credentials 服务），
+    // 取任意一家即可；一家都没登记时如实回答「都没配」。
+    const credentials = [...this.vendorDeps.values()][0]?.credentials;
+    if (credentials === undefined) return refs.map((ref) => ({ ref, configured: false }));
+    // 一次查询一批：端口本来就是批量接口，避免 N 次往返。
+    const described = await credentials.describe([...refs]);
+    return refs.map((ref) => ({ ref, configured: described[ref]?.configured === true }));
   }
 
   /** 取一家厂商的读口；没登记过就吵出来（静默返回空结果会伪装成「没有账号」）。 */

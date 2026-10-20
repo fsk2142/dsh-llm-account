@@ -55,7 +55,7 @@ function deps(overrides: Partial<Parameters<typeof createSearchProvider>[0]> = {
     sessionRoute: () => ({ provider: "opendesign" as string | undefined, model: "deepseek-v4.1-flash" as string | undefined }),
     strategy: () => "gateway-first",
     gatewayAccess: async () => ({ baseURL: "https://amr-link.open-design.ai/v1", key: "sk-gw" }),
-    resolveApiKey: async () => "sk-api",
+    resolveApiKeys: async () => [{ ref: "DEEPSEEK_API_KEY", key: "sk-api" }],
     ...overrides,
   };
 }
@@ -123,7 +123,7 @@ describe("选路", () => {
       deps({
         fetchImpl: impl,
         sessionRoute: () => ({ provider: "commandcode", model: "deepseek/x" }),
-        resolveApiKey: async () => undefined,
+        resolveApiKeys: async () => [],
       }),
     );
     await expect(provider.search({ query: "hello" })).rejects.toBeInstanceOf(SearchUnavailableError);

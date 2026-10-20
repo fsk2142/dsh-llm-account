@@ -25,8 +25,9 @@
  * @module dsh-llm-account/src/vendors/search-provider
  */
 
-import { chooseSearchRoute, type SearchRoute } from "../core/switching/search-route";
-import { searchViaApi } from "./search-api";
+import { chooseSearchRoute, isSearchDisabled, type SearchRoute } from "../core/switching/search-route";
+import { pickWorkingKey } from "../core/switching/search-keys";
+import { SearchApiError, searchViaApi } from "./search-api";
 
 /** 本 provider 的稳定 id（宿主注册表的键）。 */
 export const SEARCH_PROVIDER_ID = "llm-account-deepseek";
@@ -64,8 +65,13 @@ export interface SearchProviderDeps {
    * @returns 基地址与密钥；该网关不可用时为 `undefined`。
    */
   gatewayAccess: (provider: string) => Promise<{ baseURL: string; key: string } | undefined>;
-  /** 解析 API key（凭据服务里的引用）。 */
-  resolveApiKey: () => Promise<string | undefined>;
+  /**
+   * 按顺序解析多个 API key 引用名（多 key 轮替）。
+   *
+   * 返回**实际解析到的**那些（顺序即优先级）：解析不到的引用名直接跳过，
+   * 不当作失败 —— 用户可能只填了第一条。
+   */
+  resolveApiKeys: () => Promise<{ ref: string; key: string }[]>;
 }
 
 /** 辅助搜索请求的模型（与宿主同一档）。 */
@@ -148,6 +154,15 @@ export function registerSearchProvider(
 }
 
 /**
+ * 从一个错误里取出 HTTP 状态码（轮替判定要用）。
+ * @param error - 捕获到的错误。
+ * @returns 状态码；不是 `SearchApiError` 时为 `undefined`。
+ */
+function statusOf(error: unknown): number | undefined {
+  return error instanceof SearchApiError ? error.status : undefined;
+}
+
+/**
  * 造一个搜索 provider（注册到 `ctx.web.registerSearchProvider`）。
  * @param deps - 传输、会话路由与凭据解析。
  * @returns 宿主形状的 provider。
@@ -164,18 +179,22 @@ export function createSearchProvider(deps: SearchProviderDeps): {
   };
 
   /** 当前该走哪条路（只解析凭据，不发搜索请求）。 */
-  const route = async (): Promise<{ chosen: SearchRoute; apiKey?: string; access?: { baseURL: string; key: string } }> => {
+  const route = async (): Promise<{
+    chosen: SearchRoute;
+    apiKeys: { ref: string; key: string }[];
+    access?: { baseURL: string; key: string };
+  }> => {
     const { provider, model } = deps.sessionRoute();
-    const apiKey = await deps.resolveApiKey();
+    const apiKeys = await deps.resolveApiKeys();
     const access = await gatewayReady(provider);
     const chosen = chooseSearchRoute({
       provider,
       model,
       strategy: deps.strategy(),
-      hasApiKey: apiKey !== undefined,
+      hasApiKey: apiKeys.length > 0,
       hasGateway: access !== undefined,
     });
-    return { chosen, ...(apiKey === undefined ? {} : { apiKey }), ...(access === undefined ? {} : { access }) };
+    return { chosen, apiKeys, ...(access === undefined ? {} : { access }) };
   };
 
   return {
@@ -190,29 +209,49 @@ export function createSearchProvider(deps: SearchProviderDeps): {
       return true;
     },
     async search(request: SearchRequest, signal?: AbortSignal): Promise<SearchResult> {
-      const { chosen, apiKey, access } = await route();
+      const { chosen, apiKeys, access } = await route();
       if (chosen.kind === "unavailable") {
+        // 区分「用户主动关掉」与「两条路都没配好」—— 前者不是错误配置。
+        if (isSearchDisabled(deps.strategy())) {
+          throw new SearchUnavailableError("网页搜索已被关闭（搜索方式选了「不启用」）");
+        }
         throw new SearchUnavailableError(
-          "没有可用的搜索凭据：当前策略下两条路都不可用。请在功能页选择搜索策略，并配好 DeepSeek API key（或 opendesign 账号）",
+          "没有可用的搜索凭据：当前策略下两条路都不可用。请在功能页选择搜索方式，并配好 DeepSeek API key（或 opendesign 账号）",
         );
       }
 
       // —— API 路：直连 /v1/tools/search（不吃对话 token）——
       if (chosen.kind === "api") {
-        if (apiKey === undefined) throw new SearchUnavailableError("没有解析到 DeepSeek API key");
-        try {
-          const result = await searchViaApi({
-            query: request.query,
-            key: apiKey,
-            ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
-            fetchImpl: deps.fetchImpl,
-            ...(signal === undefined ? {} : { signal }),
-          });
-          return { sources: result.sources };
-        } catch (error) {
-          // 把 Search API 的错误翻成宿主认识的 provider 错误（保留原因）。
-          throw new SearchUnavailableError(error instanceof Error ? error.message : String(error));
+        if (apiKeys.length === 0) throw new SearchUnavailableError("没有解析到 DeepSeek API key");
+        // **多 key 轮替**：401/402（这把 key 不行）就换下一条，其余错误不换。
+        const tried = new Set<string>();
+        let lastError: unknown;
+        for (;;) {
+          const current = pickWorkingKey(
+            apiKeys.map((item) => item.ref),
+            // 第一轮没有失败码：直接取第一条。
+            lastError === undefined ? 401 : statusOf(lastError),
+            tried,
+          );
+          const picked = current === undefined ? undefined : apiKeys.find((item) => item.ref === current);
+          if (picked === undefined) break;
+          tried.add(picked.ref);
+          try {
+            const result = await searchViaApi({
+              query: request.query,
+              key: picked.key,
+              ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
+              fetchImpl: deps.fetchImpl,
+              ...(signal === undefined ? {} : { signal }),
+            });
+            return { sources: result.sources };
+          } catch (error) {
+            lastError = error;
+            // 不该换 key 的失败（429/5xx/400）直接抛，不折腾其他 key。
+            if (pickWorkingKey(apiKeys.map((item) => item.ref), statusOf(error), tried) === undefined) break;
+          }
         }
+        throw new SearchUnavailableError(lastError instanceof Error ? lastError.message : String(lastError));
       }
 
       // —— 网关路：模型在对话里调用服务端搜索工具 ——

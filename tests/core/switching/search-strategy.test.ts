@@ -26,7 +26,7 @@ const BOTH: Omit<SearchRouteInput, "strategy"> = {
 
 describe("策略取值", () => {
   it("四种策略：网关优先 / API 优先 / 只用网关 / 只用 API", () => {
-    expect(SEARCH_STRATEGIES).toEqual(["gateway-first", "api-first", "gateway-only", "api-only"]);
+    expect(SEARCH_STRATEGIES).toEqual(["gateway-first", "api-first", "gateway-only", "api-only", "off"]);
   });
 
   it("线上值不可信：不认识的策略按「网关优先」处理（最保守，不额外花钱）", () => {

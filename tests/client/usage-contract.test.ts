@@ -125,6 +125,8 @@ describe("参数校验器接受真值", () => {
     window: "today",
     // 导出的条数上限（`usageExportCsv`，可省略）。
     limit: 1000,
+    // 凭据状态查询的引用名（`credentialStatus`）。
+    refs: ["DEEPSEEK_API_KEY"],
   };
 
   const seen = new Set<string>();

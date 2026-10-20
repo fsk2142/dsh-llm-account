@@ -72,6 +72,8 @@ describe("搜索设置卡里的控件", () => {
       "api-first",
       "gateway-only",
       "api-only",
+      // 用户 2026-10-20：下拉里要有「不使用网页搜索」。
+      "off",
     ]);
   });
 
@@ -82,7 +84,7 @@ describe("搜索设置卡里的控件", () => {
     const inside = elementsOf(searchCard);
     const fields = inside.filter((element) => element.props["data-field"] !== undefined).map((element) => element.props["data-field"]);
     expect(fields).toContain("searchStrategy");
-    expect(fields).toContain("searchApiKeyEnv");
+    expect(fields).toContain("searchApiKeyRefs");
   });
 
   it("选项文案是可读的人话（不是键名）", () => {

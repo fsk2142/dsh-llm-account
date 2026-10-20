@@ -53,12 +53,12 @@ describe("卡片声明与厂商声明必须对得上", () => {
 
   it("搜索卡里也包含 API key 引用（两条路之一需要它）", () => {
     const search = SETTINGS_CARDS.find((card) => card.id === "search");
-    expect(search?.shared).toContain("searchApiKeyEnv");
+    expect(search?.shared).toContain("searchApiKeyRefs");
   });
 
   it("每个已声明的搜索相关字段都被卡片收录（没有漏掉的新字段）", () => {
     const searchKeys = SETTINGS_CARDS.find((card) => card.id === "search")?.shared ?? [];
-    for (const key of ["searchStrategy", "searchApiKeyEnv"]) {
+    for (const key of ["searchStrategy", "searchApiKeyRefs"]) {
       expect(searchKeys, key).toContain(key);
     }
   });

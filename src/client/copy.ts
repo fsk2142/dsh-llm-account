@@ -91,8 +91,11 @@ export type CopyKey =
   | "options.searchApiFirst"
   | "options.searchGatewayOnly"
   | "options.searchApiOnly"
-  | "field.searchApiKeyEnv"
-  | "field.searchApiKeyEnv.hint"
+  | "field.searchApiKeyRefs"
+  | "field.searchApiKeyRefs.hint"
+  | "options.searchOff"
+  | "search.keyConfigured"
+  | "search.keyMissing"
   | "field.searchApiKeyEnv"
   | "field.searchApiKeyEnv.hint"
   | "card.display"
@@ -388,8 +391,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.searchApiFirst": "API 优先（省 token）",
     "options.searchGatewayOnly": "只用网关",
     "options.searchApiOnly": "只用 API",
-    "field.searchApiKeyEnv": "DeepSeek API key 引用名",
-    "field.searchApiKeyEnv.hint": "凭据库里的引用名（不是明文）。只走 API 路时需要；可在设置页的凭据区写入。",
+    "field.searchApiKeyRefs": "DeepSeek API key 引用名",
+    "field.searchApiKeyRefs.hint": "凭据库里的引用名（不是明文）。多个用逗号分隔，按顺序轮替：前一个无效或余额不足时自动换下一个。",
+    "options.searchOff": "不启用网页搜索",
+    "search.keyConfigured": "已添加",
+    "search.keyMissing": "未添加",
     "card.display": "显示设置",
     "card.display.hint": "侧边栏额度卡片要不要显示、多久刷新一次。三家共用。",
     "card.switching": "切换设置",
@@ -677,8 +683,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.searchApiFirst": "API first (save tokens)",
     "options.searchGatewayOnly": "Gateway only",
     "options.searchApiOnly": "API only",
-    "field.searchApiKeyEnv": "DeepSeek API key reference",
-    "field.searchApiKeyEnv.hint": "A credential reference name, not a literal secret. Needed for the API route; write it in the credentials section.",
+    "options.searchOff": "Web search off",
+    "field.searchApiKeyRefs": "DeepSeek API key references",
+    "field.searchApiKeyRefs.hint": "Credential reference names, not literal secrets. Separate several with commas; they are tried in order when one is invalid or out of balance.",
+    "search.keyConfigured": "added",
+    "search.keyMissing": "not added",
     "card.display": "Display",
     "card.display.hint": "Whether the sidebar quota card shows, and how often it refreshes. Shared by all vendors.",
     "card.switching": "Switching",

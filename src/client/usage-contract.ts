@@ -84,6 +84,8 @@ export const USAGE_METHODS = [
   "usageClear",
   // 导出用量台账为 CSV 文本
   "usageExportCsv",
+  // 凭据状态（只回布尔，不回密钥）
+  "credentialStatus",
 ] as const;
 
 /** 一个方法名。 */
@@ -408,6 +410,32 @@ function parseUsageCsv(endpoint: string, value: unknown): string {
 }
 
 /**
+ * 校验「凭据状态」的结果。
+ *
+ * 只收 `{ ref, configured }` 两项：这是**布尔摘要**，绝不搬运密钥本身
+ * （那会把它传进浏览器内存，而界面上从来不需要它）。
+ * 形状不合格的行丢掉；一条都不剩时返回空数组（界面据此显示「未添加」）。
+ * @param endpoint - 调用点。
+ * @param value - 线上值。
+ * @returns 逐条状态。
+ */
+function parseCredentialStatus(endpoint: string, value: unknown): { ref: string; configured: boolean }[] {
+  if (!Array.isArray(value)) {
+    throw boundaryError(endpoint, `expected an array of credential statuses, got ${describeValue(value)}`);
+  }
+  const out: { ref: string; configured: boolean }[] = [];
+  for (const row of value) {
+    if (!isRecord(row)) continue;
+    const ref = row.ref;
+    const configured = row.configured;
+    if (typeof ref !== "string" || ref === "") continue;
+    if (typeof configured !== "boolean") continue;
+    out.push({ ref, configured });
+  }
+  return out;
+}
+
+/**
  * 校验用量报表。
  *
  * **必须逐层校验**，不能只看顶层：渲染时会直接解引用 `account.period.kind` /
@@ -649,6 +677,8 @@ const VENDOR_PARAM: ParamSpec = { name: "vendor", typeSymbol: "VendorId", parse:
 const REF_PARAM: ParamSpec = { name: "ref", typeSymbol: "AccountRef", parse: parseString };
 /** 模型 id 数组参数。 */
 const MODELS_PARAM: ParamSpec = { name: "models", typeSymbol: "AccountModels", parse: parseStringArray };
+/** 凭据引用名数组参数（查询它们是否真的配置了）。 */
+const REFS_PARAM: ParamSpec = { name: "refs", typeSymbol: "CredentialRefs", parse: parseStringArray };
 /**
  * 用量窗口参数（`today` / `7d` / `30d` / `all`）。
  *
@@ -776,6 +806,9 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("usageExportCsv", "UsageCsv", parseUsageCsv, [
       { name: "limit", typeSymbol: "ExportLimit", parse: parseNumber, optional: true },
     ]),
+    // 凭据状态：界面要能回答「我填的那个引用名，库里真的有一把 key 吗」。
+    // 只回**布尔**，绝不回密钥本身 —— 这条边界与账号卡片的「已配置」徽标同一来源。
+    makeDescriptor("credentialStatus", "CredentialStatusList", parseCredentialStatus, [REFS_PARAM]),
   ];
 }
 
@@ -805,6 +838,13 @@ export interface UsageNamespace {
    * @param limit - 最多导出多少条（尾部，即最近的）；省略 = 全部。
    */
   usageExportCsv?(limit?: number): Promise<unknown>;
+  /**
+   * 查询一组凭据引用名是否**真的**配置了（界面用来显示「已添加 / 未添加」）。
+   *
+   * 返回 `unknown`：与其它远程方法一样，真实值是 `{ ok, value }` 信封，必须 `unwrapRemote`。
+   * 只回布尔，**绝不回密钥**。
+   */
+  credentialStatus?(refs: readonly string[]): Promise<unknown>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   models?(vendor: string): Promise<CatalogModelsResult>;

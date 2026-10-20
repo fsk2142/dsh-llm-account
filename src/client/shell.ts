@@ -324,14 +324,19 @@ export const VENDORS: readonly VendorEntry[] = [
               { value: "api-first", labelKey: "options.searchApiFirst" },
               { value: "gateway-only", labelKey: "options.searchGatewayOnly" },
               { value: "api-only", labelKey: "options.searchApiOnly" },
+              // 用户 2026-10-20：下拉里要有「不使用网页搜索」。
+              { value: "off", labelKey: "options.searchOff" },
             ],
             fallback: "gateway-first",
           },
           {
-            key: "searchApiKeyEnv",
+            // 多 key：一行一个引用名，按顺序轮替（401/402 换下一条）。
+            // 用 `text` + 逗号/换行分隔，因为字段控件没有「列表」这种 kind。
+            key: "searchApiKeyRefs",
             kind: "text",
-            labelKey: "field.searchApiKeyEnv",
-            hintKey: "field.searchApiKeyEnv.hint",
+            labelKey: "field.searchApiKeyRefs",
+            hintKey: "field.searchApiKeyRefs.hint",
+            // 一个引用名；多个用逗号分隔（控件是单行文本框，换行会被吃掉）。
             fallback: "DEEPSEEK_API_KEY",
           },
         ],

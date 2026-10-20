@@ -37,15 +37,34 @@ export type SearchRoute =
  *   一次搜索就是一次完整模型调用；
  * - `api` 走 `POST /v1/tools/search`，按**请求次数**计费（每 1000 次 5 元），不烧 token。
  *
- * `*-first` 是「优先但可回退」，`*-only` 是「不许回退，不可用就明确失败」。
+ * `*-first` 是「优先但可回退」，`*-only` 是「不许回退，不可用就明确失败」，
+ * `off` 是「完全不启用网页搜索」（用户 2026-10-20 要求：下拉里要有这一项）。
  */
-export type SearchStrategy = "gateway-first" | "api-first" | "gateway-only" | "api-only";
+export type SearchStrategy = "gateway-first" | "api-first" | "gateway-only" | "api-only" | "off";
 
 /** 全部策略（渲染下拉与校验都用这一份，避免两处各写一遍）。 */
-export const SEARCH_STRATEGIES: readonly SearchStrategy[] = ["gateway-first", "api-first", "gateway-only", "api-only"];
+export const SEARCH_STRATEGIES: readonly SearchStrategy[] = [
+  "gateway-first",
+  "api-first",
+  "gateway-only",
+  "api-only",
+  "off",
+];
 
 /** 缺省策略：网关优先 —— 用订阅额度，不额外花钱。 */
 export const DEFAULT_SEARCH_STRATEGY: SearchStrategy = "gateway-first";
+
+/**
+ * 用户是否**关掉了**网页搜索。
+ *
+ * 只在显式选 `off` 时为真：缺失、空串、其它值一律算启用 —— 线上值形状不可信，
+ * 把「没配过」当成关闭会让搜索莫名其妙不可用。
+ * @param strategy - 设置文档里的策略值。
+ * @returns 是否关闭。
+ */
+export function isSearchDisabled(strategy: unknown): boolean {
+  return typeof strategy === "string" && strategy.trim().toLowerCase() === "off";
+}
 
 /** 选路的输入。 */
 export interface SearchRouteInput {
@@ -99,6 +118,9 @@ export function chooseSearchRoute(input: SearchRouteInput): SearchRoute {
     : DEFAULT_SEARCH_STRATEGY;
 
   switch (strategy) {
+    case "off":
+      // 用户明确关掉了：两条路都不走，界面/宿主据此报「搜索未启用」。
+      return { kind: "unavailable" };
     case "gateway-only":
       // 用户明确要求只用网关：不可用时**明确失败**，不偷偷改用 API 烧他的余额。
       return gatewayReady ? { kind: "gateway", provider: SEARCH_CAPABLE_GATEWAY } : { kind: "unavailable" };
