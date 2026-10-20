@@ -1529,6 +1529,13 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [updateState, setUpdateState] = useState<UpdateState | undefined>(undefined);
     const [updateBusy, setUpdateBusy] = useState(false);
     /**
+     * 是否显示「刷新页面」提示。
+     *
+     * 两个来源：① 共享界面没注册成功（`sharedSurfacesReady()` 为 false）；
+     * ② 刚刚通过更新按钮装好了新版本 —— 那时页面里跑的还是旧代码。
+     */
+    const [reloadHint, setReloadHint] = useState(false);
+    /**
      * 密钥实测结论（`ref → 结论`）与正在测试的那一把。
      *
      * 用户 2026-10-20：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话就进行提示」
@@ -1896,13 +1903,16 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         for (let tick = 0; tick < 60; tick += 1) {
           const progress = await pollUpdate(started.operationId);
           if (progress.state === "succeeded") {
-            // 装好了。新代码要页面重载才会生效（与「插件更新」提示同一条理由），
-            // 但**不自动刷新**：用户可能正在设置页做别的事。给出结论让他自己点。
-            setUpdateState({
-              kind: "current",
-              installed: "",
-              source: "",
-            });
+            // 装好了。**必须提示刷新页面**：新装的代码要页面重载才会进启动图
+            // （与「插件已更新」那条提示同一条理由）。但**不自动刷新** —— 用户可能正在
+            // 设置页做别的事，页面突然重载会打断他。
+            //
+            // 不能用 `kind: "current"` 表示「装好了」：那个状态会渲染成
+            // 「已是最新版本（{installed}）」，而此刻 `installed` 是空串，界面会显示
+            // 「已是最新版本（）」—— 括号里什么都没有。所以改用 `unknown` + 一句明确的
+            // 说明，并让 `reloadHint` 把它变成「刷新页面」的入口。
+            setUpdateState({ kind: "unknown", reason: t("update.done") });
+            setReloadHint(true);
             return;
           }
           if (progress.state === "failed" || progress.state === "cancelled" || progress.state === "rolled-back") {
@@ -1962,7 +1972,9 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       // 判据：本页已经能渲染设置页，说明客户端 bundle 跑过了；但共享界面**没有**注册成功
       // （`apply` 的注册那一步没跑 / 抛错），或者侧边栏槽位在本页压根没被宿主渲染。
       // 这两种情况刷新一次页面都能解决，不必重启宿主。
-      ...(sharedSurfacesReady() ? {} : { reloadHint: true }),
+      // 两种情况刷新一次页面都能解决，不必重启宿主：
+      // ① 共享界面没注册成功；② 刚通过更新按钮装好新版本（页面里跑的还是旧代码）。
+      ...(reloadHint || !sharedSurfacesReady() ? { reloadHint: true } : {}),
       // 「刷新页面」按钮：只是重载本页，不碰任何数据。
       onReload: () => {
         reloadPage();

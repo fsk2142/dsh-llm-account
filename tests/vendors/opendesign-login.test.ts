@@ -146,6 +146,41 @@ it("找不到 vela 也没有本机登录产物：failed/vela-missing，不写任
   expect(storeKey).not.toHaveBeenCalled();
 });
 
+// —— 诊断不能被吞掉（2026-10-20 体检）——
+
+it("**查找 vela 时抛错**要说出真原因，不能伪装成「没装 vela」", async () => {
+  // 以前这里把错误吞成 `undefined`，于是权限问题 / 非法路径都会被报成「没装 vela」——
+  // 用户照着装一遍环境也不会好。
+  const login = createOpenDesignLogin(
+    loginDeps({
+      resolveVela: async () => {
+        throw new Error("EACCES: permission denied, access 'Program Files vela'");
+      },
+      readFile: async () => Promise.reject(new Error("ENOENT")),
+    }),
+  );
+  const status = await login.begin();
+  expect(status.state).toBe("failed");
+  expect(status.reason).toBe("vela-missing");
+  // 原文必须带出来。
+  expect(status.detail).toContain("EACCES");
+  expect(status.detail).toContain("查找 vela 时出错");
+});
+
+it("**spawn 同步抛错**也要带出原文（不只是 unavailable）", async () => {
+  const login = createOpenDesignLogin(
+    loginDeps({
+      spawn: () => {
+        throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+      },
+    }),
+  );
+  const status = await login.begin();
+  expect(status.state).toBe("failed");
+  expect(status.reason).toBe("unavailable");
+  expect(status.detail).toContain("EINVAL");
+});
+
 it("有界窗口内没解析出授权提示：failed/timeout（vela 起不来或输出形状变了）", async () => {
   // sleep 立即返回：解析窗口瞬间用完，而 stdout 什么都没有。
   const login = createOpenDesignLogin(loginDeps({ spawn: () => fakeChild() }));

@@ -509,22 +509,38 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
     this.#abort = abort;
 
     let vela: string | undefined;
+    let resolveProblem: string | undefined;
     try {
       // 走**字段**而不是 `deps.resolveVela`：构造时已经把缺省解析器装进字段，直接读 deps
       // 会绕过缺省值（它还是可选属性 ——  TS 会判「可能未定义」）。
       vela = await this.#resolveVela();
-    } catch {
+    } catch (error) {
+      // 解析器自己抛错 ≠ 没装 vela。以前这里把错误吞成 `undefined`，于是权限问题、
+      // 路径里有非法字符这类故障都会被报成「没装 vela / 没有可导入的登录产物」——
+      // 用户照着装一遍环境也不会好。把原文留下来，交给失败状态带去界面。
       vela = undefined;
+      resolveProblem = error instanceof Error ? error.message : String(error);
     }
     if (abort.signal.aborted || this.#cancelPending) return this.#settleCancelled();
 
-    if (vela === undefined) return await this.#importWithoutVela(attempt, abort.signal);
+    if (vela === undefined) {
+      const imported = await this.#importWithoutVela(attempt, abort.signal);
+      // 导入也没成（`vela-missing`）且解析器**报过错**：那条真错误才是原因。
+      return imported.reason === "vela-missing" && resolveProblem !== undefined
+        ? { ...imported, detail: `查找 vela 时出错：${resolveProblem}` }
+        : imported;
+    }
 
     let child: VelaChild;
     try {
       child = this.#spawn(vela, ["login"]);
-    } catch {
-      this.#statusValue = { state: "failed", reason: "unavailable" };
+    } catch (error) {
+      // spawn 同步抛错（参数非法、路径不可执行）：同样把原文带出去，不只是 `unavailable`。
+      this.#statusValue = {
+        state: "failed",
+        reason: "unavailable",
+        detail: `启动 vela 失败：${error instanceof Error ? error.message : String(error)}`,
+      };
       return { ...this.#statusValue };
     }
     this.#child = child;

@@ -366,6 +366,7 @@ export type CopyKey =
   | "update.notApplicable"
   | "update.unknown"
   | "update.starting"
+  | "update.done"
   | "update.failed"
   | "account.reason.no-signin"
   | "account.reason.config-invalid"
@@ -703,6 +704,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
       "当前是**本地链接安装**（{installed}），它跟着源码走，不会通过更新按钮变化 —— 改了代码刷新页面即可。要装发行版，请从插件市场重新安装一次。",
     "update.unknown": "暂时查不到更新信息：{reason}",
     "update.starting": "正在更新…",
+    "update.done": "装好了。刷新页面后新版本才会生效（下面那个「刷新页面」按钮）。",
     "update.failed": "更新失败：{reason}",
     "account.reason.no-signin": "浏览器里没有完成授权（vela 已退出）。请重试并在浏览器里批准。",
     "account.reason.config-invalid": "本机的登录产物形状不认识（缺少 runtime key）。请重新登录一次。",
@@ -1032,6 +1034,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
       "This is a **linked local install** ({installed}); it follows the source tree and never changes through an update button — edit the code and reload the page. To use a release build, install it from the plugin market again.",
     "update.unknown": "Could not check for updates: {reason}",
     "update.starting": "Updating…",
+    "update.done": "Installed. Reload the page to start using the new version (the button below).",
     "update.failed": "Update failed: {reason}",
     "account.reason.no-signin": "The browser never finished signing in (vela exited). Try again and approve in the browser.",
     "account.reason.config-invalid": "The local sign-in data has an unrecognised shape (no runtime key). Sign in again.",
