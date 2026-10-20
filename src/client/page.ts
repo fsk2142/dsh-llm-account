@@ -14,7 +14,8 @@ import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
-import type { CardGroupSpec, VendorEntry } from "./registry";
+import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
+import type { VendorEntry } from "./registry";
 
 /** 页面外壳的属性。全部是数据与回调：外壳自己不留状态。 */
 export interface PageShellProps {
@@ -77,13 +78,12 @@ function renderErrorPanel(error: unknown): ReactElement {
 /** 外壳本体（假定不抛；抛了由 {@link PageShell} 接住）。 */
 function pageBody(props: PageShellProps): ReactElement {
   const { state, entries, t } = props;
-  const active = entries.find((entry) => entry.ns === state.activeNs);
-  // 「一个厂商都没发现」是**页面级**的事实，与当前选中哪张 tab 无关。
-  //
-  // 功能页常驻之后，`active` 几乎不再是 undefined（功能页永远在 entries 里），所以空态
-  // 判定不能只靠 `active === undefined` —— 否则用户看到的是「一个干净的功能页」，
-  // 而真相是「三家网关一个都没被发现」，那正是最需要说出口的情况。
+  // 「一个厂商都没发现」是**页面级**的事实，与选中哪个设置对象无关（功能页常驻之后
+  // `active` 几乎不再为 undefined）。
   const noVendor = !state.tabs.some((tab) => tab.ns !== FEATURE_TAB_NS);
+  // 四张卡片把三家的字段合并渲染。功能页（切换/搜索）的字段也属于这几张卡，
+  // 所以它**参与合并**，只是它没有自己的 tab 了。
+  const vendors = entries;
 
   return createElement(
     "div",
@@ -95,13 +95,7 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
     props.accounts === undefined ? null : props.accounts,
-    // 「设置对象」下拉：**页面级**，不挂在任何卡片组里。
-    //
-    // 以前它挂在「高级」组内，于是选中一个**没有高级组**的页时下拉会消失，用户就再也切不回
-    // 别的设置对象。功能页（切换与搜索）正是这种页，所以这里必须提升到页面级。
-    props.mergeTabs === true ? settingsTarget(props) : null,
-    props.mergeTabs === true ? null : tabRow(props),
-    // 空态提示：**独立于选中的 tab** 显示一次（见上面 noVendor 的说明）。
+    // 空态提示：独立于任何选择显示一次（见上面 noVendor 的说明）。
     noVendor
       ? createElement(
           Fragment,
@@ -118,79 +112,131 @@ function pageBody(props: PageShellProps): ReactElement {
               ),
         )
       : null,
-    active === undefined
-      ? null
-      : vendorBody(props, active),
-  );
-}
-
-/** 合并模式下的设置对象下拉（替代供应商 tab 行）。 */
-function settingsTarget(props: PageShellProps): ReactNode {
-  const { state, t } = props;
-  if (state.tabs.length === 0) return null;
-  return createElement(
-    "div",
-    { "data-settings-target": "true", className: CSS_CLASS.field },
-    createElement(
-      "span",
-      { className: CSS_CLASS.fieldText },
-      createElement("span", null, t("settingsTarget")),
-      createElement("small", null, t("settingsTarget.hint")),
-    ),
-    createElement(
-      "select",
-      {
-        "data-settings-target-select": "true",
-        value: state.activeNs ?? state.tabs[0]?.ns ?? "",
-        onChange: (event: { target?: { value?: string } }) => {
-          if (event.target?.value !== undefined) props.onSelectTab(event.target.value);
-        },
-      },
-      ...state.tabs.map((tab) => createElement("option", { key: tab.ns, value: tab.ns }, t(tab.labelKey))),
-    ),
-  );
-}
-
-/** 标签页一行；没有标签页时什么都不渲染。 */
-function tabRow(props: PageShellProps): ReactNode {
-  const { state, t } = props;
-  if (state.tabs.length === 0) return null;
-  return createElement(
-    "nav",
-    { "data-tabs": "true", role: "tablist", className: CSS_CLASS.tabs },
-    state.tabs.map((tab) =>
-      createElement(
-        "button",
-        {
-          key: tab.ns,
-          type: "button",
-          "data-tab": tab.ns,
-          role: "tab",
-          "aria-selected": tab.ns === state.activeNs,
-          className: CSS_CLASS.tab,
-          onClick: () => props.onSelectTab(tab.ns),
-        },
-        t(tab.labelKey),
-      ),
-    ),
+    // 四张卡片（按功能分组，三家合并）。用户 2026-10-20：「三家设置合并在一起，
+    // 除非某个设置是专门针对某一家网关的」「不要那个设置对象，就按照可收起的卡片形式」。
+    ...SETTINGS_CARDS.map((card) => settingsCardElement(props, vendors, card)),
+    // 保存条：任何一家厂商有未保存改动时出现（合并视图下共用一条）。
+    // 功能页与承载行共用文档，不单独出按钮。
+    vendors.some((entry) => entry.ns !== FEATURE_TAB_NS && isDirty(props.state, entry.ns))
+      ? mergedSaveBar(props, vendors)
+      : null,
   );
 }
 
 /**
- * 当前厂商的主体：通用字段卡片 → 专属卡片 → 保存条。
+ * 一张功能卡片：把三家（以及功能页）里属于这张卡的字段**合并去重**后渲染。
  *
- * 专属卡片（模型列表）放在设置之后：OpenCode 的模型目录有几十个，若把它放在最前面，
- * 「切换策略」会被推到一屏之外，看起来像消失。模型卡片自己带折叠箭头，需要长时间浏览时
- * 仍可收起。
+ * 合并规则直接来自 {@link SETTINGS_CARDS}：
+ * - `shared` 字段：任意一家有这个声明就渲染**一次**（三家同名同义）；从第一家取控件形状，
+ *   值也取第一家（它们本来就该一致，写回时会镜像）。
+ * - `specific` 字段：只在它归属的那一家存在时渲染，并标注是哪一家。
+ * @param props - 页面属性。
+ * @param vendors - 参与合并的厂商行（不含功能页）。
+ * @param card - 卡片声明。
+ * @returns 可折叠卡片元素。
  */
-function vendorBody(props: PageShellProps, entry: VendorEntry): ReactNode {
-  const extras = props.renderVendorCards?.(entry.ns);
+function settingsCardElement(
+  props: PageShellProps,
+  vendors: readonly VendorEntry[],
+  card: SettingsCard,
+): ReactNode {
+  const { t } = props;
+  const nodes: ReactNode[] = [];
+
+  // 1) 共有字段：第一次出现时渲染一次。
+  for (const key of card.shared) {
+    const owner = vendors.find((entry) => fieldsOf(props.state, entry).some((field) => field.spec.key === key));
+    if (owner === undefined) continue;
+    const field = fieldsOf(props.state, owner).find((candidate) => candidate.spec.key === key);
+    if (field === undefined) continue;
+    nodes.push(fieldElement(props, owner, field));
+  }
+
+  // 2) 厂商专属字段：按厂商顺序渲染，并标注归属。
+  for (const vendor of vendors) {
+    for (const field of fieldsOf(props.state, vendor)) {
+      const declared = card.specific.find((item) => item.key === field.spec.key && item.vendor === vendor.providerId);
+      if (declared === undefined) continue;
+      nodes.push(fieldElement(props, vendor, field, labelOf(props, vendor)));
+    }
+  }
+
+  if (nodes.length === 0) return null;
+
+  // 原生 `<details>` 自带可收起语义（与页面里其它卡片一致，不需要额外状态）。
   return createElement(
-    Fragment,
-    null,
-    ...cardGroupsOf(entry).map((group) => cardGroupElement(props, entry, group)),
-    extras === undefined ? null : extras,
-    isDirty(props.state, entry.ns) ? saveBar(props, entry) : null,
+    "details",
+    {
+      key: card.id,
+      "data-card": card.id,
+      // 高级设置默认收起（平时不动）；其余默认展开。
+      ...(card.id === "advanced" ? {} : { open: true }),
+      className: CSS_CLASS.card,
+    },
+    createElement(
+      "summary",
+      { className: CSS_CLASS.modelSummary, "data-card-collapse": card.id },
+      createElement("span", { className: CSS_CLASS.modelSummaryTitle }, t(card.labelKey)),
+      createElement(ChevronIcon, null),
+    ),
+    createElement("small", { className: CSS_CLASS.note }, t(card.hintKey)),
+    ...nodes,
+  );
+}
+
+/** 厂商的展示名（用于「这一项只对某家生效」的标注）。 */
+function labelOf(props: PageShellProps, entry: VendorEntry): string {
+  return props.t(entry.labelKey);
+}
+
+/**
+ * 合并视图的保存条：三家共用一条。
+ *
+ * 为什么要合并：四张卡片里三家字段是混排的，若每家各一条保存条，用户会看到三根按钮却分不清
+ * 哪一根管哪一行。这里一次性提交**所有脏行**。
+ * @param props - 页面属性。
+ * @param vendors - 厂商行。
+ * @returns 保存条元素。
+ */
+function mergedSaveBar(props: PageShellProps, vendors: readonly VendorEntry[]): ReactElement {
+  const { t } = props;
+  // 功能页与承载行（commandcode）共用同一份文档，它的「脏」由那一行代表，
+  // 所以这里只给**真正的厂商行**出按钮（否则会多出一根写同一份文档的按钮）。
+  const dirty = vendors.filter((entry) => entry.ns !== FEATURE_TAB_NS && isDirty(props.state, entry.ns));
+  const saving = props.saving === true;
+  return createElement(
+    "div",
+    { "data-save-bar": "true", className: CSS_CLASS.save },
+    ...dirty.map((entry) =>
+      createElement(
+        "button",
+        {
+          key: entry.ns,
+          type: "button",
+          "data-save": entry.ns,
+          className: CSS_CLASS.buttonPrimary,
+          disabled: saving,
+          onClick: () => props.onSave(entry.ns),
+        },
+        saving ? t("saving") : t("save"),
+      ),
+    ),
+    createElement("small", null, t("saveHint")),
+    ...dirty
+      .filter((entry) => props.state.saveErrors[entry.ns] !== undefined)
+      .map((entry) =>
+        createElement(
+          "small",
+          {
+            key: `error-${entry.ns}`,
+            // 值与旧版一致：**命名空间**（调用方与测试都靠它定位是哪一家失败了）。
+            "data-save-error": entry.ns,
+            "data-save-error-reason": props.state.saveErrors[entry.ns],
+            className: CSS_CLASS.failure,
+          },
+          t("save.failed"),
+        ),
+      ),
   );
 }
 
@@ -201,34 +247,22 @@ function vendorBody(props: PageShellProps, entry: VendorEntry): ReactNode {
  * 也能收）：这两组都是配置一次就不常动的字段，摊开会让设置页显得很长；账号与额度是
  * 常用区，保持展开。
  */
-function cardGroupElement(props: PageShellProps, entry: VendorEntry, group: CardGroupSpec): ReactElement {
-  const fields = fieldsOf(props.state, entry).filter((field) => group.fields.some((spec) => spec.key === field.spec.key));
-  const heading = createElement("h2", null, props.t(`group.${group.group}`));
-  const hint = createElement("p", { "data-card-hint": group.group }, props.t(`group.${group.group}.hint`));
-  const body = fields.map((field) => fieldElement(props, entry, field));
 
-  if (group.group === "advanced" || group.group === "integrations") {
-    return createElement(
-      "details",
-      { key: group.group, "data-card-group": group.group, className: CSS_CLASS.card },
-      createElement(
-        "summary",
-        null,
-        createElement(ChevronIcon, null),
-        // 标题用组名，不再写死「高级」—— 折叠组现在不止一个。
-        props.t(`group.${group.group}`),
-      ),
-      // 「设置对象」下拉已提升到页面级（见 pageBody）—— 它不能依赖某个卡片组存在，
-      // 否则没有高级组的页（如功能页）会把唯一的切换入口弄丢。
-      hint,
-      ...body,
-    );
-  }
-  return createElement("section", { key: group.group, "data-card-group": group.group, className: CSS_CLASS.card }, heading, hint, ...body);
-}
-
-/** 一个字段：标签 + 控件 + 说明。控件种类由字段声明决定，不认识的一律不渲染。 */
-function fieldElement(props: PageShellProps, entry: VendorEntry, field: DraftField): ReactNode {
+/**
+ * 一个字段：标签 + 控件 + 说明。控件种类由字段声明决定，不认识的一律不渲染。
+ * @param props - 页面属性。
+ * @param entry - 这个字段所属的厂商行（写回按它走）。
+ * @param field - 字段的控件状态。
+ * @param vendorLabel - 厂商专属字段的归属标注；共有字段不传（它们三家通用，标了反而让人
+ *   以为「改这一家不影响别家」）。
+ * @returns 字段元素；控件认不出时为 `null`。
+ */
+function fieldElement(
+  props: PageShellProps,
+  entry: VendorEntry,
+  field: DraftField,
+  vendorLabel?: string,
+): ReactNode {
   const { t } = props;
   const { spec } = field;
   const control = fieldControl(props, entry, field);
@@ -238,8 +272,28 @@ function fieldElement(props: PageShellProps, entry: VendorEntry, field: DraftFie
   // 把标签列挤到只剩一两个字宽（真机截图里「用量刷新间隔（分钟）」就是竖排的）。
   return createElement(
     "label",
-    { key: spec.key, "data-field": spec.key, className: CSS_CLASS.field },
-    createElement("span", { className: CSS_CLASS.fieldText }, createElement("span", null, t(spec.labelKey)), hint),
+    {
+      key: spec.key,
+      "data-field": spec.key,
+      // 厂商专属字段带上归属，便于排查「这项只对某家生效」。
+      ...(vendorLabel === undefined ? {} : { "data-field-vendor": entry.providerId }),
+      className: CSS_CLASS.field,
+    },
+    createElement(
+      "span",
+      { className: CSS_CLASS.fieldText },
+      createElement(
+        "span",
+        null,
+        ...(vendorLabel === undefined
+          ? [t(spec.labelKey)]
+          : [
+              t(spec.labelKey),
+              createElement("small", { key: "vendor", className: CSS_CLASS.vendorBadge }, vendorLabel),
+            ]),
+      ),
+      hint,
+    ),
     control,
   );
 }
@@ -321,28 +375,6 @@ function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftFie
 }
 
 /** 底部保存条：只在有改动时渲染（`vendorBody` 已经判过）；保存失败时带一条可读原因。 */
-function saveBar(props: PageShellProps, entry: VendorEntry): ReactElement {
-  const { t } = props;
-  // 失败原因原文放在 data 属性上供排查，界面上只显示通用文案（宿主的错误串对用户没有意义）。
-  const error = props.state.saveErrors[entry.ns];
-  const saving = props.saving === true;
-  return createElement(
-    "div",
-    { "data-save-bar": "true", className: CSS_CLASS.save },
-    createElement("button", { type: "button", "data-save": entry.ns, className: CSS_CLASS.buttonPrimary, disabled: saving, onClick: () => props.onSave(entry.ns) }, saving ? t("saving") : t("save")),
-    createElement("small", null, t("saveHint")),
-    ...(error === undefined
-      ? []
-      : [
-          createElement("small", {
-            key: "error",
-            "data-save-error": entry.ns,
-            "data-save-error-reason": error,
-            className: CSS_CLASS.failure,
-          }, t("save.failed")),
-        ]),
-  );
-}
 
 /**
  * 该厂商声明的卡片组（供容器组件与 T5–T7 复用，避免它们各自再实现一遍规则）。

@@ -162,11 +162,10 @@ describe("设置页容器仿真", () => {
     const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
 
-    // 切到 opencode（合并模式没有 tab 行，用设置对象下拉），改 baseURL，保存。
-    fireSim(find(page.tree(), "data-settings-target-select", "true"), "onChange", {
-      target: { value: "llm-opencode-go" },
-    });
-    await settleSim(mini);
+    // 四张卡片把三家字段混排，`baseURL` 是**厂商专属**字段（opencode 与 opendesign 各一个），
+    // 所以按 `data-field-vendor` 定位到 opencode 那一个（不再有「设置对象」下拉可切）。
+    const baseUrl = findSim(page.tree(), "data-field-vendor", "dsh-opencode-go");
+    expect(baseUrl, "opencode 的 baseURL 字段应带归属标记").toBeDefined();
     fireSim(find(page.tree(), "data-field-input", "baseURL"), "onChange", { target: { value: "https://new.example" } });
     await settleSim(mini);
     expect(findSim(page.tree(), "data-save-bar")).toBeDefined();

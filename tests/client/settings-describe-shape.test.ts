@@ -242,10 +242,9 @@ describeSuite("remote.settings.describe() shape", () => {
     expect(accepted).toBeUndefined();
   });
 
-  it("yields one tab per discovered vendor, in declared order", async () => {
-    // The tab row is derived from discovery: no vendors found means no tabs and
-    // the page shows the empty notice. This is the user-visible symptom of the
-    // shape regression, so pin the whole chain rather than just the snapshot.
+  it("discovers the declared vendors and renders their settings without the empty notice", async () => {
+    // 发现链路是「页面能看到设置」的唯一来源：没有任何快照时页面只能给空态。
+    // 这个测试钉住整条链（describe → snapshots → state → 渲染），不只是快照本身。
     const described = hostDescribe([
       { ns: "llm-commandcode", value: { showSidebarQuota: true } },
       { ns: "llm-opencode-go", value: { showSidebarQuota: false } },
@@ -257,8 +256,12 @@ describeSuite("remote.settings.describe() shape", () => {
 
     const shell = PageShell({ state, entries: ENTRIES, t: (key) => key, onSelectTab: () => undefined, onSetField: () => undefined, onSave: () => undefined });
     const rendered = flatten(shell);
-    expect(rendered.some((node) => node.props?.["data-tab"] === "llm-commandcode")).toBe(true);
-    expect(rendered.some((node) => node.props?.["data-tab"] === "llm-opencode-go")).toBe(true);
+    // 用户 2026-10-20：三家设置合并成四张卡片，不再有厂商 tab / 设置对象下拉。
+    // （这份 fixture 的 vendors 没有声明任何字段，所以四张卡都是空的 —— 这里只钉
+    //  「没有 tab」与「不报空态」两件事，字段级行为由 page.test.ts 覆盖。）
+    expect(rendered.some((node) => node.props?.["data-tab"] !== undefined)).toBe(false);
+    expect(rendered.some((node) => node.props?.["data-settings-target-select"] !== undefined)).toBe(false);
+    // 发现成功 → 不出现「没有可显示的厂商」。
     expect(rendered.some((node) => node.props?.["data-empty"] === "vendor")).toBe(false);
   });
 });

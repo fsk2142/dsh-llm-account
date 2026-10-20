@@ -281,22 +281,23 @@ function render(state: PageState, t = dictionaryOf("en")): StubElement {
   });
 }
 
-it("页面外壳渲染标题、简介与每个厂商一个标签页", () => {
+it("页面外壳渲染标题、简介，以及四张功能卡片（不再有厂商 tab / 设置对象下拉）", () => {
   const tree = render(createPageState(VENDORS, SNAPSHOTS));
   const all = elementsOf(tree);
 
-  const tabs = all.filter((element) => element.props["data-tab"] !== undefined);
-  // 功能页（切换与搜索）永远排最后：它不是厂商，但必须常驻 ——
-  // 两台功能都关掉后，用户仍然需要这个入口把功能重新打开。
-  expect(tabs.map((element) => element.props["data-tab"])).toEqual([
-    "llm-commandcode",
-    "llm-opencode-go",
-    FEATURE_TAB_NS,
-  ]);
+  // 用户 2026-10-20：三家设置合并，不要设置对象，改成可收起卡片。
+  expect(all.some((element) => element.props["data-tab"] !== undefined)).toBe(false);
+  expect(all.some((element) => element.props["data-settings-target-select"] !== undefined)).toBe(false);
+
+  // 四张卡片按固定顺序出现（显示 → 切换 → 搜索 → 高级）。
+  const cards = all
+    .filter((element) => element.props["data-card"] !== undefined)
+    .map((element) => element.props["data-card"]);
+  expect(cards).toEqual(expect.arrayContaining(["display", "switching", "search", "advanced"]));
+
   const texts = textOf(tree);
   expect(texts).toContain(COPY.en.title);
   expect(texts).toContain(COPY.en.intro);
-  expect(texts).toContain(COPY.en["vendor.commandcode"]);
 });
 
 
@@ -320,7 +321,7 @@ it("渲染期抛错时显示错误面板，而不是整页空白", () => {
   expect(textOf(tree).join("\n")).toContain("t() exploded");
 });
 
-it("「集成与显示」与「高级」都默认折叠（原生 details），标题用组名而不是写死的「高级」", () => {
+it("四张卡片都是可折叠的 details，标题用卡片名（不是写死的「高级」）", () => {
   const state = createPageState(VENDORS, SNAPSHOTS);
   const tree = PageShell({
     state,
@@ -331,18 +332,18 @@ it("「集成与显示」与「高级」都默认折叠（原生 details），�
     onSave: () => undefined,
   });
   const all = elementsOf(tree);
-  for (const group of ["integrations", "advanced"]) {
-    const details = all.find((element) => element.type === "details" && element.props["data-card-group"] === group);
-    expect(details, `${group} 应该是可折叠的 details`).toBeDefined();
-    // 默认收起：不带 open。
-    expect(details!.props.open).toBeUndefined();
-    // 标题用组名（写死「高级」会让两个折叠组同名）。
-    const summary = elementsOf(details).find((element) => element.type === "summary")!;
-    expect(textOf(summary).join(" ")).toContain(COPY.zh[`group.${group}`]);
+  for (const id of ["display", "switching", "search", "advanced"]) {
+    const details = all.find((element) => element.type === "details" && element.props["data-card"] === id);
+    expect(details, `${id} 应该是可折叠的 details`).toBeDefined();
+    // 标题用卡片名，四张卡各有自己的名字。
+    const summary = elementsOf(details!).find((element) => element.type === "summary")!;
+    expect(textOf(summary).join(" ")).toContain(COPY.zh[`card.${id}`]);
   }
-  // 不折叠的组必须还是 section（`privacy` 在快照里声明了）。
-  const privacy = all.find((element) => element.props["data-card-group"] === "privacy");
-  if (privacy !== undefined) expect(privacy.type).toBe("section");
+  // 高级设置默认收起（平时不动）；其余默认展开。
+  const advanced = all.find((element) => element.props["data-card"] === "advanced")!;
+  expect(advanced.props.open).toBeUndefined();
+  const display = all.find((element) => element.props["data-card"] === "display")!;
+  expect(display.props.open).toBe(true);
 });
 it("数字字段写回 number（字符串会让宿主按非法值回落）", () => {
   const state = createPageState(VENDORS, SNAPSHOTS);
@@ -361,18 +362,23 @@ it("数字字段写回 number（字符串会让宿主按非法值回落）", () 
   expect(onSetField).toHaveBeenCalledWith("llm-commandcode", "quotaRefreshMinutes", 5);
 });
 
-it("未声明的卡片组不渲染元素；声明了的组带着字段渲染", () => {
+it("合并视图把三家字段并进四张卡：共有字段只出现一次，专属字段标归属", () => {
   const tree = render(createPageState(VENDORS, SNAPSHOTS));
   const all = elementsOf(tree);
 
-  const groups = all.filter((element) => element.props["data-card-group"] !== undefined).map((element) => element.props["data-card-group"]);
-  expect(groups).toEqual(["integrations", "advanced"]);
-  // 「隐私与安全」这一期两家都没声明 → 连标题都不出现。
-  expect(textOf(tree)).not.toContain(COPY.en["group.privacy"]);
+  // 共有字段只渲染一次（`showSidebarQuota` 三家都有声明，但不能出现三次）。
+  const shared = all.filter((element) => element.props["data-field"] === "showSidebarQuota");
+  expect(shared).toHaveLength(1);
 
+  // 厂商专属字段出现，并带归属标记。
+  const owned = all.filter((element) => element.props["data-field-vendor"] !== undefined);
+  expect(owned.map((element) => element.props["data-field-vendor"])).toContain("opendesign");
+
+  // 字段仍然都在（合并没有把任何一家丢掉）。
   const fieldKeys = all.filter((element) => element.props["data-field"] !== undefined).map((element) => element.props["data-field"]);
   expect(fieldKeys).toContain("showSidebarQuota");
   expect(fieldKeys).toContain("apiBase");
+  expect(fieldKeys).toContain("workspaceId");
 });
 
 it("保存条只在当前厂商有改动时出现", () => {

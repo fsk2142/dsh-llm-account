@@ -89,6 +89,14 @@ export type CopyKey =
   | "field.searchPreferGateway.hint"
   | "field.searchApiKeyEnv"
   | "field.searchApiKeyEnv.hint"
+  | "card.display"
+  | "card.display.hint"
+  | "card.switching"
+  | "card.switching.hint"
+  | "card.search"
+  | "card.search.hint"
+  | "card.advanced"
+  | "card.advanced.hint"
   | "vendor.features"
   | "field.featureSwitchEnabled"
   | "field.featureSwitchEnabled.hint"
@@ -376,6 +384,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchPreferGateway.hint": "当前会话走 opendesign 且是 DeepSeek 模型时用订阅额度搜索；其余情况回退到下面的 API key。",
     "field.searchApiKeyEnv": "搜索用的 API key 引用名",
     "field.searchApiKeyEnv.hint": "填凭据库里的引用名（不是明文密钥）。缺省 DEEPSEEK_API_KEY，可在设置页的凭据区写入。",
+    "card.display": "显示设置",
+    "card.display.hint": "侧边栏额度卡片要不要显示、多久刷新一次。三家共用。",
+    "card.switching": "切换设置",
+    "card.switching.hint": "什么时候换号/换模型、中断后要不要自动继续。三家共用。",
+    "card.search": "搜索设置",
+    "card.search.hint": "联网搜索走哪条路：优先网关订阅额度，否则用下面这个 API key。三家共用。",
+    "card.advanced": "高级设置",
+    "card.advanced.hint": "端点、超时与输出上限。带厂商徽标的项只对那一家生效。",
     "vendor.features": "切换与搜索",
     "field.featureSwitchEnabled": "显示切换策略",
     "field.featureSwitchEnabled.hint": "关掉后这一块隐藏，但选项卡保留 —— 你仍然可以从这里重新打开。",
@@ -657,6 +673,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchPreferGateway.hint": "Uses subscription quota when the session runs opendesign with a DeepSeek model; otherwise falls back to the API key below.",
     "field.searchApiKeyEnv": "Search API key reference",
     "field.searchApiKeyEnv.hint": "A credential reference name, not a literal secret. Defaults to DEEPSEEK_API_KEY.",
+    "card.display": "Display",
+    "card.display.hint": "Whether the sidebar quota card shows, and how often it refreshes. Shared by all vendors.",
+    "card.switching": "Switching",
+    "card.switching.hint": "When to switch account/model, and whether to continue after an interruption. Shared.",
+    "card.search": "Search",
+    "card.search.hint": "Which route web search takes: gateway subscription quota first, then this API key. Shared.",
+    "card.advanced": "Advanced",
+    "card.advanced.hint": "Endpoints, timeouts and output limits. Items with a vendor badge apply to that vendor only.",
     "vendor.features": "Switching & Search",
     "field.featureSwitchEnabled": "Show switching strategy",
     "field.featureSwitchEnabled.hint": "Hides this block; the tab stays so you can turn it back on.",
