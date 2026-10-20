@@ -159,6 +159,26 @@ function addMonths(at: number, months: number): number {
  */
 export function planPeriodAt(periodEnd: number, at: number, periodStart?: number): BillingPeriod | undefined {
   if (!Number.isFinite(periodEnd) || periodEnd <= 0 || !Number.isFinite(at)) return undefined;
+  // 0) 本期已经结束（订阅过期 / 厂商还没报新一期）：`periodEnd` 在过去。
+  //
+  // 以前这里会返回「以过去的 periodEnd 结尾」的周期，`at` 根本不在区间内 —— 而
+  // `usage-report` 用 `record.at < period.end` 过滤，于是当前所有记录被丢掉：账号用量块显示
+  // 0 请求，而请求其实在正常进行（2026-10-20 审计）。这里改成**从 periodEnd 往后推**，
+  // 让区间真正兜住此刻；真正的「本期」仍然优先用厂商给的边界（见下面两条）。
+  if (at >= periodEnd) {
+    const anchor = periodStart !== undefined && Number.isFinite(periodStart) && periodStart > 0 && periodStart < periodEnd
+      ? periodStart
+      : addMonths(periodEnd, -1);
+    const length = periodEnd - anchor;
+    if (length > 0) {
+      // 已经过了几期就往后推几期（最多 24 期，避免异常数据导致死循环）。
+      const steps = Math.min(24, Math.max(1, Math.ceil((at - periodEnd) / length)));
+      const start = anchor + steps * length;
+      if (start <= at) {
+        return { kind: "month", key: periodKeyOf("month", start), start, end: start + length, fromResetAt: true };
+      }
+    }
+  }
   // 1) 厂商自己给了本期起点：直接用它，不做任何推算。
   if (periodStart !== undefined && Number.isFinite(periodStart) && periodStart > 0 && periodStart < periodEnd) {
     const inside = at >= periodStart && at < periodEnd;

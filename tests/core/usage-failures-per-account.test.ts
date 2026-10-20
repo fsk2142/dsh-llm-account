@@ -39,10 +39,11 @@ describe("失败明细按账号分组", () => {
     ];
     const perAccount = failureBreakdownPerAccount(records);
 
-    expect(perAccount.get("a")).toEqual([
+    // 键是 `vendor\u0000account`（见 usage-failures-vendor.test.ts：只按 account 会串味）。
+    expect(perAccount.get("opendesign\u0000a")).toEqual([
       { kind: "network", count: 2, lastAt: 1_000, lastAccount: "a" },
     ]);
-    expect(perAccount.get("b")).toEqual([{ kind: "quota", count: 1, lastAt: 1_000, lastAccount: "b" }]);
+    expect(perAccount.get("opendesign\u0000b")).toEqual([{ kind: "quota", count: 1, lastAt: 1_000, lastAccount: "b" }]);
   });
 
   it("某账号一条失败都没有 → 该账号不在结果里（界面据此不渲染那一块）", () => {
@@ -51,8 +52,8 @@ describe("失败明细按账号分组", () => {
       record({ account: "b", outcome: "success" }),
     ];
     const perAccount = failureBreakdownPerAccount(records);
-    expect(perAccount.has("a")).toBe(true);
-    expect(perAccount.has("b")).toBe(false);
+    expect(perAccount.has("opendesign\u0000a")).toBe(true);
+    expect(perAccount.has("opendesign\u0000b")).toBe(false);
   });
 
   it("同一账号两类失败，按次数降序（与全局聚合同一套排序）", () => {
@@ -61,7 +62,7 @@ describe("失败明细按账号分组", () => {
       record({ account: "a", outcome: "failure", failureKind: "network" }),
       record({ account: "a", outcome: "failure", failureKind: "network" }),
     ];
-    expect(failureBreakdownPerAccount(records).get("a")?.map((row) => row.kind)).toEqual(["network", "quota"]);
+    expect(failureBreakdownPerAccount(records).get("opendesign\u0000a")?.map((row) => row.kind)).toEqual(["network", "quota"]);
   });
 
   it("空记录 → 空 Map（不返回 undefined）", () => {
@@ -75,7 +76,7 @@ describe("失败明细按账号分组", () => {
     ];
     // 全局：network × 2；分账号：各 1。
     expect(failureBreakdownOf(records)).toEqual([{ kind: "network", count: 2, lastAt: 1_000, lastAccount: "b" }]);
-    expect(failureBreakdownPerAccount(records).get("a")?.[0]?.count).toBe(1);
-    expect(failureBreakdownPerAccount(records).get("b")?.[0]?.count).toBe(1);
+    expect(failureBreakdownPerAccount(records).get("opendesign\u0000a")?.[0]?.count).toBe(1);
+    expect(failureBreakdownPerAccount(records).get("opendesign\u0000b")?.[0]?.count).toBe(1);
   });
 });

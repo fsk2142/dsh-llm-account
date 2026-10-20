@@ -237,12 +237,19 @@ export function AccountUsageBlock(props: {
   // 花费的**口径标签**：有厂商数就标「官方账号」，只有本机数就标「仅本机」。
   // 没有这个标签，同一个 $ 符号在两台机器上会给出两个不同的数而无人解释得清。
   const costScope = vendorSpent !== undefined ? "vendor" : localSpent !== undefined ? "local" : undefined;
-  const costHint =
+  // 金额是不是**部分和**：价格表只覆盖少数模型，此时这一列只算进了有价的那部分。
+  // 不标出来，用户会把它当完整花费去对账（2026-10-20 审计）。
+  const officialPartial = bucket.officialCostPartial === true;
+  const vendorCostPartial = bucket.vendorCostPartial === true;
+  const costPartial = (costScope === "local" && officialPartial) || (costScope === "vendor" && vendorCostPartial);
+  const costHintRaw =
     costScope === "local"
       ? t("usage.localOnly")
       : officialCost === undefined
         ? undefined
         : `${t("usage.officialShort")} ≈ ${money(officialCost, "—")}`;
+  // 部分和优先说「只统计了部分」——那比口径标签更能防止误读。
+  const costHint = costPartial ? t("usage.costPartial") : costHintRaw;
 
   const head = createElement(
     "div",

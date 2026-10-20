@@ -75,6 +75,18 @@ export interface UsageBucket extends TokenCounts {
   vendorCost: number | undefined;
   /** 同一批 token 按 DeepSeek 官方价折算的价值（美元）。 */
   officialCost: number | undefined;
+  /**
+   * 上面的金额**是否只是一部分**（有记录没有价格，没被算进去）。
+   *
+   * 为什么需要它：价格表只覆盖少数模型，累加时只算「有价的那些」，于是结果是一个**部分和**
+   * 而不是 `undefined`。把部分和当完整金额显示，等于在「钱」这一列违反本项目的
+   * 「缺失不等于 0」纪律（2026-10-20 审计）。界面据此标「≈」或明说只统计了部分。
+   * 只有「至少有一条有价、且至少有一条没价」时才为 `true`；一条有价的都没有时保持
+   * `undefined`（那是「完全没有」，不是「部分」）。
+   */
+  vendorCostPartial?: boolean;
+  /** 官方价折算是否只是部分（口径同 {@link vendorCostPartial}）。 */
+  officialCostPartial?: boolean;
 }
 
 /** 一条价格（每 100 万 token 的美元价）。 */
@@ -159,6 +171,9 @@ export function aggregateUsage(
   let ok = 0;
   let vendorCost: number | undefined;
   let officialCost: number | undefined;
+  /** 有多少条记录**没有**对应价格（决定上面的金额是不是部分和）。 */
+  let vendorMissing = 0;
+  let officialMissing = 0;
 
   for (const record of records) {
     const counts = countsOf(record);
@@ -168,13 +183,19 @@ export function aggregateUsage(
     // 成本逐条累加：不同记录可能是不同模型，不能先合并 token 再套一个价。
     const vendor = costOf(counts, priceOf(record.model));
     if (vendor !== undefined) vendorCost = (vendorCost ?? 0) + vendor;
+    else vendorMissing += 1;
     const official = costOf(counts, officialPriceOf(record.model));
     if (official !== undefined) officialCost = (officialCost ?? 0) + official;
+    else officialMissing += 1;
   }
 
   const failed = requests - ok;
   // 命中率的分母：命中的 + 未命中的输入。写缓存不算（见字段注释）。
   const promptTokens = totals.cacheReadTokens + totals.inputTokens;
+  // 「部分和」的判定：有价的那部分算出来了、又有记录因为没价没算进去。
+  // 一条有价的都没有时金额是 `undefined` —— 那是「完全没有」，不是「部分」。
+  const partialOf = (total: number | undefined, missing: number): boolean | undefined =>
+    total !== undefined && missing > 0 ? true : undefined;
   return {
     period,
     since,
@@ -186,6 +207,8 @@ export function aggregateUsage(
     cacheHitRate: promptTokens === 0 ? undefined : totals.cacheReadTokens / promptTokens,
     vendorCost,
     officialCost,
+    ...(partialOf(vendorCost, vendorMissing) === undefined ? {} : { vendorCostPartial: true }),
+    ...(partialOf(officialCost, officialMissing) === undefined ? {} : { officialCostPartial: true }),
   };
 }
 

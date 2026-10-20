@@ -225,10 +225,29 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
     },
 
     async clear(): Promise<void> {
-      // 保留文件、清空内容：避免「删文件」这类破坏性操作，也避免和并发写撞上。
+      // 清**整段保留期**，不是只清今天：`readRecords` 会读每一个日文件，只清今天的会让
+      // 前几天的历史在重读后原样回来 —— 用户确认的是「清空全部」，界面却显示部分成功
+      // 且部分数据丢失（2026-10-20 审计）。
+      //
+      // 仍然**保留文件本身、只清空内容**：删文件这类破坏性操作更大，且与并发写更容易撞上。
       writeChain = writeChain.then(async () => {
         await ensureDirectory();
-        await writeFile(pathOf(now()), "", "utf8");
+        let names: string[];
+        try {
+          names = await readdir(directory);
+        } catch {
+          // 目录不可读：没有可清的东西。
+          return;
+        }
+        const files = names.filter((name) => dayOfFile(name) !== undefined);
+        // 保留期内的每一个日文件都清空（`slice` 与读路径同一口径，避免读得到却清不掉）。
+        const targets = files.sort().slice(-USAGE_RETENTION_DAYS);
+        for (const name of targets) {
+          await writeFile(join(directory, name), "", "utf8");
+        }
+        // 目录里一个日文件都没有（新装机器）时也写一个空的今天文件：让「清空」可被观察到，
+        // 与以前的行为一致。
+        if (targets.length === 0) await writeFile(pathOf(now()), "", "utf8");
       });
       await writeChain;
     },

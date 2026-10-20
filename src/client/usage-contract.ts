@@ -109,6 +109,14 @@ export interface UsageBucketView {
   cacheHitRate?: number;
   vendorCost?: number;
   officialCost?: number;
+  /**
+   * 上面的金额只是**部分**（有记录因为没有价格没被算进去）。
+   *
+   * 界面必须据此把金额标成「≈」或说明只统计了部分 —— 否则一个部分和会被当成完整花费
+   * （2026-10-20 审计：价格表只覆盖少数模型，这一列几乎总是部分和）。
+   */
+  vendorCostPartial?: boolean;
+  officialCostPartial?: boolean;
 }
 
 /** 一个账号的用量（与 `core/usage-report` 的 `AccountUsage` 同形）。 */
@@ -167,6 +175,7 @@ export interface UsageReportView {
    * 2026-10-20 审计发现的真 bug）。没有失败的账号不出现在这个数组里。
    */
   failuresByAccount?: {
+    vendor: string;
     account: string;
     rows: { kind: string; count: number; lastAt: number; lastAccount: string }[];
   }[];
@@ -449,16 +458,20 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
  */
 function failuresByAccountOf(
   value: unknown,
-): { account: string; rows: { kind: string; count: number; lastAt: number; lastAccount: string }[] }[] | undefined {
+): { vendor: string; account: string; rows: { kind: string; count: number; lastAt: number; lastAccount: string }[] }[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const out: { account: string; rows: { kind: string; count: number; lastAt: number; lastAccount: string }[] }[] = [];
+  const out: { vendor: string; account: string; rows: { kind: string; count: number; lastAt: number; lastAccount: string }[] }[] = [];
   for (const entry of value) {
     if (!isRecord(entry)) continue;
+    const vendor = entry.vendor;
     const account = entry.account;
-    if (typeof account !== "string" || account === "") continue;
+    // `account` 允许空串（选账号之前就失败的记录），但 `vendor` 必须非空 ——
+    // 没有厂商维度的条目无法归属，留着只会串味。
+    if (typeof vendor !== "string" || vendor === "") continue;
+    if (typeof account !== "string") continue;
     const rows = failuresByKindOf(entry.rows);
     if (rows === undefined) continue;
-    out.push({ account, rows });
+    out.push({ vendor, account, rows });
   }
   return out.length === 0 ? undefined : out;
 }
@@ -776,12 +789,22 @@ export interface UsageNamespace {
    */
   usageReport?(window: UsageWindowView): Promise<UsageReportView>;
   /** 清空用量台账（不可撤销；页面负责二次确认）。 */
-  usageClear?(): Promise<void>;
+  /**
+   * 清空用量台账（不可撤销；页面负责二次确认）。
+   *
+   * 返回 `unknown` 而不是 `void`：宿主的一元调用**永远 resolve 成信封**
+   * （`{ ok: true, value }` / `{ ok: false, error }`），写 `Promise<void>` 等于对类型撒谎 ——
+   * 调用方会以为 `await` 正常返回就是成功，于是根本没有解包（2026-10-20 审计的真 bug：
+   * 被拒绝的清空看起来像成功了）。调用方必须走 `unwrapRemote`。
+   */
+  usageClear?(): Promise<unknown>;
   /**
    * 导出用量台账为 CSV 文本（可选：老宿主没实现时按钮不显示）。
-   * @param limit - 最多导出多少条（尾部，即最近的）。
+   *
+   * 同样返回 `unknown`：真实值是信封，必须解包后再用（否则会把 `[object Object]` 写进文件）。
+   * @param limit - 最多导出多少条（尾部，即最近的）；省略 = 全部。
    */
-  usageExportCsv?(limit?: number): Promise<string>;
+  usageExportCsv?(limit?: number): Promise<unknown>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   models?(vendor: string): Promise<CatalogModelsResult>;

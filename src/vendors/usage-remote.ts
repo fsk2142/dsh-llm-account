@@ -67,6 +67,11 @@ function readRangeFor(window: UsageWindowView, now: number): { since?: number } 
   // 周期最长按月：留 40 天余量，既覆盖最长的周期聚合，又不必读 120 天。
   const periodFloor = now - 40 * day;
   const windowFloor = windowStartOf(window, now);
+  // `window === "all"` 时 `windowStartOf` 返回 `undefined`，意思是**没有下界** ——
+  // 以前这里把 undefined 当成「没给」而回落到 40 天，等于把 `all` 悄悄变成「近 40 天」：
+  // 失败明细与超过 40 天的周期都会掉数据，而 CSV 导出（全读）与界面对不上
+  // （2026-10-20 审计）。这里保持 `all` 真的无下界（台账读取自身仍受 120 天保留期约束）。
+  if (window === "all") return {};
   return { since: windowFloor === undefined ? periodFloor : Math.min(windowFloor, periodFloor) };
 }
 
@@ -592,7 +597,16 @@ export class LlmAccountUsageService extends TypertRemoteService {
     // 而不是画一行「失败 0 次」。
     const scoped = withinWindow(records, window, now);
     const perAccount = failureBreakdownPerAccount(scoped);
-    const failuresByAccount = [...perAccount.entries()].map(([account, rows]) => ({ account, rows }));
+    // 键是 `vendor\u0000account`：拆开成两个字段传出去，客户端按 (vendor, account) 查
+    // —— 只按 account 会让两家同名 ref 串味（2026-10-20 审计）。
+    const failuresByAccount = [...perAccount.entries()].map(([key, rows]) => {
+      const separator = key.indexOf("\u0000");
+      return {
+        vendor: separator < 0 ? "" : key.slice(0, separator),
+        account: separator < 0 ? key : key.slice(separator + 1),
+        rows,
+      };
+    });
     // 与此同时保留一份**全局**的（按厂商汇总），供将来做「整家厂商的失败概览」；
     // 界面目前只用 `failuresByAccount`。
     const failuresByKind = failureBreakdownOf(scoped);

@@ -83,28 +83,39 @@ export function failureBreakdownOf(records: readonly UsageRecord[]): FailureKind
 }
 
 /**
- * 按**账号**分组统计失败明细。
+ * 失败明细的分组键：`vendor\u0000account`。
  *
- * 为什么必须分账号：报表里的 `failuresByKind` 是**窗口级的全局**汇总，而界面把用量块渲染在
- * **每个账号**下面（`usageOf(ref)` 每账号调一次）。直接把全局那份传给每个账号，会让同一厂商
- * 的所有账号都显示同一份明细 —— 重复，而且更糟：失败属于 A 却显示在 B 下面，用户会以为 B
- * 也在失败（2026-10-20 审计发现的真 bug）。
+ * 为什么必须带厂商：凭据引用名（ref）是**用户可写**的（`apiKeyEnv` 接受任意名字），两家都填
+ * `DSH_WORK_KEY` 时只按 account 分组会让 A 家的失败显示在 B 家账号下面（2026-10-20 审计）。
+ * `\u0000` 是不可能出现在 ref 里的分隔符，与台账其它地方同一写法。
+ * @param record - 台账记录。
+ * @returns 分组键。
+ */
+function accountKeyOf(record: UsageRecord): string {
+  return `${record.vendor}\u0000${record.account}`;
+}
+
+/**
+ * 按 **(vendor, account)** 分组统计失败明细。
  *
- * 台账每条记录本来就带 `account`，所以这只是**换一个切法**，不额外取数。
+ * 键是 `vendor\u0000account`（见 {@link accountKeyOf}）。`account` 为空串时照常出一行
+ * —— 那是「该厂商但还没选中账号」的失败（选账号之前就失败），丢掉它会让分账号之和与
+ * 全局 `failuresByKind` 对不上。
  * @param records - 台账记录（成功的会被忽略）。
- * @returns account → 该账号的明细行（次数降序 → 分类名升序）；没有失败的账号不出现在 Map 里。
+ * @returns 分组键 → 明细行（次数降序 → 分类名升序）；没有失败时不返回该键。
  */
 export function failureBreakdownPerAccount(records: readonly UsageRecord[]): Map<string, FailureKindSummary[]> {
   const byAccount = new Map<string, UsageRecord[]>();
   for (const record of records) {
     if (record.outcome !== "failure") continue;
-    const bucket = byAccount.get(record.account);
-    if (bucket === undefined) byAccount.set(record.account, [record]);
+    const key = accountKeyOf(record);
+    const bucket = byAccount.get(key);
+    if (bucket === undefined) byAccount.set(key, [record]);
     else bucket.push(record);
   }
   const out = new Map<string, FailureKindSummary[]>();
-  for (const [account, items] of byAccount) {
-    out.set(account, failureBreakdownOf(items));
+  for (const [key, items] of byAccount) {
+    out.set(key, failureBreakdownOf(items));
   }
   return out;
 }

@@ -587,24 +587,47 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
 }
 
 /**
- * 把一次账户操作草稿翻译成一次远程调用。
+ * 一次账户操作的结果：成功，或宿主给的可读原因。
  *
- * 为什么单独成函数：**哪个操作调哪个方法**、以及「空名称/空密钥不提交」这类判定都属于
- * 会出错的地方，而容器组件（唯一的 Hook 宿主）不参与单测（Ruling 22）。放在这里就能被测到。
+ * 为什么不能直接返回远程 promise：宿主的一元调用**永远 resolve**（失败也 resolve 成
+ * `{ ok: false, error }`，见 `unwrapRemote` 的注释），所以 `promise.then(onOk, onError)` 的
+ * 失败分支**永远不会跑** —— 被拒绝的新增/改名/换密钥会被当成成功：编辑器关闭、修订号 +1、
+ * 一句错误都不显示（2026-10-20 审计）。
+ */
+export type AccountActionResult = { ok: true; value: unknown } | { ok: false; problem: string };
+
+/**
+ * 派发一次账户操作。
  *
  * 名称与密钥都在**边界上 trim**：用户粘贴的密钥常带换行/尾随空格，名称常带无意空格，
  * 原样提交会把它们写进宿主（标签页显示、凭据槽内容）。
  * @param usage - 已挂载的远程命名空间；还没挂上时为 `undefined`。
  * @param vendor - 厂商 id。
  * @param action - `page-state.ts` 里的操作草稿。
- * @returns 远程调用；不可用或输入不合法时为 `undefined`（调用方据此不关草稿）。
+ * @returns 已**拆信封**的结果；不可用或输入不合法时为 `undefined`（调用方据此不关草稿）。
  */
 export function dispatchAccountAction(
   usage: UsageNamespace | undefined,
   vendor: string,
   action: AccountAction,
-): Promise<unknown> | undefined {
+): Promise<AccountActionResult> | undefined {
   if (usage === undefined) return undefined;
+  /**
+   * 解开宿主信封。
+   *
+   * 非信封（裸载荷 / `undefined`）一律按成功处理：老宿主可能直接 resolve 结果本身，
+   * 那种形状没有 `ok` 字段，按 `unwrapRemote` 的同一条规则。
+   */
+  const unwrap = async (pending: Promise<unknown>): Promise<AccountActionResult> => {
+    const result = await pending;
+    if (typeof result !== "object" || result === null || !("ok" in result)) {
+      return { ok: true, value: result };
+    }
+    const envelope = result as { ok?: unknown; value?: unknown; error?: unknown };
+    if (envelope.ok === false) return { ok: false, problem: describeRemoteError(envelope.error) };
+    return { ok: true, value: envelope.value };
+  };
+
   switch (action.kind) {
     case "add": {
       // 空名称不提交（宿主会拒绝，但我们先不发这次调用）。
@@ -612,20 +635,20 @@ export function dispatchAccountAction(
       if (label === "") return undefined;
       const key = action.key.trim();
       // 空密钥只建条目：`key` 字段整个不传，而不是传空串（那会被当成「要写空密钥」）。
-      return usage.addAccount(vendor, key === "" ? { label } : { label, key });
+      return unwrap(usage.addAccount(vendor, key === "" ? { label } : { label, key }));
     }
     case "rename": {
       if (action.ref === undefined) return undefined;
       const label = action.label.trim();
       if (label === "") return undefined;
-      return usage.renameAccount(vendor, action.ref, label);
+      return unwrap(usage.renameAccount(vendor, action.ref, label));
     }
     case "key": {
       // 空密钥不提交：那等于把账号的密钥清掉，用户不会想用这个方式做。
       if (action.ref === undefined) return undefined;
       const key = action.key.trim();
       if (key === "") return undefined;
-      return usage.replaceKey(vendor, action.ref, key);
+      return unwrap(usage.replaceKey(vendor, action.ref, key));
     }
   }
 }
@@ -1360,10 +1383,12 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * @param ref - 账号 ref。
      * @returns 该账号的明细行；没有失败或报表还没读到时为 `undefined`。
      */
-    const failuresOf = (ref: string): readonly { kind: string; count: number; lastAt: number; lastAccount: string }[] | undefined => {
+    const failuresOf = (vendor: string, ref: string): readonly { kind: string; count: number; lastAt: number; lastAccount: string }[] | undefined => {
       const entries = usageReport?.failuresByAccount;
       if (!Array.isArray(entries)) return undefined;
-      const entry = entries.find((item) => item?.account === ref);
+      // 按 **(vendor, account)** 查：ref 是用户可写的凭据名，两家可能重名，
+      // 只按 ref 查会让 A 家的失败显示在 B 家的账号下面（2026-10-20 审计）。
+      const entry = entries.find((item) => item?.vendor === vendor && item?.account === ref);
       const rows = entry?.rows;
       return Array.isArray(rows) && rows.length > 0 ? rows : undefined;
     };
@@ -1416,8 +1441,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           entry: row,
           label: accountLabelOf(statuses[vendor]?.accounts ?? [], ref),
           // 失败明细挂在用量块脚下：它与「成功率」说的是同一件事，分开两处会让人对不上。
-          // 按**账号**取（不是按厂商）：见 failuresOf 的说明。
-          ...(failuresOf(ref) === undefined ? {} : { failures: failuresOf(ref) }),
+          // 按 **(vendor, account)** 取（不是按厂商、也不是只按 ref）：见 failuresOf 的说明。
+          ...(failuresOf(vendor, ref) === undefined ? {} : { failures: failuresOf(vendor, ref) }),
         }),
       );
     };
@@ -1474,14 +1499,16 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           return;
         }
         setActionError(undefined);
-        void pending.then(
-          () => {
-            setState((current) => closeAction(current));
-            setAccountRevision((current) => current + 1);
-          },
-          // 远程侧拒绝（宿主校验、凭据服务报错）：以前没有失败分支，错误直接被丢掉。
-          (error: unknown) => setActionError(error instanceof Error ? error.message : String(error)),
-        );
+        void pending.then((result) => {
+          // 宿主**总是 resolve**（失败是 `{ ok: false }`），所以必须看 result.ok ——
+          // 以前这里用 `.then(ok, err)` 的第二个参数，那条分支永远不会跑。
+          if (!result.ok) {
+            setActionError(result.problem);
+            return;
+          }
+          setState((current) => closeAction(current));
+          setAccountRevision((current) => current + 1);
+        });
       },
       onCancelAction: () => {
         setActionError(undefined);
@@ -1515,6 +1542,9 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       loginError: loginErrors,
       // 导出：远程取 CSV 文本 → 浏览器下载。宿主侧不写文件（「存在哪」会变成新问题）。
       // 远程面没有这个方法（老宿主）时传 undefined，按钮自己就不渲染。
+      //
+      // **必须解信封**：宿主失败时 resolve 的是 `{ ok: false, error }`，不解包就会把整个
+      // 信封 `String()` 成 `[object Object]` 写进 .csv（2026-10-20 审计）。
       onExportUsage:
         usage?.usageExportCsv === undefined
           ? undefined
@@ -1522,10 +1552,20 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
               setExportBusy(true);
               setExportError(undefined);
               try {
-                const csv = await usage.usageExportCsv!();
-                downloadCsv(csv);
+                const result = await usage.usageExportCsv!();
+                const unwrapped = unwrapRemote(result);
+                if (!unwrapped.ok) {
+                  setExportError(unwrapped.error);
+                  return;
+                }
+                // 非字符串同样按失败处理：写进文件只会得到一个 `[object Object]`。
+                if (typeof unwrapped.value !== "string") {
+                  setExportError(t("usage.exportFailed"));
+                  return;
+                }
+                downloadCsv(unwrapped.value);
               } catch (error) {
-                // 失败必须说出来：静默失败会让人以为导出成功、而拿到的还是一份空的/旧的。
+                // 装配故障（宿主抛错）走这里；宿主侧的「拒绝」不会 reject，见上。
                 setExportError(error instanceof Error ? error.message : String(error));
               } finally {
                 setExportBusy(false);
@@ -1535,6 +1575,9 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       ...(exportError === undefined ? {} : { exportError }),
       // 清空台账：远程面没有这个方法（老宿主）时传 undefined，按钮自己就不渲染。
       // 二次确认由**容器状态**驱动（不用 window.confirm：那会阻塞渲染线程且无法单测）。
+      //
+      // **必须解信封**：宿主拒绝时 resolve 的是 `{ ok: false }`，`.catch` 永远不会跑 ——
+      // 那样确认面板会关闭、修订号会 +1，看起来像清空成功了（2026-10-20 审计）。
       onClearUsage:
         usage?.usageClear === undefined
           ? undefined
@@ -1543,7 +1586,12 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
               setClearError(undefined);
               void usage
                 .usageClear!()
-                .then(() => {
+                .then((result) => {
+                  const unwrapped = unwrapRemote(result);
+                  if (!unwrapped.ok) {
+                    setClearError(unwrapped.error);
+                    return;
+                  }
                   setClearConfirming(false);
                   // 清完必须重读：否则界面还挂着已经不存在的数据。
                   setAccountRevision((current) => current + 1);

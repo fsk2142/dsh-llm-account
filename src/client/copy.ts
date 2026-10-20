@@ -157,6 +157,7 @@ export type CopyKey =
   | "usage.officialCost"
   | "usage.officialShort"
   | "usage.localOnly"
+  | "usage.costPartial"
   | "usage.fromVendor"
   | "usage.localSpent"
   | "usage.priceUnknown"
@@ -438,6 +439,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.officialCost": "≈ 按 DeepSeek 官方价",
     "usage.officialShort": "官方价",
     "usage.localOnly": "仅本机（不含其他设备）",
+    "usage.costPartial": "≈ 仅统计了有官方价的模型，不是全部花费",
     "usage.fromVendor": "官方账号口径",
     "usage.localSpent": "本机折合",
     "usage.priceUnknown": "未公开",
@@ -703,6 +705,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.officialCost": "≈ at DeepSeek list price",
     "usage.officialShort": "list price",
     "usage.localOnly": "this device only (excludes other devices)",
+    "usage.costPartial": "≈ priced models only; not the full amount",
     "usage.fromVendor": "vendor account scope",
     "usage.localSpent": "local equivalent",
     "usage.priceUnknown": "not published",
