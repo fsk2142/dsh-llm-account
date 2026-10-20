@@ -115,8 +115,26 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     }
     const declared = stringValue(raw.name);
     declaredNames.push(declared !== undefined && declared !== id ? declared : undefined);
-    const contextWindow = positiveNumber(raw.context_length ?? raw.contextWindow);
-    const maxTokens = positiveNumber(raw.max_output_tokens ?? raw.maxTokens ?? raw.publishedMaxTokens);
+    // **opendesign 把容量放在嵌套的 `metadata` 里**（2026-10-20 用真实目录实测）：
+    //
+    // ```json
+    // "metadata": { "context_limit": 1048000, "context_budget": 328000, "output_budget": 128000 }
+    // ```
+    //
+    // 而它的**顶层没有** `context_length` / `max_output_tokens` —— 只认顶层的旧实现因此把
+    // 12 个模型全部读成「没公布」，连带两个症状：① 宿主不显示会话长度；
+    // ② 宿主的自动压缩插件读到 `info.context === undefined` 直接抛错，**该路由完全不压缩**，
+    // 最终以 HTTP 400（上下文超限）收场（日志实测 91.6 万 token 时被拒）。
+    //
+    // 取值优先级：扁平字段（若有）> `metadata.context_limit`。仍取不到才留空 ——
+    // 保持「未公布」与「公布为 0」的区别，不编数字。
+    const meta = isRecord(raw.metadata) ? raw.metadata : undefined;
+    const contextWindow = positiveNumber(
+      raw.context_length ?? raw.contextWindow ?? meta?.context_limit ?? meta?.contextWindow,
+    );
+    const maxTokens = positiveNumber(
+      raw.max_output_tokens ?? raw.maxTokens ?? raw.publishedMaxTokens ?? meta?.output_budget ?? meta?.max_output_tokens,
+    );
     const efforts = effortsOf(raw);
     entries.push({
       id,

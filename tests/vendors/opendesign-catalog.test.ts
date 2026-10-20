@@ -45,6 +45,53 @@ describe("parseCatalog：显示名", () => {
   });
 });
 
+describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实测）", () => {
+  it("**从 metadata.context_limit / output_budget 读容量**（顶层没有这两个字段）", () => {
+    // 线上目录的真实形状（`/v1/models` 实测）：顶层只有 id/object/created/owned_by/
+    // architecture/metadata/default/enabled，**没有** context_length / max_output_tokens。
+    // 只认顶层的旧实现把 12 个模型全读成「未公布」，连带两个后果：
+    //   ① 宿主不显示会话长度；
+    //   ② 宿主的自动压缩插件拿到 info.context === undefined 后直接抛错，该路由**完全不压缩**，
+    //      最终以 HTTP 400（上下文超限）收场。
+    const parsed = parseCatalog({
+      object: "list",
+      data: [
+        {
+          id: "deepseek-v4.1-flash",
+          object: "model",
+          owned_by: "vela",
+          metadata: { cost: "low", capability: "advanced", context_limit: 1048000, output_budget: 128000 },
+          default: true,
+          enabled: true,
+        },
+      ],
+    });
+    expect(parsed.entries[0]!.contextWindow).toBe(1048000);
+    expect(parsed.entries[0]!.maxTokens).toBe(128000);
+  });
+
+  it("扁平字段优先于 metadata（别家网关的形状更好时照旧生效）", () => {
+    const parsed = parseCatalog({
+      data: [{ id: "m", context_length: 200000, max_output_tokens: 8000, metadata: { context_limit: 999, output_budget: 111 } }],
+    });
+    expect(parsed.entries[0]!.contextWindow).toBe(200000);
+    expect(parsed.entries[0]!.maxTokens).toBe(8000);
+  });
+
+  it("metadata 也没有容量时**不编数字**（保持「未公布」）", () => {
+    const parsed = parseCatalog({ data: [{ id: "m", metadata: { cost: "low" } }] });
+    expect(parsed.entries[0]!.contextWindow).toBeUndefined();
+    expect(parsed.entries[0]!.maxTokens).toBeUndefined();
+  });
+
+  it("metadata 是坏形状时不抛错（负值/字符串/数组都不当容量）", () => {
+    for (const metadata of [-1, "big", [], null, { context_limit: "1048000" }, { context_limit: 0 }]) {
+      const parsed = parseCatalog({ data: [{ id: "m", metadata }] });
+      expect(parsed.entries[0]!.contextWindow, JSON.stringify(metadata)).toBeUndefined();
+    }
+  });
+});
+
 describe("effortsFor：思考强度", () => {
   it("目录声明优先（厂商自己公布时以它为准）", () => {
     expect(effortsFor("claude-sonnet-4-5", ["low", "max"])).toEqual(["low", "max"]);
