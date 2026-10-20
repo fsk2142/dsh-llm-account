@@ -92,6 +92,50 @@ describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实�
   });
 });
 
+describe("输入模态：opendesign 放在 architecture.input_modalities（2026-10-20 实测）", () => {
+  it("**从 architecture.input_modalities 读到图片**（顶层没有 modalities）", () => {
+    // 线上真实形状：`architecture: { input_modalities: ["text","image"] }`，顶层没有
+    // `modalities` / `image`。只认顶层的旧实现把**所有**模型读成「仅文本」，
+    // 宿主的图片按钮因此永远不出现 —— 包括上游明确声明支持图片的 deepseek-v4.1-flash。
+    const parsed = parseCatalog({
+      data: [
+        { id: "deepseek-v4.1-flash", architecture: { input_modalities: ["text", "image"] } },
+        { id: "deepseek-v4-flash", architecture: { input_modalities: ["text"] } },
+        { id: "kimi-k2.7-code", architecture: { input_modalities: ["text", "image"] } },
+      ],
+    });
+    expect(parsed.entries[0]!.inputModalities).toEqual(["text", "image"]);
+    expect(parsed.entries[1]!.inputModalities).toEqual(["text"]);
+    expect(parsed.entries[2]!.inputModalities).toEqual(["text", "image"]);
+  });
+
+  it("`file` / `video` / `audio` **不算**图片（宿主只有文本与图片两档）", () => {
+    // 把 `file` 当成图片会让「能读附件」的模型误显示为能读图。
+    const parsed = parseCatalog({
+      data: [
+        { id: "a", architecture: { input_modalities: ["text", "file"] } },
+        { id: "b", architecture: { input_modalities: ["text", "video"] } },
+        { id: "c", architecture: { input_modalities: ["text", "audio"] } },
+      ],
+    });
+    for (const entry of parsed.entries) expect(entry.inputModalities).toEqual(["text"]);
+  });
+
+  it("顶层 modalities 仍然优先（别家形状更好时照旧生效）", () => {
+    const parsed = parseCatalog({
+      data: [{ id: "m", modalities: ["image"], architecture: { input_modalities: ["text"] } }],
+    });
+    expect(parsed.entries[0]!.inputModalities).toEqual(["text", "image"]);
+  });
+
+  it("architecture 是坏形状时不抛错（数组/字符串/null 都不当声明）", () => {
+    for (const architecture of [[], "text,image", null, { input_modalities: "image" }, { input_modalities: [1, 2] }]) {
+      const parsed = parseCatalog({ data: [{ id: "m", architecture }] });
+      expect(parsed.entries[0]!.inputModalities, JSON.stringify(architecture)).toEqual(["text"]);
+    }
+  });
+});
+
 describe("effortsFor：思考强度", () => {
   it("目录声明优先（厂商自己公布时以它为准）", () => {
     expect(effortsFor("claude-sonnet-4-5", ["low", "max"])).toEqual(["low", "max"]);

@@ -55,15 +55,29 @@ function rowsOf(payload: Record<string, unknown>): readonly unknown[] {
 /**
  * 读出一行的输入模态。
  *
- * 只信负载自己声明的能力：`modalities` 数组里的 `"image"`，或布尔 `image: true`
- * （旧插件的模型表属第 2 期，本期不搬）。未声明就是**未知**，不猜。
+ * **opendesign 把能力放在嵌套的 `architecture` 里**（2026-10-20 用真实目录实测）：
+ *
+ * ```json
+ * "architecture": { "input_modalities": ["text","image"], "output_modalities": ["text"] }
+ * ```
+ *
+ * 顶层**没有** `modalities` / `image` 字段。只认顶层的旧实现因此把所有模型都读成
+ * 「仅文本」—— 包括上游明确声明支持图片的 `deepseek-v4.1-flash`（`[text,image]`）、
+ * `deepseek-v4-flash-vision-exp`、`kimi-k2.7-code` 等，宿主的图片按钮就永远不出现。
+ *
+ * 取值优先级：顶层 `modalities` / `image`（若有）> `architecture.input_modalities`。
+ * `video` / `audio` / `file` 这类**不映射**到宿主的模态判定：宿主的 `ModelModality` 只有
+ * 文本与图片两档，把 `file` 也算成图片会让「能读附件」的模型误显示为能读图。
  * @param row - 一行原始目录数据。
  * @returns 至少含 `"text"` 的模态列表。
  */
 function inputModalitiesOf(row: Record<string, unknown>): readonly ModelModality[] {
   const declared = row.modalities;
   const fromList = Array.isArray(declared) && declared.includes("image");
-  if (fromList || row.image === true) return ["text", "image"];
+  const architecture = isRecord(row.architecture) ? row.architecture : undefined;
+  const inputs = architecture?.input_modalities;
+  const fromArchitecture = Array.isArray(inputs) && inputs.includes("image");
+  if (fromList || fromArchitecture || row.image === true) return ["text", "image"];
   return ["text"];
 }
 
