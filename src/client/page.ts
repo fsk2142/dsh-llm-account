@@ -14,7 +14,7 @@ import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
-import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
+import { isConfigEnabled, primarySwitchOf, SETTINGS_CARDS, subordinateFieldsOf, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
 /** 页面外壳的属性。全部是数据与回调：外壳自己不留状态。 */
@@ -84,6 +84,8 @@ function pageBody(props: PageShellProps): ReactElement {
   // 四张卡片把三家的字段合并渲染。功能页（切换/搜索）的字段也属于这几张卡，
   // 所以它**参与合并**，只是它没有自己的 tab 了。
   const vendors = entries;
+  /** 合并后的设置值：判定主开关状态用（草稿优先于基线）。 */
+  const merged = cardSettingsValue(props, vendors);
 
   return createElement(
     "div",
@@ -114,51 +116,122 @@ function pageBody(props: PageShellProps): ReactElement {
       : null,
     // 四张卡片（按功能分组，三家合并）。用户 2026-10-20：「三家设置合并在一起，
     // 除非某个设置是专门针对某一家网关的」「不要那个设置对象，就按照可收起的卡片形式」。
-    ...SETTINGS_CARDS.map((card) => settingsCardElement(props, vendors, card)),
-    // 保存条：任何一家厂商有未保存改动时出现（合并视图下共用一条）。
-    // 功能页与承载行共用文档，不单独出按钮。
-    vendors.some((entry) => entry.ns !== FEATURE_TAB_NS && isDirty(props.state, entry.ns))
+    //
+    // 卡片**永远都在**：主开关（启用自动切换 / 启用网页搜索）关掉时只把下方配置置灰，
+    // 卡片不消失 —— 用户随时能重新打开，也不会分不清「自己关掉了」还是「坏了」。
+    ...SETTINGS_CARDS.map((card) => settingsCardElement(props, vendors, card, merged)),
+    // 保存条：**任何一行**有未保存改动时出现（含功能页 —— 它的字段也存在承载行文档里）。
+    // 只看厂商行会让「启用自动切换」这类开关改了之后没有保存按钮（2026-10-20 报障）。
+    vendors.some((entry) => isDirty(props.state, entry.ns))
       ? mergedSaveBar(props, vendors)
       : null,
   );
 }
 
 /**
+ * 合并后的设置值：用于判断「显示切换策略 / 显示网页搜索」这两个开关。
+ *
+ * 三个来源按优先级叠加，与控件本身的读法一致：
+ * 1. 各家的**基线**（宿主文档）；
+ * 2. 各家的**草稿**（用户刚点、还没保存）。
+ *
+ * 为什么按顺序覆盖而不是只取一家：功能页的开关存在承载行（commandcode）上，但用户也可能
+ * 直接改那一行；取「最后一份非空」会在两家值不同时抖动，所以按「谁有值用谁」逐键合并 ——
+ * 这些字段本来就该三家一致（写回时会镜像）。
+ * @param props - 页面属性。
+ * @param vendors - 厂商行（含功能页，它的值代表承载行）。
+ * @returns 合并后的值。
+ */
+function cardSettingsValue(
+  props: PageShellProps,
+  vendors: readonly VendorEntry[],
+): Readonly<Record<string, unknown>> {
+  const merged: Record<string, unknown> = {};
+  for (const entry of vendors) {
+    const baseline = props.state.snapshots[entry.ns]?.value;
+    if (baseline !== undefined) Object.assign(merged, baseline);
+    const draft = props.state.drafts[entry.ns];
+    if (draft !== undefined) Object.assign(merged, draft);
+  }
+  return merged;
+}
+
+/**
  * 一张功能卡片：把三家（以及功能页）里属于这张卡的字段**合并去重**后渲染。
  *
- * 合并规则直接来自 {@link SETTINGS_CARDS}：
- * - `shared` 字段：任意一家有这个声明就渲染**一次**（三家同名同义）；从第一家取控件形状，
- *   值也取第一家（它们本来就该一致，写回时会镜像）。
- * - `specific` 字段：只在它归属的那一家存在时渲染，并标注是哪一家。
+ * 卡片的形状（用户 2026-10-20 澄清）：
+ * 1. **主开关在最上面**（「启用自动切换」/「启用网页搜索」）—— 它是这张卡的重点；
+ * 2. 主开关下面是**相关配置**；主开关关掉时这些配置变**禁用但仍在**（不隐藏）—— 隐藏会
+ *    让整块消失、不留线索，用户也分不清是自己关掉了还是坏了；
+ * 3. `specific` 字段只渲染它归属的那一家，并标注厂商徽标。
  * @param props - 页面属性。
- * @param vendors - 参与合并的厂商行（不含功能页）。
+ * @param vendors - 参与合并的厂商行（含功能页，它的值代表承载行）。
  * @param card - 卡片声明。
+ * @param value - 合并后的设置值（用于判定主开关状态）。
  * @returns 可折叠卡片元素。
  */
 function settingsCardElement(
   props: PageShellProps,
   vendors: readonly VendorEntry[],
   card: SettingsCard,
+  value: Readonly<Record<string, unknown>>,
 ): ReactNode {
   const { t } = props;
+  const enabled = isConfigEnabled(value, card.id);
   const nodes: ReactNode[] = [];
 
-  // 1) 共有字段：第一次出现时渲染一次。
-  for (const key of card.shared) {
-    const owner = vendors.find((entry) => fieldsOf(props.state, entry).some((field) => field.spec.key === key));
-    if (owner === undefined) continue;
-    const field = fieldsOf(props.state, owner).find((candidate) => candidate.spec.key === key);
-    if (field === undefined) continue;
-    nodes.push(fieldElement(props, owner, field));
+  /** 在合并后的厂商列表里找某个共有字段的声明（取第一家）。 */
+  const sharedField = (key: string): { owner: VendorEntry; field: DraftField } | undefined => {
+    for (const entry of vendors) {
+      const field = fieldsOf(props.state, entry).find((candidate) => candidate.spec.key === key);
+      if (field !== undefined) return { owner: entry, field };
+    }
+    return undefined;
+  };
+
+  // 1) 主开关：单独一块，排最上面（不从属任何「配置」组）。
+  const primaryKey = primarySwitchOf(card.id);
+  const primary = primaryKey === undefined ? undefined : sharedField(primaryKey);
+  if (primary !== undefined) {
+    nodes.push(
+      createElement(
+        "div",
+        { key: `${card.id}-primary`, "data-card-primary": card.id, className: CSS_CLASS.inset },
+        fieldElement(props, primary.owner, primary.field),
+      ),
+    );
   }
 
-  // 2) 厂商专属字段：按厂商顺序渲染，并标注归属。
+  // 2) 相关配置：主开关关掉时整体加一个 data 标记（样式据此置灰），但元素仍在。
+  const configNodes: ReactNode[] = [];
+  for (const key of subordinateFieldsOf(card.id)) {
+    const found = sharedField(key);
+    if (found === undefined) continue;
+    configNodes.push(fieldElement(props, found.owner, found.field));
+  }
+  // 3) 厂商专属字段。
   for (const vendor of vendors) {
     for (const field of fieldsOf(props.state, vendor)) {
       const declared = card.specific.find((item) => item.key === field.spec.key && item.vendor === vendor.providerId);
       if (declared === undefined) continue;
-      nodes.push(fieldElement(props, vendor, field, labelOf(props, vendor)));
+      configNodes.push(fieldElement(props, vendor, field, labelOf(props, vendor)));
     }
+  }
+  if (configNodes.length > 0) {
+    nodes.push(
+      createElement(
+        "div",
+        {
+          key: `${card.id}-config`,
+          "data-card-config": card.id,
+          // 主开关关掉 → 配置区禁用（视觉置灰 + 说明），但**不隐藏**。
+          ...(enabled ? {} : { "data-card-disabled": "true" }),
+          className: CSS_CLASS.inset,
+        },
+        ...(enabled ? [] : [createElement("small", { key: "off", className: CSS_CLASS.note }, t("card.disabledHint"))]),
+        ...configNodes,
+      ),
+    );
   }
 
   if (nodes.length === 0) return null;
@@ -200,27 +273,39 @@ function labelOf(props: PageShellProps, entry: VendorEntry): string {
  */
 function mergedSaveBar(props: PageShellProps, vendors: readonly VendorEntry[]): ReactElement {
   const { t } = props;
-  // 功能页与承载行（commandcode）共用同一份文档，它的「脏」由那一行代表，
-  // 所以这里只给**真正的厂商行**出按钮（否则会多出一根写同一份文档的按钮）。
-  const dirty = vendors.filter((entry) => entry.ns !== FEATURE_TAB_NS && isDirty(props.state, entry.ns));
+  // 功能页与承载行（`rowIds[0]`，本插件是 `llm-commandcode`）**共用同一份设置文档**。
+  // 功能页字段的草稿存在 `FEATURE_TAB_NS` 下，但保存必须落到承载行上 ——
+  // 否则那些开关永远存不下去（2026-10-20 报障「点了没反应」的深层原因之一）。
+  const carrierNs = vendors.find((entry) => entry.ns === FEATURE_TAB_NS)?.rowIds[0];
+  const dirty = vendors.filter((entry) => {
+    if (entry.ns !== FEATURE_TAB_NS) return isDirty(props.state, entry.ns);
+    // 功能页：只有承载行自己没脏时才替它出按钮（避免同一份文档出现两根保存按钮）。
+    return (
+      carrierNs !== undefined &&
+      !vendors.some((other) => other.ns === carrierNs && isDirty(props.state, other.ns)) &&
+      isDirty(props.state, entry.ns)
+    );
+  });
   const saving = props.saving === true;
   return createElement(
     "div",
     { "data-save-bar": "true", className: CSS_CLASS.save },
-    ...dirty.map((entry) =>
-      createElement(
+    ...dirty.map((entry) => {
+      // 功能页的按钮写的是承载行（宿主按条目 id 寻址，功能页没有自己的行）。
+      const target = entry.ns === FEATURE_TAB_NS && carrierNs !== undefined ? carrierNs : entry.ns;
+      return createElement(
         "button",
         {
           key: entry.ns,
           type: "button",
-          "data-save": entry.ns,
+          "data-save": target,
           className: CSS_CLASS.buttonPrimary,
           disabled: saving,
-          onClick: () => props.onSave(entry.ns),
+          onClick: () => props.onSave(target),
         },
         saving ? t("saving") : t("save"),
-      ),
-    ),
+      );
+    }),
     createElement("small", null, t("saveHint")),
     ...dirty
       .filter((entry) => props.state.saveErrors[entry.ns] !== undefined)

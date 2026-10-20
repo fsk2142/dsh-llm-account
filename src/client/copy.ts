@@ -89,6 +89,7 @@ export type CopyKey =
   | "field.searchPreferGateway.hint"
   | "field.searchApiKeyEnv"
   | "field.searchApiKeyEnv.hint"
+  | "card.disabledHint"
   | "card.display"
   | "card.display.hint"
   | "card.switching"
@@ -384,6 +385,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchPreferGateway.hint": "当前会话走 opendesign 且是 DeepSeek 模型时用订阅额度搜索；其余情况回退到下面的 API key。",
     "field.searchApiKeyEnv": "搜索用的 API key 引用名",
     "field.searchApiKeyEnv.hint": "填凭据库里的引用名（不是明文密钥）。缺省 DEEPSEEK_API_KEY，可在设置页的凭据区写入。",
+    "card.disabledHint": "上面那个开关关着，所以这些配置暂时不生效。打开后立即恢复。",
     "card.display": "显示设置",
     "card.display.hint": "侧边栏额度卡片要不要显示、多久刷新一次。三家共用。",
     "card.switching": "切换设置",
@@ -673,6 +675,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.searchPreferGateway.hint": "Uses subscription quota when the session runs opendesign with a DeepSeek model; otherwise falls back to the API key below.",
     "field.searchApiKeyEnv": "Search API key reference",
     "field.searchApiKeyEnv.hint": "A credential reference name, not a literal secret. Defaults to DEEPSEEK_API_KEY.",
+    "card.disabledHint": "The switch above is off, so these settings do not apply. Turn it on to restore them.",
     "card.display": "Display",
     "card.display.hint": "Whether the sidebar quota card shows, and how often it refreshes. Shared by all vendors.",
     "card.switching": "Switching",

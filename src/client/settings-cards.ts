@@ -61,9 +61,11 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     id: "switching",
     labelKey: "card.switching",
     hintKey: "card.switching.hint",
+    // 「启用自动切换」排最前（主开关），其余是它的相关配置。
+    // 关掉主开关 → 下方配置禁用，**卡片仍然在**（用户随时能重新打开）。
     shared: [
-      "autoSwitchModelOnQuota",
       "featureSwitchEnabled",
+      "autoSwitchModelOnQuota",
       "autoContinueOnError",
       "autoContinueOnTruncate",
       "autoContinueMaxAttempts",
@@ -74,6 +76,7 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     id: "search",
     labelKey: "card.search",
     hintKey: "card.search.hint",
+    // 「启用网页搜索」排最前（主开关），下面是选路与密钥配置。
     shared: ["featureSearchEnabled", "searchPreferGateway", "searchApiKeyEnv"],
     specific: [],
   },
@@ -119,4 +122,50 @@ export function isSharedField(key: string): boolean {
 export function fieldAppliesTo(key: string, vendor: string): boolean {
   if (SETTINGS_CARDS.some((card) => card.shared.includes(key))) return true;
   return SETTINGS_CARDS.some((card) => card.specific.some((field) => field.key === key && field.vendor === vendor));
+}
+
+/** 卡片 id → 它的主开关字段名。没有主开关的卡（显示/高级）不在表里。 */
+const CARD_PRIMARY_SWITCH: Partial<Record<SettingsCardId, string>> = {
+  switching: "featureSwitchEnabled",
+  search: "featureSearchEnabled",
+};
+
+/**
+ * 一张卡片的主开关字段名。
+ * @param id - 卡片 id。
+ * @returns 主开关字段名；该卡没有主开关时为 `undefined`。
+ */
+export function primarySwitchOf(id: SettingsCardId): string | undefined {
+  return CARD_PRIMARY_SWITCH[id];
+}
+
+/**
+ * 一张卡片里**除主开关之外**的字段（即「相关配置」），保持声明顺序。
+ *
+ * 主开关单独渲染在最上面，所以这里必须把它排除 —— 否则同一张卡里会出现两次同一个开关。
+ * @param id - 卡片 id。
+ * @returns 从属字段名。
+ */
+export function subordinateFieldsOf(id: SettingsCardId): readonly string[] {
+  const card = SETTINGS_CARDS.find((item) => item.id === id);
+  if (card === undefined) return [];
+  const primary = CARD_PRIMARY_SWITCH[id];
+  return primary === undefined ? card.shared : card.shared.filter((key) => key !== primary);
+}
+
+/**
+ * 一张卡片的配置区当前是否可用（主开关关掉时禁用，但**不隐藏**）。
+ *
+ * 为什么禁用而不是隐藏：用户关掉「启用自动切换」之后仍然需要看见下面的配置项，
+ * 才能判断自己要调整什么、也才能重新打开。隐藏会让整块消失、不留线索。
+ * @param value - 设置文档（形状不可信）。
+ * @param id - 卡片 id。
+ * @returns 配置是否可用。
+ */
+export function isConfigEnabled(value: Readonly<Record<string, unknown>>, id: SettingsCardId): boolean {
+  const key = CARD_PRIMARY_SWITCH[id];
+  if (key === undefined) return true;
+  // 只有**显式 false** 才算关闭：缺失、字符串、null 一律按启用处理
+  // （线上值可能是 JSON 里的 `"false"`，把它当关闭会让整块莫名变灰）。
+  return value[key] !== false;
 }
