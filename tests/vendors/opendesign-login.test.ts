@@ -12,6 +12,7 @@ import {
   parseAmrProfile,
   parseVelaPrompt,
   profileLabel,
+  spawnOptionsFor,
   createOpenDesignLogin,
   createVelaPreflight,
   discoverWorkspaceId,
@@ -112,7 +113,7 @@ it("设备授权成功：状态先 waiting（带授权网址与验证码），�
     state: "waiting",
     authUrl: "https://open-design.ai/cli/activate?deviceId=abc",
     userCode: "WXYZ",
-  });
+});
   expect(await settle(login)).toBe("success");
 
   expect(storeKey).toHaveBeenCalledTimes(1);
@@ -123,7 +124,7 @@ it("设备授权成功：状态先 waiting（带授权网址与验证码），�
     controlKey: "ctrl-1",
     workspaceId: "ws-1",
     label: "fsk@example.com",
-  });
+});
 });
 
 it("找不到 vela 但本机已有登录产物：直接导入并成功（不逼用户再装一个 CLI）", async () => {
@@ -248,12 +249,12 @@ it("授权提示解析：下一行是网址、Code 行是验证码，认不出�
   expect(parseVelaPrompt(VELA_PROMPT)).toEqual({
     authUrl: "https://open-design.ai/cli/activate?deviceId=abc",
     userCode: "WXYZ",
-  });
+});
   // 同一行冒号之后的写法也认。
   expect(parseVelaPrompt("Open this URL to continue: https://x.test/activate\nCode: ABCD")).toMatchObject({
     authUrl: "https://x.test/activate",
     userCode: "ABCD",
-  });
+});
   expect(parseVelaPrompt("nothing here")).toEqual({});
 });
 
@@ -270,8 +271,7 @@ it("vela 解析顺序：VELA_BIN 直接采信，桌面端内置按 LOCALAPPDATA 
   expect(findVelaBinary({}, () => false)).toBeUndefined();
 });
 
-it("能用 **npm 装出来的 `vela.cmd`**（2026-10-20 真机：只找 .exe 会漏掉它）", () => {
-  // `npm i -g @powerformer/vela-cli` 在 Windows 上生成 vela.cmd / vela.ps1 / 无扩展名 vela，
+it("能用 **npm 装出来的 `vela.cmd`**（2026-10-20 真机：只找 .exe 会漏掉它）", () => {  // `npm i -g @powerformer/vela-cli` 在 Windows 上生成 vela.cmd / vela.ps1 / 无扩展名 vela，
   // **没有 .exe**。旧清单只找 vela.exe 与 vela —— 后者是 POSIX shell 脚本，Windows 起不来，
   // 于是 spawn 静默失败、零输出（正是「vela 没有任何输出」那条诊断）。
   const onlyCmd = findVelaBinary({ PATH: "C:\\npm" }, (path) => path.toLowerCase().endsWith("vela.cmd"));
@@ -325,4 +325,41 @@ it("vela preflight 拒绝形状不对的工作区 id（参数注入闸门）", a
   await expect(preflight("--help")).rejects.toThrow(/工作区 id/);
   await expect(preflight("ws\nrm -rf /")).rejects.toThrow(/工作区 id/);
   expect(spawn).not.toHaveBeenCalled();
+});
+
+// —— spawn 参数：`spawn EINVAL` 的根因（2026-10-20 新设备） ——
+
+
+it(".exe → 直接 spawn（不加 shell）", () => {
+  const { command, options } = spawnOptionsFor("C:\\vela\\vela.exe", "win32");
+  expect(command).toBe("C:\\vela\\vela.exe");
+  expect(options.shell).toBeUndefined();
+});
+
+it("`.cmd` → shell + 引号 + verbatim（不加会 EINVAL）", () => {
+  const { command, options } = spawnOptionsFor("C:\\npm\\vela.cmd", "win32");
+  // 实测：shell:false 起 .cmd 会直接 spawn EINVAL、stdout 零字节。
+  expect(options.shell).toBe(true);
+  expect(options.windowsVerbatimArguments).toBe(true);
+  // 路径自带引号，否则含空格时会被 cmd.exe 拆成两段。
+  expect(command).toBe('"C:\\npm\\vela.cmd"');
+});
+
+it("**无扩展名的 `vela`**（npm 也会生成）→ 同样走 shell", () => {
+  // 这正是新设备命中的形状：`findVelaBinary` 返回无扩展名的 sh 脚本，
+  // 旧实现只给 .cmd/.bat 开 shell，于是落到 shell:false → spawn EINVAL。
+  const { command, options } = spawnOptionsFor("C:\\npm\\vela", "win32");
+  expect(options.shell).toBe(true);
+  expect(command).toBe('"C:\\npm\\vela"');
+});
+
+it("含空格的路径也加引号（用户名带空格时必现）", () => {
+  const { command } = spawnOptionsFor("C:\\Users\\Some Name\\vela.cmd", "win32");
+  expect(command.startsWith('"')).toBe(true);
+  expect(command.endsWith('"')).toBe(true);
+});
+
+it("非 Windows 平台不加 shell（POSIX 脚本靠 shebang）", () => {
+  const { options } = spawnOptionsFor("/usr/local/bin/vela", "linux");
+  expect(options.shell).toBeUndefined();
 });

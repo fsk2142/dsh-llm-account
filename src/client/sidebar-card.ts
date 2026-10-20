@@ -140,6 +140,18 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
         ? [
             // 两行：第一行 5 小时（带重置时间），第二行周 + 月。
             ...quotaRows(props, currentRow),
+            // 有账号数据、但**没有 5 小时/每周这两档**时如实说明（2026-10-20 用户要求：
+            // 「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」）——
+            // 不拿月度顶替，也不留一片空白让人以为卡坏了。
+            ...(quotaRows(props, currentRow).length === 0
+              ? [
+                  createElement(
+                    "p",
+                    { key: "no-short-window", "data-sidebar-empty": "short-window", className: CSS_CLASS.empty },
+                    t("sidebar.noShortWindow"),
+                  ),
+                ]
+              : []),
           ]
         : [
             // 没有可显示的数据：失败时说失败（附上一次数据标记），什么都没发生过时才说
@@ -191,8 +203,15 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
   const fiveHour = windowOfKind(windows, "five-hour");
   const week = windowOfKind(windows, "week");
   const shown = [fiveHour, week].filter((item): item is QuotaWindow => item !== undefined);
-  // 一档都认不出来（旧宿主只给无键窗口）：用第一个能读的，不留空白。
-  const rows = shown.length > 0 ? shown : windows.filter((item) => item.unlimited !== true).slice(0, 1);
+  /**
+   * **只显示「5 小时」与「每周」这两档**（用户 2026-10-20 明确要求）。
+   *
+   * 以前的兜底是「一档都认不出来就用第一个能读的窗口」——于是当小时/周读数缺失、只剩月度窗口
+   * 时，界面会**单独显示月度额度**。那是不对的：侧边栏的版式与语义就是「本周期还剩多少」的
+   * 短周期视图，缺了短周期数据时正确做法是**如实说没有**，而不是拿一档不相干的数字顶上去
+   * （用户原话：「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」）。
+   */
+  const rows = shown;
   if (rows.length === 0) return [];
   // **外层网格**：三列定义在容器上，两行共享同一套列宽 —— 这是两条进度条对齐的前提
   // （每行各写一套网格时，标签宽度不同会让后两列错开）。

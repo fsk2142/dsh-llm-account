@@ -280,6 +280,11 @@ export type CopyKey =
   | "sidebar.effective"
   | "sidebar.open"
   | "sidebar.noRequest"
+  /**
+   * 侧边栏只显示「5 小时」与「每周」两档。这两档缺失时如实说没有，**不拿月度顶替**
+   * （用户 2026-10-20：「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」）。
+   */
+  | "sidebar.noShortWindow"
   | "usage.failed"
   | "usage.failure.timeout"
   | "usage.failure.whoami"
@@ -615,6 +620,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.effective": "当前使用",
     "sidebar.open": "点击打开用量面板",
     "sidebar.noRequest": "还没有请求经过这个账号。",
+    "sidebar.noShortWindow": "没有 5 小时 / 每周额度数据（这里只显示这两档；月度额度请打开用量面板查看）。",
     "usage.failed": "用量读取失败",
     "usage.failure.timeout": "读取超时",
     "usage.failure.whoami": "账号信息读取失败",
@@ -935,6 +941,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "sidebar.effective": "In use",
     "sidebar.open": "Click to open the usage panel",
     "sidebar.noRequest": "No request has used this account yet.",
+    "sidebar.noShortWindow": "No 5-hour / weekly quota data (only those two are shown here; open the usage panel for monthly).",
     "usage.failed": "Usage read failed",
     "usage.failure.timeout": "Timed out",
     "usage.failure.whoami": "Account info read failed",

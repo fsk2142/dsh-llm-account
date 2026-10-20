@@ -118,6 +118,57 @@ it("两行额度：5 小时 + 每周，每行都是「标签 — 条 — 重置�
   expect(rowsMarker).toEqual(["primary", "secondary"]);
 });
 
+it("**只剩月度额度时不显示月度**（2026-10-20 用户要求：短周期缺席不能拿月度顶替）", () => {
+  // 用户原话：「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」。
+  // 这在新设备上是真实出现的：周额度查询失败 → 只剩月度窗口 → 旧逻辑的兜底
+  // 「一档都认不出来就用第一个能读的」会把月度单独画上去。
+  const tree = renderCard(
+    statusOf({
+      effective: { ref: "serving", at: 1_700_000_000_000 },
+      accounts: [
+        row("serving", {
+          label: "Serving",
+          effective: true,
+          quota: {
+            windows: [{ key: "monthly", used: 3, cap: 120, unit: "usd" }],
+            failures: [],
+          },
+        }),
+      ],
+    }),
+  );
+  // 一档都不该画。
+  const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
+  expect(windows, "没有 5 小时/每周数据时不该画任何额度行").toEqual([]);
+  // 但必须**说清楚为什么**，而不是留一片空白让人以为卡坏了。
+  const empty = elementsOf(tree).find((element) => element.props["data-sidebar-empty"] === "short-window");
+  expect(empty, "应当有一句「没有短周期数据」的说明").toBeDefined();
+  expect(textsOf(tree).join(" ")).toContain(dictionaryOf("zh")("sidebar.noShortWindow"));
+});
+
+it("只有 5 小时一档时只画那一档（不补月度、不补第二行）", () => {
+  const tree = renderCard(
+    statusOf({
+      effective: { ref: "serving", at: 1_700_000_000_000 },
+      accounts: [
+        row("serving", {
+          label: "Serving",
+          effective: true,
+          quota: {
+            windows: [
+              { key: "5h", percent: 20, resetAt: 1_700_000_000_000 },
+              { key: "monthly", used: 3, cap: 120, unit: "usd" },
+            ],
+            failures: [],
+          },
+        }),
+      ],
+    }),
+  );
+  const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
+  expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h"]);
+});
+
 
 it("整张卡片就是一个按钮：点它打开用量面板（不再有单独的按钮）", () => {
   const onOpen = vi.fn();
