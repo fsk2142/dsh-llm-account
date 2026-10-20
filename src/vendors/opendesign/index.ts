@@ -299,6 +299,14 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         summaryFallback: velaSummary,
         walletBase,
         preflight: velaPreflight,
+        // **身份闸门**（多账号兼容）：preflight 用的是本机 vela 登录态，不是这个账号的
+        // 密钥；两者不是同一人时它返回别人的用量，必须逐次核对再决定采信与否。
+        identitiesOf: async (ref) => {
+          const key =
+            normalizeKey(await resolveAccountKey(ctx, credentials, opendesignControlRef(document(), ref))) ??
+            normalizeKey(await resolveAccountKey(ctx, credentials, ref));
+          return identitiesFor(key, normalizeKey(document().walletBase) ?? DEFAULT_WALLET_BASE_URL);
+        },
         // 月度用量：这家厂商的接口不给（订阅走 credit 窗口，钱包消耗恒 0），问本机台账 ——
         // 界面会标成「仅本机」（用户 2026-10-19 的两个要求：月度要有数字 + 只统计本机）。
         localSpend: (from, to) => localSpendBetween({ vendor: "opendesign", account: ref ?? "", from, to }),
@@ -742,6 +750,83 @@ async function velaPreflight(workspaceId: string): Promise<unknown> {
     throw error;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * 核对「这个账号」与「本机 vela 登录态」是不是同一个人（多账号兼容的身份闸门）。
+ *
+ * 为什么必须核对（2026-10-20 用户提出的「一个网关多个账户」）：
+ *
+ * 1. `vela billing preflight` **没有 `--key` 参数** —— 它永远用本机 vela 登录态那份身份
+ *    去查额度。所以网关下挂了第二个人的账号时，采信它就是**显示别人的用量**。
+ * 2. `~/.amr/config.json` 是**单例文件**（只有 `profiles.prod`）：第二个账号走网页登录会
+ *    **覆盖**第一个。于是「vela 登录态 = 最后一次登录的账号」是常态，不能假设它等于当前账号。
+ *
+ * 两条身份来源：
+ * - 账号侧：用它自己的控制面密钥查 `GET /me` 的 `id`；
+ * - vela 侧：`vela whoami` 的输出里有 `ID: <id>`（实测第二行）。
+ *
+ * 任一读不到就缺字段，由调用方判成「不采信」—— 宁可没有这档数字，
+ * 也不显示一个可能属于别人的数字。
+ * @param key - 该账号的控制面密钥（装配层解析好传进来）。
+ * @param base - 控制面基地址。
+ * @returns 两侧的身份 id；任一缺失时对应字段为 `undefined`。
+ */
+async function identitiesFor(
+  key: string | undefined,
+  base: string,
+): Promise<{ account?: string; vela?: string } | undefined> {
+  const account = await accountIdentityViaApi(key, base);
+  const vela = await velaIdentityViaCli();
+  if (account === undefined && vela === undefined) return undefined;
+  return {
+    ...(account === undefined ? {} : { account }),
+    ...(vela === undefined ? {} : { vela }),
+  };
+}
+
+/**
+ * 账号自己的控制面身份：`GET /me` 的 `id`。失败读作「不知道」。
+ * @param key - 该账号的控制面密钥（由装配层解析好传进来）。
+ * @param base - 控制面基地址。
+ * @returns 身份 id，或 `undefined`。
+ */
+async function accountIdentityViaApi(key: string | undefined, base: string): Promise<string | undefined> {
+  if (key === undefined || key === "") return undefined;
+  try {
+    const response = await fetch(`${base.replace(/\/+$/, "")}/me`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS),
+    });
+    if (!response.ok) return undefined;
+    const payload: unknown = await response.json();
+    return isRecord(payload) ? normalizeKey(payload.id) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 本机 vela 登录态的身份：`vela whoami` 输出里 `ID: <id>` 那一行。失败读作「不知道」。 */
+async function velaIdentityViaCli(): Promise<string | undefined> {
+  const vela = findVelaBinary();
+  if (vela === undefined) return undefined;
+  try {
+    const child = spawn(vela, ["whoami"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const timer = setTimeout(() => {
+      child.kill();
+    }, VELA_PREFLIGHT_TIMEOUT_MS);
+    try {
+      const [stdout, code] = await Promise.all([readStream(child.stdout), waitForExit(child)]);
+      if (code !== 0) return undefined;
+      // 实测输出形如两行：第一行是邮箱，第二行是 `ID: <id>`。
+      const matched = /^ID:\s*(\S+)\s*$/m.exec(stdout);
+      return matched === null ? undefined : normalizeKey(matched[1]);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return undefined;
   }
 }
 

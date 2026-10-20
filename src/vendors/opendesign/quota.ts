@@ -79,6 +79,21 @@ export interface OpenDesignQuotaDeps {
    * 不该出现这条错误）。
    */
   preflight?: (workspaceId: string) => Promise<unknown>;
+  /**
+   * **该账号的身份**（控制面 `/me` 的 `id`）+ **本机 vela 登录态的身份**。
+   *
+   * 为什么必须有（2026-10-20 用户提的「一个网关多个账户」）：`vela billing preflight`
+   * **没有 `--key` 参数**，它永远用**本机 vela 登录态**那份身份去查额度。所以：
+   *
+   * - 账号 A 与 vela 登录态是同一人 → preflight 的数字是 A 的，可以用；
+   * - 账号 B 是另一个人 → preflight 会返回 **A 的用量**，直接采信就是「显示别人的数据」，
+   *   比没有数据更糟（用户会照着一个不属于自己的额度安排事情）。
+   *
+   * 返回 `undefined` 表示任一身份读不到：这时**不采信** preflight（同样不能猜）。
+   * @param ref - 账号 ref。
+   * @returns 该账号的控制面身份 id 与 vela 登录态身份 id。
+   */
+  identitiesOf?: (ref: string) => Promise<{ account?: string; vela?: string } | undefined>;
   /** 控制面基地址；缺省 {@link DEFAULT_WALLET_BASE_URL}。 */
   walletBase?: string;
   /** 每个端点的预算（毫秒）；缺省 {@link DEFAULT_QUOTA_TIMEOUT_MS}。 */
@@ -130,6 +145,41 @@ function numberValue(value: unknown): number | undefined {
 /** 错误对象到一行文案；非 Error 原样转字符串。 */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * vela 周期额度能不能用在这个账号上（多账号的身份闸门）。
+ *
+ * 背景：`vela billing preflight` **没有 `--key` 参数** —— 它永远用本机 vela 登录态那份
+ * 身份去查。于是同一个网关挂多个账号时：
+ *
+ * | 场景 | preflight 返回 | 该不该采信 |
+ * | --- | --- | --- |
+ * | 账号与 vela 登录态同一人 | 这个账号的用量 | ✅ 采信 |
+ * | 账号是另一个人 | **别人的用量** | ❌ 绝不采信 |
+ * | 任一身份读不到 | 不知道是谁的 | ❌ 不猜 |
+ *
+ * 另外 `~/.amr/config.json` 是**单例文件**（只有 `profiles.prod`）：第二个账号走网页登录会
+ * 覆盖第一个。所以「vela 登录态 = 最后一个登录的账号」是常态，更必须逐次核对身份。
+ * @param ref - 账号 ref。
+ * @param deps - 端口依赖（要 `identitiesOf`）。
+ * @returns `same` 可采信；`different` 不是同一人；`unknown` 判断不了。
+ */
+async function checkPreflightIdentity(
+  ref: string,
+  deps: OpenDesignQuotaDeps,
+): Promise<"same" | "different" | "unknown"> {
+  if (deps.identitiesOf === undefined) return "unknown";
+  let identities: { account?: string; vela?: string } | undefined;
+  try {
+    identities = await deps.identitiesOf(ref);
+  } catch {
+    return "unknown";
+  }
+  const account = normalizeKey(identities?.account);
+  const vela = normalizeKey(identities?.vela);
+  if (account === undefined || vela === undefined) return "unknown";
+  return account === vela ? "same" : "different";
 }
 
 /**
@@ -436,17 +486,29 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
       }
       let preflight: unknown;
       const workspaceId = ref === undefined ? undefined : normalizeKey(await deps.workspaceIdOf(ref));
-      if (workspaceId !== undefined && deps.preflight !== undefined) {
-        try {
-          const value = await deps.preflight(workspaceId);
-          if (value === undefined) {
-            failures.push("周期额度查询没有返回数据：本机 vela 没给出可用的读数");
-          } else {
-            preflight = value;
+      if (workspaceId !== undefined && deps.preflight !== undefined && ref !== undefined) {
+        // **身份闸门**（2026-10-20，多账号兼容）：preflight 用的是本机 vela 登录态，
+        // 不是这个账号的密钥。若两者不是同一个人，它返回的是**别人的用量** ——
+        // 那比「没有数据」更糟，因为用户会照着一个不属于自己的额度安排事情。
+        const identityVerdict = await checkPreflightIdentity(ref, deps);
+        if (identityVerdict !== "same") {
+          failures.push(
+            identityVerdict === "different"
+              ? "周期额度只用本机 vela 登录态查询，而这与本账号不是同一个人：为避免显示别人的用量，这档已跳过（余额与套餐仍然准确）"
+              : "周期额度只用本机 vela 登录态查询；无法确认登录态与本账号是否同一人，已跳过（余额与套餐仍然准确）",
+          );
+        } else {
+          try {
+            const value = await deps.preflight(workspaceId);
+            if (value === undefined) {
+              failures.push("周期额度查询没有返回数据：本机 vela 没给出可用的读数");
+            } else {
+              preflight = value;
+            }
+          } catch (error) {
+            // vela 找不到、退出非零、输出不是 JSON 都在这里变成一句人话，绝不倒成 0。
+            failures.push(`周期额度查询失败：${messageOf(error)}`);
           }
-        } catch (error) {
-          // vela 找不到、退出非零、输出不是 JSON 都在这里变成一句人话，绝不倒成 0。
-          failures.push(`周期额度查询失败：${messageOf(error)}`);
         }
       } else if (workspaceId === undefined) {
         // 没有工作区就**一定**没有额度窗口（窗口只来自 vela 的 codingPlan）。以前这里是静默

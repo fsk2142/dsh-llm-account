@@ -48,6 +48,10 @@ function deps(fetchImpl: typeof fetch, overrides: Partial<Parameters<typeof crea
     resolveControlKey: async () => "control-key-1",
     workspaceIdOf: () => undefined,
     fetchImpl,
+    // **缺省视为「同一人」**：绝大多数既有用例关心的是额度归一化/容错，不是身份闸门；
+    // 多账号隔离另有专门的用例（见下方「身份闸门」一组）。
+    // 生产装配必须给真实实现 —— 缺省会判成「不确定」而不采信 preflight。
+    identitiesOf: async () => ({ account: "u-1", vela: "u-1" }),
     ...overrides,
   };
 }
@@ -238,6 +242,83 @@ it("默认基地址是控制面入口（与推理基地址分开）", async () =
   const quota = createOpenDesignQuota(deps(fetchImpl));
   await quota.snapshot();
   expect(fetchImpl.requests[0]?.url).toBe(`${DEFAULT_WALLET_BASE_URL}/billing/summary`);
+});
+
+// —— 多账号兼容：vela preflight 的身份闸门（2026-10-20）——
+
+it("**账号与 vela 登录态不是同一人 → 不采信 preflight**（否则显示别人的用量）", async () => {
+  // `vela billing preflight` 没有 --key 参数，永远用本机 vela 登录态查。
+  // 网关下挂了第二个人的账号时，采信它就是「把别人的额度显示给你」——
+  // 用户会照着一个不属于自己的数字安排事情，比没有数据更糟。
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "GOAT", creditsPerUsd: 10000 })]);
+  const preflight = vi.fn(async () => ({
+    codingPlan: { windows: [{ usedCredits: 17871, limitCredits: 50000, durationSeconds: 18000 }] },
+  }));
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      workspaceIdOf: () => "ws-1",
+      preflight,
+      identitiesOf: async () => ({ account: "user-alice", vela: "user-bob" }),
+    }),
+  );
+  const snapshot = await quota.snapshot();
+  // 关键：**没有调用** preflight。
+  expect(preflight).not.toHaveBeenCalled();
+  // 周期窗口一条都没有（那是 bob 的数据，不属于 alice）。
+  expect(snapshot.windows.filter((w) => w.key === "fiveHour" || w.key === "weekly")).toEqual([]);
+  // 但必须说清为什么 —— 不能静默少一档。
+  expect(snapshot.failures.join(" ")).toContain("不是同一个人");
+  // 套餐与余额照旧（那用的是该账号自己的控制面密钥，结论准确）。
+  expect(snapshot.plan).toMatchObject({ id: "GOAT" });
+});
+
+it("同一人时才采信 preflight，窗口正常出现", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "GOAT", creditsPerUsd: 10000 })]);
+  const preflight = vi.fn(async () => ({
+    codingPlan: {
+      windows: [{ usedCredits: 17871, limitCredits: 50000, durationSeconds: 18000, resetsAt: 1_800_000_000_000 }],
+    },
+  }));
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      workspaceIdOf: () => "ws-1",
+      preflight,
+      identitiesOf: async () => ({ account: "user-same", vela: "user-same" }),
+    }),
+  );
+  const snapshot = await quota.snapshot();
+  expect(preflight).toHaveBeenCalledWith("ws-1");
+  const fiveHour = snapshot.windows.find((w) => w.key === "fiveHour");
+  expect(fiveHour?.used).toBe(1.7871);
+  expect(fiveHour?.cap).toBe(5);
+});
+
+it("**身份读不到就当作不确定，同样不采信**（不猜）", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "GOAT" })]);
+  const preflight = vi.fn(async () => ({ codingPlan: { windows: [] } }));
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      workspaceIdOf: () => "ws-1",
+      preflight,
+      // 缺 vela 侧身份（vela 没登录 / 命令失败）。
+      identitiesOf: async () => ({ account: "user-alice" }),
+    }),
+  );
+  const snapshot = await quota.snapshot();
+  expect(preflight).not.toHaveBeenCalled();
+  expect(snapshot.failures.join(" ")).toContain("无法确认");
+});
+
+it("没提供 identitiesOf 的老装配也不采信（缺省=不确定，不是「默认同一人」）", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "GOAT" })]);
+  const preflight = vi.fn(async () => ({ codingPlan: { windows: [] } }));
+  // 显式把 identitiesOf 去掉（`deps()` 的缺省是「同一人」，那是给额度归一化用例用的）。
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, { workspaceIdOf: () => "ws-1", preflight, identitiesOf: undefined }),
+  );
+  const snapshot = await quota.snapshot();
+  expect(preflight).not.toHaveBeenCalled();
+  expect(snapshot.failures.join(" ")).toContain("无法确认");
 });
 
 it("套餐字段宽容读取：tier/plan/status 与 subscription 子对象都认（名字对不上不该整块消失）", async () => {

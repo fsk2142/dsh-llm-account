@@ -331,12 +331,19 @@ it("额度端口：请求打控制面基地址，Bearer 头用控制面密钥", 
     const bundle = opendesign.apply(host.ctx, opendesign.Config(SHAPE));
 
     const snapshot = await bundle.quota.snapshot("OPENDESIGN_ACCOUNT_WORK_ab12cd");
-    expect(requests).toEqual([
+    // 2026-10-20 起多了一次 `GET /me`：那是 preflight 的**身份闸门**（核对本机 vela 登录态
+    // 与这个账号是不是同一个人）。这里只断言账单请求本身，身份查询单独看。
+    const billing = requests.filter((request) => request.url.endsWith("/billing/summary"));
+    expect(billing).toEqual([
       { url: "https://amr-api.open-design.ai/api/v1/billing/summary", authorization: "Bearer ctrl-work" },
     ]);
-    // 顶层没配 workspaceId 的账号条目配了（ws-work）：没有 vela 时记一句人话失败，不崩。
+    // 身份查询用的是**同一个**控制面密钥（不是推理密钥）。
+    const identity = requests.filter((request) => request.url.endsWith("/me"));
+    expect(identity.every((request) => request.authorization === "Bearer ctrl-work")).toBe(true);
+    // 顶层没配 workspaceId 的账号条目配了（ws-work）：本机没有 vela 时**先说身份不确定**，
+    // 于是压根不去查 preflight —— 这正是多账号闸门要的：查不到是谁的数据就不采信。
     expect(snapshot.plan).toMatchObject({ id: "GOAT", name: "GOAT" });
-    expect(snapshot.failures.join(" ")).toContain("周期额度查询失败");
+    expect(snapshot.failures.join(" ")).toContain("无法确认");
   } finally {
     vi.unstubAllGlobals();
   }
