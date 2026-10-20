@@ -106,6 +106,29 @@ export interface PageState {
   readonly discovery: DiscoveryProblem | undefined;
 }
 
+/**
+ * 功能页的虚拟命名空间：**不是**任何厂商的设置文档，而是一张专门放跨厂商功能的选项卡
+ * （切换策略 + 网页搜索）。
+ *
+ * 为什么它必须是一个 tab 而不是塞进某家厂商页：这两台功能与「用哪家网关」无关 ——
+ * 切号策略对三家同时生效，搜索是全局能力。放在某一家下面会让人以为只对那家生效。
+ *
+ * **它不是厂商**：容器里所有「按厂商做什么」的路径（读状态、读模型目录、账号表）
+ * 都必须显式排除它，否则会多打注定失败的请求。
+ */
+export const FEATURE_TAB_NS = "llm-account-features";
+
+/** 功能页的虚拟 providerId（不冒充任何厂商；`discoverVendors` 永不产出它）。 */
+export const FEATURE_TAB_PROVIDER = "features";
+
+/**
+ * 功能页的排序值：远大于任何厂商 order，保证它永远排最后。
+ *
+ * 用常量而不是「最大值 + 1」：厂商 order 是插件自己声明的（12/22/32 这个量级），
+ * 常量更稳定，也不会因为某家改了 order 而让功能页跑到中间去。
+ */
+const FEATURE_TAB_ORDER = 9_999;
+
 /** 三组卡片的规范顺序（规格 §8 的卡片顺序：隐私与安全 → 集成与显示 → 高级设置）。 */
 const GROUP_ORDER: readonly CardGroupSpec["group"][] = ["switch", "privacy", "integrations", "advanced"];
 
@@ -125,13 +148,30 @@ export function createPageState(
   discovery?: DiscoveryProblem,
 ): PageState {
   const available = new Set(snapshots.map((snapshot) => snapshot.ns));
-  const tabs = entries
-    .filter((entry) => available.has(entry.ns))
+  // 厂商页：只收**宿主真的存在**的设置命名空间（发现的依据）。
+  // 功能页是插件自己声明的，不走这条发现路径 —— 它由下面的常量 tab 提供。
+  const vendorTabs = entries
+    .filter((entry) => entry.ns !== FEATURE_TAB_NS && available.has(entry.ns))
     .sort((left, right) => left.order - right.order)
     .map((entry): VendorTab => ({ ns: entry.ns, providerId: entry.providerId, labelKey: entry.labelKey, order: entry.order }));
+  // 功能页**永远**在最后：两台功能都被隐藏时，用户仍然需要入口把功能重新打开
+  // —— 与「移除的模型仍要出现在列表里」是同一条纪律。
+  const tabs: VendorTab[] = [
+    ...vendorTabs,
+    { ns: FEATURE_TAB_NS, providerId: FEATURE_TAB_PROVIDER, labelKey: "vendor.features", order: FEATURE_TAB_ORDER },
+  ];
   const snapshotMap: Record<string, VendorSnapshot> = {};
   for (const snapshot of snapshots) {
     snapshotMap[snapshot.ns] = { ns: snapshot.ns, row: snapshot.row, value: { ...snapshot.value }, revision: snapshot.revision };
+  }
+  // 功能页的设置**存在承载行**上（`rowIds[0]`，本插件是 `llm-commandcode`），而
+  // `discoverVendors` 只会为厂商产出快照。这里按承载行借一份，键换成功能页的 ns ——
+  // 于是它能读到 `featureSwitchEnabled` 等字段，写入也落回同一个承载行。
+  const featureEntry = entries.find((entry) => entry.ns === FEATURE_TAB_NS);
+  const hostRow = featureEntry?.rowIds.find((row) => snapshotMap[row] !== undefined);
+  if (hostRow !== undefined && snapshotMap[FEATURE_TAB_NS] === undefined) {
+    const host = snapshotMap[hostRow]!;
+    snapshotMap[FEATURE_TAB_NS] = { ns: FEATURE_TAB_NS, row: hostRow, value: { ...host.value }, revision: host.revision };
   }
 
   const drafts: Record<string, Record<string, unknown>> = {};
@@ -144,9 +184,24 @@ export function createPageState(
     if (Object.keys(kept).length > 0) drafts[ns] = kept;
   }
 
-  const activeNs = previous !== undefined && tabs.some((tab) => tab.ns === previous.activeNs)
-    ? previous.activeNs
-    : tabs[0]?.ns;
+  // 默认选中第一个**厂商页**，而不是功能页：用户打开设置十次有九次是来配账号的，
+  // 落到「切换与搜索」会显得设置页坏了。没有厂商页时才退回功能页。
+  const firstVendorTab = tabs.find((tab) => tab.ns !== FEATURE_TAB_NS);
+  const previousStillThere =
+    previous !== undefined && tabs.some((tab) => tab.ns === previous.activeNs);
+  // 首帧通常还没有任何厂商快照（发现是异步的），于是 activeNs 落到功能页。等厂商被发现后，
+  // 若不把人接回去，用户就被**留在功能页**上、看不到自己的账号配置（实测踩到）。
+  // 只在「上一次停在功能页、而且当时确实没有厂商页」时自动接回，用户主动点过就不动他。
+  const strandedOnFeature =
+    previousStillThere &&
+    previous!.activeNs === FEATURE_TAB_NS &&
+    firstVendorTab !== undefined &&
+    (previous!.tabs ?? []).every((tab) => tab.ns === FEATURE_TAB_NS);
+  const activeNs = strandedOnFeature
+    ? firstVendorTab.ns
+    : previousStillThere
+      ? previous!.activeNs
+      : (firstVendorTab ?? tabs[0])?.ns;
   return {
     entries,
     tabs,

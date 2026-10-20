@@ -83,10 +83,18 @@ describe("client plugin skeleton", () => {
     apply(shared);
     apply(shared);
 
-    // Registry: the package knows all three of its vendors, and two `apply` calls do
-    // not produce a fourth entry (metadata is static — instance identity cannot
-    // be read, per the controller's vendor-discovery ruling).
-    expect(vendors().map((vendor) => vendor.ns)).toEqual(["llm-commandcode", "llm-opencode-go", "llm-opendesign"]);
+    // Registry: the package knows all three of its vendors **plus the feature page**,
+    // and two `apply` calls do not produce duplicates (metadata is static — instance
+    // identity cannot be read, per the controller's vendor-discovery ruling).
+    //
+    // 功能页（切换与搜索）也是一条注册项，所以这里期望四条；它排在最后，
+    // 且它的 ns 不是厂商命名空间（`entries` 里靠它渲染那张选项卡）。
+    expect(vendors().map((vendor) => vendor.ns)).toEqual([
+      "llm-commandcode",
+      "llm-opencode-go",
+      "llm-opendesign",
+      "llm-account-features",
+    ]);
 
     // Page: exactly ONE `settings.section`, even though both instances ran.
     // The centre-column panel is registered the same way (once): both slots are

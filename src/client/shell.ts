@@ -18,6 +18,7 @@
  * @module dsh-llm-account/src/client/shell
  */
 import { injectPluginCss, PAGE_CSS, PAGE_CSS_ID } from "./css";
+import { FEATURE_TAB_NS, FEATURE_TAB_PROVIDER } from "./page-state";
 import { registerVendor, resetRegistry, type VendorEntry } from "./registry";
 
 /** One page locale namespace for the whole unified page (`settings.llm-account`). */
@@ -263,6 +264,43 @@ export const VENDORS: readonly VendorEntry[] = [
             kind: "number",
             labelKey: "field.streamIdleTimeoutMs",
             hintKey: "field.streamIdleTimeoutMs.hint",
+          },
+        ],
+      },
+    ],
+  },
+  // —— 功能页（跨厂商）：切换策略 + 网页搜索 ——
+  //
+  // 它**不是**一家厂商：`providerId` 是虚拟值、`rowIds` 指向承载行（本插件的
+  // `llm-commandcode` 配置行）。这两台功能与「用哪家网关」无关，所以单独一张选项卡，
+  // 每台都能用 `featureSwitchEnabled` / `featureSearchEnabled` 整块隐藏。
+  //
+  // 容器里所有「按厂商做什么」的路径必须排除它（读状态、读目录、账号表）——
+  // 它没有额度、没有模型、没有账号。见 `seams.ts` 的 `availableEntries`。
+  {
+    ns: FEATURE_TAB_NS,
+    rowIds: ["llm-commandcode"],
+    providerId: FEATURE_TAB_PROVIDER,
+    order: 9_999,
+    labelKey: "vendor.features",
+    cards: [
+      {
+        group: "switch",
+        fields: [
+          {
+            key: "featureSwitchEnabled",
+            kind: "boolean",
+            labelKey: "field.featureSwitchEnabled",
+            hintKey: "field.featureSwitchEnabled.hint",
+            // 默认开：这两台是插件的主体能力，藏起来会让人以为没有。
+            fallback: true,
+          },
+          {
+            key: "featureSearchEnabled",
+            kind: "boolean",
+            labelKey: "field.featureSearchEnabled",
+            hintKey: "field.featureSearchEnabled.hint",
+            fallback: true,
           },
         ],
       },

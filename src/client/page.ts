@@ -13,7 +13,7 @@ import { createElement, Fragment, type ReactElement, type ReactNode } from "reac
 import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
-import { cardGroupsOf, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
+import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, isDirty, type DraftField, type PageState } from "./page-state";
 import type { CardGroupSpec, VendorEntry } from "./registry";
 
 /** 页面外壳的属性。全部是数据与回调：外壳自己不留状态。 */
@@ -78,6 +78,12 @@ function renderErrorPanel(error: unknown): ReactElement {
 function pageBody(props: PageShellProps): ReactElement {
   const { state, entries, t } = props;
   const active = entries.find((entry) => entry.ns === state.activeNs);
+  // 「一个厂商都没发现」是**页面级**的事实，与当前选中哪张 tab 无关。
+  //
+  // 功能页常驻之后，`active` 几乎不再是 undefined（功能页永远在 entries 里），所以空态
+  // 判定不能只靠 `active === undefined` —— 否则用户看到的是「一个干净的功能页」，
+  // 而真相是「三家网关一个都没被发现」，那正是最需要说出口的情况。
+  const noVendor = !state.tabs.some((tab) => tab.ns !== FEATURE_TAB_NS);
 
   return createElement(
     "div",
@@ -89,8 +95,14 @@ function pageBody(props: PageShellProps): ReactElement {
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
     props.accounts === undefined ? null : props.accounts,
+    // 「设置对象」下拉：**页面级**，不挂在任何卡片组里。
+    //
+    // 以前它挂在「高级」组内，于是选中一个**没有高级组**的页时下拉会消失，用户就再也切不回
+    // 别的设置对象。功能页（切换与搜索）正是这种页，所以这里必须提升到页面级。
+    props.mergeTabs === true ? settingsTarget(props) : null,
     props.mergeTabs === true ? null : tabRow(props),
-    active === undefined
+    // 空态提示：**独立于选中的 tab** 显示一次（见上面 noVendor 的说明）。
+    noVendor
       ? createElement(
           Fragment,
           null,
@@ -105,6 +117,9 @@ function pageBody(props: PageShellProps): ReactElement {
                 `${state.discovery.kind}: ${state.discovery.detail}`,
               ),
         )
+      : null,
+    active === undefined
+      ? null
       : vendorBody(props, active),
   );
 }
@@ -203,8 +218,8 @@ function cardGroupElement(props: PageShellProps, entry: VendorEntry, group: Card
         // 标题用组名，不再写死「高级」—— 折叠组现在不止一个。
         props.t(`group.${group.group}`),
       ),
-      // 「设置对象」只对按厂商区分的字段有意义，所以只挂在高级组里。
-      group.group === "advanced" && props.mergeTabs === true ? settingsTarget(props) : null,
+      // 「设置对象」下拉已提升到页面级（见 pageBody）—— 它不能依赖某个卡片组存在，
+      // 否则没有高级组的页（如功能页）会把唯一的切换入口弄丢。
       hint,
       ...body,
     );

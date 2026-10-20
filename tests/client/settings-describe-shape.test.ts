@@ -24,7 +24,7 @@
 import { describe as describeSuite, expect, it } from "vitest";
 
 import { describeVendorSnapshots, discoverVendors, saveSettings, type ClientSeamContext } from "../../src/client/seams";
-import { createPageState } from "../../src/client/page-state";
+import { createPageState, FEATURE_TAB_NS } from "../../src/client/page-state";
 import { PageShell } from "../../src/client/page";
 import type { VendorEntry } from "../../src/client/registry";
 
@@ -252,7 +252,7 @@ describeSuite("remote.settings.describe() shape", () => {
     ]);
     const snapshots = await describeVendorSnapshots(contextWith(described), ENTRIES);
     const state = createPageState(ENTRIES, snapshots);
-    expect(state.tabs.map((tab) => tab.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
+    expect(state.tabs.map((tab) => tab.ns)).toEqual(["llm-commandcode", "llm-opencode-go", FEATURE_TAB_NS]);
     expect(state.activeNs).toBe("llm-commandcode");
 
     const shell = PageShell({ state, entries: ENTRIES, t: (key) => key, onSelectTab: () => undefined, onSetField: () => undefined, onSave: () => undefined });

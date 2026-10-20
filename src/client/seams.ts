@@ -30,6 +30,7 @@ import {
   closeAction,
   createPageState,
   dirtyFields,
+  FEATURE_TAB_NS,
   noteCredentialChange,
   noteSaveResult,
   openAction,
@@ -202,6 +203,10 @@ export async function discoverVendors(ctx: ClientSeamContext, entries: readonly 
   // 行名（宿主设置服务按条目 id 寻址），用 `ns` 会让 opencode 的保存落在一个不存在的条目上。
   const byRow = new Map<string, VendorEntry>();
   for (const entry of entries) {
+    // 功能页**不参与发现**：它的 `rowIds` 指向承载行（`llm-commandcode`），登记进来会
+    // 把那一行认成功能页，厂商快照就丢了（实测：tab 变成「功能页 + opencode」）。
+    // 功能页的快照由 `createPageState` 按承载行借用（见那里的注释）。
+    if (entry.ns === FEATURE_TAB_NS) continue;
     for (const rowId of entry.rowIds) byRow.set(rowId, entry);
     byRow.set(entry.ns, entry);
   }
@@ -888,11 +893,19 @@ function renderBoundaryPanel(error: unknown): ReactElement {
 
 /** 容器本体（Hook + 组装）；由 {@link createConnectedPage} 包进错误边界。 */
 function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElement {
-  const { entries, ctx } = options;
+  const { ctx } = options;
+  // **在入口处把功能页摘掉**：下面的容器全是「按厂商做什么」的逻辑（读状态、读目录、
+  // 账号表、登录轮询、侧边栏、仪表盘）。功能页不是厂商，让它进这些循环会多打一堆注定
+  // 失败的请求（实测：状态读取会多出一次 `features`）。
+  //
+  // 只有建页面状态（`createPageState`）需要完整列表 —— 它靠 entries 里的功能页条目渲染
+  // 那张选项卡（见 `shell.ts` 的 VENDORS）。
+  const entries = options.entries.filter((entry) => entry.ns !== FEATURE_TAB_NS);
+  const allEntries = options.entries;
   const t = options.t ?? dictionaryOf("zh");
 
   return function ConnectedPage(): ReactElement {
-    const [state, setState] = useState<PageState>(() => createPageState(entries, []));
+    const [state, setState] = useState<PageState>(() => createPageState(allEntries, []));
     const [usage, setUsage] = useState<UsageNamespace | undefined>(undefined);
     /** usage 远程面**挂载**失败的原因（`undefined` = 没失败或在挂载中）。 */
     const [usageProblem, setUsageProblem] = useState<string | undefined>(undefined);
@@ -973,12 +986,12 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       // 但要把失败原因记进状态：空态据此自证，而不是只说一句「没有可显示的厂商」。
       if (snapshots.length === 0) {
         if (problem !== undefined) {
-          setState((current) => createPageState(entries, snapshots, current, problem));
+          setState((current) => createPageState(allEntries, snapshots, current, problem));
         }
         return;
       }
       noteSidebarSnapshots(entries, snapshots);
-      setState((current) => createPageState(entries, snapshots, current, problem));
+      setState((current) => createPageState(allEntries, snapshots, current, problem));
     };
 
     useEffect(() => {
@@ -1139,7 +1152,11 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     // 侧边栏卡片与中栏面板的注册在 apply 期一次完成（`registerSharedSurfaces`，常驻），
     // 门控在卡片组件里按**已存储**的开关做（`createSidebarCardView`）—— 这里不再碰插槽。
 
-    const availableEntries = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
+    // 功能页不是厂商：它没有额度、没有模型目录、没有账号，必须从「按厂商做什么」的
+    // 所有名单里排除，否则会多打一次注定失败的状态/目录请求。
+    const availableEntries = entries.filter(
+      (entry) => entry.ns !== FEATURE_TAB_NS && state.tabs.some((tab) => tab.ns === entry.ns),
+    );
     const modelVendorKey = availableEntries.map((entry) => entry.providerId).join(",");
 
     // 读**所有**可用厂商的未过滤模型目录：全局模型卡要把两家放在一起；只读当前标签页会让
@@ -1612,7 +1629,9 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     // 页面上不再有跨账号的用量卡片，所以这里不再往 `PageShell` 传 `usage`。
     return PageShell({
       state,
-      entries,
+      // 页面外壳要**完整**列表：它按 `activeNs` 找 entry 渲染字段，功能页也在其中
+      // （传过滤后的列表会让功能页永远渲染成空 —— 实测踩到过一次）。
+      entries: allEntries,
       t,
       accounts,
       mergeTabs: true,
@@ -2421,7 +2440,10 @@ export function registerSharedSurfaces(options: {
   t: (key: string) => string;
   localeNs: string;
 }): () => void {
-  const { ctx, entries, t, localeNs } = options;
+  // 侧边栏与仪表盘都是「按厂商」的：功能页没有额度也没有账号，混进去会多算一家
+  // （实测：仪表盘从 3 家变 4 家、状态读取多打一次）。
+  const { ctx, t, localeNs } = options;
+  const entries = options.entries.filter((entry) => entry.ns !== FEATURE_TAB_NS);
   const disposeSidebar = registerSidebarCard(ctx, {
     id: SIDEBAR_CARD_ID,
     order: 1,

@@ -79,6 +79,11 @@ export type CopyKey =
   | "options.openai"
   | "options.messages"
   | "options.cli"
+  | "vendor.features"
+  | "field.featureSwitchEnabled"
+  | "field.featureSwitchEnabled.hint"
+  | "field.featureSearchEnabled"
+  | "field.featureSearchEnabled.hint"
   | "vendor.commandcode"
   | "vendor.opencodeGo"
   | "vendor.opendesign"
@@ -351,6 +356,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
+    "vendor.features": "切换与搜索",
+    "field.featureSwitchEnabled": "显示切换策略",
+    "field.featureSwitchEnabled.hint": "关掉后这一块隐藏，但选项卡保留 —— 你仍然可以从这里重新打开。",
+    "field.featureSearchEnabled": "显示网页搜索",
+    "field.featureSearchEnabled.hint": "关掉后这一块隐藏，但选项卡保留。",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",
     "field.workspaceId": "工作区 ID",
@@ -617,6 +627,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
+    "vendor.features": "Switching & Search",
+    "field.featureSwitchEnabled": "Show switching strategy",
+    "field.featureSwitchEnabled.hint": "Hides this block; the tab stays so you can turn it back on.",
+    "field.featureSearchEnabled": "Show web search",
+    "field.featureSearchEnabled.hint": "Hides this block; the tab stays.",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",
     "field.workspaceId": "Workspace ID",

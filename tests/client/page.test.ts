@@ -16,6 +16,7 @@ import {
   closeAction,
   createPageState,
   dirtyFields,
+  FEATURE_TAB_NS,
   fieldValue,
   fieldsOf,
   isDirty,
@@ -87,14 +88,15 @@ it("标签页只渲染「已注册且宿主上存在」的厂商，按 order 升
   const registered = [entryOf({ ns: "llm-opencode-go", order: 20 }), entryOf({ ns: "llm-commandcode", order: 12 })];
   const state = createPageState(registered, SNAPSHOTS);
 
-  expect(state.tabs.map((tab) => tab.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
+  // 功能页永远在最后（它不是「发现到的厂商」，是插件自己声明的常驻页）。
+  expect(state.tabs.map((tab) => tab.ns)).toEqual(["llm-commandcode", "llm-opencode-go", FEATURE_TAB_NS]);
   // 注册了但宿主上没有这个命名空间：不渲染（规格 §8 的「按设置命名空间发现厂商」）。
   const withGhost = createPageState([...registered, entryOf({ ns: "llm-ghost" })], SNAPSHOTS);
-  expect(withGhost.tabs.map((tab) => tab.ns)).toEqual(["llm-commandcode", "llm-opencode-go"]);
-  // 一个都没有：没有标签页，也没有选中的厂商（不编造）。
+  expect(withGhost.tabs.map((tab) => tab.ns)).toEqual(["llm-commandcode", "llm-opencode-go", FEATURE_TAB_NS]);
+  // 一个厂商都没发现：只剩功能页，且**不编造**选中的厂商（activeNs 落到功能页而不是幽灵厂商）。
   const none = createPageState(registered, []);
-  expect(none.tabs).toEqual([]);
-  expect(none.activeNs).toBeUndefined();
+  expect(none.tabs.map((tab) => tab.ns)).toEqual([FEATURE_TAB_NS]);
+  expect(none.activeNs).toBe(FEATURE_TAB_NS);
 });
 
 it("切换标签不丢草稿：每个厂商的草稿各存各的", () => {
@@ -150,7 +152,8 @@ it("三组通用卡片按厂商声明渲染：未声明的组不出现，空组�
 });
 
 it("「集成与显示」里的侧边栏卡片开关默认关闭，且声明来源就是厂商注册表", () => {
-  for (const vendor of VENDORS) {
+  // 功能页不是厂商：它没有侧边栏开关（那条开关描述的是「要不要显示某家的额度卡」）。
+  for (const vendor of VENDORS.filter((entry) => entry.ns !== FEATURE_TAB_NS)) {
     const toggle = sidebarToggleField(vendor);
     expect(toggle?.key, vendor.ns).toBe("showSidebarQuota");
     expect(toggle?.kind, vendor.ns).toBe("boolean");
@@ -283,7 +286,13 @@ it("页面外壳渲染标题、简介与每个厂商一个标签页", () => {
   const all = elementsOf(tree);
 
   const tabs = all.filter((element) => element.props["data-tab"] !== undefined);
-  expect(tabs.map((element) => element.props["data-tab"])).toEqual(["llm-commandcode", "llm-opencode-go"]);
+  // 功能页（切换与搜索）永远排最后：它不是厂商，但必须常驻 ——
+  // 两台功能都关掉后，用户仍然需要这个入口把功能重新打开。
+  expect(tabs.map((element) => element.props["data-tab"])).toEqual([
+    "llm-commandcode",
+    "llm-opencode-go",
+    FEATURE_TAB_NS,
+  ]);
   const texts = textOf(tree);
   expect(texts).toContain(COPY.en.title);
   expect(texts).toContain(COPY.en.intro);
