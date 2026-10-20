@@ -240,8 +240,12 @@ export function assignUniqueNames(ids: readonly string[]): string[] {
       // 1) 借被规则吃掉的差异（`Qwen3.8-Max-0902` → `(0902)`、`step-5-preview-free` → `(free)`）。
       const marker = markerOf(ids[index] ?? "");
       if (marker !== "") candidate = `${base} (${marker})`;
-      // 2) 还撞就退回 id 的最后一段。
-      if (used.has(candidate.toLowerCase()) && tail !== base) candidate = `${base} (${tail})`;
+      // 2) 还撞就退回 id 的最后一段 —— 但**只在它确实比展示名多出信息时**用。
+      //    `a/same-model` 与 `b/same-model` 的 tail 都是 `same-model`，加进括号只会得到
+      //    `Same-Model (same-model)` 这种纯重复（2026-10-20 审计）。那时不如直接跳到序号。
+      if (used.has(candidate.toLowerCase()) && tail !== base && !base.toLowerCase().includes(tail.toLowerCase())) {
+        candidate = `${base} (${tail})`;
+      }
       // 3) 最终退路：序号。
       while (used.has(candidate.toLowerCase())) {
         counter += 1;

@@ -47,7 +47,7 @@ import {
 } from "../client/usage-contract";
 import { lastUsedAccountOf } from "../core/last-used";
 import { ledgerCsvOf, exportTailOf } from "../core/usage-export";
-import { failureBreakdownOf } from "../core/usage-failures";
+import { failureBreakdownOf, failureBreakdownPerAccount } from "../core/usage-failures";
 import { buildUsageReport } from "../core/usage-report";
 import { withinWindow, type UsageRecord } from "../core/usage-stats";
 import { sharedUsageLedger } from "./usage-store";
@@ -586,27 +586,41 @@ export class LlmAccountUsageService extends TypertRemoteService {
     // 只收**仍然存在的账号**：台账里可能留着已删除的 ref，拿它显示会对不上名字。
     const known = new Set(windows.keys());
     const lastUsed = lastUsedAccountOf(records, (vendor, account) => known.has(`${vendor}\u0000${account}`));
-    // 失败明细：只在**这个窗口**内统计（与总账同一口径）。一条失败都没有时不写这个字段
-    // —— 界面据此整块不渲染，而不是画一行「失败 0 次」。
-    const failuresByKind = failureBreakdownOf(withinWindow(records, window, now));
+    // 失败明细：只在**这个窗口**内统计（与总账同一口径），并且**按账号**分开
+    // —— 界面把用量块渲染在每个账号下面，传一份全局的会让同厂商所有账号显示同一份
+    // （失败属于 A 却显示在 B 下面）。一条失败都没有时不写这个字段：界面据此整块不渲染，
+    // 而不是画一行「失败 0 次」。
+    const scoped = withinWindow(records, window, now);
+    const perAccount = failureBreakdownPerAccount(scoped);
+    const failuresByAccount = [...perAccount.entries()].map(([account, rows]) => ({ account, rows }));
+    // 与此同时保留一份**全局**的（按厂商汇总），供将来做「整家厂商的失败概览」；
+    // 界面目前只用 `failuresByAccount`。
+    const failuresByKind = failureBreakdownOf(scoped);
     return {
       ...report,
       ...(lastUsed === undefined ? {} : { lastUsed }),
       ...(failuresByKind.length === 0 ? {} : { failuresByKind }),
+      ...(failuresByAccount.length === 0 ? {} : { failuresByAccount }),
     };
   }
 
   /**
-   * 导出用量台账为 CSV（最近 `limit` 条）。
+   * 导出用量台账为 CSV。
    *
    * 为什么在宿主侧做序列化：台账文件在这台机器上，客户端只拿到远程结果；把 CSV 文本整个传过去
    * 比传几千条记录再在浏览器里拼更省事，也保证导出与界面看到的是**同一份**数据。
-   * @param limit - 最多导出多少条（尾部，即最近的）；缺省 1000。
+   *
+   * **缺省导出全部**（120 天保留期内）。以前缺省是「最近 1000 条」，而客户端从不传参 ——
+   * 台账一旦超过 1000 条，用户拿到的文件就悄悄少了前面那部分，界面上却毫无提示
+   * （2026-10-20 审计；当时台账已有 2401 条）。对账场景下「看起来成功但数据不全」比失败更糟。
+   * @param limit - 可选上限（尾部，即最近的）。省略 = 不截断。
    * @returns CSV 文本（含表头）。
    */
   async usageExportCsv(limit?: number): Promise<string> {
     const records = await sharedUsageLedger().read();
-    return ledgerCsvOf(exportTailOf(records, limit ?? 1000));
+    // 只有显式给了正数上限才截断；`undefined`/非正数/非有限值一律导出全部。
+    const usable = typeof limit === "number" && Number.isFinite(limit) && limit > 0;
+    return ledgerCsvOf(usable ? exportTailOf(records, limit) : [...records]);
   }
 
   /**

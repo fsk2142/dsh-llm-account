@@ -149,8 +149,11 @@ export type CopyKey =
   | "usage.exportCsv"
   | "usage.exporting"
   | "usage.exportFailed"
+  | "usage.clearFailed"
   | "usage.clear"
   | "usage.clearConfirm"
+  | "usage.clearConfirmAction"
+  | "usage.clearing"
   | "usage.officialCost"
   | "usage.officialShort"
   | "usage.localOnly"
@@ -427,8 +430,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.exportCsv": "导出 CSV",
     "usage.exporting": "导出中…",
     "usage.exportFailed": "导出失败",
+    "usage.clearFailed": "清空失败",
     "usage.clear": "清空",
     "usage.clearConfirm": "清空全部用量记录？此操作不可撤销。",
+    "usage.clearConfirmAction": "确认清空",
+    "usage.clearing": "清空中…",
     "usage.officialCost": "≈ 按 DeepSeek 官方价",
     "usage.officialShort": "官方价",
     "usage.localOnly": "仅本机（不含其他设备）",
@@ -689,8 +695,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.exportCsv": "Export CSV",
     "usage.exporting": "Exporting…",
     "usage.exportFailed": "Export failed",
+    "usage.clearFailed": "Clear failed",
     "usage.clear": "Clear",
     "usage.clearConfirm": "Clear all usage records? This cannot be undone.",
+    "usage.clearConfirmAction": "Clear all",
+    "usage.clearing": "Clearing…",
     "usage.officialCost": "≈ at DeepSeek list price",
     "usage.officialShort": "list price",
     "usage.localOnly": "this device only (excludes other devices)",

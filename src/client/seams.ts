@@ -711,6 +711,7 @@ function reportOf(value: UsageReportView | undefined): UsageReportView | undefin
       accounts,
       ...(value.lastUsed === undefined ? {} : { lastUsed: value.lastUsed }),
       ...(value.failuresByKind === undefined ? {} : { failuresByKind: value.failuresByKind }),
+      ...(value.failuresByAccount === undefined ? {} : { failuresByAccount: value.failuresByAccount }),
       total: {
         window: USAGE_REPORT_WINDOW,
         bucket: {
@@ -741,6 +742,7 @@ function reportOf(value: UsageReportView | undefined): UsageReportView | undefin
     // 一直显示清单第一个（commandcode），opendesign 永远出不来（2026-10-19 报障）。
     ...(value.lastUsed === undefined ? {} : { lastUsed: value.lastUsed }),
     ...(value.failuresByKind === undefined ? {} : { failuresByKind: value.failuresByKind }),
+    ...(value.failuresByAccount === undefined ? {} : { failuresByAccount: value.failuresByAccount }),
   };
 }
 
@@ -909,6 +911,10 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [exportBusy, setExportBusy] = useState(false);
     /** 上一次导出失败的原因（人话）；成功即清掉。 */
     const [exportError, setExportError] = useState<string | undefined>(undefined);
+    /** 清空台账：进行中、二次确认是否展开、失败原因。 */
+    const [clearBusy, setClearBusy] = useState(false);
+    const [clearConfirming, setClearConfirming] = useState(false);
+    const [clearError, setClearError] = useState<string | undefined>(undefined);
     /**
      * 上一次账户操作没提交出去的原因（人话）。
      *
@@ -1346,21 +1352,20 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      */
     const usageProblemShown = new Set<string>();
     /**
-     * 某个厂商在这个窗口里的失败明细。
+     * 某个**账号**在这个窗口里的失败明细。
      *
-     * 报表里的 `failuresByKind` 是**跨厂商**的（台账是一本共享账），而失败明细要挂在具体
-     * 账号下面，所以这里按账号从 `accounts[].bucket.failed` 是否大于 0 过滤 —— 只有真的
-     * 有失败记录的厂商才拿得到明细。同一次失败不会被两家重复显示。
-     * @param vendor - 厂商。
-     * @returns 明细行；没有失败或报表还没读到时为 `undefined`。
+     * 必须是按账号查，不是按厂商：用量块渲染在每个账号下面，而报表的全局汇总若直接拿来用，
+     * 会让同厂商的所有账号显示同一份明细 —— 重复，而且失败属于 A 却显示在 B 下面
+     * （2026-10-20 审计发现的真 bug）。
+     * @param ref - 账号 ref。
+     * @returns 该账号的明细行；没有失败或报表还没读到时为 `undefined`。
      */
-    const failuresOf = (vendor: string): readonly { kind: string; count: number; lastAt: number; lastAccount: string }[] | undefined => {
-      const rows = usageReport?.failuresByKind;
-      if (!Array.isArray(rows) || rows.length === 0) return undefined;
-      // 该厂商的账号里有没有失败：没有就不把这个厂商的明细挂到别人头上。
-      const own = (usageReport?.accounts ?? []).filter((entry) => entry?.vendor === vendor);
-      const hasFailure = own.some((entry) => typeof entry?.bucket?.failed === "number" && entry.bucket.failed > 0);
-      return hasFailure ? rows : undefined;
+    const failuresOf = (ref: string): readonly { kind: string; count: number; lastAt: number; lastAccount: string }[] | undefined => {
+      const entries = usageReport?.failuresByAccount;
+      if (!Array.isArray(entries)) return undefined;
+      const entry = entries.find((item) => item?.account === ref);
+      const rows = entry?.rows;
+      return Array.isArray(rows) && rows.length > 0 ? rows : undefined;
     };
     /**
      * 某个账号的用量块（渲染在它自己的额度条下方）。
@@ -1411,7 +1416,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           entry: row,
           label: accountLabelOf(statuses[vendor]?.accounts ?? [], ref),
           // 失败明细挂在用量块脚下：它与「成功率」说的是同一件事，分开两处会让人对不上。
-          ...(failuresOf(vendor) === undefined ? {} : { failures: failuresOf(vendor) }),
+          // 按**账号**取（不是按厂商）：见 failuresOf 的说明。
+          ...(failuresOf(ref) === undefined ? {} : { failures: failuresOf(ref) }),
         }),
       );
     };
@@ -1527,6 +1533,31 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
             },
       exportBusy,
       ...(exportError === undefined ? {} : { exportError }),
+      // 清空台账：远程面没有这个方法（老宿主）时传 undefined，按钮自己就不渲染。
+      // 二次确认由**容器状态**驱动（不用 window.confirm：那会阻塞渲染线程且无法单测）。
+      onClearUsage:
+        usage?.usageClear === undefined
+          ? undefined
+          : () => {
+              setClearBusy(true);
+              setClearError(undefined);
+              void usage
+                .usageClear!()
+                .then(() => {
+                  setClearConfirming(false);
+                  // 清完必须重读：否则界面还挂着已经不存在的数据。
+                  setAccountRevision((current) => current + 1);
+                })
+                .catch((error: unknown) => {
+                  setClearError(error instanceof Error ? error.message : String(error));
+                })
+                .finally(() => setClearBusy(false));
+            },
+      clearBusy,
+      clearConfirming,
+      onRequestClearConfirm: () => setClearConfirming(true),
+      onCancelClear: () => setClearConfirming(false),
+      ...(clearError === undefined ? {} : { clearError }),
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
     // 统计**全在账号下面**（用户 2026-10-19：「只在每个账号下面统计本身的用量」）：

@@ -44,10 +44,25 @@ function cell(value: unknown): string {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+/**
+ * 一个时刻 → ISO 8601；不可信的值原样写成数字而不是抛错。
+ *
+ * `new Date(NaN).toISOString()` 抛 `RangeError` —— 台账解析本来会过滤掉坏 `at`，但导出是
+ * **用户按一下就期待拿到文件**的操作：一行坏数据不该让整次导出失败。坏值写成原始数字，
+ * 既留下线索又不拖垮整个文件。
+ * @param at - 记录时刻（形状不可信）。
+ * @returns 可安全写进 CSV 的文本。
+ */
+function timestampOf(at: unknown): string {
+  if (typeof at !== "number" || !Number.isFinite(at)) return cell(at);
+  const date = new Date(at);
+  return Number.isNaN(date.getTime()) ? cell(at) : cell(date.toISOString());
+}
+
 /** 一条记录 → 一行 CSV。 */
 function rowOf(record: UsageRecord): string {
   return LEDGER_CSV_COLUMNS.map((column) => {
-    if (column === "at") return cell(new Date(record.at).toISOString());
+    if (column === "at") return timestampOf(record.at);
     return cell(record[column]);
   }).join(",");
 }

@@ -113,3 +113,79 @@ export function UsageExportButton(props: UsageExportButtonProps): ReactElement |
     busy ? props.t("usage.exporting") : props.t("usage.exportCsv"),
   );
 }
+
+/** 清空按钮的属性。 */
+export interface UsageClearButtonProps {
+  t: (key: string) => string;
+  /** 缺省表示当前宿主没有清空能力 —— 整个按钮不渲染。 */
+  onClear?: (() => void) | undefined;
+  /** 请求展开确认面板（第一次点击）。 */
+  onRequestConfirm?: (() => void) | undefined;
+  /** 收起确认面板。 */
+  onCancel?: (() => void) | undefined;
+  /** 是否已经展开确认。 */
+  confirming?: boolean;
+  /** 清空进行中。 */
+  busy?: boolean;
+}
+
+/**
+ * 台账清空按钮（带二次确认）。
+ *
+ * 为什么要有：远程方法 `usageClear` 一直在，但界面入口在某次删卡片时被连带砍掉，
+ * 两条文案的消费者降到 0 —— 用户没有任何办法清空历史（2026-10-20 审计）。
+ *
+ * 二次确认用**受控状态**而不是 `window.confirm`：宿主是浏览器里的插件，`confirm` 会阻塞
+ * 渲染线程、无法被单测覆盖；这里的确认面板是纯元素，状态由容器持有。
+ * @param props - 文案、回调、进行中标记与「是否已确认」。
+ * @returns 元素树，或 `null`（没有清空能力时）。
+ */
+export function UsageClearButton(props: UsageClearButtonProps): ReactElement | null {
+  const onClear = props.onClear;
+  if (onClear === undefined) return null;
+  const busy = props.busy === true;
+  const confirming = props.confirming === true;
+
+  if (!confirming) {
+    return createElement(
+      "button",
+      {
+        type: "button",
+        "data-usage-clear": "true",
+        disabled: busy,
+        className: `${CSS_CLASS.buttonSecondary} ${CSS_CLASS.buttonSm}`,
+        // 第一下只请求确认（由容器把 confirming 置 true），绝不直接清空。
+        onClick: () => props.onRequestConfirm?.(),
+      },
+      busy ? props.t("usage.clearing") : props.t("usage.clear"),
+    );
+  }
+
+  return createElement(
+    "div",
+    { "data-usage-clear-panel": "true", className: CSS_CLASS.actions },
+    // 不可撤销，必须写明白（用的就是已有的 usage.clearConfirm 文案）。
+    createElement("small", { className: CSS_CLASS.failure }, props.t("usage.clearConfirm")),
+    createElement(
+      "button",
+      {
+        type: "button",
+        "data-usage-clear-confirm": "true",
+        disabled: busy,
+        className: `${CSS_CLASS.buttonSecondary} ${CSS_CLASS.buttonSm}`,
+        onClick: () => onClear(),
+      },
+      busy ? props.t("usage.clearing") : props.t("usage.clearConfirmAction"),
+    ),
+    createElement(
+      "button",
+      {
+        type: "button",
+        "data-usage-clear-cancel": "true",
+        className: `${CSS_CLASS.buttonGhost} ${CSS_CLASS.buttonSm}`,
+        onClick: () => props.onCancel?.(),
+      },
+      props.t("account.cancel"),
+    ),
+  );
+}

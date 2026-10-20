@@ -12,7 +12,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 
 import { accountAddSection, accountRows, reasonText, type AccountCardProps, type LoginView } from "./account-card";
 import { CSS_CLASS } from "./css";
-import { UsageExportButton } from "./failure-list";
+import { UsageClearButton, UsageExportButton } from "./failure-list";
 import { isHttpUrl } from "./login-window";
 import type { AccountAction } from "./page-state";
 import type { VendorEntry } from "./registry";
@@ -118,6 +118,21 @@ export interface AccountsPanelProps {
   exportBusy?: boolean;
   /** 上一次导出的失败原因（人话）；成功或还没导过时缺省。 */
   exportError?: string | undefined;
+  /**
+   * 清空用量台账（不可撤销；面板负责二次确认）。
+   *
+   * 缺省表示当前宿主没有这个能力 —— 整个按钮不渲染，而不是留一个点了没反应的入口。
+   */
+  onClearUsage?: (() => void) | undefined;
+  /** 清空进行中。 */
+  clearBusy?: boolean;
+  /** 是否已展开二次确认。 */
+  clearConfirming?: boolean;
+  /** 请求展开确认 / 收起确认。 */
+  onRequestClearConfirm?: (() => void) | undefined;
+  onCancelClear?: (() => void) | undefined;
+  /** 上一次清空的失败原因。 */
+  clearError?: string | undefined;
 }
 
 /**
@@ -154,6 +169,15 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
         onExport: props.onExportUsage === undefined ? undefined : () => void props.onExportUsage?.(),
         busy: props.exportBusy === true,
       }),
+      // 清空：紧跟导出（同一组「整本台账」操作）。同样自带二次确认与能力门控。
+      createElement(UsageClearButton, {
+        t,
+        onClear: props.onClearUsage,
+        ...(props.onRequestClearConfirm === undefined ? {} : { onRequestConfirm: props.onRequestClearConfirm }),
+        ...(props.onCancelClear === undefined ? {} : { onCancel: props.onCancelClear }),
+        ...(props.clearConfirming === undefined ? {} : { confirming: props.clearConfirming }),
+        ...(props.clearBusy === undefined ? {} : { busy: props.clearBusy }),
+      }),
     ),
     // 导出失败要说一句：静默失败会让人以为导出成功、而文件内容还是旧的。
     props.exportError === undefined
@@ -167,6 +191,19 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
             className: CSS_CLASS.failure,
           },
           `${t("usage.exportFailed")}：${props.exportError}`,
+        ),
+    // 清空失败同样要说出来：静默失败会让人以为清掉了，而实际什么都没变。
+    props.clearError === undefined
+      ? null
+      : createElement(
+          "small",
+          {
+            key: "clear-error",
+            "data-usage-clear-error": true,
+            "data-usage-clear-error-detail": props.clearError,
+            className: CSS_CLASS.failure,
+          },
+          `${t("usage.clearFailed")}：${props.clearError}`,
         ),
     createElement(
       "details",

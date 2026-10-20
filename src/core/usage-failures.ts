@@ -81,3 +81,30 @@ export function failureBreakdownOf(records: readonly UsageRecord[]): FailureKind
   }
   return [...rows.values()].sort((left, right) => right.count - left.count || left.kind.localeCompare(right.kind));
 }
+
+/**
+ * 按**账号**分组统计失败明细。
+ *
+ * 为什么必须分账号：报表里的 `failuresByKind` 是**窗口级的全局**汇总，而界面把用量块渲染在
+ * **每个账号**下面（`usageOf(ref)` 每账号调一次）。直接把全局那份传给每个账号，会让同一厂商
+ * 的所有账号都显示同一份明细 —— 重复，而且更糟：失败属于 A 却显示在 B 下面，用户会以为 B
+ * 也在失败（2026-10-20 审计发现的真 bug）。
+ *
+ * 台账每条记录本来就带 `account`，所以这只是**换一个切法**，不额外取数。
+ * @param records - 台账记录（成功的会被忽略）。
+ * @returns account → 该账号的明细行（次数降序 → 分类名升序）；没有失败的账号不出现在 Map 里。
+ */
+export function failureBreakdownPerAccount(records: readonly UsageRecord[]): Map<string, FailureKindSummary[]> {
+  const byAccount = new Map<string, UsageRecord[]>();
+  for (const record of records) {
+    if (record.outcome !== "failure") continue;
+    const bucket = byAccount.get(record.account);
+    if (bucket === undefined) byAccount.set(record.account, [record]);
+    else bucket.push(record);
+  }
+  const out = new Map<string, FailureKindSummary[]>();
+  for (const [account, items] of byAccount) {
+    out.set(account, failureBreakdownOf(items));
+  }
+  return out;
+}

@@ -101,6 +101,23 @@ describe("同一份目录里归一后撞名时，必须仍然可区分", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
+  it("tail 只是重复展示名时，用序号而不是 `(same-model)` 这种冗余", () => {
+    // `a/same-model` 与 `b/same-model` 的 tail 都是 `same-model`，而展示名已经是
+    // `Same-Model` —— 括号里再写一遍是纯重复（2026-10-20 审计）。
+    const parsed = parseCommandCodeCatalog({
+      models: [
+        { id: "a/same-model", name: "Same Model A (CC)" },
+        { id: "b/same-model", name: "Same Model B (CC)" },
+        { id: "c/same-model", name: "Same Model C (CC)" },
+      ],
+    });
+    expect(parsed.entries.map((entry) => entry.name)).toEqual([
+      "Same-Model",
+      "Same-Model (2)",
+      "Same-Model (3)",
+    ]);
+  });
+
   it("不撞名时一个字符都不改（不许给所有模型加尾巴）", () => {
     const parsed = parseCommandCodeCatalog({
       models: [

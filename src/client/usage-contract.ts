@@ -159,6 +159,17 @@ export interface UsageReportView {
    * 判断是网络抖动、限额还是凭据失效。缺失时整块不渲染（**不是**给一条全 0 的行）。
    */
   failuresByKind?: { kind: string; count: number; lastAt: number; lastAccount: string }[];
+  /**
+   * 失败明细的**按账号**切法（界面真正使用的那一份）。
+   *
+   * 为什么需要它：用量块渲染在**每个账号**下面，而 `failuresByKind` 是窗口级的全局汇总 ——
+   * 直接用它会让同厂商的所有账号都显示同一份明细（失败属于 A 却显示在 B 下面，
+   * 2026-10-20 审计发现的真 bug）。没有失败的账号不出现在这个数组里。
+   */
+  failuresByAccount?: {
+    account: string;
+    rows: { kind: string; count: number; lastAt: number; lastAccount: string }[];
+  }[];
 }
 
 /** 一次登录尝试的状态（与宿主侧 `LoginStatus` 同形；`reason` 是稳定文案键）。 */
@@ -413,6 +424,7 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
   // 失败明细同样**必须显式搬运**：这个函数会重建对象，漏一行就等于把字段抹掉
   // （与 lastUsed 那条注释同一条纪律）。
   const failuresByKind = failuresByKindOf(value.failuresByKind);
+  const failuresByAccount = failuresByAccountOf(value.failuresByAccount);
   return {
     accounts,
     total: {
@@ -423,7 +435,32 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
     },
     ...(lastUsed === undefined ? {} : { lastUsed }),
     ...(failuresByKind === undefined ? {} : { failuresByKind }),
+    ...(failuresByAccount === undefined ? {} : { failuresByAccount }),
   } as UsageReportView;
+}
+
+/**
+ * 校验并搬运「按账号的失败明细」。
+ *
+ * 逐行核对：`account` 非空、`rows` 是数组且其中每一行形状合格。坏行**丢弃**（一行坏掉不该
+ * 让整块消失）；`rows` 全坏时整个账号条目丢弃。一条都没有时返回 `undefined`。
+ * @param value - 线上值（形状不可信）。
+ * @returns 按账号的明细；没有合格条目时为 `undefined`。
+ */
+function failuresByAccountOf(
+  value: unknown,
+): { account: string; rows: { kind: string; count: number; lastAt: number; lastAccount: string }[] }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: { account: string; rows: { kind: string; count: number; lastAt: number; lastAccount: string }[] }[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const account = entry.account;
+    if (typeof account !== "string" || account === "") continue;
+    const rows = failuresByKindOf(entry.rows);
+    if (rows === undefined) continue;
+    out.push({ account, rows });
+  }
+  return out.length === 0 ? undefined : out;
 }
 
 /**
