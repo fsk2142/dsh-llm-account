@@ -59,18 +59,6 @@ export function defaultProfilePath(): string {
   return join(homedir(), ".amr", "config.json");
 }
 
-/** 失败原因的稳定文案键（`LoginStatus.reason`；客户端按 `account.reason.<key>` 取词）。 */
-export type OpenDesignLoginReason =
-  | "cancelled"
-  | "timeout"
-  | "unavailable"
-  /** 本机既没有 vela，也没有可用的本机登录产物。 */
-  | "vela-missing"
-  /** vela 正常结束，但登录产物没出现（浏览器里没批准）。 */
-  | "no-signin"
-  /** 登录产物的形状不认得（缺 `runtimeKey` 之类）。 */
-  | "config-invalid";
-
 /** vela 子进程的一个输出流（只认 `data`：两个流都逐块读）。 */
 export interface VelaStream {
   on(event: "data", listener: (chunk: unknown) => void): unknown;

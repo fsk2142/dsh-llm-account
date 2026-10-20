@@ -88,8 +88,6 @@ describe("随机操作序列仿真", () => {
     const { resetShell, VENDORS, PAGE_LOCALE_NS } = await import("../../src/client/shell");
     const { registerSharedSurfaces, startSharedState, createConnectedPage } = await import("../../src/client/seams");
     const { dictionaryOf } = await import("../../src/client/copy");
-    const { AccountCard } = await import("../../src/client/account-card");
-    const { createElement } = await import("react");
 
     const mini = await runtime();
     for (let run = 0; run < 24; run += 1) {
@@ -110,33 +108,6 @@ describe("随机操作序列仿真", () => {
         entries: VENDORS,
         ctx: host.ctx as never,
         t,
-        renderVendorCards: (cards) => {
-          const context = cards as {
-            t: (key: string) => string;
-            action?: { kind: string };
-            openAction: (action: unknown) => void;
-            setActionField: (field: string, value: string) => void;
-            confirmAction: () => void;
-            cancelAction: () => void;
-            select: (ref: string) => void;
-            remove: (ref: string) => void;
-            toggleExpand: (ref: string) => void;
-            loginBegin: () => void;
-          };
-          return createElement(AccountCard as never, {
-            status: undefined,
-            t: context.t,
-            action: context.action,
-            onOpenAction: context.openAction,
-            onActionField: context.setActionField,
-            onConfirmAction: context.confirmAction,
-            onCancelAction: context.cancelAction,
-            onSelect: context.select,
-            onRemove: context.remove,
-            onToggleExpand: context.toggleExpand,
-            onLoginBegin: context.loginBegin,
-          } as never);
-        },
       });
 
       const card = mini.mount(cardComponent);

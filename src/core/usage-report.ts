@@ -104,11 +104,6 @@ export interface UsageQuery {
   spentOf?: (vendor: string, account: string) => { amount: number; window: string } | undefined;
 }
 
-/** 空桶（没有记录时也要有形状）。 */
-function emptyBucket(period: string, since: number): UsageBucket {
-  return aggregateUsage([], period, since, () => undefined, () => undefined);
-}
-
 /**
  * 生成报表。
  * @param query - 见 {@link UsageQuery}。
@@ -200,12 +195,4 @@ export function buildUsageReport(query: UsageQuery): { accounts: AccountUsage[];
 /** 窗口的起点（`all` 用 0）。 */
 function startOf(window: UsageWindow, now: number): number {
   return windowStart(window, now) ?? 0;
-}
-
-/** 报表为空时的形状（界面在「还没有记录」时用它，避免到处判空）。 */
-export function emptyReport(window: UsageWindow, now: number): { accounts: AccountUsage[]; total: TotalUsage } {
-  return {
-    accounts: [],
-    total: { window, bucket: emptyBucket(window, startOf(window, now)), byVendor: [] },
-  };
 }

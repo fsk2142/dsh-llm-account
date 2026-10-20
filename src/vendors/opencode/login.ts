@@ -23,9 +23,6 @@ import {
 /** 本登录流所属的 provider 路由（ref 生成的厂商段）。 */
 export const OPENCODE_LOGIN_VENDOR: VendorId = "dsh-opencode-go";
 
-/** 失败原因的稳定文案键。 */
-export type OpencodeLoginReason = "cancelled" | "timeout" | "denied" | "unavailable" | "network";
-
 /** 登录依赖。 */
 export interface OpencodeLoginDeps extends OAuthHttpDeps {
   /**

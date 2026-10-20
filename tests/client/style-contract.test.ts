@@ -21,7 +21,6 @@ import { AccountCard, type AccountCardProps } from "../../src/client/account-car
 import { CSS_CLASS, PAGE_CSS } from "../../src/client/css";
 import { dictionaryOf } from "../../src/client/copy";
 import { Dashboard } from "../../src/client/dashboard";
-import { ModelsCard } from "../../src/client/models-card";
 import { OpenCodeAccountCard } from "../../src/client/opencode-account-card";
 import { SidebarCard } from "../../src/client/sidebar-card";
 import type { AccountUsageStatus, VendorCapabilities, VendorUsageStatus } from "../../src/client/usage-contract";
@@ -184,24 +183,6 @@ it("OpenCode 账户卡片：排序控件与 autoSwitch 也有类", () => {
     onSetAutoSwitch: vi.fn(),
   });
   expect(assertStyled(tree, "opencode 账户卡片")).toBeGreaterThan(5);
-});
-
-it("模型卡片：搜索、逐模型移除、添加都有类", () => {
-  const tree = ModelsCard({
-    t,
-    models: ["alpha", "beta"],
-    visibility: { beta: false },
-    draft: "gamma",
-    filter: "al",
-    onFilterChange: vi.fn(),
-    mode: "onSave",
-    onToggleModel: vi.fn(),
-    onRemoveModel: vi.fn(),
-    onDraftChange: vi.fn(),
-    onAddModel: vi.fn(),
-  });
-  // 两行按钮：移除（过滤后剩下的那一行）+ 添加。数量多于 1 就说明两条路径都渲染了。
-  expect(assertStyled(tree, "模型卡片")).toBeGreaterThan(1);
 });
 
 it("侧边栏卡片与中栏仪表盘：按钮都有类", () => {

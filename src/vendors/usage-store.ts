@@ -48,11 +48,6 @@ export function sharedUsageLedger(directory: string = defaultUsageRoot()): Usage
   return sharedLedger;
 }
 
-/** 复位单例（测试隔离；生产不会调用）。 */
-export function resetSharedUsageLedger(): void {
-  sharedLedger = undefined;
-}
-
 /**
  * 某个账号在 [from, to) 内的**本机折合花费**（美元，按 DeepSeek 官方价算我们自己记的 token）。
  *

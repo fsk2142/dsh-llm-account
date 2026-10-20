@@ -125,16 +125,6 @@ export function periodAt(kind: PeriodKind, at: number, resetAt?: number | undefi
   return { kind, key: periodKeyOf(kind, start), start, end: ongoing ? undefined : end, fromResetAt: false };
 }
 
-/** 周期里还剩多少毫秒（没有终点时为 `undefined`）。 */
-export function remainingOf(period: BillingPeriod, now: number): number | undefined {
-  if (period.end === undefined) {
-    // 自然周期：算到下一个自然边界。
-    const end = naturalEnd(period.kind, period.start);
-    return Math.max(0, end - now);
-  }
-  return Math.max(0, period.end - now);
-}
-
 /**
  * 把一个时刻按**日历月**前移/后移（月末夹取：1/31 的前一月是 12/31，不会溢出到 3 月）。
  * @param at - 基准时刻。

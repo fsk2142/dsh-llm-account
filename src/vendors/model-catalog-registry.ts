@@ -78,14 +78,6 @@ export function registerCatalogSource(source: CatalogSource): void {
 }
 
 /**
- * 注销一家的读口（该行卸载时调用）。
- * @param provider - 要摘掉的 provider。
- */
-export function unregisterCatalogSource(provider: string): void {
-  if (sources.delete(provider)) cached = undefined;
-}
-
-/**
  * 取合并后的候选清单（带一次短 TTL 缓存）。
  *
  * 读失败的那一家只是缺席，不影响别家 —— 换模型是尽力而为的补救，不该因为某家目录读不到
@@ -163,26 +155,6 @@ export function noteCatalogModels(
     });
   }
   cached = { at: now, value: kept };
-}
-
-/**
- * 后台预热候选清单（`apply` 期调一次）。
- *
- * 为什么要预热：换模型走**缓存优先**（{@link cachedModelCandidates}），从不因为一次失败去
- * 现打三家目录端点。但缓存得有东西 —— 所以在启动时安静地读一次（失败只记日志）。
- *
- * 为什么可以接受这次读：目录数据本来就要为「模型选择器」准备，三条 provider 行各自维护一份；
- * 这里只是在启动时提前触发，而不是在失败路径上现读。
- * @param onError - 失败回调（缺省静默）。
- * @returns 预热完成的 promise（测试可 await；生产不等待）。
- */
-export function primeModelCandidates(onError?: (error: unknown) => void): Promise<void> {
-  return modelCandidates().then(
-    () => undefined,
-    (error: unknown) => {
-      onError?.(error);
-    },
-  );
 }
 
 /** 复位（测试隔离；生产不会调用）。 */

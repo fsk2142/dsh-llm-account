@@ -237,13 +237,3 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
 
 /** 台账文件的目录名（相对插件私有目录）。 */
 export const USAGE_DIR_NAME = "usage";
-
-/** 由插件数据根算出用量目录。 */
-export function usageDirectoryOf(dataRoot: string): string {
-  return join(dataRoot, USAGE_DIR_NAME);
-}
-
-/** 确保目录存在（导出给装配层在启动时调用一次）。 */
-export async function ensureUsageDirectory(directory: string): Promise<void> {
-  await mkdir(directory, { recursive: true });
-}

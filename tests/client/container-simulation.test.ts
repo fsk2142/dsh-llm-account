@@ -26,9 +26,7 @@
  * 8. 插槽注册形状（`id`/`order` 与 `key`），卡片「打开面板」与面板「关闭」都走 `layout.selectPanel`。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
 
-import type { VendorCardsContext } from "../../src/client/seams";
 import {
   elementsOfSim,
   findSim,
@@ -76,7 +74,7 @@ async function freshSeams(): Promise<void> {
 }
 
 /** 造设置页容器（真实生产代码）。 */
-async function pageContainer(host: FakeHost, renderVendorCards?: (cards: VendorCardsContext) => ReactNode): Promise<() => unknown> {
+async function pageContainer(host: FakeHost): Promise<() => unknown> {
   const { createConnectedPage } = await import("../../src/client/seams");
   const { VENDORS } = await import("../../src/client/shell");
   const { dictionaryOf } = await import("../../src/client/copy");
@@ -84,7 +82,6 @@ async function pageContainer(host: FakeHost, renderVendorCards?: (cards: VendorC
     entries: VENDORS,
     ctx: host.ctx as never,
     t: dictionaryOf("zh"),
-    ...(renderVendorCards === undefined ? {} : { renderVendorCards }),
   });
 }
 
@@ -242,7 +239,7 @@ describe("设置页容器仿真", () => {
     const mini = await runtime();
     await freshSeams();
     const host = fakeHost(mini);
-    // 生产路径：账户表在标签页上方的合并面板里，不在 `renderVendorCards` 的专属卡片里。
+    // 生产路径：账户表在标签页上方的合并面板里。
     const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
 
@@ -476,46 +473,6 @@ describe("设置页容器仿真", () => {
     await settleSim(mini);
     expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go", "opendesign"]);
     second.unmount();
-  });
-
-  it("模型勾选在保存前就反映到草稿（回归：点了没反应）", async () => {
-    const mini = await runtime();
-    await freshSeams();
-    const host = fakeHost(mini);
-    const { ModelsCard } = await import("../../src/client/models-card");
-    const { createElement } = await import("react");
-    const page = mini.mount(
-      await pageContainer(host, (cards) =>
-        createElement(ModelsCard as never, {
-          t: cards.t,
-          models: cards.models,
-          visibility: cards.modelVisibility,
-          visibleModels: cards.visibleModels,
-          modelInfo: cards.modelInfo,
-          catalogFailure: cards.catalogFailure,
-          catalogLoading: cards.catalogLoading,
-          onRetryCatalog: cards.onRetryCatalog,
-          draft: cards.modelDraft,
-          filter: cards.modelFilter,
-          onFilterChange: cards.setModelFilter,
-          mode: cards.modelMode,
-          onToggleModel: (model: string, visible: boolean) => cards.editModel({ kind: "toggle", model, visible }),
-          onRemoveModel: (model: string) => cards.editModel({ kind: "remove", model }),
-          onDraftChange: cards.setModelDraft,
-          onAddModel: (model: string) => cards.editModel({ kind: "add", model }),
-        } as never),
-      ),
-    );
-    await settleSim(mini);
-
-    // 新规则：目录里的 m1 默认关闭；点一下必须立刻变成已勾选（还没保存）。
-    const toggle = find(page.tree(), "data-model-visible", "m1");
-    expect(toggle.props.checked).toBe(false);
-    fireSim(toggle, "onChange", { target: { checked: true } });
-    await settleSim(mini);
-    expect(find(page.tree(), "data-model-visible", "m1").props.checked).toBe(true);
-    // 草稿已经脏了：保存条出现，勾选不是假象。
-    expect(findSim(page.tree(), "data-save-bar")).toBeDefined();
   });
 });
 

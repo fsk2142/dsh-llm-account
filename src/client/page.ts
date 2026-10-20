@@ -40,13 +40,6 @@ export interface PageShellProps {
    * 字段卡片**之前**，与规格 §8 的卡片顺序一致）。
    */
   renderVendorCards?: (ns: string) => ReactNode;
-  /**
-   * 每家的模型目录（键是命名空间）：models 类型的字段要靠它渲染勾选框。
-   *
-   * 目录是**厂商级**资源，容器已经为模型卡片读过一次（modelCatalogs），这里复用同一份，
-   * 不为设置页多发一次请求。缺省或还没读到时，models 字段退回「纯输入」形态。
-   */
-  catalogs?: Readonly<Record<string, readonly { id: string; name?: string }[]>>;
   /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
   mergeTabs?: boolean;
   /** 当前是否正在保存（保存按钮的即时反馈）。 */

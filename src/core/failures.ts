@@ -17,12 +17,6 @@ export type { FailureKind, Rejection } from "./adapter";
 export type TransientFailureKind = Extract<FailureKind, "server" | "network">;
 
 /**
- * 账号级失败分类：必须写入拒绝表并让该账号退出轮换，恢复方式见各分类的冷却规则。
- * 用 `Exclude` 而不是重抄一遍联合成员，`FailureKind` 增删成员时这里会跟着变。
- */
-export type AccountScopedFailureKind = Exclude<FailureKind, TransientFailureKind>;
-
-/**
  * 构造一次拒绝。`resetAt` 只在厂商确实给出重置时刻时传入 —— 缺省时**不写**该字段，
  * 让「未知重置时刻」与「已知重置时刻」在数据上可区分（轮换引擎据此选择冷却策略）。
  * @param kind - 失败分类。

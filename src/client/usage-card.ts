@@ -338,17 +338,3 @@ export function AccountUsageBlock(props: {
     ...(foot.length === 0 ? [] : [createElement("div", { key: "foot", className: CSS_CLASS.usageFoot }, ...foot)]),
   );
 }
-
-/**
- * 账号行的周期剩余时间文案（用在账号卡片的额度区下方）。
- * @param t - 取词。
- * @param end - 周期终点（epoch 毫秒）。
- * @param now - 现在。
- * @returns 文案；没有终点时为 `undefined`。
- */
-export function periodRemainingText(t: (key: string) => string, end: number | undefined, now: number): string | undefined {
-  if (end === undefined) return undefined;
-  const remaining = end - now;
-  if (remaining <= 0) return undefined;
-  return `${t("usage.remaining")} ${relativeTime(t, now + remaining)}`;
-}

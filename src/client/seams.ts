@@ -27,12 +27,9 @@ import { Dashboard } from "./dashboard";
 import { closeLoginWindow, openLoginWindow, pointLoginWindowAt, type LoginWindowHandle } from "./login-window";
 import { SidebarCard } from "./sidebar-card";
 import {
-  applyModelEdit,
   closeAction,
   createPageState,
   dirtyFields,
-  modelEditTarget,
-  normalizeModels,
   noteCredentialChange,
   noteSaveResult,
   openAction,
@@ -46,18 +43,15 @@ import {
   sidebarVendorOf,
   sidebarScopeOf,
   toggleExpanded,
-  vendorCardKinds,
   type AccountAction,
-  type ModelEdit,
   type PageState,
   type VendorSnapshot,
 } from "./page-state";
 import type { LoginView } from "./account-card";
-import type { ModelsWriteMode } from "./models-card";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import type { VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type SwitchRuntimeState, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
 import { AccountUsageBlock } from "./usage-card";
 
 /**
@@ -642,86 +636,8 @@ export interface ConnectedPageOptions {
   ctx: ClientSeamContext;
   /** 取词函数；缺省按 `zh` 的本地字典（宿主 locale 绑定由 `shell.ts` 负责）。 */
   t?: (key: string) => string;
-  /**
-   * 该厂商的专属卡片（账户卡片、模型卡片……）。T5–T7 从这里注入。
-   *
-   * 容器把「当前可用的远程命名空间 + 页面状态里与卡片有关的那些字段 + 一组回调」交给它：
-   * 卡片自己是纯函数（Ruling 22），所以状态与回调必须由容器递进来。
-   */
-  renderVendorCards?: (context: VendorCardsContext) => ReactNode;
 }
 
-/** 交给专属卡片的一切：数据 + 状态切片 + 回调。 */
-export interface VendorCardsContext {
-  /** 厂商的设置命名空间。 */
-  ns: string;
-  /** 该厂商的远程 id（`commandcode` / `dsh-opencode-go`）。 */
-  vendor: string;
-  /** 已挂载的远程命名空间；还没挂上时为 `undefined`（卡片必须自己降级）。 */
-  usage: UsageNamespace | undefined;
-  /** 该厂商最新的状态（生效账号、账号行、额度摘要）；还没读到时为 `undefined`。 */
-  status: VendorUsageStatus | undefined;
-  /**
-   * 状态读不出来时的**原因**（挂载失败或读口报错时的宿主原文）。
-   *
-   * 与 `status === undefined` 配套：症状一样（读不到数据），病因不同（远程面没挂上 vs
-   * 读口调用失败 vs 形状不认识）。空态必须显示它，否则就只能猜。
-   */
-  problem: string | undefined;
-  /** 该厂商设置文档的当前值（`autoSwitch` 等设置类控件的当前值来源）。 */
-  settings: Record<string, unknown>;
-  t: (key: string) => string;
-  /** 正在进行的账户操作草稿。 */
-  action: AccountAction | undefined;
-  /** 展开完整报告的账号。 */
-  expandedRef: string | undefined;
-  /** 该厂商的登录状态（没有登录入口的厂商为 `undefined`）。 */
-  login: LoginView | undefined;
-  openAction: (action: { kind: AccountAction["kind"]; ref?: string }) => void;
-  setActionField: (field: "label" | "key", value: string) => void;
-  confirmAction: () => void;
-  cancelAction: () => void;
-  toggleExpand: (ref: string) => void;
-  select: (ref: string | null) => void;
-  remove: (ref: string) => void;
-  /** 调整账号顺序（`toIndex` 是移动后的**最终下标**）。 */
-  move: (ref: string, toIndex: number) => void;
-  /** 写自动切换开关（立即生效）。 */
-  setAutoSwitch: (value: boolean) => void;
-  /** 这家要渲染哪些专属卡片（顺序即规格 §8 的卡片顺序）；规则在 `vendorCardKinds` 里。 */
-  cardKinds: readonly ("accounts" | "models")[];
-  /** 要展示的模型 id（厂商目录 ∪ 白名单 ∪ 显隐表里有记录的，已去重）。 */
-  models: string[];
-  /** 白名单；缺省或为空表示不按白名单限制。 */
-  visibleModels: readonly string[];
-  /** 逐模型显隐（缺省视为可见）。 */
-  modelVisibility: Record<string, boolean>;
-  /** 目录带下来的公司/免费标记（供模型卡片分组）；页面会按 id 前缀兜底。 */
-  modelInfo: Record<string, { company?: string; free?: boolean }>;
-  /** 模型目录读取失败原因（宿主原文）；读取正常时缺省。 */
-  catalogFailure?: string;
-  /** 模型目录正在读取。 */
-  catalogLoading?: boolean;
-  /** 重新读取模型目录。 */
-  onRetryCatalog?: () => void;
-  /** 「添加模型」输入框的当前草稿。 */
-  modelDraft: string;
-  /** 模型搜索框关键词（纯展示过滤，不改任何设置）。 */
-  modelFilter: string;
-  setModelFilter: (value: string) => void;
-  /** 该厂商模型改动的生效时机。 */
-  modelMode: ModelsWriteMode;
-  setModelDraft: (value: string) => void;
-  /** 做一次模型编辑（按生效时机分派到草稿或立刻写）。 */
-  editModel: (edit: ModelEdit) => void;
-  /** 切换策略运行态（倒计时/待切换）。 */
-  switchState?: SwitchRuntimeState;
-  /** 容器每秒推进的时钟（卡片自己不设定时器）。 */
-  now: number;
-  /** 立即执行一次切换。 */
-  switchNow: () => void;
-  loginBegin: () => void;
-}
 
 /** 登录轮询间隔（毫秒）。等待授权时的轮询是**唯一的**后台请求来源，且随状态起停。 */
 export const LOGIN_POLL_MS = 1_000;
@@ -930,10 +846,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [statusLoading, setStatusLoading] = useState<Record<string, boolean>>(() =>
       Object.fromEntries(entries.map((entry) => [entry.providerId, true])),
     );
-    /** 「添加模型」的输入草稿（按厂商分开）。 */
-    const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({});
-    /** 模型搜索关键词（按厂商分开；纯展示，不进设置草稿、不进保存条）。 */
-    const [modelFilters, setModelFilters] = useState<Record<string, string>>({});
     /** 每个厂商的未过滤目录（`models()` 的结果）；还没读到时缺省。 */
     const [modelCatalogs, setModelCatalogs] = useState<Record<string, CatalogModelsResult | undefined>>({});
     /** 目录读取中（按厂商）。 */
@@ -1142,9 +1054,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
 
     // 侧边栏卡片与中栏面板的注册在 apply 期一次完成（`registerSharedSurfaces`，常驻），
     // 门控在卡片组件里按**已存储**的开关做（`createSidebarCardView`）—— 这里不再碰插槽。
-
-    const activeEntry = entries.find((entry) => entry.ns === state.activeNs);
-    const activeVendor = activeEntry?.providerId;
 
     const availableEntries = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
     const modelVendorKey = availableEntries.map((entry) => entry.providerId).join(",");
@@ -1525,17 +1434,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       loginStarting,
       loginError: loginErrors,
     });
-    // 设置页里 `models` 类型的字段要勾选框：把已读到的目录按**命名空间**整理一份。
-    //
-    // 为什么按 ns 而不是 providerId：字段挂在 vendor 的 settings 上，而字段控件拿到的
-    // `entry.ns` 是命名空间（opencode 的 providerId 是 `dsh-opencode-go`、ns 是
-    // `llm-opencode-go`），用错了那个字段就永远是空的。
-    const catalogsForSettings: Record<string, readonly { id: string; name?: string }[]> = {};
-    for (const entry of availableEntries) {
-      const catalog = modelCatalogs[entry.providerId];
-      if (catalog !== undefined) catalogsForSettings[entry.ns] = catalog.models;
-    }
-
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
     // 统计**全在账号下面**（用户 2026-10-19：「只在每个账号下面统计本身的用量」）：
     // 页面上不再有跨账号的用量卡片，所以这里不再往 `PageShell` 传 `usage`。
@@ -1543,8 +1441,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       state,
       entries,
       t,
-      // models 类型的字段要勾选框：目录复用模型卡片那一份，不额外请求。
-      catalogs: catalogsForSettings,
       accounts,
       mergeTabs: true,
       saving: savingNs === state.activeNs,
@@ -1587,208 +1483,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           }
         }
       },
-      ...(options.renderVendorCards === undefined || activeEntry === undefined || activeVendor === undefined
-        ? {}
-        : {
-            renderVendorCards: (ns: string) =>
-              options.renderVendorCards?.({
-                ns,
-                vendor: activeVendor,
-                usage,
-                status: statuses[activeVendor],
-                // 挂载失败的原因优先（那时连读口都发不出去），其次是读口本身的报错。
-                problem: usageProblem ?? statusProblems[activeVendor],
-                settings: state.snapshots[activeEntry.ns]?.value ?? {},
-                t,
-                action: state.action,
-                expandedRef: state.expandedRef,
-                login: loginDismissed[activeVendor] === true ? undefined : logins[activeVendor],
-                openAction: (action) => setState((current) => openAction(current, action)),
-                setActionField: (field, value) => setState((current) => setActionField(current, field, value)),
-                confirmAction: () => {
-                  // 派发判定在 `dispatchAccountAction` 里（可单测）；这里只负责「成了就关草稿并重读」。
-                  const pending = state.action === undefined ? undefined : dispatchAccountAction(usage, activeVendor, state.action);
-                  if (pending === undefined) return;
-                  void pending.then(() => {
-                    setState((current) => closeAction(current));
-                    setAccountRevision((current) => current + 1);
-                  });
-                },
-                cancelAction: () => setState((current) => closeAction(current)),
-                toggleExpand: (ref) => setState((current) => toggleExpanded(current, ref)),
-                select: (ref) => {
-                  void usage?.selectAccount(activeVendor, ref).then(() => setAccountRevision((current) => current + 1));
-                },
-                remove: (ref) => {
-                  void usage?.removeAccount(activeVendor, ref).then(() => setAccountRevision((current) => current + 1));
-                },
-                move: (ref, toIndex) => {
-                  void usage?.moveAccount(activeVendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
-                },
-                setAutoSwitch: (value) => {
-                  void usage?.setAutoSwitch(activeVendor, value).then(() => setAccountRevision((current) => current + 1));
-                },
-                ...modelCardContext({
-                  entry: activeEntry,
-                  state,
-                  mode: modelWriteModeOf(statuses[activeVendor]),
-                  draft: modelDrafts[activeEntry.ns] ?? "",
-                  setDraft: (value) => setModelDrafts((current) => ({ ...current, [activeEntry.ns]: value })),
-                  filter: modelFilters[activeEntry.ns] ?? "",
-                  setFilter: (value) => setModelFilters((current) => ({ ...current, [activeEntry.ns]: value })),
-                  catalog: modelCatalogs[activeVendor],
-                  catalogLoading: modelCatalogLoading[activeVendor] === true,
-                  // 单卡模式的重试同样是按厂商读（与合并面板的账号行刷新同一个动作）。
-                  onRetryCatalog: () => refreshVendorCatalog(activeVendor),
-                  draftInto: (ns, fields) => setState((current) => fields.reduce((acc, field) => setField(acc, ns, field.key, field.value), current)),
-                  writeNow: (ns, fields) => {
-                    // 立刻写（`immediate` 能力）：同样写行名；失败不静默 —— 记进保存错误，
-                    // 下一次快照重读会让控件回落到已存储的值（用户看得出这次没写进去）。
-                    const target = state.snapshots[ns];
-                    void saveSettings(ctx, target?.row ?? ns, fields, target?.revision ?? 0).then((error) => {
-                      setState((current) => noteSaveResult(current, ns, error));
-                      if (error === undefined) setAccountRevision((current) => current + 1);
-                      // 重读：基线以宿主为准，已落盘的草稿随之清掉。
-                      void discoverVendors(ctx, entries).then((discovery) => adopt(discovery));
-                    });
-                  },
-                }),
-                switchState: statuses[activeVendor]?.switchState,
-                // 切换面板已不再渲染；这里给一个静态时间，避免整页每秒重渲染。
-                now: Date.now(),
-                switchNow: () => {
-                  if (usage === undefined || typeof usage.switchNow !== "function") return;
-                  void usage.switchNow(activeVendor).then(() => setAccountRevision((current) => current + 1));
-                },
-                // 账号行上的行内登录入口：与合并面板的「网页登录」走同一条路径
-                // （同一个占位窗口 / 同一个「正在启动」态 / 同一套失败落地）。
-                loginBegin: () => beginLogin(activeVendor),
-              }),
-          }),
     });
-  };
-}
-
-
-/**
- * 模型卡片要的数据与回调。
- *
- * 把「两次 `setField` → 草稿」与「`saveSettings` → 立刻写」这两条路线的选择放在这里，是因为
- * 容器本身不参与单测（Ruling 22）；分流判定 `modelEditTarget` 与补丁计算 `applyModelEdit`
- * 都是纯函数、各自有测试。这里只负责接线。
- * @param input - 当前厂商、页面状态、生效时机与两个写入方式。
- * @returns 模型卡片那部分上下文。
- */
-/**
- * 模型卡片的写模式：来自宿主发布的能力声明 `capabilities.modelVisibilityWrite`。
- *
- * **两级都要判空**（实测 2026-10-17，桌面端 0.2.1-rc.2）：能力声明由本包 host 侧经
- * typert 登记的描述符发布，登记没发生时 `status.capabilities` 整个是 `undefined`。
- * 写成 `statuses[v]?.capabilities.modelVisibilityWrite` 时 `?.` 只挡住了 `statuses[v]`
- * 本身，挡不住它的属性——页面在渲染期抛 `Cannot read properties of undefined`，
- * React 丢弃整棵树，于是**整段设置页变空白**（连标题都没有），极易误判成没注册上。
- *
- * 缺能力时退回最保守的一档：跟保存条走，绝不假装支持立即写。
- * @param status - 宿主发布的厂商状态，可能整体缺席或缺 `capabilities`。
- * @returns 写模式。
- */
-export function modelWriteModeOf(status: { capabilities?: { modelVisibilityWrite?: ModelsWriteMode } } | undefined): ModelsWriteMode {
-  return status?.capabilities?.modelVisibilityWrite ?? "onSave";
-}
-
-function modelCardContext(input: {
-  entry: VendorEntry;
-  state: PageState;
-  mode: ModelsWriteMode;
-  draft: string;
-  setDraft: (value: string) => void;
-  /** 搜索关键词（纯展示）。 */
-  filter: string;
-  setFilter: (value: string) => void;
-  draftInto: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
-  writeNow: (ns: string, fields: readonly { key: string; value: unknown }[]) => void;
-  /** 厂商目录（未过滤）；还没读到时为 `undefined`。 */
-  catalog: CatalogModelsResult | undefined;
-  /** 目录正在读取。 */
-  catalogLoading: boolean;
-  /** 重新读取目录。 */
-  onRetryCatalog: () => void;
-}): Pick<
-  VendorCardsContext,
-  | "cardKinds"
-  | "models"
-  | "visibleModels"
-  | "modelVisibility"
-  | "modelInfo"
-  | "modelDraft"
-  | "modelMode"
-  | "setModelDraft"
-  | "modelFilter"
-  | "setModelFilter"
-  | "editModel"
-  | "catalogFailure"
-  | "catalogLoading"
-  | "onRetryCatalog"
-> {
-  const { entry, state, mode } = input;
-  const spec = entry.models;
-  // **草稿覆盖基线**：`onSave` 模式下控件必须立刻反映用户刚点的值；只看基线会让勾选看起来
-  // 「点了没反应」，直到按保存。连续点两个模型也不能互相覆盖（第二次要以第一次的草稿为底）。
-  const baseline = state.snapshots[entry.ns]?.value ?? {};
-  const settings = { ...baseline, ...(state.drafts[entry.ns] ?? {}) };
-  const visible = spec === undefined ? [] : normalizeModels(settings[spec.visible]);
-  const rawVisibility = spec === undefined ? undefined : settings[spec.visibility];
-  const modelVisibility =
-    typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
-      ? { ...(rawVisibility as Record<string, boolean>) }
-      : {};
-  // 列表 = 厂商目录 ∪ 白名单 ∪ 显隐表里出现过的模型：
-  // - 目录项让「还没配置过的模型」有勾选入口；
-  // - 白名单/显隐项让「目录里暂时没有、但用户手工加过」的模型继续可管理；
-  // - 显式隐藏了一个不在目录里的模型时，它也看得见（否则没有入口改回来）。
-  const catalogIds = (input.catalog?.models ?? []).map((model) => model.id);
-  const models = [...new Set([...catalogIds, ...visible, ...Object.keys(modelVisibility)])];
-  const modelInfo = Object.fromEntries(
-    (input.catalog?.models ?? []).map((model) => [
-      model.id,
-      {
-        ...(model.company === undefined ? {} : { company: model.company }),
-        ...(model.free === true ? { free: true } : {}),
-      },
-    ]),
-  );
-  const catalogFailure = input.catalog === undefined || input.catalog.failures.length === 0
-    ? undefined
-    : input.catalog.failures.join("；");
-
-  return {
-    cardKinds: vendorCardKinds(entry),
-    models,
-    visibleModels: visible,
-    modelVisibility,
-    modelInfo,
-    modelDraft: input.draft,
-    modelMode: mode,
-    setModelDraft: input.setDraft,
-    modelFilter: input.filter,
-    setModelFilter: input.setFilter,
-    ...(catalogFailure === undefined ? {} : { catalogFailure }),
-    catalogLoading: input.catalogLoading,
-    onRetryCatalog: input.onRetryCatalog,
-    editModel: (edit: ModelEdit) => {
-      if (spec === undefined) return;
-      const patch = applyModelEdit({ visible: settings[spec.visible], visibility: settings[spec.visibility] }, edit);
-      const fields = [
-        { key: spec.visible, value: patch.visibleModels },
-        { key: spec.visibility, value: patch.modelVisibility },
-      ];
-      // 生效时机由能力声明决定：`onSave` 进草稿（底部保存条提交），`immediate` 立刻写。
-      // 两种模式都**先写草稿**：控件立即反映点击；immediate 的落盘成功后重读基线、清掉草稿。
-      input.draftInto(entry.ns, fields);
-      if (modelEditTarget(mode) === "now") input.writeNow(entry.ns, fields);
-      // 添加完成后清空输入框（草稿已经落到设置里）。
-      if (edit.kind === "add") input.setDraft("");
-    },
   };
 }
 

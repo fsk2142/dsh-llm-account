@@ -14,8 +14,7 @@ import type { DiscoveryProblem } from "./seams";
 import { isLastUsedFresh } from "../core/last-used";
 import type { VendorUsageStatus } from "./usage-contract";
 
-/** 宿主设置命名空间的一份快照：值 + 修订号（保存时要用它做并发围栏）。 */
-export interface VendorSnapshot {
+/** 宿主设置命名空间的一份快照：值 + 修订号（保存时要用它做并发围栏）。 */export interface VendorSnapshot {
   ns: string;
   /**
    *  describe 时**命中的行名**：写路径必须用它，不能用 `ns`。
@@ -650,69 +649,6 @@ export function accountOrderKey(vendor: string, ref: string): string {
 export function vendorCardKinds(entry: VendorEntry): readonly ("accounts" | "models")[] {
   // 账户卡片已合并到标签页上方的常驻面板（设计 §7.2），标签页里只剩厂商专属卡片。
   return entry.models === undefined ? [] : ["models"];
-}
-
-/**
- * 一次模型编辑算出的新设置值。
- *
- * 两个字段一起算：白名单（`visibleModels`）与逐模型显隐（`modelVisibility`）是同一件事的两种
- * 表达，分开改会出现「在白名单里但被显式隐藏」这种自相矛盾的状态。
- */
-export interface ModelEditPatch {
-  visibleModels: string[];
-  modelVisibility: Record<string, boolean>;
-}
-
-/** 一次模型编辑。 */
-export type ModelEdit =
-  | { kind: "toggle"; model: string; visible: boolean }
-  | { kind: "add"; model: string }
-  | { kind: "remove"; model: string };
-
-/**
- * 把一次模型编辑应用到当前设置值上（纯函数）。
- * @param current - 当前设置文档里的两个字段（形状不可信，一律先清洗）。
- * @param edit - 要做的编辑。
- * @returns 两个字段的新值（白名单已清洗：空串与纯空白绝不会被写回去）。
- */
-export function applyModelEdit(current: { visible: unknown; visibility: unknown }, edit: ModelEdit): ModelEditPatch {
-  const visibleModels = normalizeModels(current.visible);
-  const rawVisibility = current.visibility;
-  const modelVisibility =
-    typeof rawVisibility === "object" && rawVisibility !== null && !Array.isArray(rawVisibility)
-      ? { ...(rawVisibility as Record<string, boolean>) }
-      : {};
-
-  // id 先统一清洗：白名单里存的是 trim 过的，显隐的**键**也必须是同一个 —— 否则
-  // `" m2 "` 会造出一条永远匹配不上的显隐记录（测试抓出过这个 bug）。
-  const model = edit.model.trim();
-  if (model === "") return { visibleModels, modelVisibility };
-
-  if (edit.kind === "toggle") {
-    modelVisibility[model] = edit.visible;
-    return { visibleModels, modelVisibility };
-  }
-  if (edit.kind === "add") {
-    // 用户点「添加」的意图就是「让它可用」：进白名单，同时显式可见（清掉可能存在的 false）。
-    const next = normalizeModels([...visibleModels, model]);
-    modelVisibility[model] = true;
-    return { visibleModels: next, modelVisibility };
-  }
-  // remove：从白名单里去掉，并清掉它的显隐条目（否则它会因为还存在 visibility 键而回到列表里）。
-  delete modelVisibility[model];
-  return { visibleModels: visibleModels.filter((candidate) => candidate !== model), modelVisibility };
-}
-
-/**
- * 一次模型可见性编辑该走哪条路。
- *
- * `onSave`（Command Code）→ 进设置草稿，由底部保存条提交；`immediate`（OpenCode）→ 立刻写。
- * 单独成函数：这是计划 Step 1 要求「按能力区分」的那条判定本身，而容器的定时器/状态不参与单测。
- * @param mode - 该厂商声明的写入时机。
- * @returns `draft` 表示进草稿等保存，`now` 表示立刻写。
- */
-export function modelEditTarget(mode: "onSave" | "immediate"): "draft" | "now" {
-  return mode === "immediate" ? "now" : "draft";
 }
 
 /**

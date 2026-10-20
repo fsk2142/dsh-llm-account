@@ -4,7 +4,7 @@
  * 本文件只放类型与 `supports()` 查询，不做 I/O、不持有状态、不含厂商专属逻辑。
  * @module dsh-llm-account/src/core/adapter
  */
-import type { GenerateOptions, LlmAdapter, ModelModality, StreamChunk } from "@deepseek-ai/dsh-llm";
+import type { ModelModality } from "@deepseek-ai/dsh-llm";
 
 /**
  * 本包托管的三条 provider 路由 id（`commandcode` 与 `dsh-opencode-go` 是全局约束、
@@ -56,6 +56,14 @@ export interface AccountState {
   pinned: string | null;
 }
 
+/**
+ * 模型可见性的写入时机：改完就写（`immediate`），还是等底部保存条（`onSave`）。
+ *
+ * 住在能力声明旁边：它描述的是厂商端口的行为，不是某张卡片的实现细节。设置页的字段
+ * 控件与容器都从这里取同一个联合，避免两处各写一份字面量后悄悄分叉。
+ */
+export type ModelsWriteMode = "onSave" | "immediate";
+
 /** 厂商能力声明；UI 依据它隐藏或置灰不可用控件。 */
 export interface VendorCapabilities {
   /** 是否支持调整账号顺序。 */
@@ -69,7 +77,7 @@ export interface VendorCapabilities {
   /** 额度数据的原生形状：窗口集合（used/cap）或百分比。 */
   quotaShape: "windows" | "percent";
   /** 模型可见性的写入时机。 */
-  modelVisibilityWrite: "onSave" | "immediate";
+  modelVisibilityWrite: ModelsWriteMode;
   /** 额度耗尽时是否允许自动切换账号。 */
   automaticSwitch: boolean;
 }
@@ -285,12 +293,9 @@ export interface LoginPort {
   cancel(): Promise<void>;
 }
 
-/** 传输端口：一次流式请求。deadline 与空闲看门狗由请求内核包在外面。 */
-export interface TransportPort {
-  stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
-}
-
-/** 一处按路径寻址的设置编辑；路径语义与宿主设置接缝一致。 */
+/**
+ * 一处按路径寻址的设置编辑；路径语义与宿主设置接缝一致。
+ */
 export type SettingsOp =
   | { op: "set"; path: readonly string[]; value: unknown }
   | { op: "unset"; path: readonly string[] };
@@ -310,22 +315,6 @@ export interface SettingsSnapshot {
 export interface SettingsPort {
   describe(ns: string): Promise<SettingsSnapshot>;
   mutate(ns: string, ops: readonly SettingsOp[], revision: number): Promise<SettingsSnapshot>;
-}
-
-/** 一个厂商的适配器聚合：宿主适配器实例加上各个端口与能力声明。 */
-export interface VendorAdapter {
-  readonly providerId: VendorId;
-  readonly displayName: string;
-  readonly capabilities: VendorCapabilities;
-  /** 注册到宿主路由的适配器实例。 */
-  readonly llm: LlmAdapter;
-  readonly accounts: AccountPort;
-  readonly credentials: CredentialPort;
-  readonly catalog: CatalogPort;
-  readonly quota: QuotaPort;
-  readonly transport: TransportPort;
-  /** 仅提供网页登录的厂商给出。 */
-  readonly login?: LoginPort;
 }
 
 /**

@@ -92,40 +92,9 @@ export function ExternalIcon(): ReactElement {
   );
 }
 
-/**
- * 设置（齿轮）：仪表盘头部「转到设置」用。
- *
- * 外圈 + 一个短辐条：16px 下八根辐条会糊成一团，少而粗的线条在小尺寸才可辨。
- */
-export function SettingsIcon(): ReactElement {
-  return createElement(
-    "svg",
-    FRAME,
-    stroke("M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"),
-    stroke("M8 1.5v1.8"),
-    stroke("M8 12.7v1.8"),
-    stroke("M1.5 8h1.8"),
-    stroke("M12.7 8h1.8"),
-    stroke("M3.4 3.4l1.3 1.3"),
-    stroke("M11.3 11.3l1.3 1.3"),
-    stroke("M12.6 3.4l-1.3 1.3"),
-    stroke("M4.7 11.3l-1.3 1.3"),
-  );
-}
-
 /** 用量（三根柱子）：侧边栏收起时唯一的可见入口。 */
 export function UsageIcon(): ReactElement {
   const bar = (x: number, y: number, height: number): ReactElement =>
     createElement("rect", { x, y, width: 2, height, rx: 1, fill: "currentColor" });
   return createElement("svg", FRAME, bar(3, 9, 4), bar(7, 5, 8), bar(11, 7.5, 5.5));
-}
-
-/** 返回（左箭头）：主栏里的设置页返回用量面板用。 */
-export function BackIcon(): ReactElement {
-  return createElement(
-    "svg",
-    FRAME,
-    stroke("M12.5 8h-9"),
-    stroke("M7 4.5 3.5 8 7 11.5"),
-  );
 }

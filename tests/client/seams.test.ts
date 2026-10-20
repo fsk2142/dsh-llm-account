@@ -11,7 +11,6 @@ import {
   describeVendorSnapshots,
   dispatchAccountAction,
   ensureUsageRemote,
-  modelWriteModeOf,
   mountUsageRemote,
   noteSidebarSnapshots,
   onUsageReady,
@@ -51,19 +50,6 @@ const CAPABILITIES: VendorCapabilities = {
   modelVisibilityWrite: "onSave",
   automaticSwitch: true,
 };
-
-it("模型卡片写模式：缺状态、缺 capabilities、缺字段都退回 onSave，且都不抛错", () => {
-  // 实测踩过（桌面端 0.2.1-rc.2）：`statuses[v]?.capabilities.modelVisibilityWrite` 里的
-  // `?.` 只挡住第一层；能力声明由 host 侧经 typert 登记的描述符发布，登记没发生时
-  // `capabilities` 整个是 undefined，于是页面在渲染期抛
-  // `Cannot read properties of undefined (reading 'modelVisibilityWrite')`，
-  // React 丢弃整棵树 → 整段设置页变空白（连标题都没有），像「插件没注册上」。
-  expect(modelWriteModeOf(undefined)).toBe("onSave");
-  expect(modelWriteModeOf({})).toBe("onSave");
-  expect(modelWriteModeOf({ capabilities: {} })).toBe("onSave");
-  expect(modelWriteModeOf({ capabilities: { modelVisibilityWrite: "immediate" } })).toBe("immediate");
-  expect(modelWriteModeOf({ capabilities: CAPABILITIES })).toBe("onSave");
-});
 
 /**
  * usage 远程面上的每一个读口都必须拆信封。

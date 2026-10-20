@@ -166,7 +166,6 @@ export type CopyKey =
   | "usage.emptyAccount"
   | "usage.loading"
   | "usage.readFailed"
-  | "usage.remaining"
   | "usage.kind.five-hour"
   | "usage.kind.day"
   | "usage.kind.week"
@@ -210,36 +209,11 @@ export type CopyKey =
   | "account.moveDown"
   | "account.autoSwitch"
   | "account.autoSwitch.hint"
-  | "models.title"
-  | "models.onSave"
-  | "models.immediate"
-  | "models.empty"
-  | "models.add"
-  | "models.remove"
-  | "models.placeholder"
-  | "models.searchPlaceholder"
-  | "models.filtered"
-  | "models.noMatch"
   | "models.loading"
-  | "models.summary"
   | "models.retry"
-  | "models.refresh"
-  | "models.refreshing"
   | "models.refreshAccount"
-  | "models.newBadge"
-  | "models.removedTitle"
-  | "models.removedHint"
-  | "models.restore"
-  | "models.addTitle"
-  | "models.updatedAt"
   | "models.freeGroup"
   | "models.otherCompany"
-  | "models.allTitle"
-  | "models.allHint"
-  | "models.hideGroup"
-  | "models.showGroup"
-  | "models.hideVendor"
-  | "models.showVendor"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -464,7 +438,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.emptyAccount": "这个账号还没有用量记录。发一次请求后这里就会出现统计。",
     "usage.loading": "正在读取用量…",
     "usage.readFailed": "用量读取失败",
-    "usage.remaining": "本周期还剩",
     "usage.kind.five-hour": "5 小时",
     "usage.kind.day": "日",
     "usage.kind.week": "周",
@@ -499,36 +472,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.moveDown": "下移",
     "account.autoSwitch": "额度耗尽时自动切换账号",
     "account.autoSwitch.hint": "立即生效。关闭后一次额度拒绝不会把请求打到下一个账号上。",
-    "models.title": "模型",
-    "models.onSave": "改动在底部保存后生效。",
-    "models.immediate": "改动立即生效。",
-    "models.empty": "还没有配置模型。",
-    "models.add": "添加模型",
-    "models.remove": "移除",
-    "models.placeholder": "模型 id，例如 deepseek/deepseek-v4.1-flash",
-    "models.searchPlaceholder": "搜索模型…",
-    "models.filtered": "显示 {n} / {total} 个模型",
-    "models.noMatch": "没有匹配这个关键词的模型。",
     "models.loading": "正在读取模型目录…",
-    "models.summary": "已显示 {n} / 共 {total} 个模型",
     "models.retry": "重试",
-    "models.refresh": "重新获取模型",
-    "models.refreshing": "重新获取中…",
     "models.refreshAccount": "刷新此账号的模型",
-    "models.newBadge": "New",
-    "models.removedTitle": "已移除的模型",
-    "models.removedHint": "恢复后不会自动开启，只会回到列表。",
-    "models.restore": "恢复",
-    "models.addTitle": "手动添加模型",
-    "models.updatedAt": "更新于 {time}",
     "models.freeGroup": "免费模型",
     "models.otherCompany": "其他",
-    "models.allTitle": "全部模型",
-    "models.allHint": "三家厂商的模型放在一起；勾选立即写入所属厂商。默认关闭，勾选或按组开启后才会出现在模型选择里。",
-    "models.hideGroup": "隐藏本组全部模型",
-    "models.showGroup": "显示本组全部模型",
-    "models.hideVendor": "隐藏该厂商全部模型",
-    "models.showVendor": "显示该厂商全部模型",
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "点击打开用量面板",
@@ -748,7 +696,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.emptyAccount": "No usage recorded for this account yet. Send one request and its stats appear here.",
     "usage.loading": "Reading usage…",
     "usage.readFailed": "Could not read usage",
-    "usage.remaining": "Left this period",
     "usage.kind.five-hour": "5 hours",
     "usage.kind.day": "day",
     "usage.kind.week": "week",
@@ -783,36 +730,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.moveDown": "Move down",
     "account.autoSwitch": "Switch accounts automatically when quota runs out",
     "account.autoSwitch.hint": "Takes effect immediately. While off, one quota rejection will not send the request to the next account.",
-    "models.title": "Models",
-    "models.onSave": "Changes take effect when you press Save below.",
-    "models.immediate": "Changes take effect immediately.",
-    "models.empty": "No models configured yet.",
-    "models.add": "Add model",
-    "models.remove": "Remove",
-    "models.placeholder": "model id, for example deepseek/deepseek-v4.1-flash",
-    "models.searchPlaceholder": "Search models…",
-    "models.filtered": "Showing {n} of {total} models",
-    "models.noMatch": "No model matches this keyword.",
     "models.loading": "Loading the model catalog…",
-    "models.summary": "{n} of {total} models shown",
     "models.retry": "Retry",
-    "models.refresh": "Refresh models",
-    "models.refreshing": "Refreshing…",
     "models.refreshAccount": "Refresh this account's models",
-    "models.newBadge": "New",
-    "models.removedTitle": "Removed models",
-    "models.removedHint": "Restoring only puts it back in the list; it stays off.",
-    "models.restore": "Restore",
-    "models.addTitle": "Add a model manually",
-    "models.updatedAt": "Updated at {time}",
     "models.freeGroup": "Free models",
     "models.otherCompany": "Other",
-    "models.allTitle": "All models",
-    "models.allHint": "Models from all three providers; a toggle writes through to its provider immediately. Models start off until checked or enabled by group.",
-    "models.hideGroup": "Hide all models in this group",
-    "models.showGroup": "Show all models in this group",
-    "models.hideVendor": "Hide all models from this provider",
-    "models.showVendor": "Show all models from this provider",
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Click to open the usage panel",
