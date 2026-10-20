@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { PRIMARY_SWITCH_FIELDS, SETTINGS_CARDS, isConfigEnabled, primarySwitchOf } from "../../src/client/settings-cards";
+import { SETTINGS_CARDS } from "../../src/client/settings-cards";
 import { VENDORS } from "../../src/client/shell";
 
 /** VENDORS 里声明的全部字段名（扁平）。 */
@@ -33,18 +33,19 @@ describe("两个界面开关已经移除", () => {
     expect(all).not.toContain("featureSearchEnabled");
   });
 
-  it("没有任何卡片还声明主开关（主开关概念本身随需求消失）", () => {
-    for (const id of ["display", "switching", "search", "advanced"] as const) {
-      expect(primarySwitchOf(id), id).toBeUndefined();
-    }
-    expect(PRIMARY_SWITCH_FIELDS).toEqual([]);
-  });
-
-  it("没有任何卡片会进入「禁用」状态（配置永远可用）", () => {
-    for (const id of ["display", "switching", "search", "advanced"] as const) {
-      expect(isConfigEnabled({}, id), id).toBe(true);
-      // 即使文档里碰巧留着旧值，也不再影响渲染。
-      expect(isConfigEnabled({ featureSwitchEnabled: false, featureSearchEnabled: false }, id), id).toBe(true);
+  it("卡片声明里没有任何「整卡级开关」概念残留", () => {
+    // 这里原本断言 `primarySwitchOf(id) === undefined` 与 `PRIMARY_SWITCH_FIELDS === []` ——
+    // 那两个函数恒返回恒值、源码零调用，属于「测死代码的测试」（2026-10-20 清扫已删除）。
+    // 真正有意义的事实是**声明里没有这两个字段**，直接断言它：
+    const declared = SETTINGS_CARDS.flatMap((card) => [
+      ...card.shared,
+      ...card.specific.map((field) => field.key),
+    ]);
+    expect(declared).not.toContain("featureSwitchEnabled");
+    expect(declared).not.toContain("featureSearchEnabled");
+    // 也不该有任何「整卡开关」形状的键名混进来。
+    for (const key of declared) {
+      expect(key).not.toMatch(/^(featureEnabled|cardEnabled|enabled)$/);
     }
   });
 });

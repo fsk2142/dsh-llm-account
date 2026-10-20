@@ -237,11 +237,6 @@ export interface CatalogEntry {
   inputModalities: readonly ModelModality[];
 }
 
-/** 目录端口：返回当前可广告的模型条目（已由可见性规则过滤）。 */
-export interface CatalogPort {
-  list(): Promise<CatalogEntry[]>;
-}
-
 /** 目录里的一行（只用于设置页勾选，不需要完整元数据）。 */
 export interface CatalogModel {
   /** 请求时使用的模型 id。 */

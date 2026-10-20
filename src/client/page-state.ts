@@ -738,19 +738,6 @@ export function accountOrderKey(vendor: string, ref: string): string {
 }
 
 /**
- * 该厂商要渲染哪些专属卡片，顺序即规格 §8 的卡片顺序（账户卡片 → 模型卡片）。
- *
- * 单独成函数：`index.ts` 的接线不参与单测（Ruling 22），而「厂商不支持的卡片不渲染」是计划
- * 明确要求的验收点（T7 Step 1）。这里把规则变成可测的纯函数。
- * @param entry - 厂商声明。
- * @returns 要渲染的卡片种类。
- */
-export function vendorCardKinds(entry: VendorEntry): readonly ("accounts" | "models")[] {
-  // 账户卡片已合并到标签页上方的常驻面板（设计 §7.2），标签页里只剩厂商专属卡片。
-  return entry.models === undefined ? [] : ["models"];
-}
-
-/**
  * 取该厂商「集成与显示」里的侧边栏卡片开关声明。
  * @param entry - 厂商声明。
  * @returns 开关声明；该厂商没声明时 `undefined`（此时不渲染卡片，也不轮询）。

@@ -94,63 +94,12 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
   },
 ];
 
-/** 卡片的渲染顺序（供渲染层直接用）。 */
-export const SETTINGS_CARD_ORDER: readonly SettingsCardId[] = SETTINGS_CARDS.map((card) => card.id);
-
-/**
- * 一个字段是不是「三家共有」（写回时要镜像）。
- * @param key - 设置字段名。
- * @returns 是否共有。
- */
-export function isSharedField(key: string): boolean {
-  return SETTINGS_CARDS.some((card) => card.shared.includes(key));
-}
-
-/**
- * 某个厂商专属字段归属哪一家。
- * @param key - 设置字段名。
- * @param vendor - 当前正在写的厂商。
- * @returns 该字段在这个厂商下是否适用（共有字段一律适用）。
- */
-export function fieldAppliesTo(key: string, vendor: string): boolean {
-  if (SETTINGS_CARDS.some((card) => card.shared.includes(key))) return true;
-  return SETTINGS_CARDS.some((card) => card.specific.some((field) => field.key === key && field.vendor === vendor));
-}
-
 /**
  * 卡片 id → 它的主开关字段名。**当前为空**：2026-10-20 用户去掉了「启用自动切换 /
  * 开启网页搜索」两个界面开关（卡片本来就能用箭头收起，多一个开关反而让人误以为关掉会
- * 禁用功能）。保留这个结构是为了将来真出现「整卡级开关」时不必再改渲染层。
- */
-export const PRIMARY_SWITCH_FIELDS: readonly string[] = [];
-
-/**
- * 一张卡片的主开关字段名。
- * @param _id - 卡片 id（当前没有主开关，参数保留以兼容调用方）。
- * @returns 恒为 `undefined`。
- */
-export function primarySwitchOf(_id: SettingsCardId): string | undefined {
-  return undefined;
-}
-
-/**
- * 一张卡片里的字段（当前没有主开关，所以就是声明的全部）。
- * @param id - 卡片 id。
- * @returns 字段名。
- */
-export function subordinateFieldsOf(id: SettingsCardId): readonly string[] {
-  return SETTINGS_CARDS.find((item) => item.id === id)?.shared ?? [];
-}
-
-/**
- * 一张卡片的配置区当前是否可用。
+ * 禁用功能）。
  *
- * 当前**恒为 true**：没有任何卡片级开关。参数保留是为了让渲染层不必因为「将来加回开关」
- * 而改签名。
- * @param _value - 设置文档（当前不使用）。
- * @param _id - 卡片 id（当前不使用）。
- * @returns 恒为 `true`。
+ * 那次移除曾留下三个**空壳**导出（全返回恒值、源码零调用、只有测试在断言它们恒为恒值 ——
+ * 也就是「测死代码的测试」）。2026-10-20 的清扫已把它们删除；若将来真需要整卡级开关，
+ * 按那时的需求重新设计信号，而不是恢复一个永远返回 true 的函数。
  */
-export function isConfigEnabled(_value: Readonly<Record<string, unknown>>, _id: SettingsCardId): boolean {
-  return true;
-}
