@@ -2767,30 +2767,64 @@ export function registerSharedSurfaces(options: {
   // （实测：仪表盘从 3 家变 4 家、状态读取多打一次）。
   const { ctx, t, localeNs } = options;
   const entries = options.entries.filter((entry) => entry.ns !== FEATURE_TAB_NS);
+
+  /**
+   * 给插槽组件套一层错误边界。
+   *
+   * **这是「刷新额度时侧边栏消失」最可能的真凶**（2026-10-20 第二次报障）：设置页早就有
+   * `RenderBoundary`，而侧边栏卡片与中台面板**没有** —— 一旦它们的渲染/副作用抛一次错
+   * （尺寸异常的读数、形状不可信的额度、宿主对象缺字段……），React 会**卸载整棵子树**，
+   * 于是一个瞬间异常的表现就是「卡片凭空消失」，而且没有任何提示可查。
+   *
+   * 套上之后：异常只毁它自己那一块，并显示原因与「重试」；侧边栏其余部分照常。
+   * 边界只在**首次挂载**时包一次（组件身份稳定，不会每次渲染重建）。
+   */
+  const wrap = (component: () => ReactElement, title: string): (() => ReactElement) =>
+    function Bounded(): ReactElement {
+      return createElement(
+        RenderBoundary,
+        {
+          title,
+          // `inline`：侧边栏卡片只有几十像素宽、中台面板也常是窄栏 —— 整块面板会把它撑爆，
+          // 一句「渲染失败 + 重试」才是这里该有的密度。
+          variant: "inline",
+          note: "这一块渲染失败了。其它界面不受影响。可以点「重试」。",
+          retryLabel: "重试",
+        },
+        createElement(component),
+      );
+    };
+
   const disposeSidebar = registerSidebarCard(ctx, {
     id: SIDEBAR_CARD_ID,
     order: 1,
     locale: localeNs,
-    component: createSidebarCardView({
-      ctx,
-      entries,
-      t,
-      onOpen: () => {
-        selectPanel(ctx, DASHBOARD_PANEL_ID);
-      },
-    }),
+    component: wrap(
+      createSidebarCardView({
+        ctx,
+        entries,
+        t,
+        onOpen: () => {
+          selectPanel(ctx, DASHBOARD_PANEL_ID);
+        },
+      }),
+      t("sidebar.effective"),
+    ),
   });
   const disposePanel = registerPanelCard(ctx, {
     key: DASHBOARD_PANEL_ID,
     locale: localeNs,
-    component: createDashboardView({
-      ctx,
-      entries,
-      t,
-      onClose: () => {
-        selectPanel(ctx, null);
-      },
-    }),
+    component: wrap(
+      createDashboardView({
+        ctx,
+        entries,
+        t,
+        onClose: () => {
+          selectPanel(ctx, null);
+        },
+      }),
+      t("dashboard.title"),
+    ),
   });
   // 注册成功：页面据此判断「侧边栏卡片本该在」。注册抛错时这个标记保持 false，
   // 设置页会显示「刷新页面」的提示而不是让用户以为插件坏了。

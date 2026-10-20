@@ -191,7 +191,14 @@ export function installMiniReact(): MiniReact {
       inflight = 0;
     },
     mount: (component: () => unknown): Mounted => {
-      const instance: SimInstance = { component, hooks: [], cursor: 0, tree: undefined, dirty: false, unmounted: false };
+      // **穿透错误边界**：根组件若返回一个「类组件元素」（典型是 `RenderBoundary`），
+      // 真 React 会挂载它、再由它渲染子树；而本迷你运行时只驱动根函数组件，不会自动
+      // 进到类组件里面 —— 那样被测容器的 Hook 就一个都不会跑（表现为「轮询不启动」）。
+      //
+      // 这里把类组件就地展开成它的 `render()` 结果，让真正的被测组件成为根。
+      // 例外：类组件自己就是被测对象时（错误边界的测试），不穿透 —— 由 `expandSim` 负责。
+      const unwrapped = unwrapBoundary(component);
+      const instance: SimInstance = { component: unwrapped, hooks: [], cursor: 0, tree: undefined, dirty: false, unmounted: false };
       live.push(instance);
       renderOnce(instance);
       flushEffects(instance);
@@ -205,6 +212,52 @@ export function installMiniReact(): MiniReact {
     useEffect,
     useRef,
   };
+}
+
+/**
+ * 把一个「包了错误边界」的根组件剥到真正的被测组件。
+ *
+ * 为什么需要：`RenderBoundary` 是类组件（React 里错误边界只能用类写）。真 React 会挂载它、
+ * 由它渲染 `children`；而本迷你运行时**只驱动根函数组件的 Hook** —— 如果根返回的是
+ * 一个类组件元素，内层组件的 Hook 一个都不会跑（表现为「轮询不启动」）。
+ * 2026-10-20 给插槽组件补边界时，就是这么把 20 条用例打红的。
+ *
+ * 做法：先求值一次根（包装函数**不含 Hook**，所以安全），若拿到类组件元素就实例化并
+ * `render()`，继续直到拿到「函数组件元素」—— 那才是真正的被测组件，用它当根。
+ *
+ * 语义上仍然诚实：边界在真机上的作用是**捕获子树异常**；子树是否正常渲染与边界存在与否
+ * 无关。边界自身的捕获行为由 `expandSim`（走 `getDerivedStateFromError`）单独覆盖。
+ * @param component - 注册进插槽的组件（可能被 `RenderBoundary` 包过）。
+ * @returns 真正的被测组件。
+ */
+function unwrapBoundary(component: () => unknown): () => unknown {
+  let tree: unknown;
+  try {
+    tree = component();
+  } catch {
+    return component; // 求值就抛（含 Hook 的组件被直接调用）：原样交给运行时
+  }
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (tree === null || typeof tree !== "object" || Array.isArray(tree)) break;
+    const element = tree as SimElement;
+    const type = element.type as unknown as { prototype?: { render?: unknown } } | undefined;
+    if (typeof element.type !== "function" || type?.prototype?.render === undefined) break;
+    // 类组件：实例化 → render() → 继续看结果。
+    try {
+      const instance = new (element.type as new (props: Record<string, unknown>) => {
+        state: Record<string, unknown>;
+        render(): unknown;
+      })(element.props);
+      tree = instance.render();
+    } catch {
+      return component;
+    }
+  }
+  if (tree !== null && typeof tree === "object" && !Array.isArray(tree)) {
+    const inner = (tree as SimElement).type;
+    if (typeof inner === "function") return inner as () => unknown;
+  }
+  return component;
 }
 
 /** 已挂载的容器。 */
