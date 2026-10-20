@@ -62,6 +62,7 @@ import { DEFAULT_API_BASE } from "./protocol";
 import type { CommandCodeProtocol } from "./protocol";
 import { createCommandCodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
+import { applyAutoContinue } from "../auto-continue";
 import { createUsagePort } from "../usage-store";
 import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
@@ -125,6 +126,26 @@ export const Config: PluginConfigSchema = z.object(
        * 且**只在该账号已勾选的模型里**。
        */
       autoSwitchModelOnQuota: z.boolean().default(false),
+      /**
+       * **自动继续**（用户 2026-10-20）：会话非人为中断后自动接着跑。
+       *
+       * 两台开关都默认关闭：自动续写会改变对话内容、也可能烧额度，与
+       * `autoSwitchModelOnQuota` 同一条「危险能力默认关」原则。
+       *
+       * 这些字段挂在**这一行**不是因为它属于 commandcode，而是因为功能页是跨厂商的，
+       * 需要一个固定的承载行（详见设计文档 §4.2）。三家 schema 都声明它们，
+       * 谁先加载都能读到同一个值。
+       */
+      autoContinueOnError: z.boolean().default(false),
+      autoContinueOnTruncate: z.boolean().default(false),
+      autoContinueMaxAttempts: z.number().default(3),
+      /** 功能页的两台开关：关掉只隐藏界面那一块，不影响已配置的能力。 */
+      featureSwitchEnabled: z.boolean().default(true),
+      featureSearchEnabled: z.boolean().default(true),
+      /** 搜索：是否优先用网关订阅额度（默认是；没有可用网关时回退 API key）。 */
+      searchPreferGateway: z.boolean().default(true),
+      /** 搜索用的 API key 凭据引用名（配在凭据服务里，不是明文）。 */
+      searchApiKeyEnv: z.string().role("credential-ref").default("DEEPSEEK_API_KEY"),
       accounts: z.array(
         z.object({
           label: z.string(),
@@ -334,6 +355,22 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   ctx.on("credentials/reference-updated", (ref) => {
     rotation.clearCredentialRejection(ref);
   });
+
+  // 自动继续（用户 2026-10-20）：会话非人为中断后自动接着跑。
+  //
+  // 只在这一行注册一次就够 —— 设置是**全局**的（功能页是跨厂商的），而三家 schema 都声明了
+  // 同一批字段，所以三个 provider 行里任意一行读到的都是同一份值。在这里注册可以避免
+  // 同一次请求被三条链路各重试一遍（那会把重试次数放大三倍）。
+  //
+  // 开关全关时 `applyAutoContinue` 不注册任何事件（关掉即静默）。
+  applyAutoContinue(
+    ctx as unknown as { on(event: string, listener: (...args: unknown[]) => unknown): unknown },
+    {
+      onError: document()["autoContinueOnError"] === true,
+      onTruncate: document()["autoContinueOnTruncate"] === true,
+      maxAttempts: typeof document()["autoContinueMaxAttempts"] === "number" ? (document()["autoContinueMaxAttempts"] as number) : 3,
+    },
+  );
 
   // Task 3：把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
   applyUsageRemote(ctx, {

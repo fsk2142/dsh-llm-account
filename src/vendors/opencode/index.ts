@@ -175,6 +175,14 @@ export const Config: PluginConfigSchema = z.object(
        * 且**只在该账号已勾选的模型里**。
        */
       autoSwitchModelOnQuota: z.boolean().default(false),
+      // 自动继续 / 功能页 / 搜索：**全局**设置，三家 schema 都声明，谁先加载都读到同一个值。
+      autoContinueOnError: z.boolean().default(false),
+      autoContinueOnTruncate: z.boolean().default(false),
+      autoContinueMaxAttempts: z.number().default(3),
+      featureSwitchEnabled: z.boolean().default(true),
+      featureSearchEnabled: z.boolean().default(true),
+      searchPreferGateway: z.boolean().default(true),
+      searchApiKeyEnv: z.string().role("credential-ref").default("DEEPSEEK_API_KEY"),
     baseURL: z.string().default(DEFAULT_BASE_URL),
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),

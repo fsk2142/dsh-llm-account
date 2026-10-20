@@ -302,6 +302,44 @@ export const VENDORS: readonly VendorEntry[] = [
             hintKey: "field.featureSearchEnabled.hint",
             fallback: true,
           },
+          // —— 自动继续（两台开关，默认都关）——
+          {
+            key: "autoContinueOnError",
+            kind: "boolean",
+            labelKey: "field.autoContinueOnError",
+            hintKey: "field.autoContinueOnError.hint",
+            // 默认关：自动重试会改变对话内容、也可能烧额度。
+            fallback: false,
+          },
+          {
+            key: "autoContinueOnTruncate",
+            kind: "boolean",
+            labelKey: "field.autoContinueOnTruncate",
+            hintKey: "field.autoContinueOnTruncate.hint",
+            fallback: false,
+          },
+          {
+            key: "autoContinueMaxAttempts",
+            kind: "number",
+            labelKey: "field.autoContinueMaxAttempts",
+            hintKey: "field.autoContinueMaxAttempts.hint",
+            fallback: 3,
+          },
+          // —— 搜索 ——
+          {
+            key: "searchPreferGateway",
+            kind: "boolean",
+            labelKey: "field.searchPreferGateway",
+            hintKey: "field.searchPreferGateway.hint",
+            fallback: true,
+          },
+          {
+            key: "searchApiKeyEnv",
+            kind: "text",
+            labelKey: "field.searchApiKeyEnv",
+            hintKey: "field.searchApiKeyEnv.hint",
+            fallback: "DEEPSEEK_API_KEY",
+          },
         ],
       },
     ],

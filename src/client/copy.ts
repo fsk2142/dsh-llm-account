@@ -79,6 +79,16 @@ export type CopyKey =
   | "options.openai"
   | "options.messages"
   | "options.cli"
+  | "field.autoContinueOnError"
+  | "field.autoContinueOnError.hint"
+  | "field.autoContinueOnTruncate"
+  | "field.autoContinueOnTruncate.hint"
+  | "field.autoContinueMaxAttempts"
+  | "field.autoContinueMaxAttempts.hint"
+  | "field.searchPreferGateway"
+  | "field.searchPreferGateway.hint"
+  | "field.searchApiKeyEnv"
+  | "field.searchApiKeyEnv.hint"
   | "vendor.features"
   | "field.featureSwitchEnabled"
   | "field.featureSwitchEnabled.hint"
@@ -356,6 +366,16 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
+    "field.autoContinueOnError": "请求失败时自动重试",
+    "field.autoContinueOnError.hint": "只在网络/服务端/限流这类瞬时失败上重试；用户主动停止与确定性错误（上下文超长、密钥无效）永不重试。",
+    "field.autoContinueOnTruncate": "回答被截断时自动续写",
+    "field.autoContinueOnTruncate.hint": "只在达到输出上限（finish=length）时补一句「继续」；正常结束不会多说话。",
+    "field.autoContinueMaxAttempts": "每轮最多自动继续次数",
+    "field.autoContinueMaxAttempts.hint": "两个开关共用这个上限，防止无限续写烧额度。缺省 3。",
+    "field.searchPreferGateway": "搜索优先用网关额度",
+    "field.searchPreferGateway.hint": "当前会话走 opendesign 且是 DeepSeek 模型时用订阅额度搜索；其余情况回退到下面的 API key。",
+    "field.searchApiKeyEnv": "搜索用的 API key 引用名",
+    "field.searchApiKeyEnv.hint": "填凭据库里的引用名（不是明文密钥）。缺省 DEEPSEEK_API_KEY，可在设置页的凭据区写入。",
     "vendor.features": "切换与搜索",
     "field.featureSwitchEnabled": "显示切换策略",
     "field.featureSwitchEnabled.hint": "关掉后这一块隐藏，但选项卡保留 —— 你仍然可以从这里重新打开。",
@@ -627,6 +647,16 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
+    "field.autoContinueOnError": "Retry failed requests",
+    "field.autoContinueOnError.hint": "Retries only transient failures (network/server/rate limit); user stops and deterministic errors are never retried.",
+    "field.autoContinueOnTruncate": "Continue truncated answers",
+    "field.autoContinueOnTruncate.hint": "Only when the answer hit the output limit (finish=length); normal endings are untouched.",
+    "field.autoContinueMaxAttempts": "Max auto-continues per turn",
+    "field.autoContinueMaxAttempts.hint": "Shared by both switches, so a loop cannot burn quota forever. Default 3.",
+    "field.searchPreferGateway": "Prefer gateway quota for search",
+    "field.searchPreferGateway.hint": "Uses subscription quota when the session runs opendesign with a DeepSeek model; otherwise falls back to the API key below.",
+    "field.searchApiKeyEnv": "Search API key reference",
+    "field.searchApiKeyEnv.hint": "A credential reference name, not a literal secret. Defaults to DEEPSEEK_API_KEY.",
     "vendor.features": "Switching & Search",
     "field.featureSwitchEnabled": "Show switching strategy",
     "field.featureSwitchEnabled.hint": "Hides this block; the tab stays so you can turn it back on.",
