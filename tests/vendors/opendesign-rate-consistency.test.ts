@@ -88,15 +88,17 @@ describe("换算率一致性排查", () => {
     expect(cap).toBeUndefined();
   });
 
-  it("**limitCredits 为 0 时不反推**（避免除零）", () => {
+  it("**limitCredits 为 0 时上限仍是官方值**（上限不依赖接口数字）", () => {
+    // 官方口径上线后：上限来自 WINDOW_CAP_USD，与 limitCredits 是否可用无关。
+    // limitCredits 只影响「已用金额」能不能算（除零时不算，不编 0）。
     const snap = toQuotaSnapshot({
       summary: undefined,
       preflight: preflightOf("go", [{ duration: 604_800, limit: 0, used: 0 }]),
       failures: [],
     });
     const weekly = snap.windows.find((window) => window.key === "weekly");
-    expect(weekly?.cap).toBeUndefined();
-    expect(Number.isFinite(weekly?.used ?? 0)).toBe(true);
+    expect(weekly?.cap).toBe(30);
+    expect(weekly?.used).toBeUndefined();
   });
 });
 
@@ -122,7 +124,8 @@ describe("异常窗口处理", () => {
     expect(fiveHour?.cap).toBe(10);
   });
 
-  it("窗口里没有 limitCredits 时不给美元（不猜）", () => {
+  it("**没有 limitCredits 时上限仍显示官方值，已用留空**", () => {
+    // 官方口径：上限来自文档表，不依赖接口。已用没有换算依据时留空（不编 0）。
     const p = {
       codingPlan: {
         eligible: true,
@@ -132,6 +135,7 @@ describe("异常窗口处理", () => {
     };
     const snap = toQuotaSnapshot({ summary: undefined, preflight: p, failures: [] });
     const weekly = snap.windows.find((w) => w.key === "weekly");
-    expect(weekly?.cap).toBeUndefined();
+    expect(weekly?.cap).toBe(30);
+    expect(weekly?.used).toBeUndefined();
   });
 });
