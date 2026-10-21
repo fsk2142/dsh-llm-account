@@ -124,3 +124,61 @@ it("until 也参与预筛（区间查询不会读到更晚的文件）", async (
   const untilDay2 = new Date(2026, 9, 18, 23, 59, 0).getTime();
   expect((await ledger.read({ until: untilDay2 })).map((record) => record.account)).toEqual(["d1"]);
 });
+
+it("**文件没变就不重复读盘解析**（设置页每 30 秒重读一次同样的台账）", async () => {
+  // 2026-10-21 性能审计：设置页的 `usageTick` 每 30 秒触发一次 `usageReport()`，
+  // 每次都把保留期内的日文件整份读进来、逐行 `JSON.parse`。实测 3458 条记录 ≈ 3.3ms/
+  // 次，页面开着一天约 9.5 秒纯 CPU，而且这些解析结果**每次完全一样**。
+  //
+  // 这里用「读盘次数」而不是计时来钉住它 —— 计时在 CI 上不稳定，而「同一份文件
+  // 第二次不该再读」是确定的因果。
+  const directory = await tempDirectory();
+  const now = new Date(2026, 9, 19, 12, 0, 0).getTime();
+  const ledger = createUsageLedger(directory, () => now);
+  await ledger.record({ vendor: "v", account: "a", at: now, outcome: "success" });
+
+  const first = await ledger.read();
+  expect(first).toHaveLength(1);
+  const readsAfterFirst = ledger.stats().fileReads;
+  expect(readsAfterFirst).toBeGreaterThan(0);
+
+  // 再读 5 次：文件一个字节都没变，不该再读盘。
+  for (let index = 0; index < 5; index += 1) await ledger.read();
+  expect(ledger.stats().fileReads).toBe(readsAfterFirst);
+
+  // 但结果必须仍然正确（缓存不能把数据弄丢）。
+  expect(await ledger.read()).toEqual(first);
+});
+
+it("**追加新记录后缓存失效**：立刻能读到新记录", async () => {
+  // 缓存最容易引入的 bug 就是「写进去读不出来」。追加必须让该文件的缓存失效。
+  const directory = await tempDirectory();
+  const now = new Date(2026, 9, 19, 12, 0, 0).getTime();
+  const ledger = createUsageLedger(directory, () => now);
+  await ledger.record({ vendor: "v", account: "a", at: now, outcome: "success" });
+  expect(await ledger.read()).toHaveLength(1);
+
+  await ledger.record({ vendor: "v", account: "b", at: now, outcome: "success" });
+  expect((await ledger.read()).map((record) => record.account)).toEqual(["a", "b"]);
+});
+
+it("**别的进程写了文件**：mtime/size 变了就要重读，不能拿旧缓存糊弄", async () => {
+  // 台账是三条 provider 行共用的，而且宿主可能重启 —— 缓存只在本进程内有效，
+  // 所以必须靠文件的 mtime/size 判断它是否被外部改过。
+  const directory = await tempDirectory();
+  const now = new Date(2026, 9, 19, 12, 0, 0).getTime();
+  const ledger = createUsageLedger(directory, () => now);
+  await ledger.record({ vendor: "v", account: "a", at: now, outcome: "success" });
+  expect(await ledger.read()).toHaveLength(1);
+
+  // 模拟「另一个进程」追加了一行：直接用 fs 写，不经过 ledger。
+  const name = (await import("node:fs/promises")).readdir(directory).then((names) =>
+    names.find((entry) => entry.endsWith(".jsonl")) as string,
+  );
+  const file = join(directory, await name);
+  const original = await readFile(file, "utf8");
+  const extra = `${JSON.stringify({ vendor: "v", account: "external", at: now, outcome: "success" })}\n`;
+  await writeFile(file, original + extra, "utf8");
+
+  expect((await ledger.read()).map((record) => record.account)).toEqual(["a", "external"]);
+});

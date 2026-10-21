@@ -1591,15 +1591,44 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      *
      * 为什么不是「请求完成就刷新」：客户端没有可订阅的回合结束事件（宿主的
      * `session/event` 只在 host 插件上下文里可用）。页面不可见时不读（与侧边栏同纪律）。
+     *
+     * 2026-10-21 性能审计：以前是「定时器照常跑，回调里判 hidden 再 return」——
+     * 空转的定时器仍会按点唤醒主线程、触发一次 `domDocument()` 判断，纯属白烧。
+     * 现在改成**隐藏就真的停表**、重新可见时恢复，并在恢复那一刻补一次读数
+     * （否则切回来最长要等 30 秒数字才动）。
      */
     const [usageTick, setUsageTick] = useState(0);
     useEffect(() => {
-      const timer = setInterval(() => {
-        const dom = domDocument();
-        if (dom?.visibilityState === "hidden") return;
-        setUsageTick((current) => current + 1);
-      }, 30_000);
-      return () => clearInterval(timer);
+      const dom = domDocument();
+      let timer: ReturnType<typeof setInterval> | undefined;
+      const tick = (): void => setUsageTick((current) => current + 1);
+      const start = (): void => {
+        if (timer !== undefined) return;
+        timer = setInterval(tick, 30_000);
+      };
+      const stop = (): void => {
+        if (timer === undefined) return;
+        clearInterval(timer);
+        timer = undefined;
+      };
+      const onVisibility = (): void => {
+        if (dom?.visibilityState === "hidden") {
+          stop();
+          return;
+        }
+        if (timer === undefined) {
+          // 切回来的那一刻先补一次：用户刚回到页面，数字应当立刻是新的。
+          tick();
+        }
+        start();
+      };
+      start();
+      if (typeof dom?.addEventListener === "function") dom.addEventListener("visibilitychange", onVisibility);
+      return () => {
+        stop();
+        const current = domDocument();
+        if (typeof current?.removeEventListener === "function") current.removeEventListener("visibilitychange", onVisibility);
+      };
     }, []);
     useEffect(() => {
       let alive = true;

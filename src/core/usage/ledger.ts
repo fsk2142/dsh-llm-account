@@ -11,7 +11,7 @@
  * 预筛**——选「今日」只读今天那一个文件，不必把 120 天全扫一遍。
  * @module dsh-llm-account/src/core/usage-ledger
  */
-import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { RequestOutcome, UsageRecord } from "./stats";
@@ -73,6 +73,14 @@ export interface UsageLedger {
   read(range?: ReadRange): Promise<UsageRecord[]>;
   /** 清空台账（用户显式操作；文件保留为空文件而不是删除）。 */
   clear(): Promise<void>;
+  /**
+   * 内部计数（性能审计用）。
+   *
+   * `fileReads` 是真正**读盘**的次数，不含缓存命中 —— 测试用它钉住「文件没变就不重读」，
+   * 比计时稳定（CI 上的毫秒数不可信，而这个计数是确定的因果）。
+   * @returns 计数快照。
+   */
+  stats(): { fileReads: number; cacheHits: number };
 }
 
 /**
@@ -115,16 +123,44 @@ function parseLine(line: string): UsageRecord | undefined {
 }
 
 /**
+ * 一个日文件的解析缓存。
+ *
+ * 为什么需要：设置页的 `usageTick` 每 30 秒触发一次报表，每次都把保留期内的日文件
+ * 整份读盘 + 逐行 `JSON.parse`，而**大多数时候文件一个字节都没变**。实测本机
+ * 3458 条记录 ≈ 3.3ms/次 —— 页面开着一天约 9.5 秒纯 CPU，全花在重复解析同一份数据上。
+ *
+ * 失效判据用 `mtimeMs + size` 而不是「写的时候主动清」：台账是三条 provider 行共用的，
+ * 宿主也可能重启，本进程的缓存必须能识别**别处**写入的变化。`stat` 比读整个文件便宜得多。
+ */
+interface FileCacheEntry {
+  /** 文件修改时间（毫秒）。 */
+  mtimeMs: number;
+  /** 文件字节数。 */
+  size: number;
+  /** 该文件解析出来的记录（已按 range 之外的时间过滤好）。 */
+  records: UsageRecord[];
+}
+
+/**
  * 读台账里的记录。
  *
- * 先按**文件名**筛掉不可能有命中的日期，再解析剩下的文件 —— 这是「切到今日」这条
- * 最常见路径上唯一值得做的优化：从 120 个文件降到 1 个。
+ * 两级筛选：
+ * 1. 先按**文件名**筛掉不可能有命中的日期（「切到今日」从 120 个文件降到 1 个）；
+ * 2. 再按文件 `mtime + size` 判断要不要真的读盘解析（没变就用缓存）。
  * @param directory - 存放目录。
  * @param now - 时钟（测试注入）。
  * @param range - 时间范围。
+ * @param cache - 跨调用保留的解析缓存（按文件名索引）。
+ * @param counters - 读盘/命中计数（测试与审计用）。
  * @returns 记录（按时间升序）。
  */
-async function readRecords(directory: string, now: () => number, range: ReadRange = {}): Promise<UsageRecord[]> {
+async function readRecords(
+  directory: string,
+  now: () => number,
+  range: ReadRange = {},
+  cache: Map<string, FileCacheEntry> = new Map(),
+  counters: { fileReads: number; cacheHits: number } = { fileReads: 0, cacheHits: 0 },
+): Promise<UsageRecord[]> {
   let names: string[];
   try {
     names = await readdir(directory);
@@ -154,15 +190,46 @@ async function readRecords(directory: string, now: () => number, range: ReadRang
     .slice(-USAGE_RETENTION_DAYS);
   const records: UsageRecord[] = [];
   for (const name of files) {
-    let text: string;
+    const file = join(directory, name);
+    // 先 stat 再决定要不要读：`stat` 只读元数据，比读整个文件便宜得多。
+    let stamp: { mtimeMs: number; size: number };
     try {
-      text = await readFile(join(directory, name), "utf8");
+      const info = await stat(file);
+      stamp = { mtimeMs: info.mtimeMs, size: info.size };
     } catch {
+      // 文件刚被删掉（并发清理）：跳过，不放进缓存。
+      cache.delete(name);
       continue;
     }
+    const cached = cache.get(name);
+    if (cached !== undefined && cached.mtimeMs === stamp.mtimeMs && cached.size === stamp.size) {
+      counters.cacheHits += 1;
+      for (const record of cached.records) {
+        // 缓存里存的是**该文件全量**记录，range 过滤仍要按本次调用做
+        // （否则一次 `since=X` 的读会把结果污染给下一次 `since=Y` 的读）。
+        if (record.at < since) continue;
+        if (until !== undefined && record.at > until) continue;
+        records.push(record);
+      }
+      continue;
+    }
+    let text: string;
+    try {
+      counters.fileReads += 1;
+      text = await readFile(file, "utf8");
+    } catch {
+      cache.delete(name);
+      continue;
+    }
+    const parsed: UsageRecord[] = [];
     for (const line of text.split("\n")) {
       const record = parseLine(line);
       if (record === undefined) continue;
+      parsed.push(record);
+    }
+    // 缓存**未按 range 过滤**的全量结果，过滤留给每次调用 —— 见上面那段注释。
+    cache.set(name, { ...stamp, records: parsed });
+    for (const record of parsed) {
       if (record.at < since) continue;
       if (until !== undefined && record.at > until) continue;
       records.push(record);
@@ -183,6 +250,13 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
   /** 写队列：保证同一进程内追加是有序的（否则 JSONL 会交错成坏行）。 */
   let writeChain: Promise<void> = Promise.resolve();
   let ready: Promise<void> | undefined;
+  /**
+   * 解析缓存（按文件名）。句柄级而不是模块级：不同目录/不同注入时钟的实例互不干扰，
+   * 测试也不会互相污染。
+   */
+  const cache = new Map<string, FileCacheEntry>();
+  /** 读盘 / 缓存命中计数（`stats()` 暴露给测试与审计）。 */
+  const counters = { fileReads: 0, cacheHits: 0 };
 
   const ensureDirectory = async (): Promise<void> => {
     ready ??= mkdir(directory, { recursive: true }).then(() => undefined);
@@ -221,7 +295,11 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
 
     async read(range?: ReadRange): Promise<UsageRecord[]> {
       await ensureDirectory().catch(() => undefined);
-      return readRecords(directory, now, range ?? {});
+      return readRecords(directory, now, range ?? {}, cache, counters);
+    },
+
+    stats(): { fileReads: number; cacheHits: number } {
+      return { fileReads: counters.fileReads, cacheHits: counters.cacheHits };
     },
 
     async clear(): Promise<void> {
@@ -248,6 +326,8 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
         // 目录里一个日文件都没有（新装机器）时也写一个空的今天文件：让「清空」可被观察到，
         // 与以前的行为一致。
         if (targets.length === 0) await writeFile(pathOf(now()), "", "utf8");
+        // 清空改变了文件内容：缓存必须丢掉，否则再读会拿回清空前的记录。
+        cache.clear();
       });
       await writeChain;
     },
