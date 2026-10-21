@@ -340,7 +340,8 @@ it("工作区可以是异步发现的（网页登录产物不带 workspaceId）�
   const preflight = vi.fn(async () => ({
     codingPlan: { windows: [{ usedCredits: 906, limitCredits: 50_000, durationSeconds: 18_000, resetsAt: 1_800_000_000_000 }] },
   }));
-  // 真实换算率（`/billing/summary` 实测）：10000 credits = 1 美元。
+  // 摘要里的 10000 是**接口自己的说法**，已确认与官方文档不符（Go 的 5 小时窗口
+  // 官方是 $10，而 50000 credits ÷ 10000 只有 $5）。上限以官方表为准（2026-10-21）。
   const fetchImpl = scriptedFetch([() => json({ creditsPerUsd: 10_000, membershipTier: "go" })]);
   const quota = createOpenDesignQuota(
     deps(fetchImpl, {
@@ -354,8 +355,9 @@ it("工作区可以是异步发现的（网页登录产物不带 workspaceId）�
   expect(preflight).toHaveBeenCalledWith("ws-discovered");
   // 厂商只发 5 小时/7 天两个窗口；套餐是 `go`，所以末尾补一行**月度上限**（$120），
   // 用量读不到就留空（`used` 缺席），绝不编一个 0。
+  // 5 小时窗口的上限取**官方 $10**（不是 50000 ÷ 10000 = $5）；已用仍按换算率折。
   expect(snapshot.windows).toEqual([
-    { key: "fiveHour", unit: "usd", used: 0.0906, cap: 5, resetAt: 1_800_000_000_000 },
+    { key: "fiveHour", unit: "usd", used: 0.1812, cap: 10, resetAt: 1_800_000_000_000 },
     { key: "monthly", unit: "usd", cap: 120 },
   ]);
   expect(snapshot.failures).toEqual([]);
@@ -369,12 +371,13 @@ it("月度上限：只按官方套餐表补，认不出的套餐不补；已有�
   // 认不出的套餐（旧快照 / 新套餐）：不编数字。
   expect(toQuotaSnapshot({ summary: { membershipTier: "enterprise-x" }, failures: [] }).windows).toEqual([]);
   // 厂商自己发了月度窗口（2592000 秒）就不补。
+  // 上限按官方月度总额 $120；已用按「5000 credits ÷ $120」的比率折：1000/41.67 ≈ 24。
   const snapshot = toQuotaSnapshot({
     summary: { membershipTier: "go", creditsPerUsd: 10_000 },
     preflight: { codingPlan: { windows: [{ usedCredits: 1000, limitCredits: 5000, durationSeconds: 2_592_000 }] } },
     failures: [],
   });
-  expect(snapshot.windows).toEqual([{ key: "monthly", unit: "usd", used: 0.1, cap: 0.5 }]);
+  expect(snapshot.windows).toEqual([{ key: "monthly", unit: "usd", used: 24, cap: 120 }]);
 });
 
 it("preflight 的数字是字符串（\"906\"/\"50000\"）：照样折算成美元读数，不能只剩重置时间", () => {
@@ -392,8 +395,9 @@ it("preflight 的数字是字符串（\"906\"/\"50000\"）：照样折算成美�
     },
     failures: [],
   });
-  expect(snapshot.windows[0]).toMatchObject({ key: "fiveHour", unit: "usd", used: 0.0906, cap: 5 });
-  expect(snapshot.windows[1]).toMatchObject({ key: "weekly", unit: "usd", used: 0.0906, cap: 15 });
+  // 已用按「官方上限 ÷ limitCredits」折：5 小时 906/5000 = 0.1812、周 906/5000 = 0.1812。
+  expect(snapshot.windows[0]).toMatchObject({ key: "fiveHour", unit: "usd", used: 0.1812, cap: 10 });
+  expect(snapshot.windows[1]).toMatchObject({ key: "weekly", unit: "usd", used: 0.1812, cap: 30 });
 });
 
 // —— 2026-10-19：月度用量（接口不给 → 用本机台账，且标成「仅本机」）——

@@ -285,24 +285,53 @@ function windowKeyOf(duration: unknown): string {
 /**
  * 归一化一个 preflight 窗口。
  *
- * 有换算率（`creditsPerUsd > 0`）→ 美元口径的 `used`/`cap`；没有换算率 → 百分比口径
- * （`used/limit*100`，上限为 0 或缺失时算不出来，只留窗口键与重置时刻）。两条路径都可能
- * 只拿得出一部分数字：端点没给的字段保持缺省。
+ * **上限（`cap`）优先用官方公布的美元值**，而不是从 credits 换算 —— 用户 2026-10-21
+ * 明确要求「按照官方的实际口径来而不是靠推算」。
+ *
+ * 理由：接口给的 `creditsPerUsd`（实测 10000）与官方文档的窗口额度（Go 周 $30）
+ * 对不上，算出来的上限只有实际的一半。与其用接口字段反推，不如直接采信官方文档：
+ *
+ * | 套餐 | 7 天窗口 | 5 小时窗口 |
+ * | --- | --- | --- |
+ * | Go | $30 | $10 |
+ * | Plus | $40 | 不设 |
+ * | Pro | $90 | 不设 |
+ * | Max | $150 | 不设 |
+ *
+ * `used` 仍需要换算率（官方不公布「已用多少美元」），这时用「官方上限 ÷ 接口的
+ * limitCredits」得到的比率 —— 它由两个已知量相除而来，与 `cap` 自洽。
  * @param raw - 端点给的一个窗口。
- * @param creditsPerUsd - 摘要给的每美元信用点数（缺失或非正数时按「没有换算率」处理）。
+ * @param creditsPerUsd - 换算率（`creditsPerUsd` 或由上限反推，见 {@link ratioOf}）。
+ * @param officialCap - 官方公布的这个窗口的美元上限（没有时 `undefined`）。
  * @returns 归一化窗口；整行不是对象时为 `undefined`。
  */
-function windowOf(raw: unknown, creditsPerUsd: number | undefined): QuotaWindow | undefined {
+function windowOf(raw: unknown, creditsPerUsd: number | undefined, officialCap?: number): QuotaWindow | undefined {
   if (!isRecord(raw)) return undefined;
   const key = windowKeyOf(raw.durationSeconds);
   const resetAt = epochMillis(raw.resetsAt);
   const usedCredits = numberValue(raw.usedCredits);
   const limitCredits = numberValue(raw.limitCredits);
 
-  if (creditsPerUsd !== undefined && creditsPerUsd > 0) {
+  // 上限：官方美元值优先。没有官方值时才退回「credits ÷ 换算率」。
+  const cap =
+    officialCap !== undefined && officialCap > 0
+      ? officialCap
+      : creditsPerUsd !== undefined && creditsPerUsd > 0 && limitCredits !== undefined
+        ? limitCredits / creditsPerUsd
+        : undefined;
+
+  // 已用：官方不公布，只能按换算率折。用「官方上限 ÷ limitCredits」的比率最自洽。
+  const ratio =
+    officialCap !== undefined && officialCap > 0 && limitCredits !== undefined && limitCredits > 0
+      ? limitCredits / officialCap
+      : creditsPerUsd !== undefined && creditsPerUsd > 0
+        ? creditsPerUsd
+        : undefined;
+
+  if (cap !== undefined || (ratio !== undefined && usedCredits !== undefined)) {
     const window: QuotaWindow = { key, unit: "usd" };
-    if (usedCredits !== undefined) window.used = usedCredits / creditsPerUsd;
-    if (limitCredits !== undefined) window.cap = limitCredits / creditsPerUsd;
+    if (usedCredits !== undefined && ratio !== undefined) window.used = usedCredits / ratio;
+    if (cap !== undefined) window.cap = cap;
     if (resetAt !== undefined) window.resetAt = resetAt;
     return window;
   }
@@ -327,16 +356,22 @@ function windowOf(raw: unknown, creditsPerUsd: number | undefined): QuotaWindow 
  * 只认 `codingPlan.windows` 这一条路径（计划 §0 的线上形状）；`codingPlan` 缺失表示该账号
  * 没有周期套餐（不是失败），返回空数组。
  * @param preflight - `billing preflight` 的负载。
- * @param creditsPerUsd - 摘要给的每美元信用点数。
+ * @param creditsPerUsd - 换算率（`creditsPerUsd` 或由官方上限反推）。
+ * @param tier - 套餐档位；用来查官方窗口上限表（没有时只按换算率折）。
  * @returns 归一化窗口，按端点给的顺序。
  */
-function windowsOf(preflight: unknown, creditsPerUsd: number | undefined): QuotaWindow[] {
+function windowsOf(preflight: unknown, creditsPerUsd: number | undefined, tier?: string): QuotaWindow[] {
   const record = payloadRecord(preflight);
   const codingPlan = record !== undefined && isRecord(record.codingPlan) ? record.codingPlan : undefined;
   const rows = codingPlan !== undefined && Array.isArray(codingPlan.windows) ? codingPlan.windows : [];
+  const caps = tier === undefined ? undefined : WINDOW_CAP_USD[tier.trim().toLowerCase()];
   const windows: QuotaWindow[] = [];
   for (const row of rows) {
-    const window = windowOf(row, creditsPerUsd);
+    // 官方上限：按时长查表（Go 的周窗口 = $30 等）。
+    const duration = isRecord(row) ? numberValue(row.durationSeconds) : undefined;
+    const field = duration === undefined ? undefined : DURATION_TO_CAP[duration];
+    const officialCap = field === undefined ? undefined : caps?.[field];
+    const window = windowOf(row, creditsPerUsd, officialCap);
     if (window !== undefined) windows.push(window);
   }
   return windows;
@@ -544,21 +579,21 @@ function monthlyWindowOf(plan: QuotaPlan | undefined, windows: readonly QuotaWin
  * @returns 归一化读数；窗口顺序 = preflight 给的顺序（补的月度窗口排最后）。
  */
 export function toQuotaSnapshot(parts: OpenDesignQuotaParts): QuotaSnapshot {
-  // 套餐优先取**账单摘要**（它还有状态与账期），摘要是 403 空的时候回退到
+  // 套餐优先取**账单摘要**（它还有状态与账期），摘要是空的时候回退到
   // preflight 的 `codingPlan.tier` —— 那条路稳定可达，否则套餐徽标永远是空的。
   const plan = planOf(parts.summary) ?? planFromPreflight(parts.preflight);
   /**
-   * 换算率三档来源，依次尝试：
-   * 1. 账单摘要的 `creditsPerUsd`（最权威，但它一直 403）；
-   * 2. 官方窗口上限 ÷ 接口的 `limitCredits`（`creditsPerUsdFromCaps`）；
-   * 3. 都没有 → 退回百分比口径（`windowsOf` 自己处理）。
+   * **窗口上限直接采信官方公布的美元值**（`WINDOW_CAP_USD`），不靠换算推算 ——
+   * 2026-10-21 明确的口径：接口的 `creditsPerUsd`（实测 10000）与官方文档
+   * （Go 周窗口 $30，对应 5000）对不上，算出来的上限只有实际的一半。
    *
-   * 第 2 档是 2026-10-21 补的：用户看到周窗口显示「共 $15.00」而官方说是 $30，
-   * 根因就是摘要 403 后没有任何换算率，界面只能按早期文档记的 10000 折算。
+   * 换算率只用来算「已用多少美元」：官方上限 ÷ 接口的 `limitCredits`。
+   * 两者都拿不到时退回 `creditsPerUsd`，再不行就进百分比口径。
    */
   const creditsPerUsd =
-    creditsPerUsdOf(parts.summary) ?? creditsPerUsdFromCaps(parts.preflight, plan?.id);
-  const windows = windowsOf(parts.preflight, creditsPerUsd);
+    creditsPerUsdFromCaps(parts.preflight, plan?.id) ??
+    creditsPerUsdOf(parts.summary);
+  const windows = windowsOf(parts.preflight, creditsPerUsd, plan?.id);
   const monthly = monthlyWindowOf(plan, windows);
   return {
     windows: monthly === undefined ? windows : [...windows, monthly],

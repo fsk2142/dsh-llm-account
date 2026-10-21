@@ -47,15 +47,29 @@ describe("open-design 窗口的美元换算", () => {
     expect(weekly?.used).toBeCloseTo(10.35, 1);
   });
 
-  it("**摘要给了 creditsPerUsd 时以它为准**（更权威）", () => {
+  it("**摘要给的 creditsPerUsd 不再决定上限**（官方口径优先）", () => {
+    // 用户 2026-10-21 明确要求「按照官方的实际口径来而不是靠推算」。
+    // 接口实测给的 creditsPerUsd 是 10000，按它算周窗口只有 $15，而官方是 $30。
+    // 所以上限一律采信官方表；creditsPerUsd 只在算「已用」时当备用比率。
     const snap = toQuotaSnapshot({
       summary: { membershipTier: "go", creditsPerUsd: 10_000 },
       preflight: REAL_GO,
       failures: [],
     });
     const weekly = snap.windows.find((window) => window.key === "weekly");
-    // 10000 是摘要自己给的，尊重它（即使与官方上限表不一致）。
-    expect(weekly?.cap).toBe(15);
+    expect(weekly?.cap).toBe(30);
+  });
+
+  it("**已用金额仍按「官方上限 ÷ limitCredits」折**（与上限自洽）", () => {
+    // 51768 credits、官方周上限 $30、limitCredits 150000 → 比率 5000 → 已用 $10.35。
+    // 即使 summary 给了 10000 也不影响，因为比率优先来自官方上限。
+    const snap = toQuotaSnapshot({
+      summary: { membershipTier: "go", creditsPerUsd: 10_000 },
+      preflight: REAL_GO,
+      failures: [],
+    });
+    const weekly = snap.windows.find((window) => window.key === "weekly");
+    expect(weekly?.used).toBeCloseTo(10.35, 1);
   });
 
   it("套餐认不出时不反推换算率（退回百分比口径，不猜）", () => {
@@ -78,5 +92,38 @@ describe("open-design 窗口的美元换算", () => {
     const snap = toQuotaSnapshot({ summary: undefined, preflight, failures: [] });
     const weekly = snap.windows.find((window) => window.key === "weekly");
     expect(weekly?.cap).toBe(40);
+  });
+});
+
+describe("2026-10-21 真实数据回归（Go 套餐）", () => {
+  it("**摘要返回 creditsPerUsd=10000 时，周窗口仍显示 $30**", () => {
+    // 这是用户实际遇到的场景：界面上限显示 $15，实际应该是 $30。
+    // 真实 preflight：周窗口 limitCredits=150000、usedCredits=53198。
+    const real = {
+      codingPlan: {
+        eligible: true,
+        tier: "go",
+        windows: [
+          { durationSeconds: 18_000, usedCredits: "8290", limitCredits: "50000" },
+          { durationSeconds: 604_800, usedCredits: "53198", limitCredits: "150000" },
+        ],
+      },
+    };
+    const snap = toQuotaSnapshot({
+      // 关键：摘要**成功返回**且给了 10000（这不是 403 场景）。
+      summary: { membershipTier: "go", creditsPerUsd: 10_000 },
+      preflight: real,
+      failures: [],
+    });
+
+    const fiveHour = snap.windows.find((w) => w.key === "fiveHour");
+    const weekly = snap.windows.find((w) => w.key === "weekly");
+
+    // 上限走官方表：$10 / $30。
+    expect(fiveHour?.cap).toBe(10);
+    expect(weekly?.cap).toBe(30);
+    // 已用按「官方上限 ÷ limitCredits」折：8290/5000 ≈ $1.66、53198/5000 ≈ $10.64。
+    expect(fiveHour?.used).toBeCloseTo(1.66, 1);
+    expect(weekly?.used).toBeCloseTo(10.64, 1);
   });
 });
