@@ -97,7 +97,9 @@ describe("侧边栏标题的三样信息", () => {
     expect(vendor?.props.children).toBe("Command Code");
   });
 
-  it("套餐徽标显示出来，并带 monthlyCredits 的悬浮提示", () => {
+  it("套餐徽标只显示档位名：不带金额，也不加悬浮提示", () => {
+    // 用户 2026-10-21：「不用这个悬浮显示，没必要」。
+    // 一行能读到的是档位名本身，金额不必再藏进 title。
     const tree = render({
       status: statusWith({ id: "individual-goat", name: "GOAT", monthlyCredits: 70 }),
       vendorLabelKey: "vendor.commandcode",
@@ -105,8 +107,8 @@ describe("侧边栏标题的三样信息", () => {
     const plan = tree.find((element) => element.props["data-sidebar-plan"] !== undefined);
     expect(plan).toBeDefined();
     expect(plan?.props["data-sidebar-plan"]).toBe("GOAT");
-    // 徽标本身只放名字（要能塞进一行），金额进 title。
-    expect(String(plan?.props.title)).toContain("$70.00");
+    expect(plan?.props.title).toBeUndefined();
+    expect(String(plan?.props.children)).not.toContain("$");
   });
 
   it("没有套餐信息时不渲染徽标（不占位、不编造）", () => {

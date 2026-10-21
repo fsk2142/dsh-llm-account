@@ -152,17 +152,17 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
             : createElement("span", { "data-sidebar-vendor": "true", className: CSS_CLASS.sidebarVendor }, vendorOf(props)),
         ),
         // 套餐徽标靠**右对齐**（用户 2026-10-21 定的版式：账号 · 厂商 ……… 套餐）。
-        // 读不到套餐时不占位。
-        planBadgeOf(props, currentRow) === undefined
+        // 读不到套餐时不占位。只显示档位名，不带金额、也不加悬浮提示 ——
+        // 用户 2026-10-21 明确不要那个提示（一行能读到的信息不必再藏进 title）。
+        planBadgeOf(currentRow) === undefined
           ? null
           : createElement(
               "span",
               {
-                "data-sidebar-plan": planBadgeOf(props, currentRow),
+                "data-sidebar-plan": planBadgeOf(currentRow),
                 className: CSS_CLASS.sidebarPlan,
-                title: planTitleOf(props, currentRow),
               },
-              planBadgeOf(props, currentRow),
+              planBadgeOf(currentRow),
             ),
       ),
       ...(hasData
@@ -380,34 +380,13 @@ function vendorOf(props: SidebarCardProps): string | undefined {
 /**
  * 当前套餐的**短徽标**（`GOAT` / `Go` / `Pro`…），显示在标题行右侧。
  *
- * 只取套餐名、不带金额：徽标要能塞进一行且不换行，金额放进 `title` 提示里
- * （{@link planTitleOf}）。
- * @param props - 卡片属性。
+ * 只取档位名：徽标要能塞进一行且不换行。
  * @param row - 当前账号。
  * @returns 徽标文字；没有套餐信息时 `undefined`（不占位）。
  */
-function planBadgeOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): string | undefined {
-  void props;
+function planBadgeOf(row: AccountUsageStatus | undefined): string | undefined {
   const plan = row?.quota?.plan;
   if (plan === undefined) return undefined;
   const name = (plan.name ?? plan.id).trim();
   return name === "" ? undefined : name;
-}
-
-/**
- * 套餐徽标的悬浮提示：`套餐 GOAT · 每月 $70.00`。
- * @param props - 卡片属性。
- * @param row - 当前账号。
- * @returns 提示文字；没有套餐时为 `undefined`。
- */
-function planTitleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): string | undefined {
-  const plan = row?.quota?.plan;
-  if (plan === undefined) return undefined;
-  const parts: string[] = [];
-  const name = (plan.name ?? plan.id).trim();
-  if (name !== "") parts.push(`${props.t("account.plan")} ${name}`);
-  if (plan.monthlyCredits !== undefined) {
-    parts.push(props.t("quota.planMonthly").replace("{amount}", `$${plan.monthlyCredits.toFixed(2)}`));
-  }
-  return parts.length === 0 ? undefined : parts.join(" · ");
 }
