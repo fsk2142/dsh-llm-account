@@ -373,6 +373,17 @@ export type CopyKey =
   | "update.current"
   | "update.notApplicable"
   | "update.unknown"
+  /**
+   * 标题行右侧那一条的**短标签**（2026-10-21）。
+   *
+   * 同一组状态在这里要极简（只有一行、旁边就是标题），长句子放进 `title` 属性；
+   * 所以每条状态都有「长版」（上面的 available/current/…，用于 `title` 与提示条）
+   * 与「短版」。
+   */
+  | "update.availableShort"
+  | "update.currentShort"
+  | "update.notApplicableShort"
+  | "update.unknownShort"
   | "update.starting"
   | "update.done"
   | "update.failed"
@@ -713,6 +724,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "update.notApplicable":
       "当前是**本地链接安装**（{installed}），它跟着源码走，不会通过更新按钮变化 —— 改了代码刷新页面即可。要装发行版，请从插件市场重新安装一次。",
     "update.unknown": "暂时查不到更新信息：{reason}",
+    "update.availableShort": "有新版本",
+    "update.currentShort": "已是最新",
+    "update.notApplicableShort": "本地链接安装，不会更新",
+    "update.unknownShort": "查不到更新信息：{reason}",
     "update.starting": "正在更新…",
     "update.done": "装好了。刷新页面后新版本才会生效（下面那个「刷新页面」按钮）。",
     "update.failed": "更新失败：{reason}",
@@ -1045,6 +1060,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "update.notApplicable":
       "This is a **linked local install** ({installed}); it follows the source tree and never changes through an update button — edit the code and reload the page. To use a release build, install it from the plugin market again.",
     "update.unknown": "Could not check for updates: {reason}",
+    "update.availableShort": "Update available",
+    "update.currentShort": "Up to date",
+    "update.notApplicableShort": "Linked install — no updates",
+    "update.unknownShort": "Update check failed: {reason}",
     "update.starting": "Updating…",
     "update.done": "Installed. Reload the page to start using the new version (the button below).",
     "update.failed": "Update failed: {reason}",

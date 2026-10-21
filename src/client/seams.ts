@@ -1563,10 +1563,12 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     /**
      * 插件自身的更新状态（`undefined` = 还没查过）。
      *
-     * **首次进入不自动查**：设置页很短，用户随时开开关关，每次进来都访问一次更新接口
-     * 是白耗。用户点「检查更新」才查；查到结论后留在 state 里，本页期内不再重复问。
+     * **打开设置页就自动查一次**（2026-10-21 用户要求：「每次打开设置页就自动检查更新并提示吧，
+     * 别手动点了」）。早先刻意不自动查（怕每次开关设置页都打一次网络），但用户显然更在意
+     * 「一进来就知道有没有新版」；折中办法是**模块级缓存**：同一页面会话内查过一次就不再问，
+     * 反复开关设置页不会重复打网络，而刷新页面后会重新查。
      */
-    const [updateState, setUpdateState] = useState<UpdateState | undefined>(undefined);
+    const [updateState, setUpdateState] = useState<UpdateState | undefined>(() => cachedUpdateState());
     const [updateBusy, setUpdateBusy] = useState(false);
     /**
      * 是否显示「刷新页面」提示。
@@ -1919,11 +1921,48 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const runUpdateCheck = async (): Promise<void> => {
       setUpdateBusy(true);
       try {
-        setUpdateState(await checkForUpdate());
+        const next = await checkForUpdate();
+        setUpdateState(next);
+        // 存进模块级缓存：反复开关设置页不再重复打网络（见 `updateCheckCache`）。
+        noteUpdateState(next);
       } finally {
         setUpdateBusy(false);
       }
     };
+
+    /**
+     * **打开设置页就自动查一次**（2026-10-21 用户要求，不再需要手动点）。
+     *
+     * 三条约束：
+     * 1. 只在**本页面会话还没查过**时发起（`updateCheckCache` 命中就直接用）；
+     * 2. 已经手动查过/正在查时不重复发；
+     * 3. 卸载后不写状态（`alive` 守卫）—— 用户在检查途中关掉设置页是常事。
+     */
+    useEffect(() => {
+      if (cachedUpdateState() !== undefined) return;
+      let alive = true;
+      setUpdateBusy(true);
+      void checkForUpdate()
+        .then((next) => {
+          noteUpdateState(next);
+          if (alive) setUpdateState(next);
+        })
+        .catch(() => {
+          // `checkForUpdate` 自己已经把失败收敛成 `unknown`；走到这里说明是更底层的意外，
+          // 同样不能静默 —— 给一个能显示在标题行右边的结论。
+          const fallback: UpdateState = { kind: "unknown", reason: "更新检查没有完成" };
+          noteUpdateState(fallback);
+          if (alive) setUpdateState(fallback);
+        })
+        .finally(() => {
+          if (alive) setUpdateBusy(false);
+        });
+      return () => {
+        alive = false;
+      };
+      // 只在挂载时跑一次：`cachedUpdateState()` 是模块级的，不需要进依赖数组。
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     /**
      * 开始更新（只在真有新版时可用）。
@@ -3001,6 +3040,27 @@ const statusReadings = new ReadingCache<VendorUsageStatus>(() => statusReadingTt
 const catalogReadings = new ReadingCache<CatalogModelsResult>(CATALOG_READING_TTL_MS);
 
 /**
+ * 更新检查的**结论**（模块级，2026-10-21）。
+ *
+ * 为什么单独放一份：用户要求「打开设置页就自动检查」，而设置页会被反复开关。
+ * 没有这份缓存，每次开关都打一次更新接口 —— 那是纯浪费。这里只存**结论**
+ * （而不是「要重查」），所以重开设置页直接显示上次结果，`undefined` 才表示该查了。
+ *
+ * 刷新页面会重置它（模块重新求值），因此「想强制重查」的语义仍然存在。
+ */
+let updateCheckCache: UpdateState | undefined;
+
+/** 读更新结论缓存（`undefined` = 本页面会话还没查过）。 */
+function cachedUpdateState(): UpdateState | undefined {
+  return updateCheckCache;
+}
+
+/** 写更新结论缓存。 */
+function noteUpdateState(state: UpdateState | undefined): void {
+  updateCheckCache = state;
+}
+
+/**
  * 这份状态读数够格进缓存吗？—— **不完整就不缓存**。
  *
  * 2026-10-18 用户报障「重新点开设置后原来显示的额度信息又不见了」的根因：缓存本意是省一次
@@ -3430,6 +3490,9 @@ export function resetSeams(): void {
   sharedUsage?.dispose();
   sharedUsage = undefined;
   usageReadyListeners.clear();
+  // 更新结论缓存也要复位（2026-10-21）：它是一个**模块级**结论，不复位会让上一条用例
+  // 查到的「有新版本」漏给下一条（实测：连跑时自动检查那条用例直接不发起请求）。
+  updateCheckCache = undefined;
   // 注册标记也要复位：否则上一条用例注册过，下一条的「该不该提示刷新」会误判。
   sharedSurfacesRegistered = false;
   sidebarVendorValue = undefined;

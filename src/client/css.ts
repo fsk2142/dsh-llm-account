@@ -60,6 +60,18 @@ export const PAGE_CSS = `
   font-family: var(--dsw-font-family); font-size: 14px; line-height: 22px;
   color: var(--dsw-alias-label-primary); }
 .dsl-header { display: flex; flex-direction: column; gap: 4px; }
+/* 标题行：名字在左、版本与更新控件在右（2026-10-21 用户要求「放到最右边」）。
+   两端对齐 + 允许换行：窄侧边栏里控件掉到第二行，而不是把标题挤没。 */
+.dsl-title-row { display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap; }
+/* 右侧控件：版本号 / 状态 / 按钮三段横排，都压到 12px 以免比标题还显眼。 */
+.dsl-update-meter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 12px; line-height: 18px; letter-spacing: normal;
+  color: var(--dsw-alias-label-tertiary); }
+/* 版本号用等宽字形：v0.1.0 这类短串在比例字体里会跳字。 */
+.dsl-update-version { font-family: var(--dsw-font-family-mono, ui-monospace, monospace);
+  font-size: 12px; color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
+.dsl-update-state { font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 .dsl-root h1 { margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; letter-spacing: normal; }
 .dsl-root h2 { margin: 0; font-size: 14px; font-weight: 500; line-height: 22px; letter-spacing: normal; }
 .dsl-root h3, .dsl-root h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 22px;
@@ -739,6 +751,11 @@ export const CSS_CLASS = {
   /* 「插件已更新，刷新页面」提示条（2026-10-20）。 */
   notice: "dsl-notice",
   noticeTitle: "dsl-notice-title",
+  /* 标题行（名字在左、版本与更新控件在右）与其右侧控件的三段（2026-10-21）。 */
+  titleRow: "dsl-title-row",
+  updateMeter: "dsl-update-meter",
+  updateVersion: "dsl-update-version",
+  updateState: "dsl-update-state",
   empty: "dsl-empty",
   note: "dsl-note",
   actions: "dsl-actions",

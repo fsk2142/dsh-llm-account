@@ -183,38 +183,80 @@ function reloadNotice(props: PageShellProps, t: (key: string) => string): ReactE
  * @param t - 取词函数。
  * @returns 区块元素；容器没有提供更新状态时为 `null`（老宿主不渲染死按钮）。
  */
-function updateBlock(props: PageShellProps, t: (key: string) => string): ReactElement | null {
+/**
+ * 标题行右侧的**版本与更新**控件（2026-10-21 用户要求）。
+ *
+ * 用户原话：「检查更新那个建议放到设置页最开头 LL 账号的最右边，检查完就提示是否有新版本，
+ * 版本号多少，显示是否更新」。
+ *
+ * 版式（一行，从左到右）：`当前版本 v0.1.0` → 状态文字 → 动作按钮。
+ *
+ * - 未检查：`v0.1.0` + 「检查更新」
+ * - 检查中：「正在检查…」（按钮禁用）
+ * - 有新版本：`v0.1.0 → v0.2.0` + 「更新到新版本」
+ * - 已最新：`v0.1.0` + 「已是最新」+ 仍保留「检查更新」以便手动重查
+ * - 本地链接安装：如实说明它不会更新（跟着源码走），**不给假按钮**
+ * - 查不到：`v0.1.0` + 「查不到更新信息：<原因>」
+ *
+ * `props.update` 为 `undefined` 时也要渲染（那是「还没查过」的初值）——
+ * 早先这里直接 `return null`，导致整块永远不出现、用户根本没有入口。
+ * @param props - 页面属性（用 `update` / `updateBusy` / `onCheckUpdate` / `onUpdate`）。
+ * @param t - 取词函数。
+ * @returns 控件元素；容器既没结论也没回调时才不渲染。
+ */
+function updateMeter(props: PageShellProps, t: (key: string) => string): ReactElement | null {
   const state = props.update;
-  // **`undefined` 也要渲染**（2026-10-20 用户报障：「这个页面看不到更新」）。
-  //
-  // 原来的写法是 `state === undefined → return null`，本意是「老宿主别留死按钮」；但
-  // 容器的初值就是 `undefined`（首次进入不自动查更新），两个设计叠在一起的结果是
-  // **整块永远不出现**、用户根本没有入口去点「检查更新」—— 一个功能被自己的防御性
-  // 判断完全藏起来了。
-  //
-  // 现在：没有结论时显示一句「还没检查」+「检查更新」按钮。容器没提供回调时
-  // （`onCheckUpdate` 缺席）才真的不渲染 —— 那才是「宿主不支持」的判据。
   if (state === undefined && props.onCheckUpdate === undefined) return null;
   const replace = (template: string, values: Record<string, string>): string =>
     template.replace(/\{(\w+)\}/g, (whole, name: string) => values[name] ?? whole);
 
+  // 版本号：有 installed 就显示它；链接安装可能带 0.1.0 这类开发版本号。
+  const installed = state !== undefined && "installed" in state && state.installed !== "" ? state.installed : undefined;
   const canUpdate = state?.kind === "available";
+  const latest = state?.kind === "available" ? state.latest : undefined;
+
   const label =
-    state === undefined
-      ? t("update.notChecked")
-      : state.kind === "available"
-        ? replace(t("update.available"), { installed: state.installed, latest: state.latest })
-        : state.kind === "current"
-          ? replace(t("update.current"), { installed: state.installed })
-          : state.kind === "not-applicable"
-            ? replace(t("update.notApplicable"), { installed: state.installed })
-            : replace(t("update.unknown"), { reason: state.kind === "unknown" ? state.reason : "" });
+    props.updateBusy === true
+      ? t("update.checking")
+      : state === undefined
+        ? ""
+        : state.kind === "available"
+          ? t("update.availableShort")
+          : state.kind === "current"
+            ? t("update.currentShort")
+            : state.kind === "not-applicable"
+              ? t("update.notApplicableShort")
+              : replace(t("update.unknownShort"), { reason: state.reason });
+
   return createElement(
     "div",
-    { "data-update-block": state?.kind ?? "unchecked", className: CSS_CLASS.notice },
-    createElement("strong", { className: CSS_CLASS.noticeTitle }, t("update.section")),
-    createElement("small", null, props.updateBusy === true ? t("update.checking") : label),
-    // 「更新」只在**真的有新版**时出现（`not-applicable` / `current` 都不画一个点不动的按钮）。
+    {
+      "data-update-meter": state?.kind ?? "unchecked",
+      className: CSS_CLASS.updateMeter,
+      // 详细说明挂在 title 上：右侧这一行很窄，长句子放不下，但排查时要看得到。
+      title:
+        state === undefined
+          ? t("update.notChecked")
+          : state.kind === "available"
+            ? replace(t("update.available"), { installed: state.installed, latest: state.latest })
+            : state.kind === "current"
+              ? replace(t("update.current"), { installed: state.installed })
+              : state.kind === "not-applicable"
+                ? replace(t("update.notApplicable"), { installed: state.installed })
+                : state.kind === "unknown"
+                  ? replace(t("update.unknown"), { reason: state.reason })
+                  : "",
+    },
+    installed === undefined
+      ? null
+      : createElement(
+          "span",
+          { "data-update-version": state?.kind ?? "unchecked", className: CSS_CLASS.updateVersion },
+          latest === undefined ? `v${installed}` : `v${installed} → v${latest}`,
+        ),
+    label === ""
+      ? null
+      : createElement("span", { "data-update-state": state?.kind ?? "unchecked", className: CSS_CLASS.updateState }, label),
     canUpdate
       ? createElement(
           "button",
@@ -227,8 +269,7 @@ function updateBlock(props: PageShellProps, t: (key: string) => string): ReactEl
           },
           props.updateBusy === true ? t("update.starting") : t("update.start"),
         )
-      : // 其余情况给「检查一次」：用户随时可以主动问，而不是等它自己刷新。
-        createElement(
+      : createElement(
           "button",
           {
             type: "button",
@@ -267,12 +308,19 @@ function pageBody(props: PageShellProps): ReactElement {  const { state, entries
     createElement(
       "header",
       { className: CSS_CLASS.header },
-      createElement("h1", null, t("title")),
+      // 标题行：左边是名字，**最右边是版本与更新控件**（2026-10-21 用户要求）。
+      // 单独一层 `dsl-title-row` 是因为 `dsl-header` 是纵向 flex（标题 + 介绍），
+      // 只有这一行需要横向两端对齐。
+      createElement(
+        "div",
+        { "data-title-row": "true", className: CSS_CLASS.titleRow },
+        createElement("h1", null, t("title")),
+        updateMeter(props, t),
+      ),
       createElement("p", { "data-intro": "true", className: CSS_CLASS.intro }, t("intro")),
     ),
     reloadNotice(props, t),
     props.accounts === undefined ? null : props.accounts,
-    updateBlock(props, t),
     // 空态提示：独立于任何选择显示一次（见上面 noVendor 的说明）。
     noVendor
       ? createElement(
