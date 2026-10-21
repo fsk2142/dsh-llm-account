@@ -282,6 +282,9 @@ export type CopyKey =
    */
   | "models.selectAll"
   | "models.clearAll"
+  | "models.quotaHint"
+  | "models.quotaFree"
+  | "models.quotaApprox"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -654,6 +657,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.otherCompany": "其他",
     "models.selectAll": "全选",
     "models.clearAll": "取消全选",
+    "models.quotaHint": "这个模型在当前套餐下的可用额度（官方公布值）",
+    "models.quotaFree": "免费",
+    "models.quotaApprox": "约 {amount}",
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "点击打开用量面板",
@@ -993,6 +999,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.otherCompany": "Other",
     "models.selectAll": "Select all",
     "models.clearAll": "Clear all",
+    "models.quotaHint": "Allowance this model gets under the current plan (official figure)",
+    "models.quotaFree": "Free",
+    "models.quotaApprox": "~{amount}",
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Click to open the usage panel",

@@ -16,6 +16,7 @@ import { UsageClearButton, UsageExportButton } from "./failure-list";
 import { isHttpUrl } from "./login-window";
 import type { AccountAction } from "./page-state";
 import type { VendorEntry } from "./registry";
+import type { AccountUsageStatus } from "./usage-contract";
 import type { CatalogModel, ModelRule, VendorUsageStatus } from "./usage-contract";
 
 /** 面板里的一个厂商。 */
@@ -98,6 +99,16 @@ export interface AccountsPanelProps {
    * 返回 `undefined` 表示这一行不画 —— 还没读到数据时不该占一块空白。
    */
   usageOf?: (vendor: string, ref: string) => ReactNode;
+  /**
+   * 查一个模型在**该账号当前套餐**下能用多少额度（用户 2026-10-21 要的功能）。
+   *
+   * 返回 `undefined` = 官方没给这个组合的数据，界面留空（不编数字）。格式化由容器做。
+   * @param vendor - 厂商行 id。
+   * @param account - 该账号（额度与它当前的套餐有关）。
+   * @param modelId - 模型 id（目录原始写法）。
+   * @returns 已格式化的额度文字；没有数据时 `undefined`。
+   */
+  modelQuotaOf?: (vendor: string, account: AccountUsageStatus, modelId: string) => string | undefined;
   /**
    * 重新读取**一家**的模型目录（按账户刷新的落点）。
    *
@@ -466,5 +477,9 @@ function accountPropsFor(props: AccountsPanelProps, group: AccountsPanelVendor):
       : { onSetAccountModels: (ref: string, models: readonly string[]) => props.onSetAccountModels?.(vendor, ref, models) }),
     // 该账号自身的用量（容器给）；缺省就不渲染，与其它可选块同一条纪律。
     ...(props.usageOf === undefined ? {} : { usageOf: (ref: string) => props.usageOf?.(vendor, ref) }),
+    // 每个模型在当前套餐下的额度（用户 2026-10-21 要的功能）：查不到就不渲染。
+    ...(props.modelQuotaOf === undefined
+      ? {}
+      : { modelQuotaOf: (account: AccountUsageStatus, modelId: string) => props.modelQuotaOf?.(vendor, account, modelId) }),
   };
 }

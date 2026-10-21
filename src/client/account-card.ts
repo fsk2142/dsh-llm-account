@@ -113,6 +113,17 @@ export interface AccountCardProps {
   /** 覆盖某个账号的模型；同一模型可属于多个账号。 */
   onSetAccountModels?: (ref: string, models: readonly string[]) => void;
   /**
+   * 查一个模型在**当前套餐**下能用多少额度（用户 2026-10-21 要的功能）。
+   *
+   * 返回 `undefined` 表示官方没给这个组合的数据（套餐认不出 / 模型不在表里）——
+   * 这时**什么都不显示**，绝不编一个数字出来。判断与格式化都在容器里做，
+   * 卡片只负责把它摆在开关左边。
+   * @param account - 该行账号（额度与账号当前的套餐有关）。
+   * @param modelId - 模型 id（目录里的原始写法）。
+   * @returns 已格式化的一行文字；没有数据时 `undefined`。
+   */
+  modelQuotaOf?: (account: AccountUsageStatus, modelId: string) => string | undefined;
+  /**
    * 该账号的用量统计（容器按 ref 提供）。
    *
    * 放在**账号行内**（额度条下方）而不是另起一张大卡：用户 2026-10-19 要求「单个账号的
@@ -482,6 +493,8 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
         ),
         ...group.models.map((id) => {
           const model = byId.get(id);
+          // 这个模型在当前套餐下能用多少额度（官方表里查不到就是 undefined → 不渲染）。
+          const quotaText = props.modelQuotaOf?.(account, id);
           return createElement(
             "label",
             { key: id, className: CSS_CLASS.field },
@@ -490,6 +503,22 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
               { className: CSS_CLASS.fieldText },
               createElement("span", { className: CSS_CLASS.mono }, model?.name ?? id),
             ),
+            // 额度信息摆在开关**左边**（用户 2026-10-21 指定：
+            // `[模型名] ...... [额度信息] [开关]`）。查不到就不占位子。
+            ...(quotaText === undefined
+              ? []
+              : [
+                  createElement(
+                    "span",
+                    {
+                      key: "quota",
+                      className: CSS_CLASS.modelQuota,
+                      "data-model-quota": `${account.ref}:${id}`,
+                      title: props.t("models.quotaHint"),
+                    },
+                    quotaText,
+                  ),
+                ]),
             createElement("input", {
               type: "checkbox",
               className: CSS_CLASS.toggle,

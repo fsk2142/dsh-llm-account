@@ -51,6 +51,11 @@ import {
 } from "./page-state";
 import type { LoginView } from "./account-card";
 import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/search-keys";
+import {
+  COMMANDCODE_MODEL_QUOTA,
+  OPENDESIGN_MODEL_QUOTA,
+  modelQuotaOf as modelQuotaOf_,
+} from "../core/model-quota-table";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import { savesImmediately, type VendorEntry } from "./registry";
@@ -1770,8 +1775,36 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       );
     };
 
+    /**
+     * 每个模型在**该账号当前套餐**下的可用额度（用户 2026-10-21 要的功能）。
+     *
+     * 数据表是内置的官方表格（`core/model-quota-table`），没有 API 可查。查不到的
+     * 三种情况一律返回 `undefined`（界面留空）：这家厂商没有表、套餐认不出、
+     * 模型不在表里 —— 与「额度缺失不倒成 0」同一条纪律。
+     *
+     * 套餐名从该账号已读到的额度摘要里取（`account.quota.plan`），所以它与额度条
+     * 显示的是同一个套餐，不会出现「上面写 GOAT、下面按 Go 算额度」。
+     * @param vendor - 厂商行 id。
+     * @param account - 该账号。
+     * @param modelId - 模型 id。
+     * @returns 已格式化的额度文字；查不到时 `undefined`。
+     */
+    const modelQuotaOf = (vendor: string, account: AccountUsageStatus, modelId: string): string | undefined => {
+      const table =
+        vendor.includes("command") ? COMMANDCODE_MODEL_QUOTA : vendor.includes("opendesign") ? OPENDESIGN_MODEL_QUOTA : undefined;
+      if (table === undefined) return undefined;
+      const plan = account.quota?.plan;
+      const planName = plan?.name ?? plan?.id;
+      const amount = modelQuotaOf_(table, planName, modelId);
+      if (amount === undefined) return undefined;
+      if (amount.kind === "free") return t("models.quotaFree");
+      const usd = `$${amount.amount.toFixed(amount.amount % 1 === 0 ? 0 : 2)}`;
+      return amount.kind === "approx" ? t("models.quotaApprox").replace("{amount}", usd) : usd;
+    };
+
     const accountsPanel = createElement(AccountsPanel, {
       usageOf: accountUsageOf,
+      modelQuotaOf,
       t,
       vendors: availableEntries.map((entry) => ({
         entry,

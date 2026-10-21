@@ -135,6 +135,12 @@ export const PAGE_CSS = `
 .dsl-model-add-input { flex: 1 1 220px; min-width: 0; border: 0;
   border-bottom: .5px solid var(--dsw-alias-border-l2); border-radius: 0; background: transparent; padding: 6px 0; }
 .dsl-model-add .dsl-actions { justify-content: flex-end; }
+/* 「这个模型在这个套餐下能用多少额度」：次要文字，紧挨在开关左边。
+   margin-inline-start:auto 让它靠右（模型名在左、额度与开关在右），
+   与用户 2026-10-21 指定的「模型名 …… 额度信息 开关」顺序一致。 */
+.dsl-model-quota { flex: none; margin-inline-start: auto; padding-inline-end: 8px;
+  font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
 .dsl-card > summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 4px; border-radius: var(--dsw-radius-xs); }
 /* 卡片底部的常驻开关（如 OpenCode 的自动切换）：一条分隔线把它们与账号列表分开。 */
@@ -730,6 +736,7 @@ export const CSS_CLASS = {
   modelGroupTitle: "dsl-model-group-title",
   modelAdd: "dsl-model-add",
   modelAddTitle: "dsl-model-add-title",
+  modelQuota: "dsl-model-quota",
   modelAddRow: "dsl-model-add-row",
   modelAddSelect: "dsl-model-add-select",
   modelAddInput: "dsl-model-add-input",
