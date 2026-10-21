@@ -93,15 +93,21 @@ describe("模型行上的额度信息", () => {
     expect(quotaIndex).toBeLessThan(toggleIndex);
   });
 
-  it("**查不到就不渲染**：不占位子、不留空 span", () => {
+  it("**查不到时显示「未知」**（用户 2026-10-21：留空看起来像坏了）", () => {
     const tree = renderWith(() => undefined);
     const nodes = elements(tree).filter((element) => element.props["data-model-quota"] !== undefined);
-    expect(nodes).toHaveLength(0);
+    // 每个模型都有一行「未知」，而不是留空。
+    expect(nodes).toHaveLength(2);
+    for (const node of nodes) expect(node.props.children).toBe("未知");
   });
 
-  it("容器没提供查询函数时整块照常渲染（不因为新功能报错）", () => {
+  it("容器没提供查询函数时也显示「未知」（不是空白）", () => {
     const tree = renderWith(undefined);
     expect(elements(tree).some((element) => element.props["data-account-model"] === "acct:minimax-m3")).toBe(true);
+    const quota = elements(tree).find(
+      (element) => element.props["data-model-quota"] === "acct:minimax-m3",
+    );
+    expect(quota?.props.children).toBe("未知");
   });
 
   it("不同模型各显示各自的值", () => {

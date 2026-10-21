@@ -141,6 +141,9 @@ export const PAGE_CSS = `
 .dsl-model-quota { flex: none; margin-inline-start: auto; padding-inline-end: 8px;
   font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
+/* 「未知」：官方没公布这个模型的额度（2026-10-21 用户要求用文字说明而不是留空）。
+   比正常额度更淡一档，读作「这里没有数据」而不是「额度是这个词」。 */
+.dsl-model-quota-unknown { color: var(--dsw-alias-label-tertiary); }
 .dsl-card > summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 4px; border-radius: var(--dsw-radius-xs); }
 /* 卡片底部的常驻开关（如 OpenCode 的自动切换）：一条分隔线把它们与账号列表分开。 */
@@ -752,6 +755,7 @@ export const CSS_CLASS = {
   modelAdd: "dsl-model-add",
   modelAddTitle: "dsl-model-add-title",
   modelQuota: "dsl-model-quota",
+  modelQuotaUnknown: "dsl-model-quota-unknown",
   modelAddRow: "dsl-model-add-row",
   modelAddSelect: "dsl-model-add-select",
   modelAddInput: "dsl-model-add-input",

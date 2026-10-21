@@ -520,7 +520,7 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
         ),
         ...group.models.map((id) => {
           const model = byId.get(id);
-          // 这个模型在当前套餐下能用多少额度（官方表里查不到就是 undefined → 不渲染）。
+          // 这个模型在当前套餐下能用多少额度（官方表里查不到就是 undefined）。
           const quotaText = props.modelQuotaOf?.(account, id);
           return createElement(
             "label",
@@ -531,21 +531,24 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
               createElement("span", { className: CSS_CLASS.mono }, model?.name ?? id),
             ),
             // 额度信息摆在开关**左边**（用户 2026-10-21 指定：
-            // `[模型名] ...... [额度信息] [开关]`）。查不到就不占位子。
-            ...(quotaText === undefined
-              ? []
-              : [
-                  createElement(
-                    "span",
-                    {
-                      key: "quota",
-                      className: CSS_CLASS.modelQuota,
-                      "data-model-quota": `${account.ref}:${id}`,
-                      title: props.t("models.quotaHint"),
-                    },
-                    quotaText,
-                  ),
-                ]),
+            // `[模型名] ...... [额度信息] [开关]`）。
+            //
+            // **查不到时写「未知」而不是留空**（用户 2026-10-21 要求）：留空看起来像
+            // 功能坏了，而「未知」明确表达「官方没给这个数据」，与「额度缺失不倒成 0」
+            // 是同一条纪律 —— 只是把沉默换成了说明。
+            createElement(
+              "span",
+              {
+                key: "quota",
+                className:
+                  quotaText === undefined
+                    ? `${CSS_CLASS.modelQuota} ${CSS_CLASS.modelQuotaUnknown}`
+                    : CSS_CLASS.modelQuota,
+                "data-model-quota": `${account.ref}:${id}`,
+                title: props.t("models.quotaHint"),
+              },
+              quotaText ?? props.t("models.quotaUnknown"),
+            ),
             createElement("input", {
               type: "checkbox",
               className: CSS_CLASS.toggle,
