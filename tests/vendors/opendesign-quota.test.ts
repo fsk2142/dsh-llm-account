@@ -477,3 +477,87 @@ it("本机台账读失败时保持只有上限，不新增失败项（额度读�
   // 台账读失败不写成额度读失败：那条失败项说的是「没配 workspaceId」，与台账无关。
   expect(snapshot.failures.some((item) => item.includes("ledger"))).toBe(false);
 });
+
+// —— 多账号额度诊断：说清「缺的是哪把密钥」（2026-10-21）——
+
+it("**只有推理密钥时说明该重登一次**，不是笼统的「账单接口 401」", async () => {
+  // 实测：`sk-amr_…`（推理）打控制面一律 401，只有 `vela_ctrl_…` 能通。
+  // 用户切到这种账号只看到「额度读不到」时，不知道该重登还是该换账号。
+  const fetchImpl = scriptedFetch([() => json({ message: "unauthorized" }, 401)]);
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      controlKeyKind: async () => "inference-only",
+    }),
+  );
+  const snapshot = await quota.snapshot();
+  const text = snapshot.failures.join(" ");
+  expect(text).toContain("只有推理密钥");
+  expect(text).toContain("网页登录");
+  // 不能只说 401 就完事 —— 那句用户看不出该做什么。
+  expect(text).not.toContain("套餐信息与额度换算单位暂时缺失");
+});
+
+it("一把密钥都没有时说清「需要先登录或填 API key」", async () => {
+  const fetchImpl = scriptedFetch([() => json({ message: "unauthorized" }, 401)]);
+  const quota = createOpenDesignQuota(deps(fetchImpl, { controlKeyKind: async () => "none" }));
+  const snapshot = await quota.snapshot();
+  expect(snapshot.failures.join(" ")).toContain("还没有任何可用密钥");
+});
+
+it("有控制面密钥但被拒时仍走旧口径（那是可重试的失败）", async () => {
+  const fetchImpl = scriptedFetch([() => json({ message: "forbidden" }, 403)]);
+  const quota = createOpenDesignQuota(deps(fetchImpl, { controlKeyKind: async () => "control" }));
+  const snapshot = await quota.snapshot();
+  expect(snapshot.failures.join(" ")).toContain("账单摘要读取失败");
+});
+
+// —— HTTP 版周期额度（2026-10-21）：多账号额度的正解 ——
+
+it("**HTTP 周期额度优先，且不需要身份闸门**（它按账号自己的密钥鉴权）", async () => {
+  // vela CLI 没有 --key，永远查本机登录态那一个人；HTTP 版按账号鉴权，
+  // 所以每个账号都能拿到自己的数字，不必再核对身份。
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "GOAT", creditsPerUsd: 10000 })]);
+  const velaPreflight = vi.fn(async () => ({ codingPlan: { windows: [] } }));
+  const httpPreflight = vi.fn(async () => ({
+    codingPlan: { windows: [{ usedCredits: 487, limitCredits: 50000, durationSeconds: 18000, resetsAt: 1_800_000_000_000 }] },
+  }));
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      workspaceIdOf: () => "ws-1",
+      preflight: velaPreflight,
+      preflightHttp: httpPreflight,
+      // 身份不一致 —— HTTP 路径**不该因此被拦**。
+      identitiesOf: async () => ({ account: "user-a", vela: "user-b" }),
+    }),
+  );
+  const snapshot = await quota.snapshot();
+  expect(httpPreflight).toHaveBeenCalledWith("ws-1", "control-key-1");
+  // 关键：压根没碰 vela。
+  expect(velaPreflight).not.toHaveBeenCalled();
+  const fiveHour = snapshot.windows.find((w) => w.key === "fiveHour");
+  expect(fiveHour?.used).toBe(0.0487);
+  expect(fiveHour?.cap).toBe(5);
+  // 也不该出现「不是同一个人」那条失败（HTTP 已经给出了准确数据）。
+  expect(snapshot.failures.join(" ")).not.toContain("不是同一个人");
+});
+
+it("HTTP 失败时**退回 vela**，那时才过身份闸门", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "GOAT", creditsPerUsd: 10000 })]);
+  const velaPreflight = vi.fn(async () => ({
+    codingPlan: { windows: [{ usedCredits: 100, limitCredits: 50000, durationSeconds: 18000 }] },
+  }));
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      workspaceIdOf: () => "ws-1",
+      preflight: velaPreflight,
+      preflightHttp: async () => {
+        throw new Error("HTTP 周期额度接口返回 404");
+      },
+      identitiesOf: async () => ({ account: "user-a", vela: "user-b" }),
+    }),
+  );
+  const snapshot = await quota.snapshot();
+  // HTTP 失败 + 身份不一致 → vela 也不采信。
+  expect(velaPreflight).not.toHaveBeenCalled();
+  expect(snapshot.failures.join(" ")).toContain("不是同一个人");
+});

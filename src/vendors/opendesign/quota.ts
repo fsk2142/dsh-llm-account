@@ -58,6 +58,30 @@ export interface OpenDesignQuotaDeps {
   /** 解析该 ref 的**控制面**密钥（凭据服务 / 环境变量的注入点）。 */
   resolveControlKey: (ref: string) => Promise<string | undefined>;
   /**
+   * 这个账号**有没有真正的控制面密钥**（2026-10-21，多账号额度诊断）。
+   *
+   * 实测：`sk-amr_…`（推理）打控制面一律 401，只有 `vela_ctrl_…` 能通。两者在
+   * 「账单接口 401」这个结果上长得一样，但对用户的含义完全不同 ——
+   *
+   * - `"control"`：有控制面密钥，被拒说明它过期/无权限 → 重登一次；
+   * - `"inference-only"`：只有推理密钥，**这个账号从来没配过控制面密钥** →
+   *   重试无用，必须走一次网页登录把这把 `vela_ctrl_…` 导进来；
+   * - `"none"`：一把都没有。
+   *
+   * 缺省（不注入）时不作区分，失败文案退回旧口径。
+   */
+  controlKeyKind?: (ref: string) => Promise<"control" | "inference-only" | "none">;
+  /**
+   * **HTTP 版的周期额度**（`GET /workspaces/{ws}/billing/preflight`，2026-10-21 实测）。
+   *
+   * 用这个账号**自己的控制面密钥**鉴权，返回与 `vela billing preflight` 完全一致的结构
+   * （`codingPlan.windows[].usedCredits / limitCredits / resetsAt`）。
+   *
+   * 它是多账号额度的正解：vela CLI 没有 `--key`，永远查本机登录态那一个人的数据；
+   * HTTP 版按账号鉴权，**每个账号都能拿到自己的数字**。
+   */
+  preflightHttp?: (workspaceId: string, controlKey: string) => Promise<unknown>;
+  /**
    * 该账号的工作区 id（条目 `workspaceId` 优先，其次顶层 `workspaceId`）。
    *
    * 允许异步：网页登录的产物**不带**工作区（`~/.amr/config.json` 只有两把密钥与 user），
@@ -145,6 +169,37 @@ function numberValue(value: unknown): number | undefined {
 /** 错误对象到一行文案；非 Error 原样转字符串。 */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 试一次 HTTP 版的周期额度。
+ *
+ * 成功与失败都返回**结构化的结论**（不是抛错）：调用方要据此决定是退回 vela，
+ * 还是直接把原因写进失败项。绝不在失败时倒成「零额度」—— 那会让用户以为这个账号用完了。
+ * @param workspaceId - 该账号的工作区。
+ * @param deps - 端口依赖（要 `preflightHttp` 与 `resolveControlKey`）。
+ * @returns `{ ok: true, value }` 或 `{ ok: false, reason }`。
+ */
+async function tryHttpPreflight(
+  workspaceId: string,
+  deps: OpenDesignQuotaDeps,
+): Promise<{ ok: true; value: unknown } | { ok: false; reason: string }> {
+  const run = deps.preflightHttp;
+  if (run === undefined) return { ok: false, reason: "这个宿主版本没有 HTTP 周期额度接口" };
+  let controlKey: string | undefined;
+  try {
+    controlKey = normalizeKey(await deps.resolveControlKey(deps.ref() ?? ""));
+  } catch {
+    controlKey = undefined;
+  }
+  if (controlKey === undefined) return { ok: false, reason: "没有可用的控制面密钥" };
+  try {
+    const value = await run(workspaceId, controlKey);
+    if (value === undefined) return { ok: false, reason: "HTTP 接口没有返回数据" };
+    return { ok: true, value };
+  } catch (error) {
+    return { ok: false, reason: messageOf(error) };
+  }
 }
 
 /**
@@ -482,33 +537,65 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
         }
       }
       if (summary === undefined) {
-        failures.push(`账单摘要读取失败（${readProblem ?? "没有返回数据"}）：套餐信息与额度换算单位暂时缺失`);
+        // **按「缺的是哪把密钥」给不同的说明**（2026-10-21，多账号额度诊断）。
+        //
+        // 两种失败都表现为「账单接口 401」，但用户该做的事完全不同：一个有救（重登），
+        // 一个没救（这个账号从来没配过控制面密钥）。旧文案只有后半句，
+        // 用户切到那个账号只看到「额度读不到」，不知道该登一次还是该换账号。
+        const kind = ref === undefined || deps.controlKeyKind === undefined ? undefined : await deps.controlKeyKind(ref);
+        if (kind === "inference-only" || kind === "none") {
+          failures.push(
+            kind === "inference-only"
+              ? "这个账号只有推理密钥（sk-amr…），没有控制面密钥（vela_ctrl…），所以读不到余额与周期额度。这条链只认控制面密钥 —— 请用**网页登录**重新登录这个账号一次，它会把这个账号的 vela_ctrl… 自动导入；重试或换密钥都无效。"
+              : "这个账号还没有任何可用密钥：余额与周期额度需要控制面密钥（vela_ctrl…），请用网页登录登录一次，或在设置里填一把 API key 用于推理。",
+          );
+        } else {
+          failures.push(`账单摘要读取失败（${readProblem ?? "没有返回数据"}）：套餐信息与额度换算单位暂时缺失`);
+        }
       }
       let preflight: unknown;
       const workspaceId = ref === undefined ? undefined : normalizeKey(await deps.workspaceIdOf(ref));
-      if (workspaceId !== undefined && deps.preflight !== undefined && ref !== undefined) {
-        // **身份闸门**（2026-10-20，多账号兼容）：preflight 用的是本机 vela 登录态，
-        // 不是这个账号的密钥。若两者不是同一个人，它返回的是**别人的用量** ——
-        // 那比「没有数据」更糟，因为用户会照着一个不属于自己的额度安排事情。
-        const identityVerdict = await checkPreflightIdentity(ref, deps);
-        if (identityVerdict !== "same") {
-          failures.push(
-            identityVerdict === "different"
-              ? "周期额度只用本机 vela 登录态查询，而这与本账号不是同一个人：为避免显示别人的用量，这档已跳过（余额与套餐仍然准确）"
-              : "周期额度只用本机 vela 登录态查询；无法确认登录态与本账号是否同一人，已跳过（余额与套餐仍然准确）",
-          );
-        } else {
-          try {
-            const value = await deps.preflight(workspaceId);
-            if (value === undefined) {
-              failures.push("周期额度查询没有返回数据：本机 vela 没给出可用的读数");
-            } else {
-              preflight = value;
+      if (workspaceId !== undefined && ref !== undefined && (deps.preflightHttp !== undefined || deps.preflight !== undefined)) {
+        /**
+         * **优先走 HTTP**（2026-10-21 发现，多账号额度的正解）。
+         *
+         * `GET /workspaces/{ws}/billing/preflight` 用**这个账号自己的控制面密钥**鉴权，
+         * 返回的东西与 `vela billing preflight` 完全一致（实测字段逐项相同：
+         * `codingPlan.windows[].usedCredits / limitCredits / resetsAt`）。
+         *
+         * 为什么它才是正解：vela CLI 没有 `--key` 参数，永远拿**本机登录态**那份身份去查 ——
+         * 同一网关挂第二个人的账号时，它返回的是别人的用量，只能靠身份闸门整段跳过。
+         * HTTP 版按账号鉴权，所以**每个账号都能拿到自己的准确数字**，不需要闸门。
+         *
+         * 顺序有意为之：HTTP 能通就绝不用 vela（那条路有身份歧义）；HTTP 失败
+         * （老版本没这个端点 / 网络问题）才退回 vela，那时仍然要过身份闸门。
+         */
+        const viaHttp = await tryHttpPreflight(workspaceId, deps);
+        if (viaHttp.ok) {
+          preflight = viaHttp.value;
+        } else if (deps.preflight !== undefined) {
+          const identityVerdict = await checkPreflightIdentity(ref, deps);
+          if (identityVerdict !== "same") {
+            failures.push(
+              identityVerdict === "different"
+                ? "周期额度：HTTP 接口不可用，退回本机 vela 查询；而 vela 登录态与本账号不是同一个人，为避免显示别人的用量已跳过（余额与套餐仍然准确）"
+                : "周期额度：HTTP 接口不可用，退回本机 vela 查询；无法确认登录态与本账号是否同一人，已跳过（余额与套餐仍然准确）",
+            );
+          } else {
+            try {
+              const value = await deps.preflight(workspaceId);
+              if (value === undefined) {
+                failures.push("周期额度查询没有返回数据：本机 vela 没给出可用的读数");
+              } else {
+                preflight = value;
+              }
+            } catch (error) {
+              // vela 找不到、退出非零、输出不是 JSON 都在这里变成一句人话，绝不倒成 0。
+              failures.push(`周期额度查询失败：${messageOf(error)}`);
             }
-          } catch (error) {
-            // vela 找不到、退出非零、输出不是 JSON 都在这里变成一句人话，绝不倒成 0。
-            failures.push(`周期额度查询失败：${messageOf(error)}`);
           }
+        } else {
+          failures.push(`周期额度查询失败：${viaHttp.reason}`);
         }
       } else if (workspaceId === undefined) {
         // 没有工作区就**一定**没有额度窗口（窗口只来自 vela 的 codingPlan）。以前这里是静默

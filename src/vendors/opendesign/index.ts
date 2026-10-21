@@ -69,7 +69,7 @@ import {
   opendesignWorkspaceId,
 } from "./accounts";
 import type { OpenDesignAccountInput, OpenDesignAccounts } from "./accounts";
-import { DEFAULT_BASE_URL } from "./protocol";
+import { DEFAULT_BASE_URL, IDENTITY_ENCODING_HEADER } from "./protocol";
 import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort, localSpendBetween } from "../usage-store";
@@ -339,14 +339,33 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
       return createOpenDesignQuota({
         ref: () => ref,
         // 控制面密钥：账号声明的槽优先，缺省派生（`<ref>_CONTROL`）；凭据库 → 启动环境。
-        // **没有再退回推理密钥**：Open Design 的手动添加只收一把 API key（表单没有控制面字段，
-        // 用户也很难拿到第二把），账单/余额与推理是同一个 Bearer —— 没有独立控制面密钥时
-        // 用推理密钥试一次，比直接报「账号没配全」有用得多；真被拒了，失败项会说明是账单接口
-        // 读不到，用户仍可走网页登录（那条路径会同时导入两把密钥与工作区）。
+        //
+        // **没有独立控制面密钥时退回推理密钥试一次** —— 早期实测认为两者是同一个 Bearer。
+        // 但 2026-10-21 用真实凭据复测：`sk-amr-…`（推理）打控制面一律 **401**，
+        // 只有 `vela_ctrl_…`（网页登录产物里的 controlKey）能通。所以这条回退**注定失败**；
+        // 它唯一的价值是兼容「宿主哪天让同一把密钥通吃」。真正的诊断由下面的
+        // `controlKeyKind` 交给额度端口，让失败文案能说清「你缺的是哪一把」。
         resolveControlKey: async (candidate) => {
           const control = await resolveAccountKey(ctx, credentials, opendesignControlRef(document(), candidate));
           if (control !== undefined) return control;
           return resolveAccountKey(ctx, credentials, candidate);
+        },
+        /**
+         * 告诉额度端口「这次拿到的是不是真正的控制面密钥」。
+         *
+         * 两种失败对用户的意义完全不同：
+         * - 有 `vela_ctrl_…` 但被拒 = 密钥过期/无权限，**重登一次**应该能好；
+         * - 只有 `sk-amr_…`（推理密钥回退）= 这个账号**从来没配过控制面密钥**，
+         *   重试一百次也没用，必须走一次**网页登录**把这个账号的 `vela_ctrl_…` 导进来。
+         *
+         * 早先两种都只报「账单接口返回 HTTP 401」，用户看不出该做什么 —— 这正是
+         * 「切到某个账号就看不到额度」最难自查的地方。
+         */
+        controlKeyKind: async (candidate) => {
+          const control = await resolveAccountKey(ctx, credentials, opendesignControlRef(document(), candidate));
+          if (control !== undefined) return "control";
+          const inference = await resolveAccountKey(ctx, credentials, candidate);
+          return inference === undefined ? "none" : "inference-only";
         },
         workspaceIdOf: (candidate) => workspaceFor(candidate),
         fetchImpl: fetch,
@@ -354,6 +373,26 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         summaryFallback: velaSummary,
         walletBase,
         preflight: velaPreflight,
+        // **HTTP 版的周期额度**（2026-10-21 实测发现）：按这个账号自己的控制面密钥鉴权，
+        // 返回与 `vela billing preflight` 完全一致的结构。它是多账号额度的正解 ——
+        // vela CLI 没有 `--key`，永远只能查本机登录态那一个人的数据。
+        preflightHttp: async (workspaceId, controlKey) => {
+          const base = normalizeKey(document().walletBase) ?? DEFAULT_WALLET_BASE_URL;
+          const response = await fetch(
+            `${base.replace(/\/+$/, "")}/workspaces/${encodeURIComponent(workspaceId)}/billing/preflight`,
+            {
+              headers: { Authorization: `Bearer ${controlKey}`, ...IDENTITY_ENCODING_HEADER },
+              signal: AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS),
+            },
+          );
+          if (!response.ok) {
+            // 404 = 这个厂商版本没有该端点（退回 vela）；401/403 = 密钥问题（同样退回，
+            // 让 vela + 身份闸门去判，最后失败项会说清是哪一种）。
+            throw new Error(`HTTP 周期额度接口返回 ${response.status}`);
+          }
+          const payload: unknown = await response.json();
+          return payload;
+        },
         // **身份闸门**（多账号兼容）：preflight 用的是本机 vela 登录态，不是这个账号的
         // 密钥；两者不是同一人时它返回别人的用量，必须逐次核对再决定采信与否。
         identitiesOf: async (ref) => {
