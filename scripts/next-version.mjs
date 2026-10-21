@@ -72,10 +72,11 @@ function bump(parts, level) {
 
 /** 读命令行参数。 */
 function parseArgs(argv) {
-  const out = { write: false, since: undefined, cwd: process.cwd() };
+  const out = { write: false, json: false, since: undefined, cwd: process.cwd() };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--write") out.write = true;
+    else if (arg === "--json") out.json = true;
     else if (arg === "--since") out.since = argv[(index += 1)];
     else if (arg === "--cwd") out.cwd = argv[(index += 1)];
   }
@@ -180,6 +181,12 @@ function main() {
     console.error(`算不出来：${error instanceof Error ? error.message : String(error)}`);
     console.error("提示：用 --since <ref> 指定一个存在的起点，或不带参数（缺省以 package.json 的版本为起点）。");
     process.exitCode = 1;
+    return;
+  }
+  // `--json`：给 `scripts/release.mjs` 这类调用方用的机器可读输出。
+  // 与人类可读的几行并存会污染 stdout，所以它独占输出并提前返回。
+  if (args.json) {
+    console.log(JSON.stringify(result));
     return;
   }
   console.log(`当前版本：${result.current}`);
