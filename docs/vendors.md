@@ -538,3 +538,39 @@ opencode 的 `toPiContext()` 同样只产出 `{ type: "text" }` 的 part。也�
 工作量与风险都不小（要动三个协议的请求构造 + 附件服务注入 + 一整套预算逻辑），
 建议单独立项，而不是塞进这一轮 UI 修整里。
 
+
+## 模型额度展示（2026-10-21）
+
+用户要求「每个模型上能否增加一下额度信息显示」+「根据订阅的套餐来获取，不要把不是
+本套餐可用的模型也放到模型中」。实现落在 `src/core/model-quota-table.ts`。
+
+**数据全部来自官网 HTML（没有 API），抓取日期 2026-10-21**：
+
+| 厂商 | 页面 | 覆盖 |
+|---|---|---|
+| commandcode | `commandcode.ai/docs/plans/goat` 的 `Monthly credits` 列 | 60 个模型（GOAT） |
+| commandcode | `commandcode.ai/pricing` 的 `Usage` 表 | 7 个模型 × 5 档 |
+| opendesign | `open-design.ai/pricing` 的 `Design Plan usage` 表 | 12 个模型 × Go/Plus/Pro |
+| opencode | `opencode.ai/go` 的 `Monthly usage` 列 | 15 个模型 × Go/Go Plus |
+
+**为什么不能用「套餐总额 × 百分比」算**：GOAT（$70/月）里 Ling 3.1 Flash 的额度是
+$100（比总额还高）、Claude Sonnet 5.5 只有 $10 —— 官方按模型计价折算，不是固定比例。
+
+**套餐可用模型过滤**（`COMMANDCODE_PLAN_MODELS`）：官方 `docs/plans/goat` 写着
+「Every model below is included on the GOAT plan」，71 个唯一模型；同页
+「The rest of the premium lineup needs Pro or Max」说明 Claude Opus 等在 GOAT 下不可用。
+网关的 `/provider/v1/models` 返回的是全站目录（98 个），所以过滤只能在客户端做。
+
+**三态语义**（`modelAvailableIn`）：`true` 可用 / `false` **明确不可用**（隐藏）/
+`undefined` 没有官方清单（照常显示）。第三态是刻意的：没有依据就藏模型会让用户
+以为插件坏了。目前只有 Command Code 的 GOAT 有完整清单。
+
+**模型名归一化**（`normalizeModelKey`）要剥掉官方展示名里的标注后缀
+（`(latest)` / `(exp)` / `(preview)`）与目录侧的 `-exp` / `-latest`：官方写
+`DeepSeek V4.1 Flash (latest)`，目录 id 是 `deepseek-v4.1-flash`，不剥就永远匹配不上。
+
+**套餐来源的坑（opendesign）**：`billing/summary` 与 `vela billing summary` **都回 403**，
+所以套餐名改为在摘要为空时回退到 `billing preflight` 的 `codingPlan.tier`
+（实测稳定给 `"go"`，且这份数据本来每次都在读）。注意 `eligible: false` 时不信 tier。
+另外 `workspace-snapshot` 的 `billingState: "free"` 只描述钱包计费范围，
+**不代表没有订阅** —— 用户实际是 Go 月付、钱包另有 $1 余额，两者并存。

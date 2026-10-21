@@ -291,11 +291,8 @@ function expand(
   return table;
 }
 
-/** 把「模型 → 单个额度字符串」的单档表展开（GOAT 用）。 */
-function expandSingle(
-  raw: Readonly<Record<string, string>>,
-  plan: string,
-): Record<string, ModelQuotaAmount> {
+/** 把「模型 → 单个额度字符串」的单档表展开（只有一列数字的表用）。 */
+function expandSingle(raw: Readonly<Record<string, string>>): Record<string, ModelQuotaAmount> {
   const bucket: Record<string, ModelQuotaAmount> = {};
   for (const [model, cell] of Object.entries(raw)) {
     const key = normalizeModelKey(model);
@@ -303,7 +300,6 @@ function expandSingle(
     const amount = amountOf(cell);
     if (amount !== undefined) bucket[key] = amount;
   }
-  void plan;
   return bucket;
 }
 
@@ -315,7 +311,7 @@ function expandSingle(
  */
 export const COMMANDCODE_MODEL_QUOTA: PlanModelQuotaTable = {
   ...expand(COMMANDCODE_RAW, COMMANDCODE_PLAN_ORDER),
-  goat: expandSingle(COMMANDCODE_GOAT_RAW, "goat"),
+  goat: expandSingle(COMMANDCODE_GOAT_RAW),
 };
 
 /** Open Design 的查表结构。 */

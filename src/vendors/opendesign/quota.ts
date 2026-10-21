@@ -343,6 +343,30 @@ function windowsOf(preflight: unknown, creditsPerUsd: number | undefined): Quota
 }
 
 /**
+ * 从 **preflight** 读套餐档位（`codingPlan.tier`）。
+ *
+ * 为什么需要这条来源（2026-10-21 实测）：`billing/summary` 与
+ * `vela billing summary` **都回 403**，而套餐名一直是从前者读的 —— 于是真机上
+ * 套餐徽标永远是空的（用户报障「opendesign 部分显示不全」）。同一个账号的
+ * `billing preflight` 却稳定给出 `codingPlan.tier`（实测 `"go"`），而这份数据本来
+ * 每次都在读（额度窗口就来自它），等于**白拿**。
+ *
+ * 只取档位：`codingPlan` 里没有套餐状态与账期，不编。
+ * @param preflight - `billing preflight` 的负载。
+ * @returns 套餐（只有 `id`/`name`）；没有 `codingPlan` 或没给 tier 时 `undefined`。
+ */
+function planFromPreflight(preflight: unknown): QuotaPlan | undefined {
+  const record = payloadRecord(preflight);
+  if (record === undefined || !isRecord(record.codingPlan)) return undefined;
+  // `eligible: false` 表示这个工作区没有周期套餐 —— 那时 tier 即使有值也不可信。
+  if (record.codingPlan.eligible === false) return undefined;
+  const tier = stringValue(record.codingPlan.tier);
+  if (tier === undefined) return undefined;
+  const plan: QuotaPlan = { id: tier, name: tier };
+  return plan;
+}
+
+/**
  * 归一化账单摘要里的套餐。`membershipTier` 是标识也是展示名（厂商没有单独的展示名），
  * `subscriptionStatus` 原样透传（开放词表，界面认不出的原样显示）。
  *
@@ -451,7 +475,9 @@ function monthlyWindowOf(plan: QuotaPlan | undefined, windows: readonly QuotaWin
  */
 export function toQuotaSnapshot(parts: OpenDesignQuotaParts): QuotaSnapshot {
   const creditsPerUsd = creditsPerUsdOf(parts.summary);
-  const plan = planOf(parts.summary);
+  // 套餐优先取**账单摘要**（它还有状态与账期），摘要是 403 空的时候回退到
+  // preflight 的 `codingPlan.tier` —— 那条路稳定可达，否则套餐徽标永远是空的。
+  const plan = planOf(parts.summary) ?? planFromPreflight(parts.preflight);
   const windows = windowsOf(parts.preflight, creditsPerUsd);
   const monthly = monthlyWindowOf(plan, windows);
   return {
