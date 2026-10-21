@@ -54,10 +54,12 @@ function scrub(message) {
   text = text.replace(/^[^\n]*按需求[（(]原话[)）][：:]?[^\n]*\n?/gmu, "");
   text = text.replace(/^(\s*)报障([：:]|\s*「)/gmu, "$1实际现象是：");
   text = text.replace(/需求(?:二次|再次|又)?报障[：:]?\s*/gu, "");
-  // 句子中间残留的 `报障时` / `报障后`（注意别和后面的「时」叠成「时时」）。
-  text = text.replace(/报障(?=时)/gu, "出问题时");
-  text = text.replace(/报障(?=后)/gu, "出问题后");
+  // 句子中间残留的 `报障时` / `报障后`：整体替换（只替换「报障」会把后面的时/后留下，
+  // 变成「出问题后后」这种叠字 —— 2026-10-21 实测踩到）。
+  text = text.replace(/报障时/gu, "出问题时");
+  text = text.replace(/报障后/gu, "出问题后");
   text = text.replace(/出问题时时/gu, "出问题时");
+  text = text.replace(/出问题后后/gu, "出问题后");
 
   // 6. 压缩因删除产生的空行（连续 3 个以上换行 → 2 个）。
   text = text.replace(/\n{3,}/gu, "\n\n");
