@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   COMMANDCODE_MODEL_QUOTA,
+  OPENCODE_MODEL_QUOTA,
   OPENDESIGN_MODEL_QUOTA,
   modelQuotaOf,
   normalizeModelKey,
@@ -127,5 +128,30 @@ describe("Open Design：官方逐模型额度", () => {
 
   it("不在表里的模型给 undefined", () => {
     expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go", "claude-opus-5")).toBeUndefined();
+  });
+});
+
+describe("OpenCode：官方逐模型额度", () => {
+  // 数据来自公开页 https://opencode.ai/go 的 Monthly usage 列（2026-10-21 抓取）。
+  // 这家只有 Go（$10/月）与 Go Plus（$40/月）两档。
+  it("Go 下 Kimi K3 是 $15，DeepSeek V4.1 Flash 是 $80", () => {
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "Kimi K3")).toEqual({ kind: "usd", amount: 15 });
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 80 });
+  });
+
+  it("Go Plus 的数字更大（同一模型是 $160）", () => {
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go Plus", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 160 });
+  });
+
+  it("官方标 Free 的模型（`∞`）给 free", () => {
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "Beam")).toEqual({ kind: "free" });
+  });
+
+  it("目录里的连字符写法也能命中（`GLM-5.3-Flash`）", () => {
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "glm-5.3-flash")).toEqual({ kind: "usd", amount: 60 });
+  });
+
+  it("表里没有的模型给 undefined", () => {
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "gpt-5")).toBeUndefined();
   });
 });

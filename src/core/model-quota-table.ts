@@ -188,10 +188,45 @@ const COMMANDCODE_RAW: Readonly<Record<string, readonly [string, string, string,
 const COMMANDCODE_PLAN_ORDER: readonly string[] = ["go", "goat", "pro", "max10x", "max20x"];
 
 /**
+ * OpenCode 的逐模型额度（官方公开页 `https://opencode.ai/go` 的 `Monthly usage` 列，
+ * 抓于 2026-10-21）。
+ *
+ * 列顺序 = Go / Go Plus 两档（官网表格每行前一组是 5 小时请求数、后一组是月度额度，
+ * 这里只取后一组）。`∞` 是官方原文：免费模型不计额度。
+ *
+ * **注意**：opencode 的额度接口（`usage.rolling` / `weekly` / `monthly`）**不上报套餐名**，
+ * 所以查表时调用方传进来的档位可能为空 —— 那时用 Go（$10/月，官网的默认档）兜底。
+ */
+const OPENCODE_RAW: Readonly<Record<string, readonly [string, string]>> = {
+  "Kimi K3": ["$15", "$60"],
+  "Gemini 4 Argon Contributor": ["$30", "$60"],
+  "Kimi K2.7 Code": ["$60", "$180"],
+  "Step 5 Preview": ["$15", "$60"],
+  "MiniMax M3": ["$60", "$180"],
+  "Claude Haiku 5.5": ["$15", "$60"],
+  "GPT 6 Luna": ["$15", "$60"],
+  "Qwen3.7 Plus": ["$60", "$180"],
+  "GLM-5.3-Flash": ["$60", "$180"],
+  "MiMo-V2.6-Flash": ["$60", "$120"],
+  "DeepSeek V4.1 Flash": ["$80", "$160"],
+  "Muse Spark 1.3 Contributor": ["$60", "$120"],
+  "LongCat 2.5 Preview": ["Free", "Free"],
+  "MiniMax M3.1 Flash": ["Free", "Free"],
+  "Beam": ["Free", "Free"],
+};
+
+/** OpenCode 在表里的两档套餐键。 */
+const OPENCODE_PLAN_ORDER: readonly string[] = ["go", "goplus"];
+
+/**
  * Open Design 的逐模型额度（官方 `Design Plan usage` 表，抓于 2026-10-21）。
  *
- * 官方表格只给 Go / Plus / Pro 三档的美元列（Max 列在页面里是空的，所以这里也没有 ——
- * **不猜**）。套餐月度额度 Go $120 / Plus $180 / Pro $480。
+ * 表头的「每月使用额度」是**该套餐额度池里分给这个模型的份额**（不是套餐价格）：
+ * 官网 zh/model-credits 页把套餐构成写得很清楚 ——
+ * Go 原价 $10/月、每月最高总额度 $120、7 天窗口 $30、5 小时窗口 $10。
+ * 所以 `go` 这一列的数字（如 DeepSeek V4.1 Flash = $120）与套餐总额度同量级是对的。
+ *
+ * 三列 = Go / Plus / Pro。**Max 列官方页面是空的**，所以这里也没有 —— 不猜。
  */
 const OPENDESIGN_RAW: Readonly<Record<string, readonly [string, string, string]>> = {
   "GLM-5.3 Flash-X": ["$30", "$40", "$90"],
@@ -267,6 +302,9 @@ export const COMMANDCODE_MODEL_QUOTA: PlanModelQuotaTable = {
 /** Open Design 的查表结构。 */
 export const OPENDESIGN_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENDESIGN_RAW, OPENDESIGN_PLAN_ORDER);
 
+/** OpenCode 的查表结构（只能区分 Go / Go Plus 两档）。 */
+export const OPENCODE_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENCODE_RAW, OPENCODE_PLAN_ORDER);
+
 /**
  * 从套餐展示名（`GOAT` / `Go` / `Max 10×` / `Plus`…）得到查表用的套餐键。
  *
@@ -283,6 +321,9 @@ export function planKeyOf(planName: string): string | undefined {
     .trim();
   if (key === "") return undefined;
   if (key === "go" || key === "goat" || key === "pro" || key === "plus") return key;
+  // OpenCode 的两档：`Go` / `Go Plus`。注意它和 Open Design 的 `Plus` 是两家的不同档位，
+  // 但两家各用各的表，所以键同名不冲突。
+  if (key === "goplus") return "goplus";
   if (key === "max10x" || key === "max20x") return key;
   return undefined;
 }

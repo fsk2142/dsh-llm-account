@@ -53,6 +53,7 @@ import type { LoginView } from "./account-card";
 import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/search-keys";
 import {
   COMMANDCODE_MODEL_QUOTA,
+  OPENCODE_MODEL_QUOTA,
   OPENDESIGN_MODEL_QUOTA,
   modelQuotaOf as modelQuotaOf_,
 } from "../core/model-quota-table";
@@ -1790,12 +1791,20 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * @returns 已格式化的额度文字；查不到时 `undefined`。
      */
     const modelQuotaOf = (vendor: string, account: AccountUsageStatus, modelId: string): string | undefined => {
-      const table =
-        vendor.includes("command") ? COMMANDCODE_MODEL_QUOTA : vendor.includes("opendesign") ? OPENDESIGN_MODEL_QUOTA : undefined;
+      const table = vendor.includes("command")
+        ? COMMANDCODE_MODEL_QUOTA
+        : vendor.includes("opendesign")
+          ? OPENDESIGN_MODEL_QUOTA
+          : vendor.includes("opencode")
+            ? OPENCODE_MODEL_QUOTA
+            : undefined;
       if (table === undefined) return undefined;
       const plan = account.quota?.plan;
       const planName = plan?.name ?? plan?.id;
-      const amount = modelQuotaOf_(table, planName, modelId);
+      // OpenCode 的额度接口**不上报套餐名**（只有 rolling/weekly/monthly 三个窗口），
+      // 所以那种情况按官网的默认档 Go 查表 —— 它只有 Go / Go Plus 两档。
+      const effectivePlan = planName ?? (vendor.includes("opencode") ? "Go" : undefined);
+      const amount = modelQuotaOf_(table, effectivePlan, modelId);
       if (amount === undefined) return undefined;
       if (amount.kind === "free") return t("models.quotaFree");
       const usd = `$${amount.amount.toFixed(amount.amount % 1 === 0 ? 0 : 2)}`;
