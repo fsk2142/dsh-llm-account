@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-account",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness LLM provider plugin hosting the commandcode, dsh-opencode-go and opendesign routes behind a shared account core",
@@ -33,6 +33,7 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "version:next": "node scripts/next-version.mjs",
     "fix:desktop-cookies": "node scripts/clear-desktop-auth-cookies.mjs"
   },
   "engines": {

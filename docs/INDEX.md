@@ -10,6 +10,8 @@
 | [operations.md](operations.md) | 排查手册：起不来、额度不显示、界面消失 | **出问题时第一个读** |
 | [decisions.md](decisions.md) | 46 条设计裁决及理由 | 想改某个「看着奇怪」的实现之前 |
 | [history.md](history.md) | 按时间记录做了什么、为什么 | 追溯某个行为是哪轮加的 |
+| [RELEASING.md](RELEASING.md) | **发版清单**：算版本号、构建、打 tag | 每次发版照着做 |
+| [reviews/](reviews/) | 独立代码审查报告 | 想知道「这一轮查过什么」 |
 
 ## 约定
 
@@ -17,3 +19,4 @@
 - **operations 是手册**：每节以症状开头，先找症状再走证据链。
 - **decisions 的编号不可改**：代码里有 30 处注释按编号引用它。新增裁决继续往后编号。
 - **history 只记录，不作为依据**：需要结论时看上面几份。
+- **提交信息带 `feat:`/`fix:`/`chore:` 前缀**：版本号靠它自动推导（见 RELEASING.md）。
