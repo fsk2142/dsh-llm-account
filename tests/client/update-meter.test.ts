@@ -111,12 +111,19 @@ describe("版本号显示：git 安装给的是 commit SHA（2026-10-21 真机�
     expect(text).not.toContain("v032c546");
   });
 
-  it("当前版本也是 SHA 时同样不显示成 v&lt;sha&gt;", () => {
+  it("**当前版本用构建期注入的真版本号**，不用接口给的 SHA", () => {
+    // 接口在 git 安装下只给 commit SHA（`installedVersion: update.current ?? update.version`）。
+    // 「我是哪个版本」只能问构建期烧进来的常量，所以这里断言显示的**不是** SHA。
     const sha = "97573fce1b2a";
     const tree = render({ kind: "current", installed: sha, source: "github" });
     const text = textsOfSim(meter(tree)).join(" ");
     expect(text).not.toContain("v97573f");
-    expect(text).toContain("97573fc");
+    expect(text).not.toContain(sha);
+    // 显示的是 package.json 的版本号（测试环境未走构建 → `0.0.0-unknown` 时不显示）。
+    const version = elementsOfSim(meter(tree)).find((element) => element.props["data-update-version"] !== undefined);
+    if (version !== undefined) {
+      expect(textsOfSim(version).join("")).toMatch(/^v\d+\.\d+\.\d+/);
+    }
   });
 
   it("语义化版本（含预发布后缀）保持带 v", () => {

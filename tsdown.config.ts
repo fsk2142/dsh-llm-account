@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { defineConfig, type UserConfig } from "tsdown";
 
 const PACKAGE_NAME = "dsh-llm-account";
@@ -97,6 +99,35 @@ const clientConfig: UserConfig = {
   deps: {
     neverBundle: [...CLIENT_EXTERNALS],
   },
+  /**
+   * **构建期注入版本号**（2026-10-21）。
+   *
+   * 为什么必须在这里注入：客户端 bundle 跑在浏览器里，读不到 `package.json`；
+   * 而市场更新接口**只暴露 commit SHA、不暴露版本号** —— `routes.js` 里是
+   * `installedVersion: update.current ?? update.version`（`current` 是 SHA 且优先），
+   * 所以 git 安装时界面上只能拿到一串 SHA。把真正的版本号在构建期烧进去，
+   * 界面才能同时显示「版本号」与「是不是最新」。
+   *
+   * 编译期常量替换：`__DSH_LLM_ACCOUNT_VERSION__` 变成字符串字面量，运行时零开销。
+   */
+  define: {
+    __DSH_LLM_ACCOUNT_VERSION__: JSON.stringify(packageVersion()),
+  },
 };
+
+/**
+ * 读 package.json 的 `version`（构建期）。
+ * @returns 版本号字符串；读不到时 `"0.0.0-unknown"`（不编造一个看起来正常的版本号）。
+ */
+function packageVersion(): string {
+  try {
+    const raw = readFileSync(new URL("./package.json", import.meta.url), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const version = typeof parsed === "object" && parsed !== null ? (parsed as { version?: unknown }).version : undefined;
+    return typeof version === "string" && version !== "" ? version : "0.0.0-unknown";
+  } catch {
+    return "0.0.0-unknown";
+  }
+}
 
 export default defineConfig([hostConfig, clientConfig]);

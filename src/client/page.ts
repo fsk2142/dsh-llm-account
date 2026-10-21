@@ -17,7 +17,7 @@ import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, specOf, type DraftField, type P
 import { parseSecretRefs, summarizeKeyStatus, validateSecretInput } from "../core/switching/search-keys";
 import { savesImmediately } from "./registry";
 import type { CredentialProbe } from "./usage-contract";
-import type { UpdateState } from "./update-check";
+import { PLUGIN_VERSION, type UpdateState } from "./update-check";
 import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
 
@@ -240,8 +240,19 @@ function updateMeter(props: PageShellProps, t: (key: string) => string): ReactEl
   const replace = (template: string, values: Record<string, string>): string =>
     template.replace(/\{(\w+)\}/g, (whole, name: string) => values[name] ?? whole);
 
-  // 版本号：有 installed 就显示它；链接安装可能带 0.1.0 这类开发版本号。
-  const installed = state !== undefined && "installed" in state && state.installed !== "" ? state.installed : undefined;
+  // **当前版本优先用构建期注入的真版本号**（2026-10-21）。
+  //
+  // 更新接口在 git 安装下只给 commit SHA（`routes.js` 的
+  // `installedVersion: update.current ?? update.version`，`current` 是 SHA 且优先），
+  // 所以「我是哪个版本」这个问题**不能问接口**，只能问构建期烧进来的常量。
+  // 接口给的 `installed` 退居其次：那是 npm / 链接安装的形状，git 安装时是 SHA。
+  const declared = (() => {
+    const fromInterface =
+      state !== undefined && "installed" in state && state.installed !== "" ? state.installed : undefined;
+    // 只有它是**版本号形状**时才采信接口值（SHA 由 `formatVersionLabel` 另行显示成提交）。
+    return formatVersionLabel(fromInterface)?.startsWith("v") === true ? fromInterface : undefined;
+  })();
+  const installed = declared ?? (PLUGIN_VERSION === "0.0.0-unknown" ? undefined : PLUGIN_VERSION);
   const canUpdate = state?.kind === "available";
   const latest = state?.kind === "available" ? state.latest : undefined;
   // 版本文案经 `formatVersionLabel` 统一格式化：git 安装的 `latestVersion` 是 commit SHA，

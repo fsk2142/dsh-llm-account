@@ -34,6 +34,19 @@
 /** 本包在宿主上的名字（更新 API 的 `name` 参数）。 */
 export const UPDATE_PACKAGE = "dsh-llm-account";
 
+/**
+ * 本插件的**真实版本号**（构建期由 `tsdown.config.ts` 的 `define` 烧进来）。
+ *
+ * 为什么不从更新接口取：那个接口只暴露 commit SHA、不暴露版本号 ——
+ * `routes.js` 里是 `installedVersion: update.current ?? update.version`，
+ * 而 `current` 是 git commit 且**优先**。所以 git 安装时界面上只能拿到一串 SHA
+ * （用户 2026-10-21 报障：「不是版本号，是一串字符」）。
+ *
+ * 客户端 bundle 跑在浏览器里读不到 `package.json`，所以只能构建期注入。
+ */
+export const PLUGIN_VERSION: string =
+  typeof __DSH_LLM_ACCOUNT_VERSION__ === "string" ? __DSH_LLM_ACCOUNT_VERSION__ : "0.0.0-unknown";
+
 /** 市场更新 API 的版本化前缀（文档：`dsh-market/update-api/v1`）。 */
 const MARKET_API = "/dsh-market/api/v1";
 

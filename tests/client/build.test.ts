@@ -140,6 +140,20 @@ describe("client bundle build", () => {
     expect(source).not.toMatch(new RegExp(`(?:require\\s*\\(\\s*|import\\s*\\(\\s*)["'](?:${bare})["']\\s*\\)`));
   });
 
+  it("**版本号在构建期被替换**：产物里不能留下 `__DSH_LLM_ACCOUNT_VERSION__` 占位符", () => {
+    // 为什么需要这条守卫（2026-10-21）：客户端跑在浏览器里读不到 package.json，
+    // 版本号只能靠 `tsdown.config.ts` 的 `define` 在构建期烧进去。一旦那个 `define`
+    // 被误删，构建**照样成功**（不报错），但产物里留下未替换的标识符 ——
+    // 运行时 `typeof __DSH_LLM_ACCOUNT_VERSION__` 得到 "undefined"，界面就退回
+    // `0.0.0-unknown`。实测变异检验时正是这个形状：构建通过、占位符还在。
+    const source = readBundle(CLIENT_BUNDLE);
+    expect(source, "构建没有注入版本号（检查 tsdown.config.ts 的 define）").not.toContain(
+      "__DSH_LLM_ACCOUNT_VERSION__",
+    );
+    // 产物里应当能找到一个真实版本号字面量。
+    expect(source).toMatch(/"\d+\.\d+\.\d+"/);
+  });
+
   it("客户端产物自包含：不相对引用任何分块", () => {
     // 浏览器侧只有 `lib/client.js` 一个文件：加载器不会替它解析相对路径（宿主分块也不在浏览器
     // 图里），所以一旦它长出 `./xxx.js` 这类导入，客户端就是加载即坏。宿主侧不受此约束
