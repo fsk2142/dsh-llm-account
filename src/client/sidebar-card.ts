@@ -32,6 +32,13 @@ export interface SidebarCardProps {
   /** 要显示的厂商状态；还没读到时为 `undefined`。 */
   status: VendorUsageStatus | undefined;
   /**
+   * 这家厂商**显示名**的文案键（`vendor.commandcode` 等）。
+   *
+   * 为什么不从 `status.vendor` 反推：那台里存的是 providerId（`dsh-opencode-go`），
+   * 与词表键不是一一对应的拼写，反推会猜错。容器手里本来就有 `entry.labelKey`。
+   */
+  vendorLabelKey?: string | undefined;
+  /**
    * 要显示**哪一个账号**（账号级轮播，2026-10-19）。
    *
    * 轮播器算出当前该显示哪个 (厂商, 账号) 对，把 ref 传进来。缺省时退回「这家当前使用的
@@ -134,7 +141,29 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
       createElement(
         "div",
         { className: CSS_CLASS.sidebarHead },
-        createElement("h3", { "data-sidebar-title": "true" }, titleOf(props, currentRow)),
+        createElement(
+          "h3",
+          { "data-sidebar-title": "true" },
+          // 标题 = 账号名 · 厂商名（用户 2026-10-21：「只有账号名显示，没有对应个网关厂商显示了」）。
+          // 厂商名放在同一行，用 `·` 分隔：侧边栏只有两百多像素，多占一行会把额度条挤下去。
+          createElement("span", { "data-sidebar-account": "true" }, titleOf(props, currentRow)),
+          vendorOf(props) === undefined
+            ? null
+            : createElement("span", { "data-sidebar-vendor": "true", className: CSS_CLASS.sidebarVendor }, vendorOf(props)),
+        ),
+        // 套餐徽标靠**右对齐**（用户 2026-10-21 定的版式：账号 · 厂商 ……… 套餐）。
+        // 读不到套餐时不占位。
+        planBadgeOf(props, currentRow) === undefined
+          ? null
+          : createElement(
+              "span",
+              {
+                "data-sidebar-plan": planBadgeOf(props, currentRow),
+                className: CSS_CLASS.sidebarPlan,
+                title: planTitleOf(props, currentRow),
+              },
+              planBadgeOf(props, currentRow),
+            ),
       ),
       ...(hasData
         ? [
@@ -329,4 +358,56 @@ function failureNote(props: SidebarCardProps): ReactElement {
 function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): string {
   const account = row === undefined ? (props.status?.effective?.ref ?? "") : row.label;
   return account === "" ? props.t("nav") : account;
+}
+
+/**
+ * 这家厂商的显示名（`Command Code` / `Open Design` / `OpenCode`）。
+ *
+ * 用户 2026-10-21 报障：「侧边栏现在只有账号名显示，没有对应个网关厂商显示了」——
+ * 多账号轮播到别家时，光看账号名分不清是哪家。
+ * @param props - 卡片属性。
+ * @returns 显示名；认不出这家时为 `undefined`（不占位）。
+ */
+function vendorOf(props: SidebarCardProps): string | undefined {
+  const key = props.vendorLabelKey;
+  if (key === undefined || key === "") return undefined;
+  const label = props.t(key);
+  // `t()` 对词表里没有的键通常原样返回键名（形如 `vendor.xxx`）：那种情况不显示，
+  // 否则界面上会冒出一串内部标识符。
+  return label === key || label === "" ? undefined : label;
+}
+
+/**
+ * 当前套餐的**短徽标**（`GOAT` / `Go` / `Pro`…），显示在标题行右侧。
+ *
+ * 只取套餐名、不带金额：徽标要能塞进一行且不换行，金额放进 `title` 提示里
+ * （{@link planTitleOf}）。
+ * @param props - 卡片属性。
+ * @param row - 当前账号。
+ * @returns 徽标文字；没有套餐信息时 `undefined`（不占位）。
+ */
+function planBadgeOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): string | undefined {
+  void props;
+  const plan = row?.quota?.plan;
+  if (plan === undefined) return undefined;
+  const name = (plan.name ?? plan.id).trim();
+  return name === "" ? undefined : name;
+}
+
+/**
+ * 套餐徽标的悬浮提示：`套餐 GOAT · 每月 $70.00`。
+ * @param props - 卡片属性。
+ * @param row - 当前账号。
+ * @returns 提示文字；没有套餐时为 `undefined`。
+ */
+function planTitleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): string | undefined {
+  const plan = row?.quota?.plan;
+  if (plan === undefined) return undefined;
+  const parts: string[] = [];
+  const name = (plan.name ?? plan.id).trim();
+  if (name !== "") parts.push(`${props.t("account.plan")} ${name}`);
+  if (plan.monthlyCredits !== undefined) {
+    parts.push(props.t("quota.planMonthly").replace("{amount}", `$${plan.monthlyCredits.toFixed(2)}`));
+  }
+  return parts.length === 0 ? undefined : parts.join(" · ");
 }

@@ -626,6 +626,16 @@ export const PAGE_CSS = `
 .dsl-sidebar-head { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; }
 .dsl-sidebar-head > h3 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   text-wrap: nowrap; }
+/* 标题行的三种文字，视觉权重按「账号 > 厂商 > 套餐徽标」递减（用户 2026-10-21 定）：
+ * 只有**账号名**是深色加粗的主信息；厂商与套餐跟「用量周期」同色（tertiary），
+ * 读作陪衬而不是第二个标题。 */
+.dsl-sidebar-account { font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dsl-sidebar-vendor { font-weight: 400; color: var(--dsw-alias-label-tertiary); }
+.dsl-sidebar-vendor::before { content: " · "; }
+/* 套餐徽标：**靠右对齐**（用户 2026-10-21 的版式：账号 · 厂商 ……… 套餐）。
+ * margin-inline-start:auto 把它推到行尾；不换行，太长时由标题让位（h3 已可省略号）。 */
+.dsl-sidebar-plan { flex: none; margin-inline-start: auto; font-weight: 400;
+  color: var(--dsw-alias-label-tertiary); text-wrap: nowrap; }
 /* 额度行：**一条一行**，「标签 — 进度条 — 重置时间」横向三样（用户 2026-10-19 定稿）。
  *
  * **对齐的关键**：列宽必须定义在**外层容器**上，不能每个行各写一套 —— 每一行是独立网格时，
@@ -850,6 +860,9 @@ export const CSS_CLASS = {
   sidebarShell: "dsl-sidebar-shell",
   sidebarCompact: "dsl-sidebar-compact",
   sidebarHead: "dsl-sidebar-head",
+  sidebarAccount: "dsl-sidebar-account",
+  sidebarVendor: "dsl-sidebar-vendor",
+  sidebarPlan: "dsl-sidebar-plan",
   sidebarFoot: "dsl-sidebar-foot",
   marks: "dsl-marks",
   dashboard: "dsl-dashboard",

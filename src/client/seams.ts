@@ -2782,6 +2782,11 @@ export function createSidebarCardView(options: {
     return SidebarCard({
       t,
       status: view.status,
+      // 厂商显示名（用户 2026-10-21：标题要能看出是哪家网关）。取该行的文案键，
+      // 查不到这一行时不给 —— 卡片会跳过，不显示内部标识符。
+      ...(vendorLabelKeyOf(entries, target?.vendor ?? view.status?.vendor) === undefined
+        ? {}
+        : { vendorLabelKey: vendorLabelKeyOf(entries, target?.vendor ?? view.status?.vendor) }),
       ...(target === undefined ? {} : { accountRef: target.ref }),
       ...(view.failure === undefined ? {} : { failure: view.failure }),
       ...(view.stale ? { stale: true } : {}),
@@ -2790,6 +2795,20 @@ export function createSidebarCardView(options: {
       onOpen: () => options.onOpen(),
     });
   };
+}
+
+/**
+ * 按 providerId 找该厂商显示名的文案键（`vendor.commandcode` 等）。
+ *
+ * 为什么按 providerId 找而不是直接拼键名：三家的键名拼写与 id 不成规律
+ * （`dsh-opencode-go` → `vendor.opencodeGo`），拼出来会猜错。
+ * @param entries - 全部厂商条目。
+ * @param providerId - 厂商行 id。
+ * @returns 文案键；找不到时 `undefined`。
+ */
+function vendorLabelKeyOf(entries: readonly VendorEntry[], providerId: string | undefined): string | undefined {
+  if (providerId === undefined || providerId === "") return undefined;
+  return entries.find((entry) => entry.providerId === providerId)?.labelKey;
 }
 
 /**
