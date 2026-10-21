@@ -98,4 +98,25 @@ describe("next-version：按 conventional commits 抬版本", () => {
     const dir = repoWith("1.2.3", ["feat：新功能"]);
     expect(nextVersion({ cwd: dir }).next).toBe("1.3.0");
   });
+
+  it("**起点 tag 存在时从 tag 算**，只计入 tag 之后的提交", () => {
+    // 这是 RELEASING.md 写的正常路径：`v<当前版本>` 是上次发版的 tag。
+    // 2026-10-21 发 0.2.1 时踩到：这条路径引用了一个不存在的变量 `base`，
+    // 只要 tag 在就抛 `ReferenceError: base is not defined`，脚本根本跑不完。
+    // 而「tag 不存在」的兜底分支不受影响，所以此前的测试（临时仓库没有 tag）
+    // 一直全绿，把这个 bug 漏了过去。
+    const dir = repoWith("1.2.3", []);
+    const git = (...args: string[]): void => {
+      execFileSync("git", ["-C", dir, ...args], { stdio: "ignore" });
+    };
+    git("tag", "v1.2.3");
+    // 打过 tag 之后才有的提交：一个 feat。
+    writeFileSync(join(dir, "after.txt"), "x\n", "utf8");
+    git("add", ".");
+    git("commit", "-q", "-m", "feat: tag 之后的新功能");
+    const result = nextVersion({ cwd: dir });
+    // 只按 tag 之后的 feat 抬 MINOR；tag 之前那个 `chore: seed` 不参与。
+    expect(result.next).toBe("1.3.0");
+    expect(result.total).toBe(1);
+  });
 });

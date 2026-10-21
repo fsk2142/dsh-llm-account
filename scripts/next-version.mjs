@@ -164,7 +164,7 @@ export function nextVersion({ cwd, since }) {
     level: highest,
     counts,
     total: commits.length,
-    base: wholeHistory ? "全部历史（没有可用的起点 tag）" : base,
+    base: wholeHistory ? "全部历史（没有可用的起点 tag）" : preferred,
     wholeHistory,
   };
 }
