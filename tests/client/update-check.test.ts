@@ -124,6 +124,37 @@ describe("startUpdate / pollUpdate", () => {
     expect(String(calls[0]!.init?.body)).toContain("dsh-llm-account");
   });
 
+  it("**宿主真实形状**：202 把 operationId 包在 operation 里 → 也要取到（2026-10-21 报障）", async () => {
+    // 宿主 dshmarket 的真实回执（routes.ts POST /dsh-market/api/v1/updates）：
+    //   { schema: "dsh-market/update-api/v1",
+    //     operation: { operationId: "boot-update-1", state: "running", ... } }
+    // 顶层**没有** operationId。旧代码只看顶层，于是把一次成功的请求判成
+    // 「宿主接受了请求但没有给出 operationId」——用户看到更新永远点不动。
+    const impl = (async () =>
+      ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          schema: "dsh-market/update-api/v1",
+          operation: { operationId: "boot-update-1", kind: "update", state: "running" },
+        }),
+      }) as Response) as unknown as typeof fetch;
+    const result = await startUpdate({ fetchImpl: impl });
+    expect(result).toEqual({ ok: true, operationId: "boot-update-1" });
+  });
+
+  it("**宿主真实形状**：202 只回 schema 没有 operation（真找不到 id）→ 明确失败，不静默", async () => {
+    const impl = (async () =>
+      ({
+        ok: true,
+        status: 202,
+        json: async () => ({ schema: "dsh-market/update-api/v1" }),
+      }) as Response) as unknown as typeof fetch;
+    const result = await startUpdate({ fetchImpl: impl });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("operationId");
+  });
+
   it("startUpdate 被拒绝时给可读原因（不假装成功）", async () => {
     const impl = (async () => ({ ok: false, status: 403, json: async () => ({}) }) as Response) as unknown as typeof fetch;
     const result = await startUpdate({ fetchImpl: impl });

@@ -166,6 +166,36 @@ export async function checkForUpdate(deps: UpdateCheckDeps = {}): Promise<Update
 }
 
 /**
+ * 从 202 回执里取 `operationId`，**两种形状都认**。
+ *
+ * 官方文档（`UPDATE-API-V1.md`）只说「返回 202 并带一个 operationId」，没说包在哪儿；
+ * 而宿主实际实现（`dshmarket` 的 `routes.ts`）把它**包在 `operation` 里**：
+ *
+ * ```json
+ * { "schema": "dsh-market/update-api/v1",
+ *   "operation": { "operationId": "boot-update-1", "state": "running", ... } }
+ * ```
+ *
+ * 2026-10-21 用户报障「查不到更新信息：宿主接受了请求但没有给出 operationId」就是
+ * 只看顶层导致的：请求其实**成功了**，操作也在跑，只是 id 没被取到，界面据此判定失败，
+ * 于是更新永远点不动。
+ *
+ * 顶层形状保留着，因为文档字面上允许它，且别的兼容实现可能真的那么回（客户端要独立校验，
+ * 见文档「Provider clients should still compare...」那段的精神）。
+ * @param payload - 已解析的 202 响应体。
+ * @returns 操作 id；取不到时 `undefined`。
+ */
+function operationIdOf(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const top = (payload as Record<string, unknown>).operationId;
+  if (typeof top === "string" && top !== "") return top;
+  const operation = (payload as Record<string, unknown>).operation;
+  if (typeof operation !== "object" || operation === null) return undefined;
+  const nested = (operation as Record<string, unknown>).operationId;
+  return typeof nested === "string" && nested !== "" ? nested : undefined;
+}
+
+/**
  * 发起一次更新（**会真的改动 profile**）。
  *
  * 只在用户点「更新」时调用。返回 `operationId` 供轮询；失败给可读原因。
@@ -188,11 +218,8 @@ export async function startUpdate(
       return { ok: false, reason: `请求被拒绝（HTTP ${response.status}）` };
     }
     const payload: unknown = await response.json();
-    const id =
-      typeof payload === "object" && payload !== null
-        ? (payload as Record<string, unknown>).operationId
-        : undefined;
-    return typeof id === "string" && id !== ""
+    const id = operationIdOf(payload);
+    return id !== undefined
       ? { ok: true, operationId: id }
       : { ok: false, reason: "宿主接受了请求但没有给出 operationId" };
   } catch (error) {
