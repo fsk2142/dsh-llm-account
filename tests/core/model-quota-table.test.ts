@@ -188,3 +188,24 @@ describe("按套餐判断模型可用性（用户 2026-10-21）", () => {
     expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "DeepSeek V4 Flash Vision (exp)")).toBe(true);
   });
 });
+
+describe("GOAT 表必须是**合并**而不是覆盖（2026-10-21 回归）", () => {
+  it("**pricing 页标 Free 的三个模型不能消失**", () => {
+    // 踩过的 bug：写成 `goat: expandSingle(GOAT_RAW)` 会整桶覆盖，
+    // 把 docs 页 Monthly credits 表里没有的 Free 模型（Beam / Glyph / Laguna）弄丢，
+    // 界面上从「免费」变成空白。现在两张表合并。
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Beam 1.0")).toEqual({ kind: "free" });
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Glyph Cluster")).toEqual({ kind: "free" });
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Laguna S 2.1")).toEqual({ kind: "free" });
+  });
+
+  it("docs 页的数字仍然优先（Free 只补缺，不覆盖真数字）", () => {
+    // MiniMax M3.1 Flash 在 pricing 页 GOAT 列是 Free，但 docs 页给了 $20 ——
+    // 完整表在前，所以 $20 胜出。
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "MiniMax M3.1 Flash")).toEqual({ kind: "usd", amount: 20 });
+  });
+
+  it("合并后 GOAT 覆盖 63 个模型（60 个有额度 + 3 个 Free）", () => {
+    expect(Object.keys(COMMANDCODE_MODEL_QUOTA.goat ?? {}).length).toBe(63);
+  });
+});

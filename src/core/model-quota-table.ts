@@ -306,13 +306,23 @@ function expandSingle(raw: Readonly<Record<string, string>>): Record<string, Mod
 /**
  * Command Code 的查表结构。
  *
- * **GOAT 用官方 docs/plans/goat 的 60 行完整表覆盖**（用户实际在用的档位，含闭源模型），
- * 其余档位仍用 pricing 页的 7 行表 —— 那是唯一给出 Go / Pro / Max 数字的来源。
+ * **GOAT 合并两张表**，不是覆盖：
+ * - `docs/plans/goat` 的 60 行完整表（含闭源模型，用户实际在用的数据）；
+ * - pricing 页那 7 行表里的 `goat` 列 —— 它标了 `Free` 的那几个模型
+ *   （Beam 1.0 / Glyph Cluster / Laguna S 2.1）在 docs 页的 `Monthly credits`
+ *   表里**没有对应行**（它们不扣额度，所以不列额度数字）。
+ *
+ * 2026-10-21 踩过：一开始写成 `{ ...expand(RAW), goat: expandSingle(GOAT_RAW) }`，
+ * 整桶覆盖导致那 3 个 Free 模型消失 —— 界面上从「免费」变成空白。
+ * 合并顺序：完整表在前、Free 兜底在后（后者的 `Free` 只补前者缺的键）。
  */
-export const COMMANDCODE_MODEL_QUOTA: PlanModelQuotaTable = {
-  ...expand(COMMANDCODE_RAW, COMMANDCODE_PLAN_ORDER),
-  goat: expandSingle(COMMANDCODE_GOAT_RAW),
-};
+export const COMMANDCODE_MODEL_QUOTA: PlanModelQuotaTable = (() => {
+  const fiveTier = expand(COMMANDCODE_RAW, COMMANDCODE_PLAN_ORDER);
+  return {
+    ...fiveTier,
+    goat: { ...(fiveTier["goat"] ?? {}), ...expandSingle(COMMANDCODE_GOAT_RAW) },
+  };
+})();
 
 /** Open Design 的查表结构。 */
 export const OPENDESIGN_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENDESIGN_RAW, OPENDESIGN_PLAN_ORDER);
