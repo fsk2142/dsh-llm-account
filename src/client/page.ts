@@ -184,6 +184,36 @@ function reloadNotice(props: PageShellProps, t: (key: string) => string): ReactE
  * @returns 区块元素；容器没有提供更新状态时为 `null`（老宿主不渲染死按钮）。
  */
 /**
+ * 把更新接口给的版本值格式化成**给人看的样子**。
+ *
+ * 为什么需要它（2026-10-21 用户在新设备报障）：「不是版本号，是一串字符」——
+ * 用户装的是 **git 仓库**，而 git 安装的 `latestVersion` 是**commit SHA**
+ * （市场插件 `updates.js` 的 github 分支用 `resolveHeadCommit` 取值），
+ * 于是无条件加的 `v` 前缀把 `032c5469b9c3adce…` 变成了 `v032c5469…`。
+ *
+ * 规则：
+ * - 形如版本号（`1.2.3` / `1.2.3-beta.1` / 带 `v` 前缀）→ 补 `v` 并原样显示；
+ * - 形如 commit（7–40 位十六进制）→ **截短到 7 位**、不加 `v`、前面标「提交」，
+ *   让人一眼看出这是 git 提交而不是版本号；
+ * - 其它（不该出现的形状）→ 原样显示，不猜。
+ * @param value - 接口给的版本串（可能为空）。
+ * @returns 给人看的文本；空值时 `undefined`。
+ */
+function formatVersionLabel(value: string | undefined): string | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const raw = value.trim();
+  // 语义化版本（可带 v 前缀与预发布后缀）。
+  if (/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(raw)) {
+    return raw.startsWith("v") ? raw : `v${raw}`;
+  }
+  // commit SHA（7–40 位十六进制）：截短，别让一长串撑爆标题行。
+  if (/^[0-9a-f]{7,40}$/i.test(raw)) {
+    return `提交 ${raw.slice(0, 7)}`;
+  }
+  return raw;
+}
+
+/**
  * 标题行右侧的**版本与更新**控件（2026-10-21 用户要求）。
  *
  * 用户原话：「检查更新那个建议放到设置页最开头 LL 账号的最右边，检查完就提示是否有新版本，
@@ -214,6 +244,16 @@ function updateMeter(props: PageShellProps, t: (key: string) => string): ReactEl
   const installed = state !== undefined && "installed" in state && state.installed !== "" ? state.installed : undefined;
   const canUpdate = state?.kind === "available";
   const latest = state?.kind === "available" ? state.latest : undefined;
+  // 版本文案经 `formatVersionLabel` 统一格式化：git 安装的 `latestVersion` 是 commit SHA，
+  // 直接拼 `v` 会得到 `v032c5469…` 这种一长串（用户 2026-10-21 报障）。
+  const installedText = formatVersionLabel(installed);
+  const latestText = formatVersionLabel(latest);
+  const versionText =
+    installedText === undefined
+      ? undefined
+      : latestText === undefined
+        ? installedText
+        : `${installedText} → ${latestText}`;
 
   const label =
     props.updateBusy === true
@@ -234,25 +274,31 @@ function updateMeter(props: PageShellProps, t: (key: string) => string): ReactEl
       "data-update-meter": state?.kind ?? "unchecked",
       className: CSS_CLASS.updateMeter,
       // 详细说明挂在 title 上：右侧这一行很窄，长句子放不下，但排查时要看得到。
+      // 这里也用格式化后的版本串，避免悬停时又冒出那串 commit SHA。
       title:
         state === undefined
           ? t("update.notChecked")
           : state.kind === "available"
-            ? replace(t("update.available"), { installed: state.installed, latest: state.latest })
+            ? replace(t("update.available"), {
+                installed: installedText ?? state.installed,
+                latest: latestText ?? state.latest,
+              })
             : state.kind === "current"
-              ? replace(t("update.current"), { installed: state.installed })
+              ? replace(t("update.current"), { installed: installedText ?? state.installed })
               : state.kind === "not-applicable"
-                ? replace(t("update.notApplicable"), { installed: state.installed })
+                ? replace(t("update.notApplicable"), { installed: installedText ?? state.installed })
                 : state.kind === "unknown"
                   ? replace(t("update.unknown"), { reason: state.reason })
                   : "",
     },
-    installed === undefined
+    // 版本号统一经 `formatVersionLabel`：git 安装给的是 commit SHA，无条件加 `v`
+    // 会显示成一长串（用户原话「不是版本号，是一串字符」）。
+    versionText === undefined
       ? null
       : createElement(
           "span",
           { "data-update-version": state?.kind ?? "unchecked", className: CSS_CLASS.updateVersion },
-          latest === undefined ? `v${installed}` : `v${installed} → v${latest}`,
+          versionText,
         ),
     label === ""
       ? null

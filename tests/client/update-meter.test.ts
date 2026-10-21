@@ -95,3 +95,34 @@ describe("更新控件在标题行最右边", () => {
     expect(textsOfSim(meter(tree)).join(" ")).toContain("正在检查");
   });
 });
+
+describe("版本号显示：git 安装给的是 commit SHA（2026-10-21 真机报障）", () => {
+  it("**commit SHA 不当作版本号**：截短到 7 位、不带 v、标明是提交", () => {
+    // 用户原话：「不是版本号，是一串字符」。他装的是 git 仓库，市场插件的 github 分支
+    // 用 `resolveHeadCommit` 取值，于是 `latestVersion` 是一整串 SHA。
+    const sha = "032c5469b9c3adce807ecd9c31fd08d2d722302c";
+    const tree = render({ kind: "available", installed: "0.1.0", latest: sha, source: "github" });
+    const text = textsOfSim(meter(tree)).join(" ");
+    // 短版本号照常带 v。
+    expect(text).toContain("v0.1.0");
+    // commit 被截短、且**没有** `v` 前缀。
+    expect(text).toContain("032c546");
+    expect(text).not.toContain(sha);
+    expect(text).not.toContain("v032c546");
+  });
+
+  it("当前版本也是 SHA 时同样不显示成 v&lt;sha&gt;", () => {
+    const sha = "97573fce1b2a";
+    const tree = render({ kind: "current", installed: sha, source: "github" });
+    const text = textsOfSim(meter(tree)).join(" ");
+    expect(text).not.toContain("v97573f");
+    expect(text).toContain("97573fc");
+  });
+
+  it("语义化版本（含预发布后缀）保持带 v", () => {
+    const tree = render({ kind: "available", installed: "1.2.3-beta.1", latest: "1.3.0", source: "npm" });
+    const text = textsOfSim(meter(tree)).join(" ");
+    expect(text).toContain("v1.2.3-beta.1");
+    expect(text).toContain("v1.3.0");
+  });
+});
