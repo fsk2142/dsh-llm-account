@@ -20,6 +20,8 @@ import {
   modelQuotaOf,
   normalizeModelKey,
   planKeyOf,
+  COMMANDCODE_PLAN_MODELS,
+  modelAvailableIn,
 } from "../../src/core/model-quota-table";
 
 describe("normalizeModelKey：各种写法落到同一个键", () => {
@@ -153,5 +155,36 @@ describe("OpenCode：官方逐模型额度", () => {
 
   it("表里没有的模型给 undefined", () => {
     expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "gpt-5")).toBeUndefined();
+  });
+});
+
+describe("按套餐判断模型可用性（用户 2026-10-21）", () => {
+  it("GOAT 清单覆盖 71 个模型", () => {
+    expect(COMMANDCODE_PLAN_MODELS.goat.size).toBe(71);
+  });
+
+  it("**GOAT 包含的模型返回 true**（含闭源模型）", () => {
+    // 官方：「Every model below is included on the GOAT plan」。
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "Claude Sonnet 5.5")).toBe(true);
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "MiniMax M3")).toBe(true);
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "deepseek/deepseek-v4.1-flash")).toBe(true);
+  });
+
+  it("**需要 Pro/Max 的模型返回 false**（应从列表里隐藏）", () => {
+    // 官方：「The rest of the premium lineup needs Pro or Max」。
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "Claude Opus 5.5")).toBe(false);
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "Claude Fable 5")).toBe(false);
+  });
+
+  it("**没有该档位清单时返回 undefined**（不知道，不能藏）", () => {
+    // 目前只有 GOAT 有官方完整清单；别的档位没有依据，必须返回 undefined。
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "Pro", "Claude Opus 5.5")).toBeUndefined();
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, undefined, "MiniMax M3")).toBeUndefined();
+  });
+
+  it("官方名里的 `(latest)` / `(exp)` 标注不影响匹配", () => {
+    // 官方表写 `DeepSeek V4.1 Flash (latest)`，目录 id 是 `deepseek-v4.1-flash`。
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "DeepSeek V4.1 Flash (latest)")).toBe(true);
+    expect(modelAvailableIn(COMMANDCODE_PLAN_MODELS, "GOAT", "DeepSeek V4 Flash Vision (exp)")).toBe(true);
   });
 });

@@ -124,6 +124,17 @@ export interface AccountCardProps {
    */
   modelQuotaOf?: (account: AccountUsageStatus, modelId: string) => string | undefined;
   /**
+   * 这个模型在**该账号当前套餐**下能不能用（用户 2026-10-21：不要把本套餐用不了的
+   * 模型也列出来）。
+   *
+   * 三档语义：`true` 可用；`false` **明确不可用**（隐藏）；`undefined` 没有官方清单
+   * （照常显示，不能凭猜测隐藏）。
+   * @param account - 该行账号。
+   * @param modelId - 模型 id。
+   * @returns 是否可用；未知时 `undefined`。
+   */
+  modelAvailable?: (account: AccountUsageStatus, modelId: string) => boolean | undefined;
+  /**
    * 该账号的用量统计（容器按 ref 提供）。
    *
    * 放在**账号行内**（额度条下方）而不是另起一张大卡：用户 2026-10-19 要求「单个账号的
@@ -418,8 +429,22 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
     return null;
   }
   const selected = new Set(props.modelRules?.find((rule) => rule.account === account.ref)?.models ?? []);
-  const groups = groupModels(props.catalog.map((model) => ({ id: model.id, company: model.company, free: model.free })));
-  const byId = new Map(props.catalog.map((model) => [model.id, model]));
+  /**
+   * **只列出本套餐真正能用的模型**（用户 2026-10-21 要求）。
+   *
+   * 网关返回的是全站目录（不知道你的档位），所以过滤必须在客户端做。判据由容器给
+   * （`props.modelAvailable`）：返回 `false` 才是「明确不可用」并隐藏；返回
+   * `undefined` 表示这家没有官方清单，**照常显示** —— 没有依据就藏模型会让用户
+   * 以为功能坏了。
+   *
+   * 已勾选的模型即使不在清单里也保留（`selected.has`）：那是用户此前的选择，
+   * 悄悄让他「丢了一个已启用的模型」比留一行更糟。
+   */
+  const visible = props.catalog.filter(
+    (model) => props.modelAvailable?.(account, model.id) !== false || selected.has(model.id),
+  );
+  const groups = groupModels(visible.map((model) => ({ id: model.id, company: model.company, free: model.free })));
+  const byId = new Map(visible.map((model) => [model.id, model]));
   const groupLabel = (key: string): string =>
     key === "free" ? props.t("models.freeGroup") : key === "other" ? props.t("models.otherCompany") : companyLabelOf(key);
   return createElement(
@@ -428,7 +453,9 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
     createElement(
       "summary",
       { className: CSS_CLASS.orderSummary },
-      `${props.t("account.models")} (${selected.size}/${props.catalog.length})`,
+      // 分母用**过滤后**的数量：它才是用户眼里「这个账号能选的模型」。
+      // 用原始目录长度会出现「1/96」但列表里只画了 71 行，数字对不上。
+      `${props.t("account.models")} (${selected.size}/${visible.length})`,
     ),
     // 目录读到了一部分（部分失败）时也说失败：不列就等于把一次不完整的目录呈现成完整的。
     ...(props.catalogFailure === undefined

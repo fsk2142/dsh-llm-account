@@ -51,11 +51,26 @@ export type ModelQuotaAmount =
 export type PlanModelQuotaTable = Readonly<Record<string, Readonly<Record<string, ModelQuotaAmount>>>>;
 
 /**
+ * 官方展示名末尾的**标注性后缀**，它们不是模型身份的一部分。
+ *
+ * 官方页写成 `DeepSeek V4.1 Flash (latest)` / `DeepSeek V4 Flash Vision (exp)`，
+ * 而网关目录里的 id 是 `deepseek-v4.1-flash` / `...-vision-exp` —— 不剥掉这些后缀，
+ * 两边永远对不上（2026-10-21 实测：带 `(latest)` 的都匹配失败）。
+ *
+ * 注意 `exp` 有两种写法：官方写 `(exp)`、目录写 `-exp`，所以它单独按词处理，
+ * 不能只剥括号。
+ */
+const ANNOTATION_PATTERN = /\((?:latest|exp|experimental|preview|beta)\)/gi;
+
+/** 目录 id 里作为「标注」的同义尾部词（`-exp` / `-latest`）。 */
+const TRAILING_MARKERS = /(?:^|\s)(?:latest|exp|experimental|beta)$/i;
+
+/**
  * 把模型 id / 展示名归一化成查表用的键。
  *
- * 规则：转小写、把连字符与下划线都换成单空格、压缩多余空白。于是
- * `deepseek/deepseek-v4.1-flash`、`DeepSeek V4.1 Flash`、`deepseek_v4.1_flash`
- * 得到同一个键 `deepseek v4.1 flash`。
+ * 规则：转小写、把连字符与下划线都换成单空格、压缩多余空白、剥掉标注性后缀。于是
+ * `deepseek/deepseek-v4.1-flash`、`DeepSeek V4.1 Flash (latest)` 得到同一个键
+ * `deepseek v4.1 flash`。
  *
  * 只保留最后一段（`company/model` 只取 `model`）：官方表不区分公司前缀，
  * 而目录里同一个模型可能带不同前缀。
@@ -67,11 +82,15 @@ export function normalizeModelKey(name: string): string {
   if (trimmed === "") return "";
   const segments = trimmed.split("/");
   const base = segments[segments.length - 1] ?? trimmed;
-  return base
+  let key = base
+    .replace(ANNOTATION_PATTERN, " ")
     .toLowerCase()
     .replace(/[-_]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  // 目录侧的 `-exp` / `-latest` 尾部标记同样剥掉（剥完可能又冒出空格）。
+  key = key.replace(TRAILING_MARKERS, "").replace(/\s+/g, " ").trim();
+  return key;
 }
 
 /** 把官方表格里的 `$47` / `~$100` / `Free` 解析成 {@link ModelQuotaAmount}。 */
@@ -304,6 +323,141 @@ export const OPENDESIGN_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENDESIGN_RAW
 
 /** OpenCode 的查表结构（只能区分 Go / Go Plus 两档）。 */
 export const OPENCODE_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENCODE_RAW, OPENCODE_PLAN_ORDER);
+
+/**
+ * **某个套餐到底包含哪些模型**（用户 2026-10-21 要求：不要把本套餐用不了的模型也列出来）。
+ *
+ * 与 {@link PlanModelQuotaTable} 的区别很重要：
+ * - 额度表回答「这个模型能用多少额度」，只有官方公布了数字的模型才在表里；
+ * - 这张表回答「这个模型能不能用」，覆盖该套餐的**全部**可用模型。
+ *
+ * 二者数量不同是正常的：GOAT 有 71 个可用模型，但只有 60 个公布了 monthly credits。
+ * 拿额度表当可用性用会把 11 个能用但没公布额度的模型也藏掉。
+ */
+export type PlanModelSet = Readonly<Record<string, ReadonlySet<string>>>;
+
+/**
+ * Command Code **GOAT 套餐**包含的全部模型（官方 `docs/plans/goat` 的
+ * 「Models included」表，抓于 2026-10-21，共 71 个唯一名字）。
+ *
+ * 官方原话：「Every model below is included on the GOAT plan」；同页还写着
+ * 「The rest of the premium lineup needs Pro or Max」—— 所以不在这张表里的模型
+ * （如 Claude Opus 系列）在 GOAT 下确实不可用。
+ */
+const COMMANDCODE_GOAT_MODELS: readonly string[] = [
+  "Beam 1.0",
+  "Claude Haiku 5.5",
+  "Claude Sonnet 5.5",
+  "DeepSeek V4 Flash",
+  "DeepSeek V4 Flash Fast",
+  "DeepSeek V4 Flash Vision",
+  "DeepSeek V4 Pro",
+  "DeepSeek V4.1 Flash",
+  "DeepSeek V4.1 Flash Fast",
+  "Gemini 3.7 Flash",
+  "Gemini 3.8 Flash",
+  "GLM-5",
+  "GLM-5.1",
+  "GLM-5.2",
+  "GLM-5.2 Fast",
+  "GLM-5.3",
+  "GLM-5.3 Flash",
+  "GLM-5.3 FlashX",
+  "Glyph Cluster",
+  "GPT-5.6 Luna",
+  "GPT-5.6 Sol",
+  "GPT-6 Luna",
+  "Grok 4.5",
+  "Grok 4.6",
+  "Grok 4.7",
+  "Inkling",
+  "Inkling Small",
+  "Jev",
+  "Jev 1.14.0",
+  "Kimi K2.5",
+  "Kimi K2.6",
+  "Kimi K2.7 Code",
+  "Kimi K2.7 Code HighSpeed",
+  "Kimi K3",
+  "Laguna S 2.1",
+  "Ling 3.1 Flash",
+  "LongCat 2.0",
+  "MiMo V2.5",
+  "MiMo V2.5 Pro",
+  "MiMo V2.6 Flash",
+  "MiMo V2.6 Pro",
+  "MiMo V2.6 Pro UltraSpeed",
+  "MiniMax M2.5",
+  "MiniMax M2.7",
+  "MiniMax M3",
+  "MiniMax M3.1 Flash",
+  "Mistral Large 4",
+  "Muse Spark 1.2",
+  "Muse Spark 1.2 Contributor",
+  "Muse Spark 1.3",
+  "Muse Spark 1.3 Contributor",
+  "Muse Spark Open",
+  "Nemotron 3 Ultra",
+  "Nemotron 3.5 Super VL",
+  "Ornith 1.5 122B",
+  "Qwen 3.6 Max Preview",
+  "Qwen 3.6 Plus",
+  "Qwen 3.7 Flash",
+  "Qwen 3.7 Max",
+  "Qwen 3.7 Plus",
+  "Qwen 3.8 27B",
+  "Qwen 3.8 Flash",
+  "Qwen 3.8 Max",
+  "Qwen 3.8 Max 0902",
+  "Qwen 3.8 Max Prime",
+  "Qwen 3.8 Omni Flash",
+  "Step 3.5 Flash",
+  "Step 3.7 Flash",
+  "Step 5 Preview",
+  "Tencent Hy3",
+  "Tencent Hy4 Preview",
+];
+
+/** 把一串官方展示名转成归一化键的集合。 */
+function keySetOf(names: readonly string[]): ReadonlySet<string> {
+  const set = new Set<string>();
+  for (const name of names) {
+    const key = normalizeModelKey(name);
+    if (key !== "") set.add(key);
+  }
+  return set;
+}
+
+/** Command Code 各档位的可用模型集合。目前只有 GOAT 有官方完整清单。 */
+export const COMMANDCODE_PLAN_MODELS: PlanModelSet = {
+  goat: keySetOf(COMMANDCODE_GOAT_MODELS),
+};
+
+/**
+ * 某个模型是否在指定套餐的可用清单里。
+ *
+ * 三档结论：
+ * - `true`：在清单里，可以显示；
+ * - `false`：**明确不在**清单里，应当隐藏；
+ * - `undefined`：这家厂商/这个档位没有官方清单（不知道），**不要隐藏** ——
+ *   没有依据就藏模型会让用户以为功能坏了。
+ * @param table - 该厂商的可用模型集合。
+ * @param planName - 套餐展示名。
+ * @param modelName - 模型 id 或展示名。
+ * @returns 是否可用；没有该档清单时 `undefined`。
+ */
+export function modelAvailableIn(
+  table: PlanModelSet,
+  planName: string | undefined,
+  modelName: string,
+): boolean | undefined {
+  if (planName === undefined) return undefined;
+  const plan = planKeyOf(planName);
+  if (plan === undefined) return undefined;
+  const set = table[plan];
+  if (set === undefined) return undefined;
+  return set.has(normalizeModelKey(modelName));
+}
 
 /**
  * 从套餐展示名（`GOAT` / `Go` / `Max 10×` / `Plus`…）得到查表用的套餐键。

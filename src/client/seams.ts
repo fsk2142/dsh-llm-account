@@ -53,8 +53,10 @@ import type { LoginView } from "./account-card";
 import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/search-keys";
 import {
   COMMANDCODE_MODEL_QUOTA,
+  COMMANDCODE_PLAN_MODELS,
   OPENCODE_MODEL_QUOTA,
   OPENDESIGN_MODEL_QUOTA,
+  modelAvailableIn,
   modelQuotaOf as modelQuotaOf_,
 } from "../core/model-quota-table";
 import { PageShell } from "./page";
@@ -1811,9 +1813,28 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       return amount.kind === "approx" ? t("models.quotaApprox").replace("{amount}", usd) : usd;
     };
 
+    /**
+     * 这个模型在**该账号当前套餐**下能不能用（用户 2026-10-21：不要把本套餐用不了的
+     * 模型也列出来）。
+     *
+     * 只有拿到官方「该档位包含哪些模型」的清单时才返回 `false`；没有清单（如 Open
+     * Design、OpenCode 目前都没有按档位的完整模型表）返回 `undefined` —— 那表示
+     * 「不知道」，界面会照常显示。没有依据就藏模型，用户会以为插件坏了。
+     * @param vendor - 厂商行 id。
+     * @param account - 该账号。
+     * @param modelId - 模型 id。
+     * @returns 是否可用；未知时 `undefined`。
+     */
+    const modelAvailable = (vendor: string, account: AccountUsageStatus, modelId: string): boolean | undefined => {
+      if (!vendor.includes("command")) return undefined;
+      const plan = account.quota?.plan;
+      return modelAvailableIn(COMMANDCODE_PLAN_MODELS, plan?.name ?? plan?.id, modelId);
+    };
+
     const accountsPanel = createElement(AccountsPanel, {
       usageOf: accountUsageOf,
       modelQuotaOf,
+      modelAvailable,
       t,
       vendors: availableEntries.map((entry) => ({
         entry,

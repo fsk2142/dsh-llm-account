@@ -110,6 +110,16 @@ export interface AccountsPanelProps {
    */
   modelQuotaOf?: (vendor: string, account: AccountUsageStatus, modelId: string) => string | undefined;
   /**
+   * 该账号当前套餐能不能用这个模型（用户 2026-10-21：不要把用不了的也列出来）。
+   *
+   * `false` 才隐藏；`undefined` 表示没有官方清单，照常显示。
+   * @param vendor - 厂商行 id。
+   * @param account - 该账号。
+   * @param modelId - 模型 id。
+   * @returns 是否可用；未知时 `undefined`。
+   */
+  modelAvailable?: (vendor: string, account: AccountUsageStatus, modelId: string) => boolean | undefined;
+  /**
    * 重新读取**一家**的模型目录（按账户刷新的落点）。
    *
    * 2026-10-18 用户要求：「重新获取模型不是刷新所有的，应该是刷新单个账户的」—— 入口从
@@ -481,5 +491,9 @@ function accountPropsFor(props: AccountsPanelProps, group: AccountsPanelVendor):
     ...(props.modelQuotaOf === undefined
       ? {}
       : { modelQuotaOf: (account: AccountUsageStatus, modelId: string) => props.modelQuotaOf?.(vendor, account, modelId) }),
+    // 本套餐能不能用这个模型（用户 2026-10-21：不要把用不了的也列出来）。
+    ...(props.modelAvailable === undefined
+      ? {}
+      : { modelAvailable: (account: AccountUsageStatus, modelId: string) => props.modelAvailable?.(vendor, account, modelId) }),
   };
 }
