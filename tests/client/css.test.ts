@@ -27,6 +27,26 @@ it("类名常量都在样式表里真的定义了（渲染层与样式表不许�
   }
 });
 
+it("侧边栏标题的三个元素字号一致", () => {
+  // 用户 2026-10-21：「确认一下字号是否是统一的」。
+  //
+  // 这里曾经真的不统一：账号与厂商在 `h3` 里（13px），而套餐徽标是 h3 的**兄弟节点**、
+  // 继承的是 `.dsl-sidebar` 的 12px —— 差 1px，肉眼能看出来。
+  // 所以三个类都显式写死同一字号，不靠继承。
+  const sizeOf = (cls: string): string | undefined => {
+    const rule = new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`).exec(PAGE_CSS);
+    return rule === null ? undefined : /font-size:\s*([\d.]+px)/.exec(rule[1]!)?.[1];
+  };
+  const sizes = ["dsl-sidebar-account", "dsl-sidebar-vendor", "dsl-sidebar-plan"].map((cls) => sizeOf(cls));
+  // 三个都**显式**声明了字号（不是靠继承）。
+  for (const [index, size] of sizes.entries()) expect(size, `第 ${index} 个没写 font-size`).toBeDefined();
+  // 且彼此相同。
+  expect(new Set(sizes).size).toBe(1);
+  // 还要与 h3 一致，否则和同一行的标题不在一个尺度上。
+  const h3 = /\.dsl-sidebar h3\s*\{([^}]*)\}/.exec(PAGE_CSS)?.[1] ?? "";
+  expect(sizes[0]).toBe(/font-size:\s*([\d.]+px)/.exec(h3)?.[1]);
+});
+
 /** 一个假 DOM：记录建过几个 style 标签、挂到哪里。 */
 function fakeDom(): {
   document: unknown;

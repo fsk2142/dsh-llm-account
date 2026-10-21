@@ -88,10 +88,89 @@ function amountOf(raw: string): ModelQuotaAmount | undefined {
 }
 
 /**
- * Command Code 的逐模型额度（官方 `Usage` 表，抓于 2026-10-21）。
+ * Command Code **GOAT 套餐**的逐模型额度（官方 `docs/plans/goat` 的 `Monthly credits` 列，
+ * 抓于 2026-10-21）。
  *
- * 列顺序即官方表格的 Go / GOAT / Pro / Max 10× / Max 20×，套餐月度额度分别是
- * $10 / $70 / $80 / $150 / $300（同一页的 `Monthly credits` 行）。
+ * 为什么单独一张：GOAT 是用户实际在用的档位，而官方在这一页把**全部 60 个模型**都列了
+ * 各自的 monthly credits（含 Claude / GPT / Gemini 等闭源模型）。pricing 页那张只有 7 个
+ * 开源模型的五档表覆盖不了它 —— 用户 2026-10-21 报障「commandcode 没看到每个模型各自的
+ * 可用额度」，根因就是当时用的是那张 7 行表。
+ *
+ * 数据特点（官方原样）：
+ * - 同一模型在不同档位拿到的 credits 不同，这里只取 GOAT 那列；
+ * - `$100`（Ling 3.1 Flash）比套餐总额 $70 还高 —— 官方按模型定价折算，不是固定比例；
+ * - Claude Sonnet 5.5 只有 $10，Claude Haiku 5.5 有 $20（官方原文：GOAT 上的 premium
+ *   models 每月 $10 credits，Claude Haiku 5.5 除外拿 $20）。
+ */
+const COMMANDCODE_GOAT_RAW: Readonly<Record<string, string>> = {
+  "Ling 3.1 Flash": "$100",
+  "DeepSeek V4.1 Flash": "$80",
+  "GLM-5.3 Flash": "$80",
+  "GLM-5.2": "$70",
+  "Tencent Hy3": "$70",
+  "Qwen 3.8 27B": "$70",
+  "DeepSeek V4 Flash": "$60",
+  "DeepSeek V4.1 Flash Fast": "$60",
+  "Kimi K2.7 Code": "$60",
+  "LongCat 2.0": "$50",
+  "MiniMax M3": "$47",
+  "Gemini 3.8 Flash": "$40",
+  "Qwen 3.7 Max": "$33",
+  "Qwen 3.7 Plus": "$33",
+  "Qwen 3.6 Plus": "$33",
+  "MiMo V2.5": "$30",
+  "GPT-5.6 Sol": "$20",
+  "GPT-5.6 Luna": "$20",
+  "Qwen 3.8 Max": "$20",
+  "Mistral Large 4": "$20",
+  "DeepSeek V4 Pro": "$20",
+  "MiMo V2.5 Pro": "$20",
+  "Claude Sonnet 5.5": "$10",
+  "Claude Haiku 5.5": "$20",
+  "Kimi K3": "$20",
+  "GPT-6 Luna": "$20",
+  "Qwen 3.8 Omni Flash": "$20",
+  "Qwen 3.8 Max Prime": "$20",
+  "Qwen 3.8 Max 0902": "$20",
+  "Tencent Hy4 Preview": "$20",
+  "MiniMax M3.1 Flash": "$20",
+  "Ornith 1.5 122B": "$20",
+  "Qwen 3.8 Flash": "$20",
+  "GLM-5.3 FlashX": "$20",
+  "DeepSeek V4 Flash Vision (exp)": "$20",
+  "DeepSeek V4 Flash Fast": "$20",
+  "GLM-5.3": "$20",
+  "Muse Spark 1.3": "$20",
+  "Muse Spark 1.3 Contributor": "$20",
+  "Muse Spark 1.2": "$20",
+  "Muse Spark 1.2 Contributor": "$20",
+  "Muse Spark Open": "$20",
+  "Kimi K2.7 Code HighSpeed": "$20",
+  "Grok 4.5": "$20",
+  "Grok 4.6": "$20",
+  "Grok 4.7": "$20",
+  "Gemini 3.7 Flash": "$40",
+  "GLM-5.2 Fast": "$20",
+  "Inkling": "$20",
+  "Inkling Small": "$20",
+  "MiMo V2.6 Pro": "$20",
+  "MiMo V2.6 Flash": "$20",
+  "MiMo V2.6 Pro UltraSpeed": "$10",
+  "Step 5 Preview": "$20",
+  "Step 3.7 Flash": "$20",
+  "Step 3.5 Flash": "$20",
+  "Nemotron 3 Ultra": "$20",
+  "Nemotron 3.5 Super VL": "$20",
+  "Jev": "$20",
+  "Jev 1.14.0": "$20",
+};
+
+/**
+ * Command Code 的**五档**逐模型额度（官方 pricing 页的 `Usage` 表，抓于 2026-10-21）。
+ *
+ * 只覆盖 7 个开源模型 —— 它比不上面的 GOAT 表全，但它是唯一给出 Go / Pro / Max 各档
+ * 数字的来源，所以保留。查表时 **GOAT 优先用 {@link COMMANDCODE_GOAT_RAW}**，
+ * 其余档位才落到这张表。
  *
  * 官方原文里 `Free` 表示「容量期内不扣 credits」；`~$` 是官方自己标了约等号。
  */
@@ -158,8 +237,32 @@ function expand(
   return table;
 }
 
-/** Command Code 的查表结构。 */
-export const COMMANDCODE_MODEL_QUOTA: PlanModelQuotaTable = expand(COMMANDCODE_RAW, COMMANDCODE_PLAN_ORDER);
+/** 把「模型 → 单个额度字符串」的单档表展开（GOAT 用）。 */
+function expandSingle(
+  raw: Readonly<Record<string, string>>,
+  plan: string,
+): Record<string, ModelQuotaAmount> {
+  const bucket: Record<string, ModelQuotaAmount> = {};
+  for (const [model, cell] of Object.entries(raw)) {
+    const key = normalizeModelKey(model);
+    if (key === "") continue;
+    const amount = amountOf(cell);
+    if (amount !== undefined) bucket[key] = amount;
+  }
+  void plan;
+  return bucket;
+}
+
+/**
+ * Command Code 的查表结构。
+ *
+ * **GOAT 用官方 docs/plans/goat 的 60 行完整表覆盖**（用户实际在用的档位，含闭源模型），
+ * 其余档位仍用 pricing 页的 7 行表 —— 那是唯一给出 Go / Pro / Max 数字的来源。
+ */
+export const COMMANDCODE_MODEL_QUOTA: PlanModelQuotaTable = {
+  ...expand(COMMANDCODE_RAW, COMMANDCODE_PLAN_ORDER),
+  goat: expandSingle(COMMANDCODE_GOAT_RAW, "goat"),
+};
 
 /** Open Design 的查表结构。 */
 export const OPENDESIGN_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENDESIGN_RAW, OPENDESIGN_PLAN_ORDER);

@@ -378,15 +378,19 @@ function vendorOf(props: SidebarCardProps): string | undefined {
 }
 
 /**
- * 当前套餐的**短徽标**（`GOAT` / `Go` / `Pro`…），显示在标题行右侧。
+ * 当前套餐的**短徽标**（`[GOAT]` / `[GO]` / `[PRO]`…），显示在标题行右侧。
+ *
+ * 用户 2026-10-21：「套餐建议加一个[]括起来，另外都用大写表示」——
+ * 方括号把它与账号名、厂商名区分开（否则一长串会被读成同一个名字）；
+ * 大写是档位标识的惯例写法。
  *
  * 只取档位名：徽标要能塞进一行且不换行。
  * @param row - 当前账号。
- * @returns 徽标文字；没有套餐信息时 `undefined`（不占位）。
+ * @returns 带方括号的徽标文字；没有套餐信息时 `undefined`（不占位）。
  */
 function planBadgeOf(row: AccountUsageStatus | undefined): string | undefined {
   const plan = row?.quota?.plan;
   if (plan === undefined) return undefined;
   const name = (plan.name ?? plan.id).trim();
-  return name === "" ? undefined : name;
+  return name === "" ? undefined : `[${name.toUpperCase()}]`;
 }

@@ -97,16 +97,16 @@ describe("侧边栏标题的三样信息", () => {
     expect(vendor?.props.children).toBe("Command Code");
   });
 
-  it("套餐徽标只显示档位名：不带金额，也不加悬浮提示", () => {
-    // 用户 2026-10-21：「不用这个悬浮显示，没必要」。
-    // 一行能读到的是档位名本身，金额不必再藏进 title。
+  it("套餐徽标用方括号包住、全部大写，且不带金额与悬浮提示", () => {
+    // 用户 2026-10-21：「套餐建议加一个[]括起来，另外都用大写表示」+
+    // 「不用这个悬浮显示，没必要」。
     const tree = render({
-      status: statusWith({ id: "individual-goat", name: "GOAT", monthlyCredits: 70 }),
+      status: statusWith({ id: "individual-goat", name: "Goat", monthlyCredits: 70 }),
       vendorLabelKey: "vendor.commandcode",
     });
     const plan = tree.find((element) => element.props["data-sidebar-plan"] !== undefined);
     expect(plan).toBeDefined();
-    expect(plan?.props["data-sidebar-plan"]).toBe("GOAT");
+    expect(plan?.props["data-sidebar-plan"]).toBe("[GOAT]");
     expect(plan?.props.title).toBeUndefined();
     expect(String(plan?.props.children)).not.toContain("$");
   });

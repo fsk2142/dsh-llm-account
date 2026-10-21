@@ -64,28 +64,40 @@ describe("planKeyOf：套餐展示名归一化", () => {
 });
 
 describe("Command Code：官方逐模型额度", () => {
-  it("**GOAT 里 MiMo V2.5 是 $100，比套餐总额 $70 还高**（不是固定比例）", () => {
-    // 这是「不能用百分比推算」最直接的反例：如果按 $70 × 比例 算，永远算不出 $100。
-    const amount = modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "MiMo V2.5");
-    expect(amount).toEqual({ kind: "approx", amount: 100 });
+  it("**GOAT 用 docs/plans/goat 的 60 行完整表**：闭源模型也有额度", () => {
+    // 用户 2026-10-21 报障「commandcode 没看到每个模型各自的可用额度」。
+    // 根因是当时用的是 pricing 页那张 7 行表（只有开源模型），查不到 Claude 系列；
+    // 官方 docs/plans/goat 页把全部 60 个模型的 monthly credits 都列了出来。
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Claude Sonnet 5.5")).toEqual({ kind: "usd", amount: 10 });
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Claude Haiku 5.5")).toEqual({ kind: "usd", amount: 20 });
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "GPT-5.6 Sol")).toEqual({ kind: "usd", amount: 20 });
   });
 
-  it("MiniMax M3 在 GOAT 下是确定的 $47", () => {
+  it("GOAT 表里各模型额度差异巨大，不是套餐总额的固定比例", () => {
+    // Ling 3.1 Flash 的 $100 比套餐总额 $70 还高；Claude Sonnet 5.5 只有 $10。
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Ling 3.1 Flash")).toEqual({ kind: "usd", amount: 100 });
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Claude Sonnet 5.5")).toEqual({ kind: "usd", amount: 10 });
+  });
+
+  it("MiniMax M3 在 GOAT 下是 $47（与官方页面一致）", () => {
     expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "MiniMax M3")).toEqual({ kind: "usd", amount: 47 });
   });
 
-  it("官方标 Free 的模型给 free（不是 0 美元）", () => {
-    // `Free` 的语义是「容量期内不扣额度」，与「额度是 0」完全不同。
-    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Ornith 1.5 122B")).toEqual({ kind: "free" });
-  });
-
   it("目录里的 id 写法（带公司前缀、连字符）也能命中", () => {
-    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "goat", "deepseek/deepseek-v4.1-flash")).toBeUndefined();
     expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "minimax-m3")).toEqual({ kind: "usd", amount: 47 });
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "cc/claude-sonnet-5.5")).toEqual({ kind: "usd", amount: 10 });
   });
 
-  it("表里没有的模型给 undefined，不编一个数字", () => {
-    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "claude-opus-4.8")).toBeUndefined();
+  it("**表里明确没有的模型给 undefined**（Claude Opus 需 Pro/Max，GOAT 无额度）", () => {
+    // 官方原文：「The rest of the premium lineup needs Pro or Max」。
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Claude Opus 5.5")).toBeUndefined();
+  });
+
+  it("非 GOAT 档位仍用 pricing 页那张 7 行表（唯一给出这些档位数据的来源）", () => {
+    // Go 档在 pricing 页有 MiniMax M3 = $8。
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "Go", "MiniMax M3")).toEqual({ kind: "usd", amount: 8 });
+    // 那些档位没有 Claude 的数据：不猜。
+    expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "Go", "Claude Sonnet 5.5")).toBeUndefined();
   });
 
   it("表里没有的套餐给 undefined", () => {

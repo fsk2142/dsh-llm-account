@@ -628,13 +628,18 @@ export const PAGE_CSS = `
   text-wrap: nowrap; }
 /* 标题行的三种文字，视觉权重按「账号 > 厂商 > 套餐徽标」递减（用户 2026-10-21 定）：
  * 只有**账号名**是深色加粗的主信息；厂商与套餐跟「用量周期」同色（tertiary），
- * 读作陪衬而不是第二个标题。 */
-.dsl-sidebar-account { font-weight: 600; color: var(--dsw-alias-label-primary); }
-.dsl-sidebar-vendor { font-weight: 400; color: var(--dsw-alias-label-tertiary); }
+ * 读作陪衬而不是第二个标题。
+ *
+ * **字号必须写死**：账号与厂商在 h3 里（13px），而套餐徽标是 h3 的兄弟节点、
+ * 继承的是 .dsl-sidebar 的 12px —— 不加这一行两者会差 1px（用户 2026-10-21 问
+ * 「确认一下字号是否是统一的」，就是这一处）。 */
+.dsl-sidebar-account { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dsl-sidebar-vendor { font-size: 13px; font-weight: 400; color: var(--dsw-alias-label-tertiary); }
 .dsl-sidebar-vendor::before { content: " · "; }
-/* 套餐徽标：**靠右对齐**（用户 2026-10-21 的版式：账号 · 厂商 ……… 套餐）。
- * margin-inline-start:auto 把它推到行尾；不换行，太长时由标题让位（h3 已可省略号）。 */
-.dsl-sidebar-plan { flex: none; margin-inline-start: auto; font-weight: 400;
+/* 套餐徽标：**靠右对齐**（用户 2026-10-21 的版式：账号 · 厂商 ……… [套餐]）。
+ * margin-inline-start:auto 把它推到行尾；不换行，太长时由标题让位（h3 已可省略号）。
+ * 字号与 h3 对齐见上一条注释。 */
+.dsl-sidebar-plan { flex: none; margin-inline-start: auto; font-size: 13px; font-weight: 400;
   color: var(--dsw-alias-label-tertiary); text-wrap: nowrap; }
 /* 额度行：**一条一行**，「标签 — 进度条 — 重置时间」横向三样（用户 2026-10-19 定稿）。
  *
