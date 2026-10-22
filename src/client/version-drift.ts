@@ -40,6 +40,14 @@ export type VersionDrift =
   | { kind: "unknown"; pageVersion: string; reason: string };
 
 /**
+ * 构建期注入失败时的占位版本号（见 `update-check.ts` 的 `PLUGIN_VERSION`）。
+ *
+ * 它不等于任何真实版本，所以**不能拿它做漂移判断** —— 否则每次加载页面都会弹提示，
+ * 而用户遇到一次「刷新了也没用」之后就会学会忽略这类提示，那比不提示更糟。
+ */
+export const UNKNOWN_VERSION = "0.0.0-unknown";
+
+/**
  * 比较两个版本号字符串。
  *
  * 只做**相等性**判断，不比较大小：目的是「页面跑的是不是同一份代码」，
@@ -56,10 +64,19 @@ export function versionsMatch(pageVersion: string, diskVersion: string): boolean
 }
 
 /**
+ * 页面版本是否可信（不是占位值）。
+ * @param pageVersion - 页面加载时注入的版本。
+ * @returns 是否是真实版本号。
+ */
+export function isKnownVersion(pageVersion: string): boolean {
+  const page = pageVersion.trim();
+  return page !== "" && page !== UNKNOWN_VERSION;
+}
+
+/**
  * 由两个版本号得出检测结论。
  * @param pageVersion - 页面加载时注入的版本。
  * @param diskResult - 宿主返回的磁盘版本（可能是信封或原始值）。
- * @param readProblem - 读取失败时的原因（有值时不作判断）。
  * @returns 检测结论。
  */
 export function driftOf(
@@ -67,6 +84,10 @@ export function driftOf(
   diskResult: { ok: true; version: string } | { ok: false; reason: string },
 ): VersionDrift {
   if (!diskResult.ok) return { kind: "unknown", pageVersion, reason: diskResult.reason };
+  // 页面版本是占位值：不知道自己在跑哪一版，**不判断**（否则会永久误弹）。
+  if (!isKnownVersion(pageVersion)) {
+    return { kind: "unknown", pageVersion, reason: "page version is a build-time placeholder" };
+  }
   if (versionsMatch(pageVersion, diskResult.version)) {
     return { kind: "same", version: diskResult.version };
   }
