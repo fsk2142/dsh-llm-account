@@ -57,9 +57,19 @@ export interface DraftField {
  * 永远不进设置文档，也不进设置草稿（`drafts`）——两者是刻意分开的两套状态。
  */
 export interface AccountAction {
-  kind: "add" | "rename" | "key";
-  /** `rename`/`key` 的目标账号；`add` 时为 `undefined`。 */
-  ref?: string;
+  /**
+   * `select` 是「切换到此账户」（2026-10-22 补）。
+   *
+   * 为什么需要它：`capabilities.pin` 声明了厂商支持固定账号，宿主侧也有
+   * `selectAccount(vendor, ref)` 远程方法 —— 但客户端**从来没有**把这个动作放进类型里，
+   * 于是账户卡的「切换到此账户」菜单项根本发不出去。症状是用户选不了账号，
+   * 侧边栏只能显示 `accounts[0]`（用户报障「没跟随我选定的账号」）。
+   *
+   * `ref` 为 `null` 表示回到自动轮换。
+   */
+  kind: "add" | "rename" | "key" | "select";
+  /** `rename`/`key` 的目标账号；`select` 时是目标账号（`null` = 回到自动）；`add` 时为 `undefined`。 */
+  ref?: string | null;
   /** 用户正在输入的名称（`add`/`rename`）。 */
   label: string;
   /** 用户正在输入的密钥（`add`/`key`）。 */

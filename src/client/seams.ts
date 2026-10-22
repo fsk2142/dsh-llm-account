@@ -682,17 +682,32 @@ export function dispatchAccountAction(
       return unwrap(usage.addAccount(vendor, key === "" ? { label } : { label, key }));
     }
     case "rename": {
-      if (action.ref === undefined) return undefined;
+      if (action.ref === undefined || action.ref === null) return undefined;
       const label = action.label.trim();
       if (label === "") return undefined;
       return unwrap(usage.renameAccount(vendor, action.ref, label));
     }
     case "key": {
       // 空密钥不提交：那等于把账号的密钥清掉，用户不会想用这个方式做。
-      if (action.ref === undefined) return undefined;
+      if (action.ref === undefined || action.ref === null) return undefined;
       const key = action.key.trim();
       if (key === "") return undefined;
       return unwrap(usage.replaceKey(vendor, action.ref, key));
+    }
+    case "select": {
+      /**
+       * 切换到此账户（2026-10-22 补上）。
+       *
+       * 这个分支以前**完全不存在** —— `capabilities.pin` 声明支持、宿主也有
+       * `selectAccount`，但客户端的动作类型里没有 `select`，于是账户卡上那个
+       * 「切换到此账户」菜单项发不出任何调用。用户选不了账号，侧边栏只能回退到
+       * `accounts[0]`（报障原话：「侧边栏没跟随我选定的账号」）。
+       *
+       * `ref === null` 表示回到自动轮换，这是宿主契约里明确的语义，所以**不能**把
+       * `null` 当成「没选」而提前 return —— 那会让「取消固定」这个操作失效。
+       */
+      if (action.ref === undefined) return undefined;
+      return unwrap(usage.selectAccount(vendor, action.ref));
     }
   }
 }
@@ -2994,47 +3009,81 @@ export function createDashboardView(options: {
      * （关掉卡片就不该再有任何请求）。要新数字，点刷新。
      */
     const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
+    /**
+     * 是否正在读取（2026-10-22 用户报障「点刷新既不转圈也不刷新内容」）。
+     *
+     * 旧实现里 `load()` 是同步函数，把结果吞在 `.then` 里立刻返回 —— 于是点刷新后
+     * 面板**没有任何可观测变化**，用户只能怀疑按钮坏了。
+     *
+     * 现在由这个状态驱动：请求发起时置 true（按钮转圈 + disabled），全部结束后置 false。
+     */
+    const [refreshing, setRefreshing] = useState(false);
 
-    const load = (): void => {
+    /**
+     * 读一次状态与用量报表。
+     *
+     * **返回 Promise**：调用方（刷新按钮）需要知道「读完了没有」，否则无法显示加载态。
+     * 内部两个读口并发，任一失败都不抛（失败信息进 `problem` / 保持旧数据）。
+     * @returns 读完后的 Promise（从不 reject）。
+     */
+    const load = async (): Promise<void> => {
       const usage = usageNamespace(ctx);
       if (usage === undefined) {
         // 远程面还没挂上：记原因，别让面板显示「暂无数据」把故障说成空态。
         setProblem(usageRemoteProblem(ctx) ?? t("usage.remoteUnavailable"));
         return;
       }
-      void Promise.all(
-        entries.map(async (entry) => ({ entry, detail: await readStatusDetail(usage, entry.providerId) })),
-      ).then((results) => {
-        const nextStatuses: Record<string, VendorUsageStatus | undefined> = {};
-        const problems: string[] = [];
-        for (const result of results) {
-          nextStatuses[result.entry.providerId] = result.detail.status;
-          // 成功读数写回设置页缓存：从仪表盘「转到设置」时看到的是同一份（面板刷新也顺带暖缓存）。
-          // 与设置页、侧边栏同一条纪律：**不完整**的读数不进缓存（见 completeReading）。
-          if (result.detail.status !== undefined && completeReading(result.detail.status)) {
-            statusReadings.put(result.entry.providerId, result.detail.status);
+      await Promise.all([
+        Promise.all(
+          entries.map(async (entry) => ({ entry, detail: await readStatusDetail(usage, entry.providerId) })),
+        ).then((results) => {
+          const nextStatuses: Record<string, VendorUsageStatus | undefined> = {};
+          const problems: string[] = [];
+          for (const result of results) {
+            nextStatuses[result.entry.providerId] = result.detail.status;
+            // 成功读数写回设置页缓存：从仪表盘「转到设置」时看到的是同一份（面板刷新也顺带暖缓存）。
+            // 与设置页、侧边栏同一条纪律：**不完整**的读数不进缓存（见 completeReading）。
+            if (result.detail.status !== undefined && completeReading(result.detail.status)) {
+              statusReadings.put(result.entry.providerId, result.detail.status);
+            }
+            if (result.detail.problem !== undefined) problems.push(result.detail.problem);
           }
-          if (result.detail.problem !== undefined) problems.push(result.detail.problem);
-        }
-        setStatuses(nextStatuses);
-        setProblem(problems[0]);
-      });
-      // 用量报表（与设置页同一个读口、同一条解信封纪律）。
-      if (usage.usageReport !== undefined) {
-        void remoteValueDetailed<UsageReportView>(callRemote(() => usage.usageReport?.(USAGE_REPORT_WINDOW))).then(
-          (detail) => {
-            if (!detail.ok) return;
-            setUsageReport(reportOf(detail.value));
-          },
-        );
-      }
+          setStatuses(nextStatuses);
+          setProblem(problems[0]);
+        }),
+        // 用量报表（与设置页同一个读口、同一条解信封纪律）。
+        usage.usageReport === undefined
+          ? Promise.resolve()
+          : remoteValueDetailed<UsageReportView>(callRemote(() => usage.usageReport?.(USAGE_REPORT_WINDOW))).then(
+              (detail) => {
+                if (!detail.ok) return;
+                setUsageReport(reportOf(detail.value));
+              },
+            ),
+      ]);
+    };
+
+    /**
+     * 刷新按钮的落点：带加载态地读一次。
+     *
+     * `finally` 里复位：即使 `load` 内部某处抛出（理论上不该，但渲染路径上的异常会
+     * 让按钮**永久 disabled**），也必须把按钮恢复可点。
+     * @returns 读完后的 Promise（从不 reject）。
+     */
+    const refresh = (): void => {
+      setRefreshing(true);
+      void load()
+        .catch(() => undefined)
+        .finally(() => {
+          setRefreshing(false);
+        });
     };
 
     useEffect(() => {
-      load();
+      void load();
       // 远程面挂载完成前读取会落空：挂上时补读一次。
       return onUsageReady(ctx, (namespace) => {
-        if (namespace !== undefined) load();
+        if (namespace !== undefined) void load();
       });
     }, []);
 
@@ -3062,7 +3111,8 @@ export function createDashboardView(options: {
         status: statuses[entry.providerId],
       })),
       onClose: () => options.onClose(),
-      onRefresh: () => load(),
+      onRefresh: refresh,
+      refreshing,
       failure: problem,
       usageOf,
     });

@@ -37,6 +37,13 @@ export interface DashboardProps {
   /** 手动刷新（可选）。 */
   onRefresh?: () => void;
   /**
+   * 是否正在刷新（2026-10-22 用户报障「点刷新既不转圈也不刷新内容」）。
+   *
+   * 以前只有一个同步的 `onRefresh`，点了之后界面**毫无反馈** —— 用户只能怀疑按钮坏了。
+   * 现在由容器提供这个布尔量：按钮进入 disabled + 旋转态，读完后自动恢复。
+   */
+  refreshing?: boolean;
+  /**
    * 最近一次读取的失败原因（宿主给出的可读文本）；读取正常时为 `undefined`。
    * 与 {@link SidebarCardProps.failure} 同一条纪律：读失败与没有数据是两件事。
    */
@@ -81,6 +88,17 @@ export function Dashboard(props: DashboardProps): ReactElement {
                   key: "refresh",
                   type: "button",
                   "data-dashboard-refresh": "true",
+                  /**
+                   * 加载态标记。**点在读的这段时间里**必须存在，否则用户点完看不到任何
+                   * 变化 —— 那正是 2026-10-22 报障的现象（「既不转圈也不刷新内容」）。
+                   *
+                   * `aria-busy` 复用 `css.ts` 里已有的旋转规则
+                   * （`.dsl-icon[aria-busy="true"] svg { animation: dsl-spin ... }`），
+                   * 不新造一套动画。
+                   */
+                  ...(props.refreshing === true
+                    ? { "data-dashboard-refreshing": "true", "aria-busy": "true", disabled: true }
+                    : { "aria-busy": "false" }),
                   "aria-label": t("dashboard.refresh"),
                   title: t("dashboard.refresh"),
                   className: CSS_CLASS.icon,
