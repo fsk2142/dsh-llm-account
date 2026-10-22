@@ -269,17 +269,26 @@ it("额度失败项写账号名称，不写内部 ref（这一行直接显示在
   expect(status.failures.some((item) => /commandcode [ab] read/.test(item))).toBe(false);
 });
 
-it("额度读取超时后会重试一次；第二次成功就不记失败", async () => {
-  // 先挂载（mount 自己等一个定时器），再换假时钟：status 里的 30s 预算由假时钟推进。
+it("**额度读取超时后不重试**（2026-10-22 改，见 bug 审查 MEDIUM-1）", async () => {
+  /**
+   * 旧行为：超时后重试一次，第二次成功就不记失败。
+   *
+   * **为什么改成不重试**：`QuotaPort.snapshot` 不接受 `AbortSignal`，`Promise.race`
+   * 超时后底层调用**仍在飞**。重试会让失败路径上同时存在两个未完成的 snapshot ——
+   * 厂商额度接口请求量翻倍，且 `snapshot` 内部会 `resolveKey(ref)`，在 opencode 那条
+   * 链路上可能触发 OAuth 刷新并回写凭据槽，两个并发刷新会互相踩踏。
+   *
+   * 取舍：额度面板是旁路读数，晚一拍看到数字没有代价；并发刷新踩踏会真的让某个账号
+   * 的凭据暂时失效。所以宁可如实报一次超时，让用户点刷新。
+   */
   let calls = 0;
   const { service } = await mount([
     vendorDeps({
       vendor: "commandcode",
       snapshot: async () => {
         calls += 1;
-        // 第一次永远不 resolve（等超时）；第二次正常返回。
-        if (calls <= 2) return new Promise<QuotaSnapshot>(() => {});
-        return { ...SNAPSHOT, windows: [...SNAPSHOT.windows] };
+        // 永远不 resolve：模拟上游慢到超时。
+        return new Promise<QuotaSnapshot>(() => {});
       },
     }),
   ]);
@@ -289,10 +298,10 @@ it("额度读取超时后会重试一次；第二次成功就不记失败", asyn
     const pending = service.status("commandcode");
     await vi.advanceTimersByTimeAsync(30_000);
     const status = await pending;
-    // 两个账号各读一次、各超时一次、各重试一次成功（共 4 次调用）。
-    expect(calls).toBe(4);
-    expect(status.failures).toEqual([]);
-    expect(status.accounts.every((row) => row.quota !== undefined)).toBe(true);
+    // 每个已配置账号各读**一次**（不重试），全部记为超时失败。
+    // 这个 fake 配了 2 个账号 —— 断言「次数 = 账号数」而不是写死 3。
+    expect(calls, "每个账号只读一次，不在超时后再发").toBe(2);
+    expect(status.failures.length, "超时如实记进 failures").toBeGreaterThan(0);
   } finally {
     vi.useRealTimers();
   }
