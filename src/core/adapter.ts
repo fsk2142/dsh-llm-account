@@ -94,6 +94,14 @@ export interface AccountPort {
   list(): Promise<AccountView[]>;
   add(input: { label: string; key?: string }): Promise<AccountView>;
   rename(ref: string, label: string): Promise<void>;
+  /**
+   * 把展示名称恢复成**账号自己记录的默认名**（登录时的邮箱）。
+   *
+   * 可选：只有实现「记录默认名」的厂商才有（本包目前只有 opendesign）。
+   * 没有默认名的账号（该字段上线前建的）调用时**抛错**，不静默 —— 界面本来就不会
+   * 显示这个入口，能走到这里说明有人直接调了远程方法。
+   */
+  restoreDefaultLabel?(ref: string): Promise<void>;
   replaceKey(ref: string, key: string): Promise<void>;
   remove(ref: string): Promise<void>;
   /** `null` 表示回到自动轮换。 */

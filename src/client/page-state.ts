@@ -67,7 +67,7 @@ export interface AccountAction {
    *
    * `ref` 为 `null` 表示回到自动轮换。
    */
-  kind: "add" | "rename" | "key" | "select";
+  kind: "add" | "rename" | "key" | "select" | "restoreName";
   /** `rename`/`key` 的目标账号；`select` 时是目标账号（`null` = 回到自动）；`add` 时为 `undefined`。 */
   ref?: string | null;
   /** 用户正在输入的名称（`add`/`rename`）。 */

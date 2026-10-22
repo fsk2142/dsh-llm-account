@@ -694,6 +694,20 @@ export function dispatchAccountAction(
       if (key === "") return undefined;
       return unwrap(usage.replaceKey(vendor, action.ref, key));
     }
+    case "restoreName": {
+      /**
+       * 一键恢复默认名（2026-10-22 用户要求）。
+       *
+       * 与「改名」的区别：不打开表单、不需要用户再确认一次 —— 恢复成默认名是个**确定
+       * 且可逆**的操作（默认名就在账号条目里），多一步确认只是麻烦。
+       *
+       * 走 `restoreAccountName` 而不是客户端算好默认名再调 `renameAccount`：默认名的
+       * 唯一真相在宿主侧，客户端读到的副本可能已经过期（另一个窗口刚改过名）。
+       */
+      if (action.ref === undefined || action.ref === null) return undefined;
+      if (typeof usage.restoreAccountName !== "function") return undefined;
+      return unwrap(usage.restoreAccountName(vendor, action.ref));
+    }
     case "select": {
       /**
        * 切换到此账户（2026-10-22 补上）。

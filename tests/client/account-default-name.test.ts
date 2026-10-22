@@ -51,22 +51,18 @@ describe("默认名称的读取与恢复", () => {
   });
 });
 
-describe("点「恢复默认名称」预填默认名", () => {
-  /** 一个最小的页面状态：`openAction` 只读 `action` / `actionVendor` 两个字段。 */
+describe("点「恢复默认名称」是一键操作", () => {
+  /** 一个最小的页面状态：`openAction` 只读 `action` / `actionVendor`。 */
   const emptyState = { action: undefined, actionVendor: undefined } as unknown as PageState;
 
-  it("**预填默认名**，用户确认即可（不用重新打一遍邮箱）", () => {
-    const next = openAction(emptyState, { kind: "rename", ref: "ACC_1", label: "user@example.com" });
-    expect(next.action).toMatchObject({
-      kind: "rename",
-      ref: "ACC_1",
-      label: "user@example.com",
-    });
-    // 密钥框不该被填（这是改名，不是换密钥）。
-    expect(next.action?.key).toBe("");
+  it("**不打开表单**（`restoreName` 不是输入类动作，`label` 保持空）", () => {
+    const next = openAction(emptyState, { kind: "restoreName", ref: "ACC_1" });
+    expect(next.action).toMatchObject({ kind: "restoreName", ref: "ACC_1" });
+    // 关键：不预填、不要求用户再输入一次 —— 默认名由宿主自己查。
+    expect(next.action?.label, "一键恢复不填表单项").toBe("");
   });
 
-  it("普通改名仍然从空白开始（不受这次改动影响）", () => {
+  it("普通改名仍然从空白开始", () => {
     const next = openAction(emptyState, { kind: "rename", ref: "ACC_1" });
     expect(next.action?.label).toBe("");
   });

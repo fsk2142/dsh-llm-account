@@ -409,6 +409,26 @@ export class LlmAccountUsageService extends TypertRemoteService {
   }
 
   /**
+   * 把账号名恢复成登录时的默认名（2026-10-22）。
+   *
+   * 默认名住在**账号条目**里（`defaultName` 字段），所以由厂商端口自己查、自己写 ——
+   * 客户端传来的只是「点的是哪个账号」，不是一个可能已过期的名字。这样「默认名」只有
+   * 一处真相。
+   *
+   * 没实现这个能力（或该账号没有记录默认名）时**报错**而不是静默：界面本来就不会显示
+   * 那个入口，能走到这里说明是直接调的远程方法，静默失败会让它以为成功了。
+   * @param vendor - 厂商 id。
+   * @param ref - 目标账号。
+   */
+  async restoreAccountName(vendor: VendorId, ref: string): Promise<void> {
+    const port = this.requireVendor(vendor).accounts;
+    if (typeof port.restoreDefaultLabel !== "function") {
+      throw new Error(`dsh-llm-account: vendor "${vendor}" does not support restoring the default account name`);
+    }
+    await port.restoreDefaultLabel.call(port, ref);
+  }
+
+  /**
    * 换密钥。
    *
    * 密钥只交给账号端口，端口只写凭据服务 —— **不经过设置文档**（全局约束）。这里不做日志输出，

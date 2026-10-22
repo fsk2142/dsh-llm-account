@@ -62,6 +62,7 @@ export const USAGE_METHODS = [
   // 账号操作（Task 5：账户卡片的 `⋯` 菜单与「添加账户」）
   "addAccount",
   "renameAccount",
+  "restoreAccountName",
   "replaceKey",
   "removeAccount",
   "selectAccount",
@@ -904,6 +905,15 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
       REF_PARAM,
       { name: "label", typeSymbol: "AccountLabel", parse: parseString },
     ]),
+    /**
+     * 把账号名恢复成登录时的默认名（2026-10-22）。
+     *
+     * 为什么单独一个方法而不是让客户端算好再调 `renameAccount`：默认名存在**宿主侧的
+     * 账号条目**里（`defaultName` 字段），客户端只是从 `list()` 里读到副本。让宿主自己
+     * 查自己写，「默认名」就只有一处真相 —— 否则客户端传来的值可能已经过期（另一个
+     * 窗口刚改过名）。
+     */
+    makeDescriptor("restoreAccountName", "Void", parseVoid, [VENDOR_PARAM, REF_PARAM]),
     // 密钥从浏览器到宿主只走这一条调用，宿主把它交给凭据服务；**永远不进设置文档**。
     makeDescriptor("replaceKey", "Void", parseVoid, [
       VENDOR_PARAM,
@@ -1016,6 +1026,10 @@ export interface UsageNamespace {
   models?(vendor: string): Promise<CatalogModelsResult>;
   addAccount(vendor: string, input: AddAccountInput): Promise<AccountView>;
   renameAccount(vendor: string, ref: string, label: string): Promise<void>;
+  /**
+   * 把账号名恢复成登录时的默认名（可选：只有记录了默认名的厂商实现）。
+   */
+  restoreAccountName?(vendor: string, ref: string): Promise<void>;
   replaceKey(vendor: string, ref: string, key: string): Promise<void>;
   removeAccount(vendor: string, ref: string): Promise<void>;
   selectAccount(vendor: string, ref: string | null): Promise<void>;

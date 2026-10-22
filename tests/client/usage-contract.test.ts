@@ -312,7 +312,7 @@ describe("边界校验器的性质", () => {
         })();
         if (!accepted) continue;
         // `void` 端点接受任何值并归一到 undefined —— 那是它的契约，不算「冒充成功」。
-        if (descriptor.method === "renameAccount" || descriptor.method === "replaceKey" || descriptor.method === "removeAccount" || descriptor.method === "moveAccount" || descriptor.method === "setAutoSwitch" || descriptor.method === "loginCancel" || descriptor.method === "selectAccount" || descriptor.method === "setAccountOrder" || descriptor.method === "setSwitchSettings" || descriptor.method === "setAccountModels" || descriptor.method === "usageClear" || descriptor.method === "setCredential") {
+        if (descriptor.method === "renameAccount" || descriptor.method === "restoreAccountName" || descriptor.method === "replaceKey" || descriptor.method === "removeAccount" || descriptor.method === "moveAccount" || descriptor.method === "setAutoSwitch" || descriptor.method === "loginCancel" || descriptor.method === "selectAccount" || descriptor.method === "setAccountOrder" || descriptor.method === "setSwitchSettings" || descriptor.method === "setAccountModels" || descriptor.method === "usageClear" || descriptor.method === "setCredential") {
           expect(parse(value), descriptor.method).toBeUndefined();
           continue;
         }
