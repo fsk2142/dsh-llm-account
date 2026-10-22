@@ -26,7 +26,9 @@ it("同一模型分配给多个账号时按全局顺序选，第一个试过后�
   expect(e.pick({ model: "m1", tried: new Set(["a"]) })).toBe("b");
 });
 
-it("同一模型分配给多个账号时，当前账号优先；当前没选该模型则按顺序", () => {
+it("**用户选定的账号永远优先**，即使模型绑给了别的账号（2026-10-22 改）", () => {
+  // 旧口径是「模型绑定的账号优先于 pinned」，导致用户报「我选定了 A，请求却走了 B」。
+  // 现在：人的显式选择比规则表权威。
   const e = new RotationEngine({
     order: ["a", "b"],
     pinned: "b",
@@ -35,14 +37,18 @@ it("同一模型分配给多个账号时，当前账号优先；当前没选该�
       { models: ["m1"], account: "b" },
     ],
   });
-  expect(e.pick({ model: "m1", tried: new Set() })).toBe("b");
+  expect(e.pick({ model: "m1", tried: new Set() }), "选定的 b 在绑定列表里 → 优先它").toBe("b");
 
   const other = new RotationEngine({
     order: ["a", "b"],
     pinned: "b",
+    // 模型 m2 只绑给了 a —— 但用户选定的是 b，仍然先用 b。
     rules: [{ models: ["m2"], account: "a" }],
   });
-  expect(other.pick({ model: "m2", tried: new Set() })).toBe("a");
+  expect(other.pick({ model: "m2", tried: new Set() }), "选定的账号不在绑定列表里也优先").toBe("b");
+
+  // 试过 b 之后才回落到模型绑定的 a。
+  expect(other.pick({ model: "m2", tried: new Set(["b"]) })).toBe("a");
 });
 
 it("固定账号优先，但被标记失效后回落到其它账号", () => {

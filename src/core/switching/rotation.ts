@@ -140,26 +140,45 @@ export class RotationEngine {
   }
 
   /**
-   * 选下一个账号：规则命中 → 固定 → 顺序里第一个未被拒绝且不在 `tried` 中的账号。
+   * 选下一个账号：**用户选定的账号 → 规则命中 → 顺序里第一个未被拒绝的**。
    *
    * 任一候选不可用都**继续往下走**，不会因为规则或固定账号不可用就直接放弃。
    * 顺带惰性清理已过期的拒绝条目。
    *
    * 命中时顺带把该 ref 记为**生效账号**（见 `noteSelected`）：选择次序、拒绝表与
    * `fallbackAllowed` 的既有语义一律不动，这里只是把「这次真的是谁去发请求」记下来。
+   *
+   * ## 优先级（2026-10-22 用户明确要求，改过）
+   *
+   * **用户手动选定的账号（pinned）永远排第一**，只要它没被拒绝、没试过。
+   *
+   * 之前的口径是「模型绑定的账号优先于 pinned」—— 只有 pinned 恰好也在该模型的绑定
+   * 列表里时才让 pinned 先。那个口径有实际后果：用户报「我选定了 A 账号，但请求走到了
+   * B」，因为同一个模型被绑到两个账号时，绑定列表的顺序压过了用户的选择。
+   *
+   * 用户原话：「我选择使用其中的一个账号时，然后在会话中使用该网关的模型发送的时候
+   * 应该就是使用我选定的那个账号的 API 发送请求」。**人的显式选择比规则表更权威。**
+   *
+   * 模型绑定因此只承担「这个模型能用哪些账号」的信息作用：pinned 不在绑定列表里时仍
+   * 优先（用户明确指定了），从绑定列表挑不到就退回普通顺序。
    * @param request - 目标模型与本请求内已试过的账号。
    * @returns 选中的账号 ref；无可选账号时为 `undefined`（此时不动生效账号）。
    */
   pick({ model, tried }: PickRequest): string | undefined {
-    // 同一模型可以分配给多个账号：当前账号也在其中时优先用它（切号才会对共享模型生效）；
-    // 否则按全局顺序试已分配账号，最后才退回固定/普通顺序。
     const assigned = this.#rules.filter((entry) => entry.models.includes(model)).map((entry) => entry.account);
     const assignedInOrder = this.#order.filter((ref) => assigned.includes(ref));
     const assignedExtra = assigned.filter((ref) => !this.#order.includes(ref));
-    const pinnedAssigned = this.#pinned !== null && assigned.includes(this.#pinned);
-    const candidates: readonly (string | null | undefined)[] = pinnedAssigned
-      ? [this.#pinned, ...assignedInOrder, ...assignedExtra, ...this.#order]
-      : [...assignedInOrder, ...assignedExtra, this.#pinned, ...this.#order];
+    /**
+     * 候选顺序：**pinned 最前**，然后模型绑定的，最后普通顺序。
+     *
+     * pinned 为 `null`（自动轮换）时会被下面的过滤跳过，等价于没有它。
+     */
+    const candidates: readonly (string | null | undefined)[] = [
+      this.#pinned,
+      ...assignedInOrder,
+      ...assignedExtra,
+      ...this.#order,
+    ];
     for (const ref of candidates) {
       if (ref === null || ref === undefined) continue;
       if (tried.has(ref)) continue;
