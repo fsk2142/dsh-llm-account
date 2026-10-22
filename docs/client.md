@@ -11,13 +11,13 @@
 项目：`dsh-llm-account`
 本机：桌面端 `0.2.1-rc.1`（`ed75efe`），profile `desktop`，本包以 `link:` 装入且已进 `bundles`。
 
-## 0. 症状与结论
+### 0. 症状与结论
 
 宿主侧全绿（`/dsh-market/check` 零 error、两行齐全、user-patch override 生效、`dsh-llm-account/commandcode` 与 `…/opencode` 都能被 Node 解析并加载），但重启后**设置页与侧边栏完全看不到本包 UI**。
 
 结论：`cordis.patch.yml` 两行的 `name` 都用了**子路径说明符**，而宿主 `client-modules` 的启动图扫描**不认子路径行名**——`./client` bundle 从未进入浏览器启动图。修法已落进 `cordis.patch.yml`。
 
-## 1. 证据链
+### 1. 证据链
 
 - 客户端插件到达浏览器的唯一通道是启动图（`window.__DSH_BOOT__` + `/plugins` 路由；见 `app.asar` 内 `@deepseek-ai/dsh-client-modules` 的 README 与实现）。
 - 运行中宿主的启动图可匿名读取：`GET http://127.0.0.1:6900/plugins/events`（SSE，每个新连接先收完整图）。
@@ -103,7 +103,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 
 此外整包必须通过 F4 的版本闸门——`dsh-*` peer 范围要跟桌面端 rc 一起长，由 `tests/compatibility.test.ts` 逐版本锁死。
 
-## 2. 落下的设计（`cordis.patch.yml`）
+### 2. 落下的设计（`cordis.patch.yml`）
 
 - 行 id 保持 `llm-commandcode` / `opencode-go`（用户 profile patch 的按 id 覆盖、设置命名空间、provider id 全部不变）。
 - `llm-commandcode` 行保持子路径名：加载器照常挂载；对扫描不可见，**不参与 source 竞争**。
@@ -112,11 +112,11 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 
 加载器一侧：相对名确实是加载器的一等用法（`name: ./plugins/app`，见 `@deepseek-ai/cordis-plugin-loader` README），但**基准由 patch 解析阶段改写**（F3），所以语义是「相对本包根」。别用裸包名去凑可见性：裸名/子路径虽能挂载，却都过不了扫描（F1）。
 
-## 3. 锁定
+### 3. 锁定
 
 `tests/client/boot-graph.test.ts` 镜像 `exactPackageSpecifier` / `pathLike` 判定与 `anchorInsertedPluginNames`，断言：两行 id 不变、**恰好一行**扫描可见、可见行是 `opencode-go` 且名字为 `./lib/opencode.js`、`commandcode` 行保持子路径、**每个路径行以 patch 所在目录为基准改写后必须真实存在**（这条正是杀死第一次修复的原因），外加 `./client` 导出与 manifest `icon` 存在。
 
-## 4. 复验方式（对 1c 清单的补充）
+### 4. 复验方式（对 1c 清单的补充）
 
 1. 重启桌面端后重新 `GET /plugins/events`（端口每次启动都变，先从 `DeepSeek Harness` 进程持有的端口里探测）：`dsh-llm-account` 应出现在 `entries` 与某个 application batch。
 2. 用图里的 `url`（形如 `plugins/??dsh-llm-account/client.js&rev=…`）拉取：应 200，body 含 `window.__ModuleLoader__.load({ id: "dsh-llm-account"`。
@@ -124,7 +124,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 
 桌面端升级后重复第 1 步之前，先跑 `tests/compatibility.test.ts`（或把它支持的版本加进去）——F4 的闸门失败时第 1 步必然失败。
 
-## 5. 图标接缝（顺带实测）
+### 5. 图标接缝（顺带实测）
 
 - **插件清单的图标**：宿主把**包根 manifest 的 `icon`**（或导出 `<specifier>/icon`）转成 base64 data URL 供给插件列表（依据：`app.asar` 内插件清单 API 的 zod 描述——「Base64 image data URL from a package root's manifest icon or an exported `<specifier>/icon`; render as an image, not inline markup.」）。已按 `dsh-better-sidebar` / `dsh-context` 的先例补 `"icon": "./icon.svg"` 与 `icon.svg`。
 - **设置导航的 glyph**：`settings.section` 槽位只投影 `id` / `order` / `label`，第三方 section 一律拿外壳的齿轮兜底；`dshmarket` 与 `dsh-better-sidebar` 都是**挂载后自己认领导航行**、用 CSS `mask-image` 换图（`dshmarket/src/client/settings-nav-icon.ts` 的注释把这条讲得很全）。本项目暂不认领；若需要导航行专属图标，按同一手法实现（按 label 认领行 → 标记属性 → 注入 mask 样式 → 随 `ctx.effect` 清理）。
@@ -141,7 +141,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 「标签 …… 数字」没有条、说明文字把标签挤成竖排单字、菜单项平铺在行里。这次只改表现层，
 数据判定、远程契约、账户语义一律不动。
 
-## 1. 先说结论：改了什么
+### 1. 先说结论：改了什么
 
 | 位置 | 之前 | 现在 |
 | --- | --- | --- |
@@ -159,7 +159,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 | 空态 | 空列表与读取失败都用同一种裸段落 | 列表空态是虚线框；「数据暂不可用」是安静的一行说明（不再套第二个虚线框） |
 | 焦点 | 没有焦点环（键盘操作不可见） | 统一 `2px` 焦点环，颜色回落 `--dsw-alias-state-business-primary` |
 
-## 2. 样式表（`src/client/css.ts`）的纪律
+### 2. 样式表（`src/client/css.ts`）的纪律
 
 - **只用宿主 `--dsw-*` 变量**，没有硬编码颜色；`tests/client/css.test.ts` 仍在逐条守着。
   - 注意：`white-space` 会命中那条「颜色名」正则（`white`），排版一律用 `text-wrap: nowrap`。
@@ -174,7 +174,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
   每个类名在样式表里都有规则」两条守着。
 - 新模块：`icons.ts`（5 个 16×16 线性图标，`currentColor`）、`time.ts`（相对时间，纯函数）。
 
-## 3. 真机验证（不重启桌面端也能看）
+### 3. 真机验证（不重启桌面端也能看）
 
 桌面端 21:48 启动时 `lib/` 不存在，因此**当前桌面端实例里没有本包 UI**；`lib/` 已重新构建，重启
 桌面端即可看到（`/plugins/events` 里会出现 `dsh-llm-account`）。
@@ -198,7 +198,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 重启桌面端后的复验顺序：设置页 → LLM 账号（两标签页、账号行、模型、字段、高级设置）→ 侧边栏
 底部（展开/收起两种形态）→ 打开用量面板。
 
-## 4. 测试
+### 4. 测试
 
 - 全量：`pnpm test` — 35 files / 518 tests 通过；`pnpm typecheck` 通过；`pnpm build` 通过。
 - `tests/client/style-contract.test.ts`（本轮一并入库）把两条与重做直接相关的结构契约钉住：
@@ -245,7 +245,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 上 —— 把 `timeout after 30000ms` 印在界面上就是调试输出。（第二轮把这条纪律
 推广成 `client/failure-text.ts` 的逐条本地化。）
 
-## 关键决策与依据
+### 关键决策与依据
 
 - **「转到设置」= 主栏面板而不是对话框**：宿主没有打开设置对话框的插件接缝（本轮大量逆向
   app.asar 证实，注释留在 `SETTINGS_PANEL_ID` 上）。`main` 插槽的 keyed 面板是宿主明文支持的
@@ -274,7 +274,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 | ⑤ 月额度也没有 | **不是端点故障**：实测 `whoami` → `usage`/`billing/credits`/`billing/window-limits` 四端点全部 200，`usage.totalCredits = 62.2122`；月度额度来自 `usage`，此前只要它那一次读取瞬时失败，界面就只剩失败行 | 同 ③（残缺读数不再进缓存，重开必现读）；并且月度窗口本来就只在 `usage` 给数时才出现（缺失 ≠ 0）。`usage` 失败时窗口列表与失败项分开呈现：读到的照旧显示，失败项给人话 |
 | ⑥ 不能选思考模式 | 宿主的档位选择器**完全**由 `resolveModel().reasoning.efforts` 驱动，而 CC 网关的 `/provider/v1/models` 从不公布档位（实测 85 个模型的键只有 `id`/`name`/`reasoning`/`contextWindow`/`maxTokens`）—— 不声明就等于没有档位可选 | 新增 `vendors/commandcode/efforts.ts`：官方 CLI 模型表的静态档位快照（58 个模型，与旧插件 `KNOWN_EFFORTS` 在 command-code@1.79.2 上校验过）；`resolveModel` 用它声明档位（负载自己哪天公布了就以负载为准）；请求路径按表**再收一次口**（宿主的「关闭」会送来 `off`，表里只有部分模型认它；表外的值一律不发字段）；Messages 传输在有可选档位时打开 `thinking: { type: "adaptive" }`（旧插件第 6624 行：那个端点只认 adaptive，且不开它 `output_config.effort` 不起作用） |
 
-## 关键决策与依据
+### 关键决策与依据
 
 - **本地化 ≠ 抹掉证据**：`failureText` 只翻「认得出形状」的诊断；认不出的原样上屏（宿主能力
   错误 `the host remote service has no $mount()` 这类必须看得见）。每处都保留 `data-*`
@@ -321,7 +321,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 有订阅的账号，`subscriptions.data.planId` 就是答案；没订阅的账号，端点如实回报 `data: null`，
 那种「没有套餐」本身也是读数。
 
-## 结论表
+### 结论表
 
 | 用户诉求 | 根因 / 约束 | 落地 |
 | --- | --- | --- |
@@ -331,7 +331,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 | ④ 新增账号操作逻辑 | 空名称点「确定」时 `dispatchAccountAction` 按规矩**不发调用**，界面因此**毫无反应** —— 按钮看起来像坏的；远程侧 reject 则被 `void pending.then(…)` 静默丢掉 | ① 容器加 `actionError` 状态：空名称/空密钥 → 「请先填写账户名称。」「请先填写密钥。」；远程面没挂上 → 「账户服务还没就绪」；远程 reject → 原文（以前完全不可见）。② 表单顶上写明「添加 Command Code 账户」（面板底部只有一个表单位置、两家共用）。③ 名称框自动聚焦。④ 两个输入框**回车 = 确定**（重命名/更换密钥的编辑器同样支持）。⑤ 密钥框下方写明「密钥只写入本机凭据库，设置文件里不留明文」。⑥ 一改字段就清掉上一次的错误 |
 | ⑤ 还能优化什么 | — | 仪表盘也显示套餐行（与设置页同一形状、同一份 `quotaPlanText`）；`QuotaPlan` 进摘要时**拷贝**出去（测试钉住不是宿主对象引用）；修正 `commandcode/quota.ts` 里「窗口单位是 token 数」的**过时注释**（线上 14/35 与旧插件 `formatMoney` 都证明是美元额度） |
 
-## 关键决策与依据
+### 关键决策与依据
 
 - **没有套餐就是没有，不猜**：`planOf` 只在端点给了 `planId` 或 `status` 时产出 `QuotaPlan`；
   表里没有的 `planId` 只带 `id`（+状态），`name`/`monthlyCredits` 一律缺省 —— 界面退回标识原文。
@@ -368,7 +368,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 
 第 2 条的结论单独写在 `2026-10-19-image-input-audit.md`（只做了调研，没有改代码）。
 
-## 1. 为什么「刷新用量」会让整个设置页消失
+### 1. 为什么「刷新用量」会让整个设置页消失
 
 症状是**整页**消失（不只是那一块），说明是 React 把子树丢了。此前有两层保护，都不够：
 
@@ -394,7 +394,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 回归覆盖（`tests/client/container-simulation.test.ts`）：喂一个「读任何字段都抛」的桶，
 断言页面本体、账号行都还在，只有用量块换成行内失败提示且原因可见。
 
-## 2. 统计改到每个账号下面（对齐参考图）
+### 2. 统计改到每个账号下面（对齐参考图）
 
 - **删掉**页面底部的跨账号用量卡片（`UsageCard` 整个移除，连带时间窗口按钮与「清空」入口）。
 - `AccountUsageBlock` 改成参考图的版式：
@@ -419,7 +419,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 - 读用量失败时，在**该厂商第一个账号**的用量位置说一次原因（同一句原因在三个账号下面
   重复三遍只是噪音）。
 
-## 3. 验证
+### 3. 验证
 
 - `pnpm run typecheck` 干净；
 - `pnpm test`：61 个文件 / 821 个用例全绿（新增 2 个容器仿真用例）；
@@ -440,7 +440,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 - 「每个账号只统计自己的记账周期，然后单独有一个总的记录」；
 - 数据来源：「两者都要」。
 
-## 1. 数据从哪来
+### 1. 数据从哪来
 
 **主来源：插件自己采集。** 三个 adapter（Command Code / OpenCode Go / OpenDesign）在
 **每次尝试结束处**上报一条样本：
@@ -457,7 +457,7 @@ schema 上，没有一个「按会话/按账号查用量」的公共远程方法
 结构，宿主机升级就会断 —— 所以这一路留空，等宿主提供正式接口再接。用户选的「两者都要」
 因此只落地了自采集这一路。
 
-## 2. 口径（都已用测试钉住）
+### 2. 口径（都已用测试钉住）
 
 | 指标 | 口径 | 为什么 |
 |---|---|---|
@@ -467,7 +467,7 @@ schema 上，没有一个「按会话/按账号查用量」的公共远程方法
 | 官方折算 | 同一批 token 按 DeepSeek 官方价再算一次 | 用户要的「约等于」 |
 | 缺失值 | 一律 `undefined` → 界面显示 `—` 或「未公开」 | 缺失不是 0；`$0.00` 会被读成「免费」 |
 
-## 3. 价格表
+### 3. 价格表
 
 **DeepSeek 官方价**（2026-10-19 取自 `api-docs.deepseek.com/quick_start/pricing`）：
 
@@ -483,9 +483,9 @@ schema 上，没有一个「按会话/按账号查用量」的公共远程方法
 **厂商真实价：当前为空。** Command Code / OpenCode Go 都是订阅 + credit 制，官方定价页
 只给「每月多少 credit / 约多少次请求」，**不公布逐模型 token 单价**；OpenDesign 的
 `vela billing preflight` 直接给美元消耗，也不需要 token×单价。硬摊成单价只会给出假数字，
-所以界面显示「未公开」。要加价时改 `src/core/pricing.ts` 的 `VENDOR_PRICES` 即可。
+所以界面显示「未公开」。要加价时改 `src/core/usage/pricing.ts` 的 `VENDOR_PRICES` 即可。
 
-## 4. 记账周期
+### 4. 记账周期
 
 「每个账号只统计自己的记账周期」的落地方式：**由额度窗口的 `resetAt` 反推周期起点**。
 
@@ -499,22 +499,22 @@ schema 上，没有一个「按会话/按账号查用量」的公共远程方法
 总账是**另一套**聚合：跨账号，按用户选的窗口（今日 / 近 7 天 / 近 30 天 / 全部）。
 周期与窗口是两件不同的事，报表里各算各的。
 
-## 5. 文件
+### 5. 文件
 
 | 文件 | 职责 |
 |---|---|
-| `src/core/usage-stats.ts` | 记录、聚合、计价、窗口（纯函数） |
-| `src/core/pricing.ts` | 官方价表 + 厂商价表 + 模型 id 归一查表 |
-| `src/core/billing-period.ts` | 由 `resetAt` / 自然边界推导周期 |
-| `src/core/usage-ledger.ts` | JSONL 按天落盘、坏行自愈、并发串行、保留 120 天 |
-| `src/core/usage-report.ts` | 每账号周期 + 总账 |
-| `src/core/usage-port.ts` | adapter 侧的采集端口（不阻塞、不抛错） |
+| `src/core/usage/stats.ts` | 记录、聚合、计价、窗口（纯函数） |
+| `src/core/usage/pricing.ts` | 官方价表 + 厂商价表 + 模型 id 归一查表 |
+| `src/core/usage/billing-period.ts` | 由 `resetAt` / 自然边界推导周期 |
+| `src/core/usage/ledger.ts` | JSONL 按天落盘、坏行自愈、并发串行、保留 120 天 |
+| `src/core/usage/report.ts` | 每账号周期 + 总账 |
+| `src/core/usage/port.ts` | adapter 侧的采集端口（不阻塞、不抛错） |
 | `src/vendors/usage-store.ts` | 三条 provider 行共用一本台账 |
 | `src/client/usage-card.ts` | 界面（纯 props） |
 
 落盘位置：`~/.dsh/llm-account/usage/usage-YYYY-MM-DD.jsonl`。
 
-## 6. 验证
+### 6. 验证
 
 `tsc --noEmit` 0 错；64 文件 / 858 例全绿；`tsdown` 重建。新增 37 例覆盖：成功率与命中率
 的分母、双口径计价、缺失值不变 0、模型 id 三种写法、窗口裁剪、周期边界的四个方向、
