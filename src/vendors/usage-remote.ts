@@ -14,6 +14,7 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
+import { readFile } from "node:fs/promises";
 
 import type {
   AccountPort,
@@ -360,6 +361,31 @@ export class LlmAccountUsageService extends TypertRemoteService {
   async switches(vendor: VendorId): Promise<SwitchRecord[]> {
     const engine = this.requireVendor(vendor).rotation.current();
     return engine.switchNotices().map((notice) => ({ ...notice, vendor }));
+  }
+
+  /**
+   * 磁盘上**当前安装版本**（读 `package.json` 的 `version`）。
+   *
+   * 用途：客户端 bundle 里有构建期注入的版本号（= 页面加载时的版本）。两者不一致
+   * 说明插件已被更新、但页面里跑的还是旧代码 —— 那时应当提示用户刷新页面，而不是
+   * 让他重启程序（2026-10-22 用户报障：市场更新后不重启，侧边栏显示异常）。
+   *
+   * **为什么不缓存**：这个值正是「磁盘变了」的探针，缓存会让它永远报旧值。
+   * 读一次文件很便宜（几 KB），而且只在页面加载与更新完成后调用。
+   * @returns 版本字符串；读不到时抛错（调用方据此不提示，而不是猜）。
+   */
+  async installedVersion(): Promise<string> {
+    // 产物在 `lib/` 下，包根是其上一级。用 import.meta.url 定位，避免 cwd 假设。
+    const here = new URL(import.meta.url);
+    const manifest = new URL("../package.json", here);
+    const raw = await readFile(manifest, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const version =
+      typeof parsed === "object" && parsed !== null ? (parsed as { version?: unknown }).version : undefined;
+    if (typeof version !== "string" || version.trim() === "") {
+      throw new Error("package.json has no version field");
+    }
+    return version.trim();
   }
 
   /**

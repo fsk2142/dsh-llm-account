@@ -721,6 +721,32 @@ export const PAGE_CSS = `
   max-width: 760px; padding: 16px 20px 32px; color: var(--dsw-alias-label-primary);
   font-size: 14px; line-height: 22px; }
 .dsl-settings-back { display: flex; flex-direction: row; align-items: center; }
+
+/* ═══ 版本漂移提示（插件更新后页面仍跑旧代码）═══
+ * 自建的覆盖层：宿主没有通用对话框 API（2026-10-22 查证）。
+ * 层级要压过宿主设置页（那是全屏面板），所以用很大的 z-index。
+ * 只做一件事：告诉用户该刷新，并给两个按钮。 */
+.dsl-drift-notice { position: fixed; inset: 0; z-index: 2147483000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; box-sizing: border-box;
+  background: var(--dsw-alias-bg-mask, var(--dsw-alias-bg-l1)); }
+.dsl-drift-notice-card { display: flex; flex-direction: column; gap: 12px;
+  box-sizing: border-box; width: 100%; max-width: 420px; padding: 20px 22px;
+  border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-settings-card-fill, var(--dsw-alias-bg-l2));
+  color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 22px;
+  box-shadow: 0 8px 32px var(--dsw-alias-bg-l1); }
+.dsl-drift-notice-title { margin: 0; font-size: 15px; line-height: 24px; font-weight: 600; }
+.dsl-drift-notice-body { margin: 0; color: var(--dsw-alias-label-secondary); }
+.dsl-drift-notice-actions { display: flex; flex-direction: row; justify-content: flex-end; gap: 8px;
+  padding-top: 4px; }
+.dsl-drift-notice-later,
+.dsl-drift-notice-reload { flex: none; padding: 6px 14px; border-radius: var(--dsw-radius-md);
+  font: inherit; cursor: pointer; }
+.dsl-drift-notice-later { border: .5px solid var(--dsw-alias-border-l2); background: transparent;
+  color: var(--dsw-alias-label-secondary); }
+.dsl-drift-notice-reload { border: 0; background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-button-primary-foreground, var(--dsw-alias-label-primary)); }
 `;
 
 /** 各元素用到的类名（渲染层与样式表共用的唯一来源，避免两边写错字）。 */
