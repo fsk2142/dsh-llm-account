@@ -102,7 +102,8 @@ export interface AccountsPanelProps {
   /**
    * 查一个模型在**该账号当前套餐**下能用多少额度（用户 2026-10-21 要的功能）。
    *
-   * 返回 `undefined` = 官方没给这个组合的数据，界面留空（不编数字）。格式化由容器做。
+   * 返回 `undefined` = 官方没给这个组合的数据，界面显示「未知」（不编数字）。
+   * 格式化由容器做。
    * @param vendor - 厂商行 id。
    * @param account - 该账号（额度与它当前的套餐有关）。
    * @param modelId - 模型 id（目录原始写法）。

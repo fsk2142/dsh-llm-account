@@ -61,7 +61,8 @@ import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import { savesImmediately, type VendorEntry } from "./registry";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type CredentialProbe, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
-import { checkForUpdate, pollUpdate, startUpdate, type UpdateState } from "./update-check";
+import { checkForUpdate, PLUGIN_VERSION, pollUpdate, startUpdate, type UpdateState } from "./update-check";
+import { showDriftNotice } from "./drift-notice";
 import { AccountUsageBlock } from "./usage-card";
 
 /**
@@ -509,6 +510,26 @@ export async function readModels(namespace: UsageNamespace | undefined, vendor: 
     models: [],
     failures: [detailed.ok ? `${USAGE_NAMESPACE}/models returned no value` : detailed.problem],
   };
+}
+
+/**
+ * 读磁盘上**当前安装**的版本（宿主侧的 `package.json.version`）。
+ *
+ * 用途：插件刚更新完时，给「请刷新页面」的提示填上真实的新版本号。
+ * 读不到就返回 `undefined` —— 提示照弹（核心信息是「该刷新了」），只是不显示版本。
+ * @param namespace - 已挂载的远程命名空间。
+ * @returns 版本字符串，或 `undefined`。
+ */
+export async function readInstalledVersion(namespace: UsageNamespace | undefined): Promise<string | undefined> {
+  if (namespace === undefined || typeof namespace.installedVersion !== "function") return undefined;
+  try {
+    const detailed = await remoteValueDetailed<string>(namespace.installedVersion());
+    if (!detailed.ok) return undefined;
+    const value = detailed.value;
+    return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 挂载远程面后的观察窗口。 */
@@ -2080,6 +2101,35 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
             // 说明，并让 `reloadHint` 把它变成「刷新页面」的入口。
             setUpdateState({ kind: "unknown", reason: t("update.done") });
             setReloadHint(true);
+            /**
+             * 读一次磁盘上的新版本，用于提示文案。
+             *
+             * 读不到就用 `"?"`：提示的核心信息是「该刷新了」，版本号只是辅助。
+             * 不值得因为它失败就不弹 —— 一次成功的更新之后不提示，用户才会真卡住。
+             */
+            const diskVersionAfterUpdate = await readInstalledVersion(usage);
+            /**
+             * **同时弹一个全局提示**（2026-10-22 用户要求「更新完自动弹出」）。
+             *
+             * 为什么不能只靠 `reloadHint`：那个提示画在**设置页**里，而用户更新完常常
+             * 直接去看侧边栏额度卡片 —— 他在那里看不到任何提示，只看到渲染异常的旧界面。
+             *
+             * 这里是唯一能拿到「刚更新完」这个时机的地方（`apply` 只在页面加载时跑，
+             * 更新后不会重跑，所以版本漂移检测那条路根本抓不到这一刻）。
+             */
+            showDriftNotice(
+              {
+                title: t("drift.title"),
+                body: t("drift.body")
+                  .replace("{page}", PLUGIN_VERSION)
+                  .replace("{disk}", diskVersionAfterUpdate ?? "?"),
+                reload: t("drift.reload"),
+                later: t("drift.later"),
+              },
+              () => {
+                reloadPage();
+              },
+            );
             return;
           }
           if (progress.state === "failed" || progress.state === "cancelled" || progress.state === "rolled-back") {
