@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-account",
-  "version": "0.8.6",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness LLM provider plugin hosting the commandcode, dsh-opencode-go and opendesign routes behind a shared account core",
