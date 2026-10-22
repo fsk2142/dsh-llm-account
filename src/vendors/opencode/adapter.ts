@@ -221,6 +221,22 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #deps: OpencodeAdapterDeps;
   /** 按基地址缓存的目录（同一基地址复用 TTL 缓存）。 */
   readonly #catalogs = new Map<string, OpencodeCatalog>();
+  /**
+   * 正在进行的 OAuth 刷新（按账号 ref 去重，2026-10-22 修 bug 审查 LOW-1）。
+   *
+   * ## 为什么需要
+   *
+   * `resolveOAuthCredential` 在 token 过期前 60s 会刷新。若同一账号在同一时刻有多个
+   * 并发请求（多标签页、或宿主并发跑 compaction / 会话标题），它们都会发现「该刷新了」
+   * 并各自发起一次刷新。若服务端启用 refresh token 轮换，第二次会用**已失效**的旧
+   * refresh token —— 那一次刷新失败，按缺凭据处理，该请求失败。
+   *
+   * ## 怎么做
+   *
+   * 同一 ref 上只保留一次刷新 promise；并发请求 await 同一个结果。刷新**成功或失败**
+   * 都立即从表里移除（失败也要移除，否则失败会被永久缓存，该账号再也刷不动）。
+   */
+  readonly #refreshing = new Map<string, Promise<{ key: string; headers?: Record<string, string>; updated?: string } | undefined>>();
 
   /**
    * @param deps - 配置读取、轮换引擎、端口与各 I/O 注入点。
@@ -623,11 +639,13 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     }).key;
     if (raw === undefined) return undefined;
     if (!raw.startsWith(OAUTH_PREFIX)) return { key: raw };
-    const resolved = await resolveOAuthCredential(raw, {
-      fetchImpl: this.#deps.fetchImpl,
-      ...(this.#deps.authBase === undefined ? {} : { authBase: this.#deps.authBase }),
-      ...(this.#deps.now === undefined ? {} : { now: this.#deps.now }),
-    });
+    /**
+     * OAuth 刷新按 ref 去重（2026-10-22 修 LOW-1）：同一账号上并发请求共享一次刷新。
+     *
+     * 只有「需要刷新」时才走这段 —— `resolveOAuthCredential` 内部会先判断 token 是否
+     * 即将过期，不新鲜时立即返回，那种情况（绝大多数）不该被去重表串行化。
+     */
+    const resolved = await this.#refreshShared(ref, raw);
     if (resolved === undefined) return undefined;
     // 只回写“从凭据槽读出来的那一份”：环境变量里的 blob 没有可写回的持久位置。
     if (resolved.updated !== undefined && stored === raw) {
@@ -638,6 +656,38 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       }
     }
     return { key: resolved.key, ...(resolved.headers === undefined ? {} : { headers: resolved.headers }) };
+  }
+
+  /**
+   * 按账号 ref 去重的 OAuth 凭据解析（2026-10-22 修 LOW-1）。
+   *
+   * 同一账号上并发的请求共享**同一次**刷新：第一个请求建 promise 放进 `#refreshing`，
+   * 其余 await 它。表项在 promise settle 后立刻移除 —— **失败也要移除**，否则一次失败
+   * 会被永久缓存，那个账号再也刷不动。
+   *
+   * 为什么按 `ref` 而不是按 token 原文：同一账号的凭据会刷新，原文每次都可能不同；
+   * ref 是稳定身份。不同账号拿到同一个 blob 的情况不存在（凭据槽按 ref 隔离）。
+   * @param ref - 账号 ref（凭据槽名）。
+   * @param raw - 从凭据槽读到的原始值（可能带 `oauth:` 前缀）。
+   * @returns 解析结果；不需要刷新或解析失败时为 `undefined`。
+   */
+  async #refreshShared(
+    ref: string,
+    raw: string,
+  ): Promise<{ key: string; headers?: Record<string, string>; updated?: string } | undefined> {
+    const existing = this.#refreshing.get(ref);
+    if (existing !== undefined) return existing;
+
+    const pending = resolveOAuthCredential(raw, {
+      fetchImpl: this.#deps.fetchImpl,
+      ...(this.#deps.authBase === undefined ? {} : { authBase: this.#deps.authBase }),
+      ...(this.#deps.now === undefined ? {} : { now: this.#deps.now }),
+    }).finally(() => {
+      // 成功与失败都移除：失败不该被缓存成「永远刷不动」。
+      this.#refreshing.delete(ref);
+    });
+    this.#refreshing.set(ref, pending);
+    return pending;
   }
 
   /** 拿（或建）该基地址的目录缓存。 */
