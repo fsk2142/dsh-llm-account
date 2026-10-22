@@ -691,13 +691,13 @@ function menuButtons(props: AccountCardProps, account: AccountUsageStatus): Reac
               "data-action": "restoreName",
               className: CSS_CLASS.item,
               /**
-               * 走现有的 `rename` 动作通道（恢复默认名本质就是一次改名），
-               * 但**预填默认名**：用户点开看到的就是原来的邮箱，确认即恢复。
+               * **一键恢复**（2026-10-22 改）：不打开表单、不需要再确认一次。
                *
-               * 值来自 `defaultLabel`（登录时记录的邮箱），不是这里现编的 ——
-               * 「默认名」只有一处真相。
+               * 恢复默认名是确定且可逆的操作（默认名就存在账号条目里），多一步确认只是
+               * 麻烦。真正的写入由宿主按账号自己记录的 `defaultName` 完成 —— 客户端
+               * 只负责说「点的是哪个账号」。
                */
-              onClick: () => props.onOpenAction({ kind: "rename", ref: account.ref, label: restorable }),
+              onClick: () => props.onOpenAction({ kind: "restoreName", ref: account.ref }),
             },
             t("account.restoreName"),
           ),
