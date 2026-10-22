@@ -181,6 +181,21 @@ export class RotationEngine {
     ];
     for (const ref of candidates) {
       if (ref === null || ref === undefined) continue;
+      /**
+       * **空串也要跳过**（2026-10-22 自查发现）。
+       *
+       * `pinned` 来自设置文档的顶层 `apiKeyEnv` —— 那个字段可能被手改坏，也可能是
+       * 半截写入留下的空串。旧代码只挡 `null` / `undefined`，于是空串被当成合法 ref
+       * 返回，一路带到适配器：
+       *
+       * - `#resolveKey("")` 必然返回 `undefined` → 被判成「没有可用密钥」；
+       * - 于是 `markRejected("", invalid-credential)` —— 拒绝表里多一条**永不过期**的
+       *   脏条目（该分类的过期时刻是 `undefined`），还会多记一条失败用量。
+       *
+       * 它不影响请求最终能不能发出去（循环会继续试真正的账号），但一直在污染拒绝表
+       * 与台账 —— 属于「不报错但一直错」的那类。
+       */
+      if (ref.trim() === "") continue;
       if (tried.has(ref)) continue;
       if (this.#live(ref) !== undefined) continue;
       this.noteSelected(ref);
