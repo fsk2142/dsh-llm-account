@@ -32,6 +32,7 @@ import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
+import { createSingleFlight } from "../../core/single-flight";
 import { OAUTH_PREFIX, resolveOAuthCredential } from "./oauth";
 import type { OpencodeCatalog, OpencodeCatalogRecord } from "./catalog";
 import { classifyGatewayFailure, gatewayLlmError } from "./failures";
@@ -222,21 +223,13 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   /** 按基地址缓存的目录（同一基地址复用 TTL 缓存）。 */
   readonly #catalogs = new Map<string, OpencodeCatalog>();
   /**
-   * 正在进行的 OAuth 刷新（按账号 ref 去重，2026-10-22 修 bug 审查 LOW-1）。
+   * 按账号 ref 合并并发的 OAuth 刷新（2026-10-22 修 bug 审查 LOW-1）。
    *
-   * ## 为什么需要
-   *
-   * `resolveOAuthCredential` 在 token 过期前 60s 会刷新。若同一账号在同一时刻有多个
-   * 并发请求（多标签页、或宿主并发跑 compaction / 会话标题），它们都会发现「该刷新了」
-   * 并各自发起一次刷新。若服务端启用 refresh token 轮换，第二次会用**已失效**的旧
-   * refresh token —— 那一次刷新失败，按缺凭据处理，该请求失败。
-   *
-   * ## 怎么做
-   *
-   * 同一 ref 上只保留一次刷新 promise；并发请求 await 同一个结果。刷新**成功或失败**
-   * 都立即从表里移除（失败也要移除，否则失败会被永久缓存，该账号再也刷不动）。
+   * 同一账号上并发的请求共享**一次**刷新：若各自刷，服务端启用 refresh token 轮换时
+   * 后一次会用已失效的旧 token，那次刷新失败、该请求失败。实现见
+   * `core/single-flight`（抽成独立模块以便直接测生产代码，而不是复刻一份逻辑）。
    */
-  readonly #refreshing = new Map<string, Promise<{ key: string; headers?: Record<string, string>; updated?: string } | undefined>>();
+  readonly #singleFlight = createSingleFlight();
 
   /**
    * @param deps - 配置读取、轮换引擎、端口与各 I/O 注入点。
@@ -675,19 +668,13 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     ref: string,
     raw: string,
   ): Promise<{ key: string; headers?: Record<string, string>; updated?: string } | undefined> {
-    const existing = this.#refreshing.get(ref);
-    if (existing !== undefined) return existing;
-
-    const pending = resolveOAuthCredential(raw, {
-      fetchImpl: this.#deps.fetchImpl,
-      ...(this.#deps.authBase === undefined ? {} : { authBase: this.#deps.authBase }),
-      ...(this.#deps.now === undefined ? {} : { now: this.#deps.now }),
-    }).finally(() => {
-      // 成功与失败都移除：失败不该被缓存成「永远刷不动」。
-      this.#refreshing.delete(ref);
-    });
-    this.#refreshing.set(ref, pending);
-    return pending;
+    return this.#singleFlight(ref, () =>
+      resolveOAuthCredential(raw, {
+        fetchImpl: this.#deps.fetchImpl,
+        ...(this.#deps.authBase === undefined ? {} : { authBase: this.#deps.authBase }),
+        ...(this.#deps.now === undefined ? {} : { now: this.#deps.now }),
+      }),
+    );
   }
 
   /** 拿（或建）该基地址的目录缓存。 */
