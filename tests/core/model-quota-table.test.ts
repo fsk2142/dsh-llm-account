@@ -20,6 +20,8 @@ import {
   modelQuotaOf,
   normalizeModelKey,
   planKeyOf,
+  quotaTableOf,
+  planModelsOf,
   COMMANDCODE_PLAN_MODELS,
   modelAvailableIn,
 } from "../../src/core/model-quota-table";
@@ -207,5 +209,37 @@ describe("GOAT 表必须是**合并**而不是覆盖（2026-10-21 回归）", ()
 
   it("合并后 GOAT 覆盖 63 个模型（60 个有额度 + 3 个 Free）", () => {
     expect(Object.keys(COMMANDCODE_MODEL_QUOTA.goat ?? {}).length).toBe(63);
+  });
+});
+
+describe("厂商 → 额度表的显式映射（防子串误配）", () => {
+  it("三个真实 providerId 各自命中正确的表", () => {
+    // 以前靠 `vendor.includes(...)` 的顺序侥幸正确：`opendesign` 与 `opencode`
+    // 共享 `openc` 前缀，顺序一改就会静默查错表 —— 显示另一家的额度，且不报错。
+    expect(quotaTableOf("commandcode")).toBe(COMMANDCODE_MODEL_QUOTA);
+    expect(quotaTableOf("opendesign")).toBe(OPENDESIGN_MODEL_QUOTA);
+    expect(quotaTableOf("dsh-opencode-go")).toBe(OPENCODE_MODEL_QUOTA);
+  });
+
+  it("大小写不敏感，认不出的 id 返回 undefined（不猜）", () => {
+    expect(quotaTableOf("CommandCode")).toBe(COMMANDCODE_MODEL_QUOTA);
+    expect(quotaTableOf("open-design")).toBeUndefined();
+    expect(quotaTableOf("unknown-vendor")).toBeUndefined();
+    expect(quotaTableOf("")).toBeUndefined();
+  });
+
+  it("**opendesign 不会被 opencode 的规则抢走**（前缀重叠）", () => {
+    // 这是子串匹配最容易出错的地方：两者都以 openc 开头。
+    const design = quotaTableOf("opendesign");
+    const code = quotaTableOf("dsh-opencode-go");
+    expect(design).not.toBe(code);
+    expect(design).toBe(OPENDESIGN_MODEL_QUOTA);
+    expect(code).toBe(OPENCODE_MODEL_QUOTA);
+  });
+
+  it("只有 commandcode 有「套餐包含哪些模型」的官方清单", () => {
+    expect(planModelsOf("commandcode")).toBe(COMMANDCODE_PLAN_MODELS);
+    expect(planModelsOf("opendesign")).toBeUndefined();
+    expect(planModelsOf("dsh-opencode-go")).toBeUndefined();
   });
 });

@@ -52,12 +52,10 @@ import {
 import type { LoginView } from "./account-card";
 import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/search-keys";
 import {
-  COMMANDCODE_MODEL_QUOTA,
-  COMMANDCODE_PLAN_MODELS,
-  OPENCODE_MODEL_QUOTA,
-  OPENDESIGN_MODEL_QUOTA,
   modelAvailableIn,
   modelQuotaOf as modelQuotaOf_,
+  planModelsOf,
+  quotaTableOf,
 } from "../core/model-quota-table";
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
@@ -1793,19 +1791,15 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * @returns 已格式化的额度文字；查不到时 `undefined`。
      */
     const modelQuotaOf = (vendor: string, account: AccountUsageStatus, modelId: string): string | undefined => {
-      const table = vendor.includes("command")
-        ? COMMANDCODE_MODEL_QUOTA
-        : vendor.includes("opendesign")
-          ? OPENDESIGN_MODEL_QUOTA
-          : vendor.includes("opencode")
-            ? OPENCODE_MODEL_QUOTA
-            : undefined;
+      // 显式映射（不靠子串顺序）：见 `quotaTableOf` 的注释 —— 认错表会静默显示另一家的额度。
+      const table = quotaTableOf(vendor);
       if (table === undefined) return undefined;
       const plan = account.quota?.plan;
       const planName = plan?.name ?? plan?.id;
       // OpenCode 的额度接口**不上报套餐名**（只有 rolling/weekly/monthly 三个窗口），
       // 所以那种情况按官网的默认档 Go 查表 —— 它只有 Go / Go Plus 两档。
-      const effectivePlan = planName ?? (vendor.includes("opencode") ? "Go" : undefined);
+      const isOpencode = vendor.trim().toLowerCase() === "dsh-opencode-go" || vendor.trim().toLowerCase() === "opencode";
+      const effectivePlan = planName ?? (isOpencode ? "Go" : undefined);
       const amount = modelQuotaOf_(table, effectivePlan, modelId);
       if (amount === undefined) return undefined;
       if (amount.kind === "free") return t("models.quotaFree");
@@ -1826,9 +1820,11 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * @returns 是否可用；未知时 `undefined`。
      */
     const modelAvailable = (vendor: string, account: AccountUsageStatus, modelId: string): boolean | undefined => {
-      if (!vendor.includes("command")) return undefined;
+      // 同一套显式映射：只有 Command Code 有「该档位包含哪些模型」的官方清单。
+      const planModels = planModelsOf(vendor);
+      if (planModels === undefined) return undefined;
       const plan = account.quota?.plan;
-      return modelAvailableIn(COMMANDCODE_PLAN_MODELS, plan?.name ?? plan?.id, modelId);
+      return modelAvailableIn(planModels, plan?.name ?? plan?.id, modelId);
     };
 
     const accountsPanel = createElement(AccountsPanel, {

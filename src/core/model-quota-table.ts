@@ -861,3 +861,34 @@ export function modelQuotaOf(
   if (bucket === undefined) return undefined;
   return bucket[normalizeModelKey(modelName)];
 }
+
+/**
+ * 厂商行 id → 该厂商的额度表。
+ *
+ * **为什么用显式映射而不是子串匹配**：以前写的是
+ * `vendor.includes("opendesign") ? … : vendor.includes("opencode") ? …`，
+ * 靠顺序侥幸不出错 —— 但 `opendesign` 与 `opencode` 共享 `openc` 前缀，一旦将来出现
+ * 一个同时含两者的 id（或顺序被调整），就会静默查错表，界面上显示的是**另一家**的额度。
+ * 这种错误不会报错、只会显示错数字，是最难发现的一类。
+ *
+ * 表里没有的 id 返回 `undefined`（不猜），调用方据此不显示额度。
+ * @param vendorId - 厂商行 id（`commandcode` / `dsh-opencode-go` / `opendesign`）。
+ * @returns 对应的额度表；认不出时 `undefined`。
+ */
+export function quotaTableOf(vendorId: string): PlanModelQuotaTable | undefined {
+  const id = vendorId.trim().toLowerCase();
+  if (id === "commandcode") return COMMANDCODE_MODEL_QUOTA;
+  if (id === "opendesign") return OPENDESIGN_MODEL_QUOTA;
+  // OpenCode 的 providerId 是 `dsh-opencode-go`（含插件前缀，不是裸 `opencode`）。
+  if (id === "dsh-opencode-go" || id === "opencode" || id === "opencode-go") return OPENCODE_MODEL_QUOTA;
+  return undefined;
+}
+
+/**
+ * 厂商行 id → 该厂商的「套餐包含哪些模型」清单。
+ * @param vendorId - 厂商行 id。
+ * @returns 可用模型清单；该厂商没有官方清单时 `undefined`。
+ */
+export function planModelsOf(vendorId: string): PlanModelSet | undefined {
+  return vendorId.trim().toLowerCase() === "commandcode" ? COMMANDCODE_PLAN_MODELS : undefined;
+}
