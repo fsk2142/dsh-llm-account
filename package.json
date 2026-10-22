@@ -4,6 +4,25 @@
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness LLM provider plugin hosting the commandcode, dsh-opencode-go and opendesign routes behind a shared account core",
+  "license": "MIT",
+  "author": "fsk2142",
+  "homepage": "https://github.com/fsk2142/dsh-llm-account#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fsk2142/dsh-llm-account.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fsk2142/dsh-llm-account/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "llm",
+    "provider",
+    "commandcode",
+    "opencode",
+    "opendesign"
+  ],
   "icon": "./icon.svg",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -27,13 +46,23 @@
     "./client": {
       "default": "./lib/client.js"
     },
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "version:next": "node scripts/next-version.mjs",
+    "release": "node scripts/release.mjs",
+    "dead-code": "node scripts/find-dead-code.mjs .",
     "fix:desktop-cookies": "node scripts/clear-desktop-auth-cookies.mjs"
   },
   "engines": {
