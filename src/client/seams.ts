@@ -1895,7 +1895,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       ...(actionError === undefined ? {} : { actionError }),
       // 按账户刷新：每个账号行的刷新按钮 → 重读**该账号所属厂商**的目录（见 refreshVendorCatalog）。
       onRefreshModels: (vendor: string) => refreshVendorCatalog(vendor),
-      onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string }) => {
+      onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string; label?: string }) => {
         setActionError(undefined);
         setState((current) => openAction(current, action, vendor));
       },

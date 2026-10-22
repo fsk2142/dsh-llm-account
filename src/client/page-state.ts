@@ -279,13 +279,28 @@ export function noteSaveResult(
  */
 export function openAction(
   state: PageState,
-  action: { kind: AccountAction["kind"]; ref?: string },
+  action: {
+    kind: AccountAction["kind"];
+    ref?: string;
+    /**
+     * 打开表单时预填的名称（2026-10-22）。
+     *
+     * 只给「恢复默认名称」用：那个菜单项点开后应当**带着默认名**，用户确认一下即可，
+     * 而不是让他在空白框里重新打一遍邮箱。其余动作不传（保持空串，行为不变）。
+     */
+    label?: string;
+  },
   vendor?: string,
 ): PageState {
   if (state.action?.kind === action.kind && state.action.ref === action.ref && state.actionVendor === vendor) return state;
   return {
     ...state,
-    action: { kind: action.kind, ...(action.ref === undefined ? {} : { ref: action.ref }), label: "", key: "" },
+    action: {
+      kind: action.kind,
+      ...(action.ref === undefined ? {} : { ref: action.ref }),
+      label: action.label ?? "",
+      key: "",
+    },
     actionVendor: vendor,
   };
 }
