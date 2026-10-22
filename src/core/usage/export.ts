@@ -30,17 +30,44 @@ export const LEDGER_CSV_COLUMNS: readonly (keyof UsageRecord)[] = [
 ];
 
 /**
+ * Excel / LibreOffice 会当作**公式起始符**的字符（2026-10-22 按 bug 审查补）。
+ *
+ * `=` 普通公式、`+` 与 `-` 参与算术、`@` 是某些版本的控制符。以它们开头的单元格被
+ * 打开时会被求值，`=HYPERLINK(...)` 这类可以外带数据。
+ *
+ * 现实评估（审计报告原文）：导出的 `account` 列受 `CREDENTIAL_REF_PATTERN`
+ * （`^[A-Za-z_][A-Za-z0-9_]*$`）约束，不可能以这些字符开头；其余列是时间、厂商 id、
+ * 内部枚举与 token 数。唯一不可控来源是厂商 API 返回的 `model` id —— 也就是说
+ * **当前利用条件基本不成立**。
+ *
+ * 仍然加这层防护的理由：这是四行代码，而「不可控来源」一旦将来变多（比如加上用户
+ * 可编辑的备注列），漏掉它的代价是被打开表格的人替我们执行公式。
+ */
+const FORMULA_PREFIXES: readonly string[] = ["=", "+", "-", "@"];
+
+/**
+ * 一个字段是否会被表格软件当成公式。
+ * @param text - 原始文本。
+ * @returns 是否以公式起始符开头。
+ */
+function looksLikeFormula(text: string): boolean {
+  return text !== "" && FORMULA_PREFIXES.includes(text[0]!);
+}
+
+/**
  * 把一个字段转成 CSV 安全的文本。
  *
- * 只含数字/字母/常见符号时不加引号（导出的文件更干净），出现分隔符或引号时才整体包裹。
+ * 只含数字/字母/常见符号时不加引号（导出的文件更干净），出现分隔符、引号或以公式字符
+ * 开头时才整体包裹。
  * @param value - 原始值。
  * @returns 可安全放进一行 CSV 的文本。
  */
 function cell(value: unknown): string {
   if (value === undefined || value === null) return "";
   const text = String(value);
-  // 逗号、双引号、换行都必须引号包裹；纯空白也包（否则 Excel 可能吃掉）。
-  if (!/[",\r\n]/.test(text) && text.trim() !== "") return text;
+  // 逗号、双引号、换行必须包；纯空白也包（否则 Excel 可能吃掉）。
+  // **公式起始符也包**：引号包裹后 Excel 不再当公式求值（RFC 4180 的合法转义）。
+  if (!/[",\r\n]/.test(text) && text.trim() !== "" && !looksLikeFormula(text)) return text;
   return `"${text.replace(/"/g, '""')}"`;
 }
 
