@@ -16,7 +16,7 @@
  * - `rename` **永不改它**（默认值不该被用户的改名影响）；
  * - 老账号没有它 → `defaultLabel === undefined` → 界面禁用「恢复默认名称」（**不猜**）。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { restoreDefaultLabelOf } from "../../src/client/account-card";
 import { openAction, type PageState } from "../../src/client/page-state";
@@ -65,5 +65,50 @@ describe("点「恢复默认名称」是一键操作", () => {
   it("普通改名仍然从空白开始", () => {
     const next = openAction(emptyState, { kind: "rename", ref: "ACC_1" });
     expect(next.action?.label).toBe("");
+  });
+});
+
+describe("restoreName 动作真的调用宿主方法", () => {
+  it("**分发到 restoreAccountName**（不是 renameAccount）", async () => {
+    const { dispatchAccountAction } = await import("../../src/client/seams");
+    const restoreAccountName = vi.fn(async () => ({ ok: true }));
+    const renameAccount = vi.fn(async () => ({ ok: true }));
+    const usage = { restoreAccountName, renameAccount } as never;
+
+    const result = await dispatchAccountAction(usage, "opendesign", {
+      kind: "restoreName",
+      ref: "ACC_1",
+      label: "",
+      key: "",
+    });
+
+    expect(result?.ok, "应当成功").toBe(true);
+    expect(restoreAccountName, "调的是恢复方法").toHaveBeenCalledWith("opendesign", "ACC_1");
+    expect(renameAccount, "**不该**走改名通道").not.toHaveBeenCalled();
+  });
+
+  it("宿主没实现这个能力时**不发调用**（返回 undefined，界面据此报错）", async () => {
+    const { dispatchAccountAction } = await import("../../src/client/seams");
+    const usage = { renameAccount: vi.fn() } as never;
+    const result = await dispatchAccountAction(usage, "opendesign", {
+      kind: "restoreName",
+      ref: "ACC_1",
+      label: "",
+      key: "",
+    });
+    expect(result, "没实现就不发调用").toBeUndefined();
+  });
+
+  it("没有 ref 时不发调用", async () => {
+    const { dispatchAccountAction } = await import("../../src/client/seams");
+    const restoreAccountName = vi.fn();
+    const usage = { restoreAccountName } as never;
+    const result = await dispatchAccountAction(usage, "opendesign", {
+      kind: "restoreName",
+      label: "",
+      key: "",
+    });
+    expect(result).toBeUndefined();
+    expect(restoreAccountName).not.toHaveBeenCalled();
   });
 });
