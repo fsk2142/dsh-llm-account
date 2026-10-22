@@ -18,26 +18,8 @@
  * @module dsh-llm-account/src/client/shell
  */
 import { injectPluginCss, PAGE_CSS, PAGE_CSS_ID } from "./css";
-import { showDriftNotice } from "./drift-notice";
 import { FEATURE_TAB_NS, FEATURE_TAB_PROVIDER } from "./page-state";
 import { registerVendor, resetRegistry, type VendorEntry } from "./registry";
-import { PLUGIN_VERSION } from "./update-check";
-import { driftOf, driftPromptOf } from "./version-drift";
-
-/**
- * 重载本页。
- *
- * **为什么在这里内联一份**：`seams.ts`（真正的实现在那里）是个很大的模块，
- * 为了一次 `location.reload()` 把它整包拉进 `shell.ts` 不值得 —— 而 `shell.ts`
- * 是每个插件行都会执行的最外层入口。
- * @returns 是否真的发起了重载（没有 `location` 的环境返回 `false`）。
- */
-function reloadPage(): boolean {
-  const location = (globalThis as { location?: { reload?: () => void } }).location;
-  if (location === undefined || typeof location.reload !== "function") return false;
-  location.reload();
-  return true;
-}
 
 /** One page locale namespace for the whole unified page (`settings.llm-account`). */
 export const PAGE_LOCALE_NS = "settings.llm-account";
@@ -517,10 +499,6 @@ export function applyShell(rawContext: unknown, options: ApplyShellOptions = {})
   // 按已存储的开关做，见 {@link ApplyShellOptions.sharedSurfaces}。
   registerSharedSurfacesOnce(context, options);
 
-  // 插件更新后页面仍跑旧代码时，弹出刷新提示（2026-10-22 报障）。
-  // 放在最后：即使它出问题也不影响前面的注册。
-  checkVersionDrift(context);
-
   // The credentials service is armed through a NESTED injection, exactly as the
   // legacy commandcode client does it (`lib/client.js:7764-7765`), not through
   // the exported top-level `inject` list. The credential-reading work of Task 4+
@@ -574,53 +552,6 @@ function registerSharedSurfacesOnce(context: ClientShell, options: ApplyShellOpt
   }
 }
 
-/**
- * 检查「页面里的代码是否落后于磁盘上的版本」，落后就弹出刷新提示。
- *
- * **为什么需要**（2026-10-22 用户报障）：通过市场更新后，宿主侧代码重新加载了，
- * 但页面里的客户端 bundle 只在**页面重载**时重新求值。两半不同步 → 侧边栏渲染异常。
- * 用户此前只能重启程序，其实刷新页面就够。
- *
- * 判断依据：本 bundle 里构建期注入的版本 vs 宿主读到的磁盘版本。
- * **读不到就不提示**（老宿主没这个接口）—— 没有依据不打扰用户。
- *
- * 整个过程包在 try/catch 里：它挂在 `apply` 路径上，抛出去会连累整页。
- * @param context - 客户端上下文（要 `remote.llm-account` 的 `installedVersion`）。
- */
-function checkVersionDrift(context: ClientShell): void {
-  try {
-    const remote = (context as { remote?: Record<string, { installedVersion?: () => Promise<unknown> }> }).remote;
-    // 命名空间在宿主侧叫 `llm-account`；cordis 的远程服务名把连字符换成下划线，
-    // 两种写法都试一遍（不猜哪一个对）。
-    const service = remote?.["llm-account"] ?? remote?.llm_account;
-    if (service?.installedVersion === undefined) return;
-    const t = context.locale.bind(PAGE_LOCALE_NS);
-
-    void service
-      .installedVersion()
-      .then((value) => {
-        // 远程读口一律是 `{ ok, value }` 信封；直接当字符串用会把对象塞进比对。
-        const envelope = value as { ok?: boolean; value?: unknown } | undefined;
-        const disk =
-          envelope?.ok === true && typeof envelope.value === "string"
-            ? envelope.value.trim()
-            : typeof value === "string"
-              ? value.trim()
-              : "";
-        if (disk === "") return;
-        const prompt = driftPromptOf(t, driftOf(PLUGIN_VERSION, { ok: true, version: disk }));
-        if (prompt === undefined) return;
-        showDriftNotice(prompt, () => {
-          reloadPage();
-        });
-      })
-      .catch(() => {
-        // 读不到就算了：不影响任何功能。
-      });
-  } catch {
-    // 版本检测是**附加**能力，任何失败都不该影响页面。
-  }
-}
 
 /**
  * Register the single `settings.section` page.
