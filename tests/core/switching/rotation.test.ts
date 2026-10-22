@@ -441,3 +441,15 @@ it("noteAutoSwitch 记一条 balance 切换提示，不改拒绝表", () => {
   expect(e.switchNotice()).toMatchObject({ fromRef: "a", toRef: "b", reason: "balance" });
   expect(e.rejections().size).toBe(0);
 });
+it("**pinned 是空串时跳过它**（不拿空 ref 去查凭据 / 污染拒绝表）", () => {
+  // 设置文档的顶层 apiKeyEnv 可能被手改坏或半截写入成空串。
+  // 旧行为：pick 返回 ""，适配器拿它去查凭据 → 必然失败 → 往拒绝表里写一条
+  // **永不过期**的 `invalid-credential` 脏条目，还多记一条失败用量。
+  const e = new RotationEngine({ order: ["a", "b"], pinned: "", rules: [] });
+  expect(e.pick({ model: "m", tried: new Set() }), "空 ref 不该被选中").toBe("a");
+});
+
+it("pinned 是纯空白时同样跳过", () => {
+  const e = new RotationEngine({ order: ["a", "b"], pinned: "   ", rules: [] });
+  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
+});
