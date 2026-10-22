@@ -665,6 +665,20 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
    * @param deadline - 等待授权的截止时刻（= `expiresAt`）。
    */
   async #awaitApproval(child: VelaChild, attempt: number, signal: AbortSignal, deadline: number): Promise<void> {
+    /**
+     * **登录开始前**产物的内容，用来判断「文件变了没有」。
+     *
+     * 为什么必须有它（2026-10-22 用户报障「登录第二个 opendesign 没有出现新账户」）：
+     * `~/.amr/config.json` 是 vela 的**固定槽位**文件（`profiles.prod`）—— 无论登录哪个
+     * 账号都写同一处。所以登录第二个账号时，文件里**已经有第一个账号的内容**。
+     *
+     * 旧判据是「文件存在且能解析 → 登录成功」，于是第二轮登录会在第一轮轮询就读到
+     * **旧内容**，立刻判定成功，把**第一个账号**的凭据又存一遍：界面显示「登录成功」，
+     * 账号列表却毫无变化 —— 正是用户看到的现象。
+     *
+     * 判据改成「内容与基线不同」：那是 vela 真的写入了这次登录的唯一证据。
+     */
+    const baseline = await this.#readProfileText();
     let exited: { code: number | null } | undefined;
     const exit = new Promise<void>((resolve) => {
       child.on("exit", (code) => {
@@ -693,6 +707,23 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
       if (signal.aborted) return;
       const text = await this.#readProfileText();
       if (text !== undefined) {
+        /**
+         * **只有内容变了才是本次登录的证据。**
+         *
+         * 见上面 `baseline` 的注释：fixed-slot 文件在登录前就有上一个账号的内容，
+         * 直接采信会把旧账号重新存一遍并谎报成功。
+         */
+        if (text === baseline) {
+          // 还是登录前那份：vela 尚未写入。子进程已退出就说明没批准，否则继续等。
+          if (exited !== undefined) {
+            await this.#settle(attempt, {
+              state: "failed",
+              reason: exited.code === 0 ? "no-signin" : "unavailable",
+            });
+            return;
+          }
+          continue;
+        }
         const profile = parseAmrProfile(text);
         if (profile !== undefined) {
           await this.#complete(attempt, profile);
