@@ -286,6 +286,10 @@ export type CopyKey =
   | "models.quotaFree"
   | "models.quotaApprox"
   | "models.quotaUnknown"
+  | "drift.title"
+  | "drift.body"
+  | "drift.reload"
+  | "drift.later"
   | "sidebar.pinned"
   | "sidebar.effective"
   | "sidebar.open"
@@ -662,6 +666,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.quotaFree": "免费",
     "models.quotaApprox": "约 {amount}",
     "models.quotaUnknown": "未知",
+    "drift.title": "插件已更新",
+    "drift.body": "当前页面运行的是 {page}，磁盘上已是 {disk}。刷新后才能使用新功能。",
+    "drift.reload": "立即刷新",
+    "drift.later": "稍后",
     "sidebar.pinned": "已指定",
     "sidebar.effective": "当前使用",
     "sidebar.open": "点击打开用量面板",
@@ -1005,6 +1013,10 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "models.quotaFree": "Free",
     "models.quotaApprox": "~{amount}",
     "models.quotaUnknown": "Unknown",
+    "drift.title": "Plugin updated",
+    "drift.body": "This page runs {page}, but {disk} is installed. Reload to use the new version.",
+    "drift.reload": "Reload now",
+    "drift.later": "Later",
     "sidebar.pinned": "Selected",
     "sidebar.effective": "In use",
     "sidebar.open": "Click to open the usage panel",

@@ -317,10 +317,9 @@ describe("边界校验器的性质", () => {
           continue;
         }
         // 其余端点接受的载荷必须是**它声明的那个类型**（数组是账号/切换记录的合法形状）。
-        // 导出端点声明返回 CSV 文本，所以它该接受非空字符串而不是对象 —— 这条断言按「类型对得上」
-        // 判定，不预设所有端点都返回对象。
+        // `usageExportCsv` 与 `installedVersion` 声明返回**字符串**，所以按字符串判定。
         const shape =
-          descriptor.method === "usageExportCsv"
+          descriptor.method === "usageExportCsv" || descriptor.method === "installedVersion"
             ? typeof value === "string" && value !== ""
             : typeof value === "object" && value !== null;
         expect(shape, `${descriptor.method} accepted ${JSON.stringify(value)}`).toBe(true);

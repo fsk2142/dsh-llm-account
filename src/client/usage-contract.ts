@@ -55,6 +55,8 @@ export const USAGE_METHODS = [
   "status",
   "accounts",
   "switches",
+  // 磁盘上的已安装版本：判断页面里的客户端 bundle 是否已落后（2026-10-22）
+  "installedVersion",
   // 设置页的模型勾选：未过滤的完整目录
   "models",
   // 账号操作（Task 5：账户卡片的 `⋯` 菜单与「添加账户」）
@@ -458,6 +460,21 @@ function parseAccountView(endpoint: string, value: unknown): AccountView {
 /** 无返回值的调用（宿主方法返回 `void`）：接受任何值并归一到 `undefined`。 */
 function parseVoid(): undefined {
   return undefined;
+}
+
+/**
+ * 校验「磁盘已安装版本」：必须是非空字符串。
+ *
+ * 拒绝空串：空版本号会让漂移检测永远判为「不一致」，于是每次加载都弹刷新提示 ——
+ * 那比不提示更糟。宁可在这里失败（客户端据此视为「读不到」，不弹）。
+ * @param endpoint - 调用点（错误信息里点名）。
+ * @param value - 宿主返回值。
+ * @returns 版本字符串。
+ */
+function parseInstalledVersion(endpoint: string, value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (text === "") throw new Error(`${endpoint}: expected a non-empty version string`);
+  return text;
 }
 
 /**
@@ -875,6 +892,8 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("status", "VendorUsageStatus", parseVendorUsageStatus, [VENDOR_PARAM]),
     makeDescriptor("accounts", "AccountViewList", parseAccountViews, [VENDOR_PARAM]),
     makeDescriptor("switches", "SwitchRecordList", parseSwitchRecords, [VENDOR_PARAM]),
+    // 无参：磁盘上的已安装版本（页面用它判断自己的 bundle 是否已落后）。
+    makeDescriptor("installedVersion", "InstalledVersion", parseInstalledVersion, []),
     makeDescriptor("models", "CatalogModels", parseCatalogModels, [VENDOR_PARAM]),
     makeDescriptor("addAccount", "AccountView", parseAccountView, [
       VENDOR_PARAM,
@@ -987,6 +1006,13 @@ export interface UsageNamespace {
   probeSearchCredential?(refs: readonly string[]): Promise<unknown>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
+  /**
+   * 磁盘上的**已安装版本**（宿主读自己的 `package.json`）。
+   *
+   * 可选：老版本宿主没有它 —— 那时页面无法判断自己是否落后，于是不提示
+   * （没有依据就不打扰用户）。
+   */
+  installedVersion?(): Promise<unknown>;
   models?(vendor: string): Promise<CatalogModelsResult>;
   addAccount(vendor: string, input: AddAccountInput): Promise<AccountView>;
   renameAccount(vendor: string, ref: string, label: string): Promise<void>;
