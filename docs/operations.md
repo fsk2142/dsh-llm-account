@@ -23,7 +23,7 @@
 
 用户报：插件改动之后 DSH Desktop 无法启动。
 
-## 排查过程（可复现的证据链）
+### 排查过程（可复现的证据链）
 
 1. **产物语法与加载**：所有 `lib/*.js` `node --check` 通过；用宿主同款的
    `window.__ModuleLoader__.load({ id, factory })` 模拟客户端启动 → `apply` 正常跑完，
@@ -33,13 +33,18 @@
    `@deepseek-ai/dsh-web` 在 `~/.dsh/profiles/desktop/node_modules` 里**不存在**（桌面端搜索
    没装/没随 profile 安装），而 `lib/web-search.js` 顶部就有 `import ... from "@deepseek-ai/dsh-web"`。
 
-## 根因
+### 根因
 
 `@deepseek-ai/dsh-web` 是**可选**依赖（`inject: ["web"]` 只保证「没有 web 服务时不调用 apply」），
 但我们把 `WebError` 当**值**静态 import 了它。静态 import 在**加载期**解析：包不在 →
 `ERR_MODULE_NOT_FOUND` → 这一行插件加载失败 → 宿主起不来。`inject` 挡不住加载期这一层。
 
-## 修法
+### 修法
+
+> **现状（2026-10-22）**：网页搜索功能后来被整体移除，`src/web-search/` 目录与
+> `@deepseek-ai/dsh-web` 依赖都已不存在。下面这段是当时的修法记录，保留是因为它
+> 解释了「静态 import 一个可选依赖会让宿主起不来」这个**通用**教训 ——
+> 换任何一个可选 peer 依赖，同一个坑仍然成立。
 
 - 新增 `src/web-search/web-error.ts`：本地镜像 `WebError`（`name: "WebError"`、`code` 逐字对齐，
   支持 `cause`）。四个调用点（`anthropic` / `custom` / `provider` / `util`）改用它；
@@ -49,7 +54,7 @@
   1. `build.test.ts` 的 `HOST_BUNDLES` 明确断言 `lib/web-search.js` **不含** dsh-web；
   2. 新增「任何产物都不得 `from "@deepseek-ai/dsh-web"`」的全 `lib/*.js` 扫描。
 
-## 验收
+### 验收
 
 `tsc` 0 错；67 文件 / 879 例全绿；`tsdown` 重建后产物裸依赖只剩
 `dsh-credentials` / `dsh-llm` / `schemastery`（宿主自带）；客户端启动模拟仍 BOOT OK。
@@ -76,7 +81,7 @@ Error: desktop welcome: Web authentication failed
 
 当天 13:19–13:48 共 10 份崩溃日志，全部同一条错误；渲染进程没有任何错误输出。
 
-## 根因（已用证据闭环）
+### 根因（已用证据闭环）
 
 1. 桌面端启动流程（`main.js` 12190–12195）：
    `host.start()` → `authenticateWebHost(ready.url)` → `connectDesktopWelcome(ready.url, net.fetch)`。
@@ -95,7 +100,7 @@ Error: desktop welcome: Web authentication failed
    `05:19:50.498Z`（相隔 90ms）。之后每次启动在**第一个请求**就 431，
    连新 Cookie 都写不进去，所以 Cookie 数量冻结在 71，崩溃永久化。
 
-## 证据
+### 证据
 
 - 真实库：71 条全部是 `127.0.0.1` 的 `dsh-auth-*`，`PRAGMA integrity_check` 正常。
 - 用宿主的真实启动 URL 实测：
@@ -106,21 +111,21 @@ Error: desktop welcome: Web authentication failed
   45 秒内无崩溃，并正常写入 1 条新 `dsh-auth-*`（握手走通）。
 - 清空 71 条后，用真实配置启动：90 秒无新崩溃日志，且只写入 1 条新 Cookie。
 
-## 与插件无关
+### 与插件无关
 
 - 崩溃栈没有一帧落在插件代码里，失败点是桌面端 shell 对自己的本地宿主做 HTTP 握手。
 - 用完整插件与 profile、仅更换 Electron user-data 目录即可正常启动。
 - 插件构建出的宿主侧服务用 Node fetch 实测 `GET /` 200、`settings/describe` RPC 200。
 - 时间上的巧合：第 71 次启动正好发生在插件返修之后，实际是 Cookie 累积到阈值。
 
-## 修复（已执行）
+### 修复（已执行）
 
 1. 备份真实 Cookie 库到 `%TEMP%/opencode/backups/Cookies-<时间戳>`。
 2. 删除 `cookies` 表中全部 `host_key='127.0.0.1' AND name LIKE 'dsh-auth-%'` 的行
    （共 71 条；该库当时只有这些行）。
 3. 重启验证通过（见上）。
 
-## 复发与预防
+### 复发与预防
 
 - 每启动一次桌面端新增 1 条 Cookie，约 **71 次启动**后再次触顶
   （按每天 5–6 次，约 1–2 周）。
@@ -179,7 +184,7 @@ Error: desktop welcome: Web authentication failed
 | 4 | 实测结论可能贴错行 | 隐患 | 「测试」结果显示在别的密钥行上 |
 | 5 | 测试套件偶发红 | 套件可靠性 | CI/本地偶尔失败，掩盖真实的回归 |
 
-## 1. 搜索网关路拿错行的数据（真 bug）
+### 1. 搜索网关路拿错行的数据（真 bug）
 
 **根因**：网关路要读「当前会话所属厂商的行」拿 baseURL 与密钥。旧实现按**固定顺序**取第一个
 可用的 provider 行（`commandcode` 优先），而不是按会话实际所属的那家。于是 opendesign 会话
@@ -188,7 +193,7 @@ Error: desktop welcome: Web authentication failed
 **修法**：改为由调用方传入**本次会话的 provider**，按它寻址该行；取不到时明确降级
 （不猜另一家）。
 
-## 2. 取消搜索后继续试剩下的 key（真 bug）
+### 2. 取消搜索后继续试剩下的 key（真 bug）
 
 **根因**：`searchWithApiKeys` 的循环只在**发起前**检查中止信号，`fetch` 抛 `AbortError`
 时被当成「这个 key 不行」继续下一个。
@@ -196,7 +201,7 @@ Error: desktop welcome: Web authentication failed
 **修法**：新增 `isAbortError()`；捕获到中止立即 `return`（不是 continue）。同时
 `strategyCanFallBack()` 区分「策略允许回退」与「这次失败可以回退」—— 用户主动取消不算失败。
 
-## 3. 密钥实测因加载顺序静默降级（隐患）
+### 3. 密钥实测因加载顺序静默降级（隐患）
 
 **根因**：`probeSearchKey` 依赖注入，而注入发生在模块装配的最后一步。若装配顺序变化
 （或某个可选依赖缺席提前返回），探测函数是 `undefined`，`probeVerdictOf` 就回
@@ -205,27 +210,27 @@ Error: desktop welcome: Web authentication failed
 **修法**：`usage-remote.ts` 用 `.find(deps => deps.probeSearchKey !== undefined)` 显式查找
 能力提供方，而不是假设位置；找不到时给**明确的**原因（不再是「版本不支持」）。
 
-## 4. 实测结论可能贴错行（隐患）
+### 4. 实测结论可能贴错行（隐患）
 
 **根因**：容器按 ref 存探测结论，但渲染时行的 ref 可能因为账号重命名/重排而变化，
 导致结论贴到相邻行。
 
 **修法**：`keyProbes` 以 ref 为键并随行一起读取；行身份变化时结论失效而不是错贴。
 
-## 5. 测试套件偶发红（套件可靠性）
+### 5. 测试套件偶发红（套件可靠性）
 
 **根因**：若干用例依赖真实计时器与固定端口，在慢机上偶发超时。
 
 **修法**：改用假计时器 / 注入时钟；对必须真实的用例放宽超时并写明理由。
 
-## 审计过但**没有**问题的部分
+### 审计过但**没有**问题的部分
 
 - 设置保存的 revision 围栏（`expectedRevision` 每次写前重读，冲突有明确错误）；
 - 串行写队列（并发点击不会互相覆盖）；
 - 密钥**明文**从不进设置文档（只存 ref）；
 - 搜索 key 的**非 ASCII** 输入在本地判 `invalid`（不浪费一次请求）。
 
-## 验证
+### 验证
 
 typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各有回归测试，全部做过
 变异检验（改回旧行为 → 对应用例变红）。
@@ -243,7 +248,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 全部属于同一类：边界形状校验不完整 —— 项目自己的纪律是「线上值形状不可信」，多数模块做到了，
 有四处漏了。
 
-## 4 个发现（按危害排序）
+### 4 个发现（按危害排序）
 
 ### 1. 限流冷却可能被静默绕过 — LOW
 
@@ -277,20 +282,20 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
   级禁用不受影响。
 - 不是门失效（commandcode 本就无条件注册），是字段缺失导致的三行不一致。
 
-## 顺带记录（非缺陷）
+### 顺带记录（非缺陷）
 
 - 死语句 `void currentKey;`（`src/core/switching/model-fallback.ts:191`）。
 - `fallbackEffort` 生产未接线（仅测试使用）；档位安全性由 `#declaredEffort` 声明闸门保证，
   功能不缺。
 - 第一次审计已修的真 bug 本轮复核**未回归**。
 
-## 证伪记录
+### 证伪记录
 
 曾假设 `src/core/transport.ts` 的 `Promise.race` 落败者晚到 rejection 会造成未处理拒绝。
 写独立复现脚本实测**不成立**：`Promise.race` 给两个输入都挂了 handler，晚到 rejection 被其
 吞掉；对照组（裸 `Promise.reject`）验证了检测器有效。故未计入发现。教训：先复现、再报告。
 
-## 审查覆盖与证据
+### 审查覆盖与证据
 
 | 项 | 结果 |
 |---|---|
@@ -301,7 +306,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 | CSS 模板字面量 | 62 个反引号配对；源码与产物 `.dsl-*` 类名数一致（138 = 138） |
 | 逐层审查 | core 纯函数；三家适配器 stream 主循环与装配；usage-remote 远程面；客户端页面/容器/样式/更新检查 |
 
-## 修复记录（控制器实施，2026-10-20 晚）
+### 修复记录（控制器实施，2026-10-20 晚）
 
 四条**全部**已修，各带回归测试与变异检验（把修复改回旧行为，对应用例变红）：
 
@@ -334,7 +339,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 > `2026-10-13-host-smoke.md` 已在文档清理时删除（它们描述的是已完成且被后续重构取代的阶段，
 > 其中「未验证项」清单的结论已并入后续文档）。**本文的假设条目仍然有效**，需要原文时从 git 历史取回。
 
-## 0. 这份文档是什么
+### 0. 这份文档是什么
 
 原计划的「宿主接缝试验」（写一个最小插件、在本机建 profile、启动宿主观察行为）已被用户取消。本文件把原本要靠试验回答的问题**改写成假设**，供两个下游使用：
 
@@ -344,7 +349,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 
 **读法**：§2 的三条都是**未验证假设，不是结论**。任何人不得把它们当作已确认的宿主行为引用。假设错误的后果已经写进每条里，目的是让 1b 的改动面最小。
 
-## 1. 为什么跳过试验：两条硬事实
+### 1. 为什么跳过试验：两条硬事实
 
 | 事实 | 证据 | 对试验的影响 |
 | --- | --- | --- |
@@ -353,7 +358,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 
 **第三条取消理由**：客户端 `apply` 被调用几次（假设 ②）只能在**真实浏览器**里观察，本机没有这条观察通道 —— 它不是 CLI 能回答的问题。
 
-## 2. 三条假设
+### 2. 三条假设
 
 ### 假设 ① 子路径导出能被宿主加载器解析
 
@@ -380,7 +385,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 - **验证方式**：Task 14 验证不了（假 ctx 不触发页面注册）；计划 1c 实测三处 —— §4 清单第 4 项（`order` 是否生效）、第 6 项（设置字段能否经 `hooks` 投影出的通道读出并渲染，对应本假设的后半段）、第 3 项（页面是否出现、出现几次）。
 - **假设错误的后果**：只改薄适配层，页面主体不动。若 `order` 不被接受，页面在设置里的顺序需要另找机制（例如依赖注册先后或 `id`）；若 `hooks` 键不被投影成 `use<Key>`，该页面拿设置数据的通道需要改为其它可用路径（例如走远程 `settings.describe()`）。
 
-## 3. 旧插件的调用点形状（引用，本文档未验证）
+### 3. 旧插件的调用点形状（引用，本文档未验证）
 
 来源：**控制器的只读调研**。安装目录为 `C:\Users\me\.dsh\profiles\desktop\node_modules\`。本文档作者**没有打开**这些包，以下内容逐字来自任务书，未经独立复核。
 
@@ -393,7 +398,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 
 用途：假设 ③ 的依据，以及计划 1b 页面注册与数据读取的书写模板。它是**观察到的旧插件写法**，不等于**宿主接受的契约**。
 
-## 4. 计划 1c 必须实测的清单
+### 4. 计划 1c 必须实测的清单
 
 计划 1c 要在用户在场、与桌面端同版本（`0.2.0-rc.2`）的引擎上执行。以下每项都是假设转结论的判定点：
 
@@ -408,7 +413,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 
 Task 14 Step 4 的 `docs/superpowers/notes/2026-10-13-host-smoke.md` 需把本期无法验证的部分指向本清单。
 
-## 5. 与其它任务的衔接
+### 5. 与其它任务的衔接
 
 - **计划 1b**：用假设 ③ 的形状写薄适配层；按假设 ② 走兜底路径（页面直读两个命名空间）；并在 `apply` 里留一个调试计数或日志，供计划 1c 直接读出 `apply` 的真实调用次数（否则只能靠注册次数间接推断，假设 ② 无法判定，见 §2 ②）。
 - **Task 14**：Step 2 验证假设 ① 的 Node 一侧；Step 3 用假 ctx 覆盖装配；Step 4 记录无法验证项。

@@ -267,7 +267,7 @@ export interface TransportPort {
 
 **我们要求的行为**：
 
-1. **生效账号（effective account）成为一等概念**：轮换引擎在每次真正选中某个 ref 去发请求时记录「最近一次生效的 ref 与时刻」；成功完成请求后更新为「最近一次成功服务的 ref」。这个概念属于内核（`src/core/rotation.ts`），并由宿主侧的 usage 远程对外发布。
+1. **生效账号（effective account）成为一等概念**：轮换引擎在每次真正选中某个 ref 去发请求时记录「最近一次生效的 ref 与时刻」；成功完成请求后更新为「最近一次成功服务的 ref」。这个概念属于内核（`src/core/switching/rotation.ts`），并由宿主侧的 usage 远程对外发布。
 2. **卡片主体显示生效账号**：套餐名 + 5 小时/每周（OpenCode 为 rolling/weekly/monthly）额度，与旧卡片的信息密度一致。
 3. **切换提示**：当生效账号与「配置里固定/首选的账号」不同时，卡片顶部显示一条提示：**谁 → 谁、原因（额度耗尽 / 限流 / 凭据失效 / 手动切换）、时间**。OpenCode 复用其 `lastSwitch` 语义；Command Code 由我们的轮换引擎产生同样形状的通知。
 4. **固定账号与生效账号并列标注**：两者不同时都可见（例如「固定：A；当前：B」），避免用户以为自己的固定设置没生效。
@@ -475,7 +475,7 @@ orderWithOverride(derived: string[], override: unknown): string[]
 
 ### 6.1 分层
 
-- **纯决策**（`src/core/switching.ts`，无 I/O、可完整单测）：
+- **纯决策**（`src/vendors/switching.ts`，无 I/O、可完整单测）：
   - `remainingScore(snapshot): number | undefined`：一个账号的「最紧窗口剩余比例」（0–1）。窗口剩 = `1 - used/cap` 或 `1 - percent/100`；`exceeded` → 0；没有可计算窗口 → `undefined`。
   - `rankCandidates(input): Candidate[]`：输入 = 顺序、拒绝表、配置状态、额度分数、策略；过滤掉被拒绝/未配置的账号；输出带分数（未知分数排最后）。
   - `nextInOrder(order, current, usable): string | undefined`。

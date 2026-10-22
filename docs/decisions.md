@@ -21,13 +21,13 @@
 Spec: docs/superpowers/specs/2026-10-13-dsh-llm-account-design.md（已读，是绑定权威；计划与它有冲突时按 spec 裁决）
 Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-phase1-host\
 
-## 环境记录
+### 环境记录
 
 - 2026-10-13：本机 `bash` 不存在（Windows），SDD 技能自带的 `scripts/sdd-workspace` / `task-brief` / `review-package` 无法执行。以等价手工方式替代：workspace 目录手工创建；任务 brief 用手工抽取写入 `<workspace>/task-N-brief.md`；review package 用 `git log --oneline` + `git diff --stat` + `git diff -U10` 重定向到一个唯一命名文件（技能明确允许此替代）。
 - 2026-10-13：工作区权限修复已执行 —— `VERDICT=PRECONDITION`（缺少所有权权限）→ `GRANTED=1`、`verification.status=verified`；备份与回滚脚本在 `D:\work\llm-acct-repo-acl-recovery\acl-backup-4d04cebfe3244089a4dd32728fafd16c.json(.ps1)`。修复后在沙箱内重跑原操作成功（node 24.19.0 / git 2.55.0 / pnpm 11.24.0）。
 - 2026-10-13：会话文件策略改为 danger-full-access，批准提示关闭；不再请求任何提权。
 
-## Pre-flight scan（Task 1 之前，逐行核对后写出）
+### Pre-flight scan（Task 1 之前，逐行核对后写出）
 
 ### 任务对之间共享文件/接口的行
 
@@ -65,18 +65,18 @@ Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-pha
 | T13 | 五条测试对应 `toQuotaSnapshot`、MAX_ACCOUNTS、意图顺序、冲突重放 | OK |
 | T14 | 三步验证对应入口导出与两条路由 | 见 Ruling 1（补 login 构造） |
 
-## Rulings
+### Rulings
 
 - Ruling 1（预检，2026-10-13）：**计划遗漏了「把内核串成一个 LlmAdapter」这一层** —— `RotationEngine`（T5）、`runStream`（T7）、`classify*Failure`（T9/T12）、`selectVisible`（T6）、`pickApiKey`（T3）全都没有消费者，没有任何任务产出宿主真正调用的 `LlmAdapter.stream()`。决定：把 T9 与 T12 扩写为「LlmAdapter 与协议」，各自产出 `createCommandCodeAdapter(deps): LlmAdapter` 与 `createOpencodeAdapter(deps): LlmAdapter`（实现 `listModels`/`resolveModel`/`stream`，stream 内串「轮换 → 传输内核 → 失败分类」，`listModels` 走 `selectVisible`）；T9/T10 补账号端口与 stream 的端到端测试；T14 增加构造 login 端口并挂载；T0 的 `package.json` 直接写完整 `exports`，`.gitignore` 增加 `.superpowers/`。依据：spec §6.3（适配器接口）、§6.4（关键语义）、§9.1（请求路径）。**若判断错误**：适配器文件比原计划大一档，后续第 2/3 期若要按协议再拆需要一次重构；不影响接口边界与命名。
   - 已执行：计划文件已按本裁决改写（T0 exports/.gitignore、T9 标题+Interfaces+测试+Step3、T10 Interfaces+测试+Step3、T12 标题+Interfaces+测试+Step3、T14 Interfaces+Step1）。同时把 T10 的账号操作改为与 T13 同语义（先写意图日志再提交），依据是 spec §6.4.5「两家共用」。
 - Ruling 2（环境，2026-10-13）：本机无 `bash`，SDD 技能的三个脚本无法执行；改用等价手工流程（brief 手工写入 `<workspace>/task-N-brief.md`，review package 用 `git log --oneline` + `git diff --stat` + `git diff -U10` 重定向到文件）。代价：若手工抽取 brief 时漏段，实现者会少需求 —— 缓解办法是 brief 里附上该任务的 Interfaces 与 Global Constraints 全文。
 - Ruling 3（模型选择，2026-10-13）：本会话只有一条可用的子代理路由（`commandcode` / `deepseek/deepseek-v4.1-flash`），因此技能要求的「按任务难度分级选模型」与「第 4-5 轮修复升级模型」都无法执行；所有派发都显式写这一条路由。代价：难任务的实现与复核没有能力提升空间，只能靠更细的 brief 与更严的复核兜底。
 
-## 需求变更（执行期间，用户追加）
+### 需求变更（执行期间，用户追加）
 
 - 变更 1（2026-10-13，用户）：**设置页与界面摆放要对齐现在用的 Command Code 插件**；账号分组方式由用户选定为**顶部厂商标签页切换**。已落进绑定规格：设计文档 §8 新增「页面结构（摆放与现有 Command Code 插件差不多）」与「界面摆放（第 2 期）」两条，§3 第 2 期行补注「摆放与卡片形状对齐」；计划末尾的 1b 说明也同步了。影响面：只在计划 1b（客户端页面）与第 2 期；1a（宿主侧）不受影响，继续执行。
 
-## 任务记录
+### 任务记录
 
 - Task 10: dispatched（implementer agent `e8392e2a-be95-40a0-9fcc-5377c6c348f9`），BASE = `5860601`。完成，提交 `d7dce69`（`quota.ts` 341 行 + `accounts.ts` 418 行 + 测试 598 行；`src/core/adapter.ts` **只加 7 行** = `CredentialPort.describe`）。`pnpm typecheck` 干净、`pnpm test` **129/129**。
 - **Ruling 25（Task 10 concern 1，2026-10-13）**：账号条目把 ref 存在**旧字段 `apiKeyEnv`** 里（零迁移必需；用户现有配置就是这个形状）。接受。**若判断错误**：Task 13/14 需改一个常量。
@@ -250,12 +250,12 @@ Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-pha
 - Task 1: 复核者的 ⚠️ 项由控制器确认：plan/spec 的两处在途修改**早于**本任务（那是控制器的需求变更提交 `7b8b5fa`）；`.superpowers/` 是 gitignored 工作区，不属于交付物；`llm-account` / order 12 确实由 spec §8 与计划 Task 14 规定。
 - Task 0 抽查：`lib/index.js` 与 `lib/index.d.ts` 存在 ✓（复核者的 ⚠️ 项已由控制器确认）。
 
-## 追加裁决（Task 0 运行期间）
+### 追加裁决（Task 0 运行期间）
 
 - Ruling 4（用户决定，2026-10-13）：**跳过宿主接缝实验**。用户选择「跳过实验」。事实依据：PATH 上的 `dsh` CLI 是 `0.1.1-rc.2`，而桌面端实际引擎是 `0.2.0-rc.2`（`runtime.json` 的 `desktopVersion`），旧 CLI 建的 profile 结论不可信；且客户端 `apply` 调用次数只能在真实浏览器里观察（`web_fetch` 不执行 JS）。已执行：Task 1 改写为「记录三条假设」的文档任务（含每条的验收方式与假设错误的后果）；Task 14 Step 3 的「一次性 profile 启动 + dsh web」替换为**假 ctx 装配测试**（断言两条 provider id 各注册一次 + 两个 Config 能解析用户现有配置形状），真机启动验收推到计划 1c（用户在场时做）；计划 1b 明确走兜底路径（页面按命名空间读两家数据，不依赖每实例注入状态）。**若判断错误**：1b 的页面数据源多写一层适配（成本已隔离在一个薄适配层内），真机问题推迟到 1c 才暴露。
 - Ruling 5（宿主类型依赖，2026-10-13）：工作区没有 `@deepseek-ai/*` 宿主包（运行时由 profile 提供），后续任务无法 typecheck/单测。已在 npm 确认 `@deepseek-ai/dsh-*` 的 `0.2.0-rc.2`、`@deepseek-ai/schemastery@3.18.4`、`@deepseek-ai/cordis@4.0.4` 均存在。已执行：Task 2 增加 Step 0，把宿主包装成 **devDependencies**（版本对齐桌面端引擎），并说明 `VendorAdapter` 引用宿主类型时用 `import type`、值导入留到 Task 9/12。**若判断错误**：devDeps 版本与真实宿主不一致导致类型漂移 —— 缓解办法是 Task 14 的 `peerDependencies` 写成与插件一致的精确析取，并在计划 1c 真机验收时暴露。
 
-## 补记：正文曾被后续编辑替换掉的 4 条裁决（内容据当时的执行记录补回，保证裁决清单穷尽）
+### 补记：正文曾被后续编辑替换掉的 4 条裁决（内容据当时的执行记录补回，保证裁决清单穷尽）
 - **Ruling 10（Task 5 concern #2，2026-10-13）**：`rate-limit` **有** `resetAt` 时按 `resetAt` 恢复，**没有**时才用 `RATE_LIMIT_COOLDOWN_MS`（与 `quota` 行对称）。我原 brief 的表格漏了这个从句，属于裁决不完整而非有意忽略。依据：旧 Command Code 插件就读取厂商的限流窗口重置时间。**若判断错误**：同一账号多一次失败尝试或轮换略延迟。已作为「复核前先修正的正确性 concern」派回原实现者（新增测试钉住两半与半开区间边界）。
 - **Ruling 13（流程，2026-10-13）**：**实现者运行期间不要提交控制器的文档改动**，否则任务的 diff 范围会被夹进无关提交（Task 7 已发生一次，靠 `-- <paths>` 限定范围解决）。**若判断错误**：无实质代价，只是复核包要多一步范围限定。
 - **Ruling 24（Task 9 fix round 3 范围，2026-10-13）**：不接受把两条 Minor 留给收尾，追加第 3 轮修复：**A** 空/截断响应不得伪装成正常收尾（旧插件抛可重试的 `EMPTY_RESPONSE`/`STREAM_CLOSED`，且我们自己的重试白名单里就有 `EMPTY_RESPONSE`）；**B** Messages 的 `tool_use` 块在 EOF 时未排空，导致补发的 finish 被宿主以 `invariant.js:53` 拒绝。依据：设计 §10「可重试错误交由宿主重试策略」+「明确错误而非静默成功」。**若判断错误**：用掉第 3 轮（上限 5），diff 仍在同一终止逻辑内。
