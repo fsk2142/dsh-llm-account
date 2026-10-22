@@ -37,6 +37,13 @@ export interface AccountView {
   ref: string;
   /** 用户可见名称。 */
   label: string;
+  /**
+   * 登录时的默认名称（2026-10-22 用户要求「改名后能恢复默认」）。
+   *
+   * `undefined` = 这个账号没有记录默认名（老数据），此时「恢复默认名称」不可用 ——
+   * **不猜**。只有厂商实现了「记录默认名」才会有值。
+   */
+  defaultLabel?: string;
   /** 背后是否已有可用密钥。 */
   configured: boolean;
   /** 是否为当前选中（固定）账号。 */

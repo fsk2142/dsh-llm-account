@@ -73,6 +73,20 @@ const WORKSPACE_FIELD = "workspaceId";
 /** 账号条目的展示名称字段。 */
 const LABEL_FIELD = "name";
 
+/**
+ * 账号条目的**默认名称**（登录时拿到的邮箱，2026-10-22 用户要求）。
+ *
+ * 为什么需要单独存：用户改名会覆盖 `name`，而原始邮箱就此丢失 ——
+ * 「不想用自定义名了就恢复默认」这件事就做不到了。
+ *
+ * **兼容性**：老账号没有这个字段。读取方要能降级：
+ * - 有它 → 「恢复默认名称」可用；
+ * - 没有它 → 该菜单项不可用（不猜、不编一个名称出来）。
+ *
+ * 它只在登录落库时写一次，`rename` **永不改它** —— 默认值不该被用户的改名影响。
+ */
+const DEFAULT_LABEL_FIELD = "defaultName";
+
 /** 账号条目的标识字段。 */
 const ID_FIELD = "id";
 
@@ -178,6 +192,22 @@ function refOf(item: unknown): string | undefined {
 function labelOf(item: unknown): string | undefined {
   if (!isRecord(item)) return undefined;
   return normalizeKey(item[LABEL_FIELD]);
+}
+
+/**
+ * 读一个账号条目的**默认名称**（登录时的邮箱）。
+ *
+ * `undefined` 有两种情况，对「恢复默认名称」而言是同一件事（都不可用）：
+ * - 老账号没有这个字段（2026-10-22 之前建的）；
+ * - 字段存在但是空白。
+ *
+ * 不降级成「ref 里那段转义文本」—— 那是凭据槽名，不是用户能认的邮箱。
+ * @param item - 账号条目（任意形状）。
+ * @returns 默认名称，或 `undefined`。
+ */
+function defaultLabelOf(item: unknown): string | undefined {
+  if (!isRecord(item)) return undefined;
+  return normalizeKey(item[DEFAULT_LABEL_FIELD]);
 }
 
 /** 文档里是否已有这个账号条目。 */
@@ -352,9 +382,16 @@ class OpenDesignAccountsImpl implements OpenDesignAccounts {
     const snapshot = await this.#deps.settings.describe(OPENDESIGN_SETTINGS_NS);
     const slot = opendesignAccountSlot(snapshot.value);
     const views: AccountView[] = rawAccounts(snapshot.value)
-      .map((item) => ({ ref: refOf(item), label: labelOf(item) }))
-      .filter((item): item is { ref: string; label: string } => item.ref !== undefined)
-      .map((item) => ({ ref: item.ref, label: item.label ?? item.ref, configured: false, active: item.ref === slot.pinned }));
+      .map((item) => ({ ref: refOf(item), label: labelOf(item), defaultLabel: defaultLabelOf(item) }))
+      .filter((item): item is { ref: string; label: string; defaultLabel: string | undefined } => item.ref !== undefined)
+      .map((item) => ({
+        ref: item.ref,
+        label: item.label ?? item.ref,
+        // 老账号没有这个字段：保持 `undefined`，界面据此禁用「恢复默认名称」（不猜）。
+        ...(item.defaultLabel === undefined ? {} : { defaultLabel: item.defaultLabel }),
+        configured: false,
+        active: item.ref === slot.pinned,
+      }));
     // 重复 ref 只保留第一个：同一个凭据槽不该在轮换里被算两轮（Review Focus 1）。
     const unique = dedupeByRef(moveFirst(views, slot.ref));
     // 列表顺序 = 全局顺序在本厂商的投影；没有全局顺序时保留派生顺序（当前账号提位）。
@@ -415,6 +452,8 @@ class OpenDesignAccountsImpl implements OpenDesignAccounts {
         const entry: Record<string, unknown> = {
           [ID_FIELD]: ref,
           [LABEL_FIELD]: label,
+          // 登录时的名称（邮箱）同时记为默认名：之后用户改名也能恢复回来。
+          [DEFAULT_LABEL_FIELD]: label,
           [REF_FIELD]: ref,
           [CONTROL_FIELD]: controlRef,
         };
@@ -457,6 +496,29 @@ class OpenDesignAccountsImpl implements OpenDesignAccounts {
         result: undefined,
       })),
     );
+  }
+
+  /**
+   * 把展示名称**恢复成登录时的默认名称**（2026-10-22 用户要求）。
+   *
+   * 语义：等价于 `rename(ref, defaultLabel)`，但**必须由账号自己记录的默认名驱动**，
+   * 不能由调用方传一个「它以为的默认名」进来 —— 那会把「默认值」变成另一个可被改写的字段。
+   *
+   * 老账号没有 `defaultName` 时抛错（而不是静默无操作）：界面上那个菜单项本来就会
+   * 因为 `view.defaultLabel === undefined` 而不显示，能走到这里说明有人直接调了远程方法，
+   * 静默失败会让它以为成功了。
+   * @param ref - 目标账号的 ref。
+   */
+  async restoreDefaultLabel(ref: string): Promise<void> {
+    await this.#require(ref);
+    // 默认名从**当前文档**读：`#require` 只保证条目存在，不返回内容。
+    const snapshot = await this.#deps.settings.describe(OPENDESIGN_SETTINGS_NS);
+    const entry = rawAccounts(snapshot.value).find((item) => refOf(item) === ref);
+    const fallback = defaultLabelOf(entry);
+    if (fallback === undefined) {
+      throw new Error(`llm-opendesign: account "${ref}" has no recorded default name`);
+    }
+    await this.rename(ref, fallback);
   }
 
   /**

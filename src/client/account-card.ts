@@ -77,7 +77,7 @@ export interface AccountCardProps {
   vendorLabel?: string | undefined;
   /** 网页登录的当前状态（没有登录入口的厂商为 `undefined`）。 */
   login?: LoginView | undefined;
-  onOpenAction: (action: { kind: AccountAction["kind"]; ref?: string }) => void;
+  onOpenAction: (action: { kind: AccountAction["kind"]; ref?: string; label?: string }) => void;
   onActionField: (field: "label" | "key", value: string) => void;
   onConfirmAction: () => void;
   onCancelAction: () => void;
@@ -149,6 +149,31 @@ export interface AccountCardProps {
    * 单独漂在卡片上方（重做前的样子）既没有归属也看不出它在管什么。
    */
   cardFooter?: ReactNode;
+}
+
+/**
+ * 「恢复默认名称」这个动作**应当恢复成什么**（2026-10-22 用户要求）。
+ *
+ * 用户原话：「账号名称修改后如果不想用了可以恢复为默认名称，就是账户原本的名称」，
+ * 并明确默认名称 = 登录邮箱。
+ *
+ * 三个返回 `undefined` 的情形，对界面都是同一件事（菜单项不显示）：
+ *
+ * - 账号没有记录默认名（2026-10-22 之前建的老账号）——**不猜**；
+ * - 默认名是空白；
+ * - 当前名**已经等于**默认名 —— 没有什么可恢复的。
+ * @param account - 账号视图（`defaultLabel` 可选）。
+ * @returns 应当恢复成的名称，或 `undefined`（不可恢复）。
+ */
+export function restoreDefaultLabelOf(account: {
+  label: string;
+  defaultLabel?: string | undefined;
+}): string | undefined {
+  const fallback = account.defaultLabel?.trim() ?? "";
+  if (fallback === "") return undefined;
+  // 已经是默认名：菜单项不该出现（点了也没有变化）。
+  if (fallback === account.label.trim()) return undefined;
+  return fallback;
 }
 
 /**
@@ -642,12 +667,41 @@ function closeMenu(event: { currentTarget?: { closest?: (selector: string) => { 
  */
 function menuButtons(props: AccountCardProps, account: AccountUsageStatus): ReactNode[] {
   const { t } = props;
+  /**
+   * 可恢复的默认名称（2026-10-22 用户要求）。
+   *
+   * `undefined` 时**不显示**这个菜单项：没有记录默认名的老账号、默认名是空白、
+   * 或当前名已等于默认名 —— 三种情况都没有「可恢复」的东西（见 `restoreDefaultLabelOf`）。
+   */
+  const restorable = restoreDefaultLabelOf(account);
   const buttons: ReactNode[] = [
     createElement(
       "button",
       { key: "rename", type: "button", "data-action": "rename", className: CSS_CLASS.item, onClick: () => props.onOpenAction({ kind: "rename", ref: account.ref }) },
       t("account.rename"),
     ),
+    ...(restorable === undefined
+      ? []
+      : [
+          createElement(
+            "button",
+            {
+              key: "restoreName",
+              type: "button",
+              "data-action": "restoreName",
+              className: CSS_CLASS.item,
+              /**
+               * 走现有的 `rename` 动作通道（恢复默认名本质就是一次改名），
+               * 但**预填默认名**：用户点开看到的就是原来的邮箱，确认即恢复。
+               *
+               * 值来自 `defaultLabel`（登录时记录的邮箱），不是这里现编的 ——
+               * 「默认名」只有一处真相。
+               */
+              onClick: () => props.onOpenAction({ kind: "rename", ref: account.ref, label: restorable }),
+            },
+            t("account.restoreName"),
+          ),
+        ]),
     createElement(
       "button",
       { key: "key", type: "button", "data-action": "replaceKey", className: CSS_CLASS.item, onClick: () => props.onOpenAction({ kind: "key", ref: account.ref }) },

@@ -146,6 +146,7 @@ export type CopyKey =
   | "account.orderTitle"
   | "account.orderHint"
   | "account.rename"
+  | "account.restoreName"
   | "account.replaceKey"
   | "account.pin"
   | "account.use"
@@ -538,6 +539,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.orderTitle": "切换顺序",
     "account.orderHint": "全局顺序；额度用尽/定时可调整顺序，额度优先只展示顺序和当前账号。",
     "account.rename": "重命名",
+    "account.restoreName": "恢复默认名称",
     "account.replaceKey": "更换密钥",
     "account.pin": "切换到此账户",
     "account.use": "使用",
@@ -885,6 +887,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.orderTitle": "Switch order",
     "account.orderHint": "One global order shared by both providers; each rotates its own projection.",
     "account.rename": "Rename",
+    "account.restoreName": "Restore default name",
     "account.replaceKey": "Replace key",
     "account.pin": "Switch to this account",
     "account.use": "Use",
