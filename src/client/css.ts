@@ -724,9 +724,12 @@ export const PAGE_CSS = `
 
 /* ═══ 版本漂移提示（插件更新后页面仍跑旧代码）═══
  * 自建的覆盖层：宿主没有通用对话框 API（2026-10-22 查证）。
- * 层级要压过宿主设置页（那是全屏面板），所以用很大的 z-index。
+ *
+ * **z-index 取 9999 而不是 2147483000**：那个最大值会压过宿主自己的模态框与菜单，
+ * 用户点开确认框时可能被我们的提示挡住 —— 一个「提醒刷新」的框不该有这种权力。
+ * 9999 足以盖过本插件自己的菜单（20）与常见面板（1000 级），又给宿主留了余地。
  * 只做一件事：告诉用户该刷新，并给两个按钮。 */
-.dsl-drift-notice { position: fixed; inset: 0; z-index: 2147483000;
+.dsl-drift-notice { position: fixed; inset: 0; z-index: 9999;
   display: flex; align-items: center; justify-content: center;
   padding: 24px; box-sizing: border-box;
   background: var(--dsw-alias-bg-mask, var(--dsw-alias-bg-l1)); }
