@@ -46,8 +46,9 @@
 > 解释了「静态 import 一个可选依赖会让宿主起不来」这个**通用**教训 ——
 > 换任何一个可选 peer 依赖，同一个坑仍然成立。
 
-- 新增 `src/web-search/web-error.ts`：本地镜像 `WebError`（`name: "WebError"`、`code` 逐字对齐，
-  支持 `cause`）。四个调用点（`anthropic` / `custom` / `provider` / `util`）改用它；
+- 新增一个本地 `web-error.ts`（**当时的路径已随功能移除**，见上面的现状说明）：
+  本地镜像 `WebError`（`name: "WebError"`、`code` 逐字对齐，支持 `cause`）。
+  四个调用点（`anthropic` / `custom` / `provider` / `util`）改用它；
   `import type { WebSearchResult … }` 保持不变（类型导入编译期擦除，零运行时依赖）。
 - `package.json`：`peerDependenciesMeta["@deepseek-ai/dsh-web"].optional = true`。
 - 回归测试两条：
