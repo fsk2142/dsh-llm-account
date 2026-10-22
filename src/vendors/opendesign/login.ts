@@ -708,26 +708,41 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
       const text = await this.#readProfileText();
       if (text !== undefined) {
         /**
-         * **只有内容变了才是本次登录的证据。**
+         * 判断「这次登录到底发生了什么」。
          *
-         * 见上面 `baseline` 的注释：fixed-slot 文件在登录前就有上一个账号的内容，
-         * 直接采信会把旧账号重新存一遍并谎报成功。
+         * **基线不能否决已经发生的事实**（2026-10-22 自查发现）：
+         *
+         * - 内容与基线**不同** 且能解析 → 本次登录写入了新内容，成功；
+         * - 内容与基线**相同**、但子进程**已正常退出** → 也要成功。这是
+         *   **重复登录同一个账号**的情况：vela 写回的 profile 与登录前完全一致
+         *   （密钥没刷新），旧逻辑会误报 `no-signin`，而用户在浏览器里明明批准了；
+         * - 内容与基线相同、子进程**没退出** → 用户还没批准，继续等。
          */
-        if (text === baseline) {
-          // 还是登录前那份：vela 尚未写入。子进程已退出就说明没批准，否则继续等。
-          if (exited !== undefined) {
-            await this.#settle(attempt, {
-              state: "failed",
-              reason: exited.code === 0 ? "no-signin" : "unavailable",
-            });
+        const profile = parseAmrProfile(text);
+        const changed = text !== baseline;
+        if (profile !== undefined) {
+          /**
+           * 三种组合分别对应真实场景：
+           *
+           * 1. `changed` → 新账号（或换密钥）：通常这时子进程还没退出，不能等它；
+           * 2. `!changed` 且已退出且 code=0 → 重复登录同一账号，批准了，成果就是这份；
+           * 3. `!changed` 且未退出 → 还可能只是旧内容，继续等（不能提前采信）。
+           */
+          if (changed || exited !== undefined) {
+            /**
+             * **第 2 种情况要额外确认 code === 0**。
+             *
+             * 异常退出（非 0）时文件里的是旧账号内容，采信它就把旧账号又存一遍。
+             * 这一类错误在 v0.8.3 之前表现为「登录成功但没新账号」，不该重犯。
+             */
+            if (changed || exited?.code === 0) {
+              await this.#complete(attempt, profile);
+              return;
+            }
+            await this.#settle(attempt, { state: "failed", reason: "unavailable" });
             return;
           }
           continue;
-        }
-        const profile = parseAmrProfile(text);
-        if (profile !== undefined) {
-          await this.#complete(attempt, profile);
-          return;
         }
         // 文件在但形状还不可用：子进程已经退出时就是最终判决；否则可能是半截写入，再等一轮。
         if (exited !== undefined) {
