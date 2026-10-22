@@ -77,12 +77,31 @@ const PROFILE_TEXT = JSON.stringify({
 /** vela 的授权提示（线上形状：`Open this URL to continue:` 的下一行是网址，随后 `Code:`）。 */
 const VELA_PROMPT = "Open this URL to continue:\nhttps://open-design.ai/cli/activate?deviceId=abc\nCode: WXYZ\n";
 
+/**
+ * 造一个「登录前无产物、登录后才有」的 readFile。
+ *
+ * **为什么必须这样**（2026-10-22 修）：`#awaitApproval` 现在会先读一次基线，只有
+ * 内容与基线**不同**才认作登录成功 —— 因为 `~/.amr/config.json` 是 vela 的固定槽位
+ * 文件，登录第二个账号时它本来就有上一个账号的内容，直接采信会把旧账号再存一遍并
+ * 谎报成功。所以测试要模拟真实的首次登录：**第一次读取是 ENOENT**（基线上没有产物）。
+ * @param text - 登录产物原文。
+ * @returns 读取函数。
+ */
+function appearAfterFirstRead(text: string): () => Promise<string> {
+  let count = 0;
+  return async () => {
+    count += 1;
+    if (count === 1) throw new Error("ENOENT: no such file or directory");
+    return text;
+  };
+}
+
 /** 造一次登录尝试的依赖。 */
 function loginDeps(overrides: Partial<OpenDesignLoginDeps> = {}): OpenDesignLoginDeps {
   return {
     storeKey: vi.fn(async () => undefined),
     spawn: () => fakeChild({ prompt: VELA_PROMPT }),
-    readFile: async () => PROFILE_TEXT,
+    readFile: appearAfterFirstRead(PROFILE_TEXT),
     sleep: async () => undefined,
     now: () => 1_000,
     resolveVela: async () => "C:\\vela.exe",
@@ -130,7 +149,19 @@ it("设备授权成功：状态先 waiting（带授权网址与验证码），�
 it("找不到 vela 但本机已有登录产物：直接导入并成功（不逼用户再装一个 CLI）", async () => {
   const storeKey = vi.fn(async () => undefined);
   const spawn = vi.fn(() => fakeChild());
-  const login = createOpenDesignLogin(loginDeps({ storeKey, spawn, resolveVela: async () => undefined }));
+  const login = createOpenDesignLogin(
+    loginDeps({
+      storeKey,
+      spawn,
+      resolveVela: async () => undefined,
+      /**
+       * 这条路径（`#importWithoutVela`）走的是「本机**已经有**登录产物，直接导入」，
+       * 与设备授权那条不同：它只读一次文件，不涉及「内容变了没有」的判定。
+       * 所以这里必须让文件一开始就存在（默认值 `appearAfterFirstRead` 第一次是 ENOENT）。
+       */
+      readFile: async () => PROFILE_TEXT,
+    }),
+  );
 
   expect(await login.begin()).toMatchObject({ state: "success" });
   expect(spawn).not.toHaveBeenCalled();
@@ -237,7 +268,14 @@ it("产物在但形状不认（缺 runtimeKey）且子进程已退出：failed/c
   const login = createOpenDesignLogin(
     loginDeps({
       spawn: () => child,
-      readFile: async () => '{"profiles":{"prod":{"controlKey":"only-control"}}}',
+      /**
+       * 模拟「登录前没有产物，vela 写出一份形状不认的内容」。
+       *
+       * 必须用 `appearAfterFirstRead`：直接返回同一份内容的话，基线读到的就是它，
+       * 新判据会认为「文件没变」→ 报 `no-signin`（没登录），而不是 `config-invalid`
+       * （写了但内容不认）。这两种失败的原因不同，告诉用户的话也不同。
+       */
+      readFile: appearAfterFirstRead('{"profiles":{"prod":{"controlKey":"only-control"}}}'),
       sleep: (async () => {
         child.emitExit(0);
         await Promise.resolve();
