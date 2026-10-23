@@ -47,8 +47,12 @@ describe("open-design 套餐来源", () => {
     expect(snapshot.plan).toBeUndefined();
   });
 
-  it("preflight 的 tier 也能带出月度上限（Go 档 = $120）", () => {
-    // 月度上限表按 tier 查；套餐名通了，补出来的月度窗口才跟着通。
+  it("preflight 的 tier 能识别出套餐（月度窗口不再合成，但套餐信息仍要发布）", () => {
+    /**
+     * 2026-10-23：本地补月度窗口的逻辑已移除（厂商不发月度、本地编的上限会误导）。
+     * 但 **tier → 套餐** 这条识别链仍然重要：界面用 `plan` 显示「套餐 go · 每月 $120」，
+     * 而 `plan` 有时只能从 preflight 的 tier 推出来（账单摘要挂了的时候）。
+     */
     const snapshot = toQuotaSnapshot({
       summary: undefined,
       preflight: {
@@ -60,8 +64,8 @@ describe("open-design 套餐来源", () => {
       },
       failures: [],
     });
-    const monthly = snapshot.windows.find((window) => window.key === "monthly");
-    expect(monthly).toBeDefined();
-    expect(monthly?.cap).toBe(120);
+
+    expect(snapshot.plan?.id, "tier 应被认成套餐").toBe("go");
+    expect(snapshot.windows.map((window) => window.key), "只有厂商给的那一档").toEqual(["fiveHour"]);
   });
 });

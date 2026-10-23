@@ -112,11 +112,9 @@ it("data 包装与 data: null：剥一层拿里层；null 是「没有数据」�
   expect(wrapped.plan).toMatchObject({ id: "pro", name: "pro" });
   expect(wrapped.plan?.status).toBeUndefined();
   expect(wrapped.plan?.periodEnd).toBe(Date.parse("2026-11-14T00:00:00Z"));
-  // 没有 preflight 也有一行：套餐是 `pro`，月度上限 $480（`used` 读不到就留空），
-  // 重置时刻就是订阅本期结束（不编别的日期）。
-  expect(wrapped.windows).toEqual([
-    { key: "monthly", unit: "usd", cap: 480, resetAt: Date.parse("2026-11-14T00:00:00Z") },
-  ]);
+  // **没有月度窗口**（2026-10-23）：厂商不发，我们也不再从本地套餐表补。
+  // 套餐信息本身仍然发布（界面用它显示「每月 $480」这种厂商真实数据）。
+  expect(wrapped.windows).toEqual([]);
 
   const nulled = toQuotaSnapshot({ summary: { data: null }, failures: [] });
   expect(nulled.plan).toBeUndefined();
@@ -353,32 +351,16 @@ it("工作区可以是异步发现的（网页登录产物不带 workspaceId）�
 
   const snapshot = await quota.snapshot();
   expect(preflight).toHaveBeenCalledWith("ws-discovered");
-  // 厂商只发 5 小时/7 天两个窗口；套餐是 `go`，所以末尾补一行**月度上限**（$120），
-  // 用量读不到就留空（`used` 缺席），绝不编一个 0。
+  // 厂商只发 5 小时/7 天两个窗口 —— **只发布这两个**（2026-10-23 起不再补月度）。
   // 5 小时窗口的上限取**官方 $10**（不是 50000 ÷ 10000 = $5）；已用仍按换算率折。
   expect(snapshot.windows).toEqual([
     { key: "fiveHour", unit: "usd", used: 0.1812, cap: 10, resetAt: 1_800_000_000_000 },
-    { key: "monthly", unit: "usd", cap: 120 },
   ]);
   expect(snapshot.failures).toEqual([]);
 });
 
-it("月度上限：只按官方套餐表补，认不出的套餐不补；已有月度窗口不重复补", () => {
-  // Go：$120（open-design.ai/model-credits 的 Plan 表）。
-  expect(toQuotaSnapshot({ summary: { membershipTier: "go" }, failures: [] }).windows).toEqual([
-    { key: "monthly", unit: "usd", cap: 120 },
-  ]);
-  // 认不出的套餐（旧快照 / 新套餐）：不编数字。
-  expect(toQuotaSnapshot({ summary: { membershipTier: "enterprise-x" }, failures: [] }).windows).toEqual([]);
-  // 厂商自己发了月度窗口（2592000 秒）就不补。
-  // 上限按官方月度总额 $120；已用按「5000 credits ÷ $120」的比率折：1000/41.67 ≈ 24。
-  const snapshot = toQuotaSnapshot({
-    summary: { membershipTier: "go", creditsPerUsd: 10_000 },
-    preflight: { codingPlan: { windows: [{ usedCredits: 1000, limitCredits: 5000, durationSeconds: 2_592_000 }] } },
-    failures: [],
-  });
-  expect(snapshot.windows).toEqual([{ key: "monthly", unit: "usd", used: 24, cap: 120 }]);
-});
+// 「月度上限：只按官方套餐表补」的测试已删除（2026-10-23）：那个本地补窗口的逻辑
+// 本身就移除了。厂商自己发月度窗口的情形由下面「厂商自己给月度窗口时照常发布」覆盖。
 
 it("preflight 的数字是字符串（\"906\"/\"50000\"）：照样折算成美元读数，不能只剩重置时间", () => {
   // 2026-10-18 真机实测：`vela billing preflight --format json` 里 usedCredits / limitCredits
@@ -400,10 +382,13 @@ it("preflight 的数字是字符串（\"906\"/\"50000\"）：照样折算成美�
   expect(snapshot.windows[1]).toMatchObject({ key: "weekly", unit: "usd", used: 0.1812, cap: 30 });
 });
 
-// —— 2026-10-19：月度用量（接口不给 → 用本机台账，且标成「仅本机」）——
+// —— 2026-10-23：**不再合成月度窗口** ——
+//
+// 这家厂商的 `billing preflight` 只发五小时与每周两档，没有月度。此前插件从本地价格表
+// (`MONTHLY_MAX_USD`) 取一个上限、再用本机台账填 `used`，凑出一个「月度条」——那个条会让人
+// 误以为它是「账户月度总额度」，而实际用量只含这一台机器。用户 2026-10-23 要求去掉。
 
-it("月度窗口没有厂商 used 时，用本机台账折合的金额填补并标成本机口径", async () => {
-  // 真机事实：订阅额度走 credit 窗口（5h / 周），接口不给月度用量；钱包消耗恒 0。
+it("**不再合成月度窗口**：厂商只给两档，就只发布这两档", async () => {
   const fetchImpl = scriptedFetch([
     () => json({
       membershipTier: "go",
@@ -411,76 +396,58 @@ it("月度窗口没有厂商 used 时，用本机台账折合的金额填补并�
       subscriptionCurrentPeriodStart: "2026-10-18T10:21:12.000Z",
       subscriptionCurrentPeriodEnd: "2026-11-18T10:21:12.000Z",
     }),
+    () =>
+      json({
+        codingPlan: {
+          windows: [
+            { usedCredits: 3298, limitCredits: 50_000, durationSeconds: 18_000 },
+            { usedCredits: 91_437, limitCredits: 150_000, durationSeconds: 604_800 },
+          ],
+        },
+      }),
   ]);
-  const asked: { from: number; to: number }[] = [];
-  const port = createOpenDesignQuota(
-    deps(fetchImpl, {
-      localSpend: async (from, to) => {
-        asked.push({ from, to });
-        return 3.5;
-      },
-    }),
-  );
-  const snapshot = await port.snapshot();
-  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
-  expect(monthly).toBeDefined();
-  expect(monthly.cap).toBe(120);
-  expect(monthly.used).toBe(3.5);
-  // 必须标出来源：这是本机折合，不是官方口径。
-  expect(monthly.usedSource).toBe("local");
-  // 问的区间以账期末为终点、往前一个自然月为起点。
-  expect(asked).toHaveLength(1);
-  expect(asked[0]!.to).toBeGreaterThan(asked[0]!.from);
+  const snapshot = await createOpenDesignQuota(deps(fetchImpl, { workspaceIdOf: () => "ws-1", preflight: async () => ({ codingPlan: { windows: [
+    { usedCredits: 3298, limitCredits: 50_000, durationSeconds: 18_000 },
+    { usedCredits: 91_437, limitCredits: 150_000, durationSeconds: 604_800 },
+  ] } }) })).snapshot();
+
+  expect(snapshot.windows.map((window) => window.key)).toEqual(["fiveHour", "weekly"]);
+  expect(snapshot.windows.some((window) => window.key === "monthly"), "**不该再有月度窗口**").toBe(false);
+  // 厂商真实数字照旧发布。
+  expect(snapshot.windows[0]?.used).toBeCloseTo(0.6596, 4);
+  expect(snapshot.windows[1]?.used).toBeCloseTo(18.2874, 4);
 });
 
-it("preflight 自己给了月度窗口时，本机数不覆盖它（官方数永远优先）", async () => {
+it("即便只拿到账单摘要（无 preflight），也不补月度窗口", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "go" })]);
+  const snapshot = await createOpenDesignQuota(deps(fetchImpl)).snapshot();
+
+  expect(snapshot.windows.some((window) => window.key === "monthly")).toBe(false);
+  // 套餐信息仍然发布（那是厂商真实数据，界面用它显示「每月 $120」）。
+  expect(snapshot.plan?.id).toBe("go");
+});
+
+it("厂商自己给月度窗口时**照常发布**（另外两家的情形，与本厂商无关）", async () => {
   const fetchImpl = scriptedFetch([
     () => json({ creditsPerUsd: 10, membershipTier: "go" }),
-    () => json({ codingPlan: { windows: [{ usedCredits: 500, limitCredits: 1200, durationSeconds: 2_592_000 }] } }),
+    () =>
+      json({
+        codingPlan: { windows: [{ usedCredits: 500, limitCredits: 1200, durationSeconds: 2_592_000 }] },
+      }),
   ]);
-  let called = false;
-  const port = createOpenDesignQuota(
+  const snapshot = await createOpenDesignQuota(
     deps(fetchImpl, {
       workspaceIdOf: () => "ws-1",
       preflight: async () => ({ codingPlan: { windows: [{ usedCredits: 500, limitCredits: 1200, durationSeconds: 2_592_000 }] } }),
-      localSpend: async () => {
-        called = true;
-        return 99;
-      },
     }),
-  );
-  const snapshot = await port.snapshot();
-  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
-  // 厂商给了 used（500/10 = $50），本机数不得盖掉它，也不该被调用。
-  expect(monthly.used).toBe(50);
-  expect(monthly.usedSource).toBeUndefined();
-  expect(called).toBe(false);
+  ).snapshot();
+
+  const monthly = snapshot.windows.find((window) => window.key === "monthly");
+  expect(monthly, "厂商给的月度窗口不该被吞掉").toBeDefined();
+  expect(monthly?.used).toBe(50);
+  expect(monthly?.usedSource, "这是官方数，不标记本机口径").toBeUndefined();
 });
 
-it("没有注入 localSpend 时行为不变（月度只有上限）", async () => {
-  const fetchImpl = scriptedFetch([() => json({ membershipTier: "go" })]);
-  const snapshot = await createOpenDesignQuota(deps(fetchImpl)).snapshot();
-  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
-  expect(monthly.cap).toBe(120);
-  expect(monthly.used).toBeUndefined();
-  expect(monthly.usedSource).toBeUndefined();
-});
-
-it("本机台账读失败时保持只有上限，不新增失败项（额度读数本身不受影响）", async () => {
-  const fetchImpl = scriptedFetch([() => json({ membershipTier: "go" })]);
-  const port = createOpenDesignQuota(
-    deps(fetchImpl, {
-      localSpend: async () => {
-        throw new Error("ledger unreadable");
-      },
-    }),
-  );
-  const snapshot = await port.snapshot();
-  const monthly = snapshot.windows.find((window) => window.key === "monthly")!;
-  expect(monthly.used).toBeUndefined();
-  // 台账读失败不写成额度读失败：那条失败项说的是「没配 workspaceId」，与台账无关。
-  expect(snapshot.failures.some((item) => item.includes("ledger"))).toBe(false);
-});
 
 // —— 多账号额度诊断：说清「缺的是哪把密钥」（2026-10-21）——
 

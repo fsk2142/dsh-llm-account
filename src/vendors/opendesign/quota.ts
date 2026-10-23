@@ -122,18 +122,8 @@ export interface OpenDesignQuotaDeps {
   walletBase?: string;
   /** 每个端点的预算（毫秒）；缺省 {@link DEFAULT_QUOTA_TIMEOUT_MS}。 */
   timeoutMs?: number;
-  /**
-   * **本机**在某段时间内折合花了多少（美元）。
-   *
-   * 存在的理由（用户 2026-10-19：「月度用量怎么没有变化」+「能不能只统计本机」）：
-   * 这家厂商的订阅额度按 credit 窗口记账（5 小时 / 周），接口**不给**月度用量，钱包消耗
-   * `totalConsumedUsd` 对订阅用户恒为 0。月度窗口于是只剩一个上限、数字永远不动。
-   * 本机台账知道答案 —— 用它把「这台机器这一期用了多少」填进去，并在窗口上打
-   * `usedSource: "local"`，界面会标成「仅本机」。
-   *
-   * 缺省（没注入）时行为与以前一致：月度窗口只显示上限。
-   */
-  localSpend?: (from: number, to: number) => Promise<number | undefined>;
+  // `localSpend` 已移除（2026-10-23）：它只为「本地合成的月度窗口」服务，
+  // 而那个窗口已删除。本机花费仍可从用量块读到（按套餐账期聚合本机台账）。
 }
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
@@ -515,20 +505,6 @@ function creditsPerUsdFromCaps(preflight: unknown, tier: string | undefined): nu
   return undefined;
 }
 
-/**
- * 官方公布的**月度上限**（美元）：`open-design.ai/model-credits` 的 Plan 表
- * （Go $120 / Plus $180 / Pro $480 / Max $900）。
- *
- * 为什么需要它：这个厂商的 `billing preflight` 只发 5 小时与 7 天两个窗口，**没有月度窗口**，
- * 但套餐卡上确实有「每月最多 $X」。月度的**用量**在接口里读不到（控制面 403、CLI 也不给），
- * 所以这里只补上限，`used` 留空 —— 宁可显示「共 $120 / 已用 —」，也不编一个数字。
- */
-const MONTHLY_MAX_USD: Readonly<Record<string, number>> = {
-  go: 120,
-  plus: 180,
-  pro: 480,
-  max: 900,
-};
 
 /**
  * 摘要里**钱包**的消耗（`totalConsumedUsd` / `todayConsumedUsd`）。
@@ -547,31 +523,8 @@ export function walletConsumedUsdOf(summary: unknown): number | undefined {
   return numberValue(record.totalConsumedUsd) ?? numberValue(record.periodConsumedUsd);
 }
 
-/**
- * 补一行月度窗口（**只有上限**）。
- *
- * 为什么 `used` 留空：这个厂商的订阅额度按 credit 窗口记账（5 小时 / 周），接口**不给**
- * 月度用量；钱包消耗（{@link walletConsumedUsdOf}）对订阅用户恒为 0。两个候选数都是错的
- * 口径，所以宁可显示「共 $120 / 已用 —」—— 与「额度缺失不倒成 0」同一条纪律。
- *
- * 「这一期到底用了多少」由**账号下面的用量块**回答（它按套餐有效期聚合我们自己的台账）。
- * @param plan - 账单摘要里的套餐。
- * @param windows - 已归一化的窗口（已有月度窗口就不补）。
- * @returns 月度窗口，或 `undefined`（套餐认不出 / 已有月度窗口）。
- */
-function monthlyWindowOf(plan: QuotaPlan | undefined, windows: readonly QuotaWindow[]): QuotaWindow | undefined {
-  if (windows.some((window) => window.key === "monthly")) return undefined;
-  const tier = plan?.id.trim().toLowerCase();
-  const cap = tier === undefined || tier === "" ? undefined : MONTHLY_MAX_USD[tier];
-  if (cap === undefined) return undefined;
-  // 月度窗口按**订阅周期**重置：摘要里有本期结束时刻就用它（没有就留空，不编日期）。
-  return {
-    key: "monthly",
-    unit: "usd",
-    cap,
-    ...(plan?.periodEnd === undefined ? {} : { resetAt: plan.periodEnd }),
-  };
-}
+// monthlyWindowOf 已移除（2026-10-23）：厂商不发月度窗口，本地合成的上限+本机用量
+// 会让人误以为那是「账户月度总额度」。用量块已如实回答「本机这一期用了多少」。
 
 /**
  * 把两个来源的负载归一化成一次额度读数。纯函数：不做 I/O、不缓存。
@@ -594,9 +547,11 @@ export function toQuotaSnapshot(parts: OpenDesignQuotaParts): QuotaSnapshot {
     creditsPerUsdFromCaps(parts.preflight, plan?.id) ??
     creditsPerUsdOf(parts.summary);
   const windows = windowsOf(parts.preflight, creditsPerUsd, plan?.id);
-  const monthly = monthlyWindowOf(plan, windows);
   return {
-    windows: monthly === undefined ? windows : [...windows, monthly],
+    // **只发布厂商真实返回的窗口**（2026-10-23 去掉了本地补的月度窗口）：
+    // 那个窗口的上限来自本地价格表、用量来自本机台账，画成进度条会让人误以为
+    // 是「账户月度总额度」。厂商只发五小时与每周两档，就只显示这两档。
+    windows,
     ...(plan === undefined ? {} : { plan }),
     failures: [...parts.failures],
   };
@@ -747,71 +702,11 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
             : "该账号未配置工作区：周期额度需要 workspaceId（网页登录会自动写入，也可在设置里手填）",
         );
       }
-      // 月度用量：接口不给（订阅走 credit 窗口），问本机台账。
-      //
-      // 这一步在 `toQuotaSnapshot` 之后做（那个是纯函数，不该做 I/O）：把本机折合的美元
-      // 填进月度窗口的 `used`，并标 `usedSource: "local"`。用户 2026-10-19 的两个要求
-      // 因此同时满足 —— 月度有数字了，而且明确是**本机**口径。
-      const snapshot = toQuotaSnapshot({
+      return toQuotaSnapshot({
         ...(summary === undefined ? {} : { summary }),
         ...(preflight === undefined ? {} : { preflight }),
         failures,
       });
-      return await withLocalMonthly(snapshot, deps.localSpend);
     },
   };
-}
-
-/**
- * 给月度窗口补上**本机**已用金额（厂商不公布月度用量时）。
- *
- * 只在三种条件下动手，全部满足才改：
- * 1. 该窗口是 `monthly` 且**没有** `used`（厂商自己给了就不覆盖 —— 官方数永远优先）；
- * 2. 有 `cap`（没有上限的窗口算不出比例，填了也没意义）；
- * 3. 注入了 `localSpend`（测试 / 没有台账的场景保持原样）。
- *
- * 区间取「账期起点（或往前推一个自然月）到此刻」：月度窗口的重置时间就是账期末，
- * 用它反推起点，与统计层的套餐账期口径一致。
- * @param snapshot - 已归一化的读数（纯函数产物）。
- * @param localSpend - 本机花费查询（缺省时原样返回）。
- * @returns 补过月度已用的读数。
- */
-async function withLocalMonthly(
-  snapshot: QuotaSnapshot,
-  localSpend: ((from: number, to: number) => Promise<number | undefined>) | undefined,
-): Promise<QuotaSnapshot> {
-  if (localSpend === undefined) return snapshot;
-  const now = Date.now();
-  const windows: QuotaWindow[] = [];
-  for (const window of snapshot.windows) {
-    const needsLocal = window.key === "monthly" && window.used === undefined && window.cap !== undefined;
-    if (!needsLocal) {
-      windows.push(window);
-      continue;
-    }
-    // 账期起点：重置时间往前推一个自然月；没有重置时间就用最近 30 天。
-    const end = window.resetAt !== undefined && window.resetAt > now ? window.resetAt : now;
-    const from = window.resetAt !== undefined ? addMonthBack(end) : end - 30 * 86_400_000;
-    let used: number | undefined;
-    try {
-      used = await localSpend(from, now);
-    } catch (error) {
-      // 台账读失败不该让整次额度读数失败：保持原样（只有上限）。
-      console.warn("[dsh-llm-account] could not compute the local monthly spend:", error);
-    }
-    windows.push(used === undefined ? window : { ...window, used, usedSource: "local" });
-  }
-  return { ...snapshot, windows };
-}
-
-/** 往前推一个自然月（月末夹取，与 `core/billing-period` 的同一口径）。 */
-function addMonthBack(at: number): number {
-  const date = new Date(at);
-  const day = date.getDate();
-  const target = new Date(at);
-  target.setDate(1);
-  target.setMonth(target.getMonth() - 1);
-  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-  target.setDate(Math.min(day, lastDay));
-  return target.getTime();
 }
