@@ -189,5 +189,5 @@ it("本机口径的窗口读数自带「仅本机」标注（不与官方口径�
   expect(local).toContain("$3.20");
   expect(local).toContain("$120.00");
   expect(local).toContain("仅本机");
-  expect(local).toContain("不含其他设备");
+  // 2026-10-23：文案收敛成「仅本机」（用户要求去掉「不含其他设备」几个字）。
 });
