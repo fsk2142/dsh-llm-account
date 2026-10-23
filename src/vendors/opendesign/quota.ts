@@ -505,31 +505,15 @@ function creditsPerUsdFromCaps(preflight: unknown, tier: string | undefined): nu
   return undefined;
 }
 
-
-/**
- * 摘要里**钱包**的消耗（`totalConsumedUsd` / `todayConsumedUsd`）。
- *
- * 2026-10-19 实测：订阅套餐用户这里是 **0.0000**（`usageCount` 已有 1080 次请求）——
- * 套餐用量走的是 credit 窗口（5 小时 50000 / 周 150000），不扣钱包。所以它**不能**当
- * 「本套餐周期用了多少」：那样月度条会永远显示「已用 $0」，比显示「—」更误导。
- *
- * 保留这一读只为「钱包余额」那类显示（本期尚未接），**不**用来填月度窗口的 `used`。
- * @param summary - `/billing/summary` 或 vela summary 的负载。
- * @returns 钱包消耗（美元）；缺失时 `undefined`。
- */
-export function walletConsumedUsdOf(summary: unknown): number | undefined {
-  const record = payloadRecord(summary);
-  if (record === undefined) return undefined;
-  return numberValue(record.totalConsumedUsd) ?? numberValue(record.periodConsumedUsd);
-}
-
-// monthlyWindowOf 已移除（2026-10-23）：厂商不发月度窗口，本地合成的上限+本机用量
-// 会让人误以为那是「账户月度总额度」。用量块已如实回答「本机这一期用了多少」。
+// 月度窗口**不再合成**（2026-10-23 移除 `monthlyWindowOf` / `MONTHLY_MAX_USD`）：
+// 这家厂商的 preflight 只发五小时与每周两档，本地补的上限（Go=$120）厂商从没说过，
+// 而 `used` 取自本机台账 —— 只含这一台机器。两者拼成进度条会让人误以为那是账户月度总额度。
+// 现在只发布厂商真实返回的窗口；「本机这一期用了多少」由用量块回答。
 
 /**
  * 把两个来源的负载归一化成一次额度读数。纯函数：不做 I/O、不缓存。
  * @param parts - 账单摘要、preflight 负载与已记名的失败项。
- * @returns 归一化读数；窗口顺序 = preflight 给的顺序（补的月度窗口排最后）。
+ * @returns 归一化读数；窗口顺序 = preflight 给的顺序，**不再追加**任何本地补的窗口。
  */
 export function toQuotaSnapshot(parts: OpenDesignQuotaParts): QuotaSnapshot {
   // 套餐优先取**账单摘要**（它还有状态与账期），摘要是空的时候回退到

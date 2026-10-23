@@ -74,8 +74,11 @@ export function quotaReading(window: QuotaWindow): QuotaReading {
   if (used !== undefined && cap !== undefined) return { shape: "used-cap", used, cap };
   if (percent !== undefined) return { shape: "percent", percent };
   if (used !== undefined) return { shape: "used", used };
-  // 只有上限：厂商公布了「每月最多 $120」，但用量不对外（Open Design 的月度就是这样）。
-  // 这种读数照样有价值（用户问的正是「月额度是多少」），不能当缺数据丢掉。
+  // 只有上限：厂商公布了额度配给、但用量读不到。这种读数照样有价值（用户问的正是
+  // 「额度是多少」），不能当缺数据丢掉。
+  //
+  // 注：Open Design 曾走过这条分支（本地补一个月度窗口、只填 cap）；2026-10-23 那个
+  // 合成窗口已移除。这条分支现在服务的是 Command Code 那种「有配给表、余额读不到」的情形。
   if (cap !== undefined) return { shape: "cap", cap };
   return { shape: "missing" };
 }
