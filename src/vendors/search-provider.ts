@@ -14,7 +14,11 @@
  * ```
  *
  * `available()` 是**廉价的本地检查**（宿主在选路时会调它，不能发网络请求）；
- * `search()` 返回 `{ sources: [{ url, title, snippet? }], truncated? }`。
+ * `search()` 返回 `{ sources: [{ url, title, snippet? }], truncated: boolean }`。
+ *
+ * **`truncated` 是必填的**（2026-10-23 收紧）：宿主的 `web_search` 工具把返回值按一份
+ * JSON schema 校验，其中它是 `required: true`。漏传会让整个返回值过不了校验，宿主报
+ * `value is not lossless JSON` —— 那句话听起来像编码问题，实际是 schema 失败。
  *
  * ## 三条硬规矩
  *

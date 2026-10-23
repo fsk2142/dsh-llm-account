@@ -154,6 +154,45 @@ describe("搜索返回值的 schema 合规性", () => {
     expect(typeof result.truncated, "网关路也必须给布尔值").toBe("boolean");
   });
 
+  it("**网关路本地截断时 `truncated: true`**（唯一返回 true 的分支，2026-10-23 补）", async () => {
+    /**
+     * 这个分支此前**零测试覆盖**：三个返回点里只有它返回 `true`，而原有测试要么走 API
+     * 路（false）、要么走网关路但不带 `maxResults`（false）。写错成 `false` 或漏掉
+     * `slice` 的话，1485 条测试照样全绿。
+     *
+     * 语义：网关返回 3 条，请求只要 1 条 → 本地切到 1 条并标记截断。
+     * （宿主自己也会 cap，这里截一次是防止 provider 侧超发。）
+     */
+    const provider = createSearchProvider({
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            content: [
+              {
+                type: "web_search_tool_result",
+                content: [
+                  { type: "web_search_result", url: "https://gw.example/1", title: "结果1" },
+                  { type: "web_search_result", url: "https://gw.example/2", title: "结果2" },
+                  { type: "web_search_result", url: "https://gw.example/3", title: "结果3" },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as unknown as typeof fetch,
+      sessionRoute: () => ({ provider: "opendesign", model: "deepseek-v4.1-flash" }),
+      strategy: () => "gateway-only",
+      gatewayAccess: async () => ({ baseURL: "https://gw.example", key: "k" }),
+      resolveApiKeys: async () => [],
+    } as never);
+
+    const result = await provider.search({ query: "测试", maxResults: 1 });
+
+    expect(result.sources, "**必须被切到 maxResults 条**").toHaveLength(1);
+    expect(result.sources[0]?.url, "保留的是第一条").toBe("https://gw.example/1");
+    expect(result.truncated, "**本地确实截断了**").toBe(true);
+  });
+
   it("宿主 schema 要求的字段一个不少", async () => {
     const result = await apiProvider().search({ query: "测试" });
     // sources 必填 + 每条必须有 url。

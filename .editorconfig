@@ -1,0 +1,27 @@
+# 编辑器统一配置（2026-10-23 加）。
+#
+# 为什么需要它：末尾换行已经丢过两次 —— 2026-10-22 扫全 src 补齐过一次
+# （提交 4006d9e），2026-10-23 删行改代码时又丢了两个文件
+# （search-provider.ts、copy.ts）。靠人手扫不可靠，交给编辑器与 CI。
+#
+# 支持 EditorConfig 的编辑器（VS Code / JetBrains / Vim/Neovim / Sublime）
+# 会自动遵守这几条；VS Code 需要装 EditorConfig 扩展（很多发行版自带）。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = true
+
+# Markdown 的行尾两个空格是「硬换行」，不能被裁掉。
+[*.md]
+trim_trailing_whitespace = false
+
+# 构建产物由 tsdown 生成，不参与格式约束（避免编辑器改写产物）。
+[lib/**]
+insert_final_newline = false
+trim_trailing_whitespace = false
