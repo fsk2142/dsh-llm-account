@@ -63,8 +63,11 @@ export interface SidebarCardProps {
  * 一行里要显示的三档窗口，按这个顺序找（键的写法各家不一，见 {@link windowOfKind}）。
  *
  * 用户 2026-10-19：「看看能不能在一行空间内显示 5 小时、一周、一个月的额度消耗情况」。
- * 找不到的档位**不占位**（`undefined` 直接跳过）——三家并不都有月度窗口（Open Design 的
- * 月度是本机口径补的，Command Code 是 `monthlyCredits`）。
+ * 找不到的档位**不占位**（`undefined` 直接跳过）——三家并不都有月度窗口：
+ *
+ * - **Open Design**：厂商只发五小时与每周两档，**没有月度**（曾本地补过一个，2026-10-23 移除）；
+ * - **Command Code**：月度来自 `credits` 的 `monthlyCredits`（真实余额派生）；
+ * - **OpenCode Go**：月度来自 `usage.monthly`（厂商 API 直接给）。
  */
 const ROW_KINDS: readonly { kind: "five-hour" | "week" | "month"; keys: readonly string[] }[] = [
   { kind: "five-hour", keys: ["fiveHour", "5h", "5H", "rolling"] },
