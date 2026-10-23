@@ -41,7 +41,17 @@ export interface SearchSource {
 /** 一次搜索的结果。 */
 export interface SearchResult {
   sources: SearchSource[];
-  truncated?: boolean;
+  /**
+   * 是否因为上限被截断。
+   *
+   * **必须总是有值**（2026-10-23 修）：宿主的 `web_search` 工具把返回值按一份 JSON
+   * schema 校验，其中 `truncated` 是 `required: true`（`type: boolean`）。我们原来把它
+   * 声明成可选、并且两处返回点没传 —— 于是宿主报
+   * `tool "web_search" returned invalid output: value is not lossless JSON`。
+   *
+   * 那个报错文案完全没提 `truncated`，所以容易误判成编码问题；实际是 schema 校验失败。
+   */
+  truncated: boolean;
 }
 
 /** 一次搜索请求（宿主传给 provider 的形状）。 */
@@ -119,7 +129,7 @@ export function sourcesOf(payload: unknown): SearchResult {
       "网关没有执行服务端搜索（响应里没有 web_search_tool_result）—— 多半是模型或协议不支持",
     );
   }
-  return { sources };
+  return { sources, truncated: false };
 }
 
 /** 搜索不可用（宿主会把消息呈现给用户）。 */
@@ -321,7 +331,7 @@ export function createSearchProvider(deps: SearchProviderDeps): {
       if (chosen.kind === "api") {
         if (apiKeys.length === 0) throw new SearchUnavailableError("没有解析到 DeepSeek API key");
         const failure = await searchWithApiKeys(apiKeys, request, deps.fetchImpl, signal);
-        if (failure.kind === "ok") return { sources: failure.sources };
+        if (failure.kind === "ok") return { sources: failure.sources, truncated: false };
         // **用户取消了**：到此为止。不回退网关（那个请求同样带着已 abort 的信号，只会再失败一次），
         // 也不把取消说成「密钥不可用」—— 那会让人去换一把没问题的 key。
         if (signal?.aborted === true) throw new SearchUnavailableError("搜索已取消");

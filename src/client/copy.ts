@@ -148,7 +148,6 @@ export type CopyKey =
   | "account.rename"
   | "account.restoreName"
   | "account.replaceKey"
-  | "account.pin"
   | "account.use"
   | "account.current"
   | "account.models"
@@ -541,7 +540,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.rename": "重命名",
     "account.restoreName": "恢复默认名称",
     "account.replaceKey": "更换密钥",
-    "account.pin": "切换到此账户",
     "account.use": "使用",
     "account.current": "当前使用",
     "account.models": "可用模型",
@@ -889,7 +887,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.rename": "Rename",
     "account.restoreName": "Restore default name",
     "account.replaceKey": "Replace key",
-    "account.pin": "Switch to this account",
     "account.use": "Use",
     "account.current": "Current",
     "account.models": "Models",
