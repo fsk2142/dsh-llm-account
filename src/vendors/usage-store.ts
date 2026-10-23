@@ -10,8 +10,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { createUsageLedger, USAGE_DIR_NAME, type UsageLedger } from "../core/usage/ledger";
-import { officialPriceOf } from "../core/usage/pricing";
-import { aggregateUsage, type UsageRecord } from "../core/usage/stats";
 import type { UsagePort, UsageSample } from "../core/usage/port";
 
 /** 单例台账。 */
@@ -48,39 +46,6 @@ export function sharedUsageLedger(directory: string = defaultUsageRoot()): Usage
   return sharedLedger;
 }
 
-/**
- * 某个账号在 [from, to) 内的**本机折合花费**（美元，按 DeepSeek 官方价算我们自己记的 token）。
- *
- * 用途：厂商不公布某个窗口的用量时（Open Design 的月度就是），额度条上的「已用」不能空着
- * ——用户 2026-10-19 报障「月度用量怎么没有变化」。用本机台账算出来的数填进去，并标成
- * `usedSource: "local"`，界面会写明「仅本机」，不会让人误以为那是官方口径。
- * @param input - 厂商、账号、时间区间。
- * @returns 美元金额；区间内没有记录、或该模型没有官方价时为 `undefined`（缺失 ≠ 0）。
- */
-export async function localSpendBetween(input: {
-  vendor: string;
-  account: string;
-  from: number;
-  to: number;
-}): Promise<number | undefined> {
-  let records: UsageRecord[];
-  try {
-    records = await sharedUsageLedger().read({ since: input.from, until: input.to });
-  } catch (error) {
-    console.warn("[dsh-llm-account] could not read the usage ledger for the local spend:", error);
-    return undefined;
-  }
-  const mine = records.filter(
-    (record) =>
-      record.vendor === input.vendor &&
-      record.account === input.account &&
-      record.at >= input.from &&
-      record.at < input.to,
-  );
-  if (mine.length === 0) return undefined;
-  const bucket = aggregateUsage(mine, "local", input.from, () => undefined, officialPriceOf);
-  return bucket.officialCost;
-}
 
 /**
  * 造一个写共享台账的采集端口。
