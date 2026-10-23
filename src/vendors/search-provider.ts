@@ -313,11 +313,28 @@ export function createSearchProvider(deps: SearchProviderDeps): {
     /**
      * 宿主拿它做选路。**必须廉价**：不发网络请求。
      *
-     * 这里不做完整判定（那要解析凭据，是异步的）：只要可能存在一条路就报告可用，
+     * ## 为什么现在要判 `off`（2026-10-23）
+     *
+     * 原来恒返回 `true`。后果是：用户把搜索方式选成「不启用」之后，宿主仍然认为
+     * 本 provider **可用** —— 它继续把每次搜索都交给这里，而这里必然抛「网页搜索
+     * 已被关闭」。别的搜索插件即使装了也排不上队。
+     *
+     * 更糟的是 `WEB_PROVIDER_AMBIGUOUS`：配置里不写 `searchProvider` 时，宿主收集
+     * 所有 `available()` 为真的 provider，**两个以上直接报错**，两个都用不了。
+     * 恒 `true` 让本插件成为那个「永远占着名额却不干活」的条目。
+     *
+     * 现在：明确选了 `off` 就报 `false`，把名额让出来。
+     *
+     * 注意宿主的行为（实测 `dsh-web` 源码）：配置的 id **已注册但 unavailable** 时
+     * 报 `WEB_PROVIDER_CONFIGURED_UNAVAILABLE`，**不会回退**到别的 provider。所以
+     * 光靠这里返回 `false` 会让搜索直接报错 —— 配套动作是 `search-release.ts`：
+     * 切到 `off` 的那一刻把 `web.searchProvider` 置空，让宿主走「未指定 id」的选路。
+     *
+     * 仍然不做完整判定（那要解析凭据，是异步的）：只要**没有被明确关闭**就报告可用，
      * 真正的失败在 `search()` 里给出可读原因。
      */
     available(): boolean {
-      return true;
+      return !isSearchDisabled(deps.strategy());
     },
     async search(request: SearchRequest, signal?: AbortSignal): Promise<SearchResult> {
       const { chosen, apiKeys, access } = await route();
