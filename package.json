@@ -63,7 +63,8 @@
     "version:next": "node scripts/next-version.mjs",
     "release": "node scripts/release.mjs",
     "dead-code": "node scripts/find-dead-code.mjs .",
-    "fix:desktop-cookies": "node scripts/clear-desktop-auth-cookies.mjs"
+    "fix:desktop-cookies": "node scripts/clear-desktop-auth-cookies.mjs",
+    "check:newline": "node scripts/check-final-newline.mjs"
   },
   "engines": {
     "node": ">=22.19.0",
