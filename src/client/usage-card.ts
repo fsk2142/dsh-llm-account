@@ -234,20 +234,31 @@ export function AccountUsageBlock(props: {
   if (vendorSpent !== undefined) costData["data-usage-spent"] = vendorSpent;
   if (localSpent !== undefined) costData["data-usage-local-spent"] = localSpent;
   if (officialCost !== undefined) costData["data-usage-official"] = officialCost;
-  // 花费的**口径标签**：有厂商数就标「官方账号」，只有本机数就标「仅本机」。
-  // 没有这个标签，同一个 $ 符号在两台机器上会给出两个不同的数而无人解释得清。
+  // 花费的**口径标签**（2026-10-23 定稿，用户要求两样都要）。
+  //
+  // 原来分两档：有厂商数标「官方账号」、只有本机数标「仅本机（不含其他设备）」。
+  // 那样两者是**互斥**的，用户只能看到一个 —— 可是这两句话回答的是两个不同的问题：
+  //
+  // - 「官方价 ≈ $X」回答**按什么价算**（token × DeepSeek 官方牌价）；
+  // - 「仅本机」回答**统计范围**（只含这台机器上本插件发出的请求，不含别的设备）。
+  //
+  // 现在两个都显示，拼成一句。顺序按「先给有用信息、再给限制」：金额在前、范围在后。
   const costScope = vendorSpent !== undefined ? "vendor" : localSpent !== undefined ? "local" : undefined;
   // 金额是不是**部分和**：价格表只覆盖少数模型，此时这一列只算进了有价的那部分。
   // 不标出来，用户会把它当完整花费去对账（2026-10-20 审计）。
   const officialPartial = bucket.officialCostPartial === true;
   const vendorCostPartial = bucket.vendorCostPartial === true;
   const costPartial = (costScope === "local" && officialPartial) || (costScope === "vendor" && vendorCostPartial);
+  /** 「按官方牌价折算」那半句：没有折算值时为 undefined（不写假的 $0.00）。 */
+  const officialHint =
+    officialCost === undefined ? undefined : `${t("usage.officialShort")} ≈ ${money(officialCost, "—")}`;
+  /** 「只含本机」那半句：本机口径才有意义（厂商口径本来就含所有设备）。 */
+  const localHint = costScope === "local" ? t("usage.localOnly") : undefined;
+
   const costHintRaw =
-    costScope === "local"
-      ? t("usage.localOnly")
-      : officialCost === undefined
-        ? undefined
-        : `${t("usage.officialShort")} ≈ ${money(officialCost, "—")}`;
+    officialHint === undefined && localHint === undefined
+      ? undefined
+      : [officialHint, localHint].filter((part): part is string => part !== undefined).join(" · ");
   // 部分和优先说「只统计了部分」——那比口径标签更能防止误读。
   const costHint = costPartial ? t("usage.costPartial") : costHintRaw;
 
