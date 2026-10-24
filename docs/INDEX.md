@@ -12,6 +12,7 @@
 | [history.md](history.md) | 按时间记录做了什么、为什么（含施工过程） | 追溯某个行为是哪轮加的 |
 | [RELEASING.md](RELEASING.md) | **发版清单**：算版本号、构建、打 tag、建 Release | 每次发版照着做 |
 | [SCRUB-COMMIT-HISTORY.md](SCRUB-COMMIT-HISTORY.md) | 清理提交历史里的对话痕迹（操作单 + 脚本用法） | 隐私清理时 |
+| [DSH-VERSION-RANGE.md](DSH-VERSION-RANGE.md) | DSH 版本声明的统一写法（`engines.dsh` / `peerDependencies`），含宿主源码依据 | 判断兼容性、升级 DSH 后核查 |
 | [reviews/](reviews/) | 独立代码审查报告 | 想知道「这一轮查过什么」 |
 
 ## 约定
