@@ -16,8 +16,9 @@
  *   成功后再 `ctx.inject(["remote.<namespace>"], …)` 取 `remoteCtx.remote.<namespace>`）；
  * - 描述符字段：`lib/index.js:3221-3242`（`makeStrictCodec` / `makeRemoteDescriptor`）。
  *
- * **未验证接缝**：我们的命名空间是 `llm-account`，客户端侧的服务名预期是 `remote.llm-account`
- * （与旧插件 `remote.commandcode` / `remote.session` 同一形状），真机判定在计划 1c。
+ * **接缝状态（2026-10-24 更正）**：我们的命名空间是 `llm-account`，客户端侧的服务名是
+ * `remote.llm-account`（与旧插件 `remote.commandcode` / `remote.session` 同一形状）。
+ * 这里原本标着「未验证」，但那已经过时 —— 账户卡片与额度面板在真机上一直正常取数。
  * @module dsh-llm-account/src/client/usage-contract
  */
 import type { AccountView, CatalogModelsResult, FailureKind, QuotaWindow, VendorCapabilities } from "../core/adapter";
