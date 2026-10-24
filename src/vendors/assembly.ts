@@ -203,9 +203,10 @@ export type SettingsRowIds = readonly string[];
  * 用的正是这一条（`@mars-sea/dsh-commandcode-provider/lib/index.js:10982`：
  * `settingsCtx.settings.configure({ auto: false }, ctx.fiber)`）。
  *
- * 两个未验证接缝都收在这里：`ctx.fiber` **没有**出现在 cordis 4.0.4 的 `Context` 类型里
- * （运行时存在：`lib/index.js:1684`），所以只有一个窄化的结构读取；`configure` 的第二个参数
- * 就是 owner fiber。
+ * 两个接缝（2026-10-24 更正：原本标着「未验证」，现已由真机确认可用）：
+ * `ctx.fiber` **没有**出现在 cordis 4.0.4 的 `Context` 类型里（运行时存在：
+ * `lib/index.js:1684`），所以只有一个窄化的结构读取；`configure` 的第二个参数就是
+ * owner fiber。
  *
  * 幂等：宿主对「这一行已经登记过策略」会抛错，而那种情况下的目标状态（自动表单已关）本来
  * 就已经达成 —— 所以不把它变成整行的失败，只在日志里留一行。

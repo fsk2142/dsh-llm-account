@@ -14,7 +14,11 @@
  *   与 `439-440`（调用前先 `typeof context.remote.$on === "function"` 判定）；
  * - 设置面：同文件 `8864-8870`（`ctx.inject(["remote.settings"], settingsCtx => settingsCtx.remote.settings)`）。
  *
- * **全部未验证**：本机没有与桌面端同版本（0.2.0-rc.2）的引擎，这些形状来自已装插件的**旁证**。
+ * **验证状态（2026-10-24 更正）**：这里原本写着「全部未验证」—— 那已经过时。下文
+ * 各节记录了 21 处**桌面端实测**（`0.2.1-rc.1` / `0.2.1-rc.2` / `0.2.1-rc.3`）。
+ *
+ * 仍然保留**未知形状的防御式读取**（形状不可信时按缺省处理）：宿主的返回形状在
+ * minor 版本间变过。但「这些接口存在、且调用方式如此」这件事已经用真机确认。
  * @module dsh-llm-account/src/client/seams
  */
 import { createElement, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";

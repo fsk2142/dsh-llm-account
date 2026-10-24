@@ -6,7 +6,8 @@
  * 而且「生效账号/切换记录」天然是跨行的（规格 §8.1 第 1、3、4 条要的是「当前到底谁在服务」）。
  * 所以服务键只有一个，第一行创建实例、第二行复用（`ctx.get` 判定，见 `applyUsageRemote`）。
  *
- * **未验证接缝**（与 T1 的客户端接缝同类，计划 1c 实测）：
+ * **接缝状态（2026-10-24 更正）**：这里原本标着「未验证」，那已经过时 —— 用量面板
+ * 在真机上一直正常取数。下面记录的来源仍然有效（作为「为什么这样接」的依据）：
  * - `ctx.inject(["typert"], …)` + `remoteCtx.typert.register(contribution)` 的形状逐字取自本机
  *   已装的 `@mars-sea/dsh-commandcode-provider/lib/index.js:8965-8976`；
  * - `super(ctx, key, { namespace })` 的绑定由 `TypertRemoteService` 基类盖上（同文件 8841-8843）。
