@@ -93,6 +93,10 @@ async function main() {
   console.log("产物已重建");
 
   // 3. 全量验证：任何一步失败都不该发出去。
+  //
+  // 提交标题也在这里查：GitHub 文件树悬停显示的是「该路径最后一次提交的标题」，
+  // 所以标题本身就是给读者看的第一句话（规范见 docs/RELEASING.md 第五节）。
+  run(["node", "scripts/check-commit-titles.mjs"], { stdio: "inherit" });
   run(["npx", "tsc", "--noEmit"], { stdio: "inherit" });
   run(["npx", "vitest", "run"], { stdio: "inherit" });
 
