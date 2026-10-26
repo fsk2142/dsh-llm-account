@@ -32,7 +32,7 @@ export type AccountIntentKind =
   | "move"
   | "auto-switch"
   /**
-   * 把工作区写进某个账号的条目（2026-10-20）。
+   * 把工作区写进某个账号的条目。
    *
    * 单独一种意图而不是复用 `rename`：两者改的是不同字段，恢复时各自重放；混在一起会让
    * 「改名」的幂等判断把工作区也带上，反之亦然。
@@ -57,7 +57,7 @@ export interface AccountIntent {
   toIndex?: number;
   /** `auto-switch` 的目标开关值。 */
   value?: boolean;
-  /** `set-workspace` 要写入的工作区 id（2026-10-20，逐账号存）。 */
+  /** `set-workspace` 要写入的工作区 id（逐账号存）。 */
   workspaceId?: string;
   /** 入队时刻（epoch 毫秒），仅供展示与排查，不参与排序。 */
   createdAt: number;
