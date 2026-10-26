@@ -91,8 +91,12 @@ const SEARCH_CAPABLE_GATEWAY = "opendesign";
 /**
  * 一个模型 id 是否属于 DeepSeek 系。
  *
- * 用「段边界」匹配而不是裸 `includes`：`my-deepseek-fork` 不该被当成 DeepSeek，
- * 而 `deepseek/...` 与 `DeepSeek-V4-Pro` 都该算。
+ * 用「段边界」匹配而不是裸 `includes`：`deepseekish` / `notdeepseek` 不该被当成
+ * DeepSeek，而 `deepseek/...`、`deepseek-v4.1-flash`、`DeepSeek-V4-Pro` 都该算。
+ *
+ * 段边界是 `-` `_` `/` `.` 与串首尾。带分隔符的变体（`my-deepseek-fork`）**会**命中 ——
+ * 这是刻意的：它名字里那一段确实叫 deepseek，无法仅凭字符串判断是不是官方服务。
+ * 真正的排除靠调用方的 provider 判断，不靠模型名。
  * @param model - 模型 id（形状不可信）。
  * @returns 是否 DeepSeek 系。
  */

@@ -23,11 +23,16 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** 要检查的目录（相对仓库根）。 */
-const ROOTS = ["src", "tests"];
+/**
+ * 要检查的目录（相对仓库根）。
+ *
+ * `scripts/` 也纳入（2026-10-26 补）：`mutation-check.py` 曾在扫描范围之外，
+ * 缺末尾换行只能靠人工发现。
+ */
+const ROOTS = ["src", "tests", "scripts"];
 
 /** 扩展名白名单：只查我们手写的文本文件。 */
-const EXTENSIONS = [".ts", ".mts", ".mjs", ".json"];
+const EXTENSIONS = [".ts", ".mts", ".mjs", ".json", ".py"];
 
 /** 递归收集文件。 */
 function collect(dir, out) {

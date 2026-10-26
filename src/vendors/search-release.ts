@@ -49,13 +49,20 @@
  * @module dsh-llm-account/src/vendors/search-release
  */
 
-/** 本插件注册的搜索 provider id（宿主注册表的键）。 */
-export const SEARCH_PROVIDER_ID = "llm-account-deepseek";
+import type { SettingsPort } from "../core/adapter";
+import { SEARCH_PROVIDER_ID } from "./search-provider";
+
+/**
+ * 本插件注册的搜索 provider id —— 从 `search-provider.ts` 复用，**不要在这里再写一份**。
+ *
+ * 2026-10-26 修审查 LOW-C：原来两处各写 `"llm-account-deepseek"` 字面量，改一处忘
+ * 另一处会让「让出 / 收回」逻辑与注册 id 失配 —— 表现是槽位同步静默失效（不报错，
+ * 但 `searchProvider` 永远对不上真实注册的 id）。
+ */
+export { SEARCH_PROVIDER_ID };
 
 /** 宿主 `web` 行的固定 id（`cordis.patch.yml` 里的 `- id: web`）。 */
 export const WEB_ROW_ID = "web";
-
-import type { SettingsPort } from "../core/adapter";
 
 /**
  * 写设置时用到的端口形状。
@@ -126,8 +133,23 @@ export async function syncSearchProviderSlot(input: {
     }
   }
 
-  // 启用态：只在本插件曾被让位（值为空）时写回，绝不覆盖用户的显式选择。
-  if (current === undefined || current === "") {
+  /**
+   * 启用态：**只在「显式空串」时写回**。
+   *
+   * 2026-10-26 修审查 LOW-B：这里原来判 `current === undefined || current === ""`，
+   * 把两种来源不同的空值混为一谈 ——
+   *
+   * - `""`：**我们让位时写下的痕迹**（上面的 `mutate` 写的就是空串）→ 该写回；
+   * - `undefined`：这一行**从来没有过** `searchProvider` 字段 → 那是用户的初始状态，
+   *   我们不该替他绑定。
+   *
+   * 混用的后果：装了第二个搜索插件、从没绑定任何一方的用户，只要改一次无关设定，
+   * 就会被静默绑到本插件 → 宿主不再走「未指定 id」的自动选路，别的插件永远轮不到。
+   *
+   * 用配置值本身（而不是内存标记）作判据：它跨进程存活，重启后仍能认出
+   * 「这是我让出的」。
+   */
+  if (current === "") {
     try {
       await settings.mutate(
         WEB_ROW_ID,

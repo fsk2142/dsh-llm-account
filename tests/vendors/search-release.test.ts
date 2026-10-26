@@ -150,4 +150,36 @@ describe("同步 web.searchProvider 槽位", () => {
       expect(store.value().searchProvider).toBe(SEARCH_PROVIDER_ID);
     }
   });
+
+  it("**字段从未配置（undefined）时不替用户绑定**（2026-10-26 修审查 LOW-B）", async () => {
+    /**
+     * 空值有两种来源，语义完全不同：
+     *
+     * - `""` —— 我们让位时写下的痕迹 → 切回启用态应当写回；
+     * - `undefined` —— 这一行从来没有过这个字段 → 那是用户的初始状态，不该被我们改。
+     *
+     * 混用的后果：装了第二个搜索插件、从没绑定任何一方的用户，改一次无关设定就会被
+     * 静默绑到本插件，宿主随之不再走「未指定 id」的自动选路。
+     */
+    const store = webSettings({});
+    const changed = await syncSearchProviderSlot({
+      settings: store.settings as never,
+      strategy: () => "api-first",
+    });
+
+    expect(changed, "从未配置过 → 不写").toBe(false);
+    expect(store.value().searchProvider, "字段仍然没有").toBeUndefined();
+    expect(store.writes, "一次都不写").toHaveLength(0);
+  });
+
+  it("**空串（我们让位的痕迹）时才写回**（同上）", async () => {
+    const store = webSettings({ searchProvider: "" });
+    const changed = await syncSearchProviderSlot({
+      settings: store.settings as never,
+      strategy: () => "api-first",
+    });
+
+    expect(changed).toBe(true);
+    expect(store.value().searchProvider).toBe(SEARCH_PROVIDER_ID);
+  });
 });
