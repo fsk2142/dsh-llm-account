@@ -285,7 +285,7 @@ it("页面外壳渲染标题、简介，以及四张功能卡片（不再有厂�
   const tree = render(createPageState(VENDORS, SNAPSHOTS));
   const all = elementsOf(tree);
 
-  // 用户 2026-10-20：三家设置合并，不要设置对象，改成可收起卡片。
+  // 需求：三家设置合并，不要设置对象，改成可收起卡片。
   expect(all.some((element) => element.props["data-tab"] !== undefined)).toBe(false);
   expect(all.some((element) => element.props["data-settings-target-select"] !== undefined)).toBe(false);
 
@@ -381,7 +381,7 @@ it("合并视图把三家字段并进四张卡：共有字段只出现一次，�
   expect(fieldKeys).toContain("workspaceId");
 });
 
-it("底部永远没有保存条（改了就直接存，用户 2026-10-20 要求）", () => {
+it("底部永远没有保存条（改了就直接存）", () => {
   const clean = elementsOf(render(createPageState(VENDORS, SNAPSHOTS)));
   expect(clean.filter((element) => element.props["data-save-bar"] !== undefined)).toHaveLength(0);
 

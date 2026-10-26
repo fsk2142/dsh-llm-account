@@ -369,7 +369,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
    *
    * 用途：客户端 bundle 里有构建期注入的版本号（= 页面加载时的版本）。两者不一致
    * 说明插件已被更新、但页面里跑的还是旧代码 —— 那时应当提示用户刷新页面，而不是
-   * 让他重启程序（2026-10-22 用户报障：市场更新后不重启，侧边栏显示异常）。
+   * 让他重启程序。
    *
    * **为什么不缓存**：这个值正是「磁盘变了」的探针，缓存会让它永远报旧值。
    * 读一次文件很便宜（几 KB），而且只在页面加载与更新完成后调用。
@@ -597,7 +597,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
     }
     // 当前各账号的额度窗口：用来定位周期（失败就让报表退回自然周期）。
     const windows = new Map<string, { windowKey?: string; resetAt?: number }>();
-    /** 每账号的**套餐本期结束**时刻（用户要求「按套餐有效期统计」，优先级最高）。 */
+    /** 每账号的**套餐本期结束**时刻（需求「按套餐有效期统计」，优先级最高）。 */
     const planEnds = new Map<string, number>();
     /** 每账号的套餐本期开始时刻（厂商公布了才填）。 */
     const planStarts = new Map<string, number>();
@@ -617,7 +617,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
             ...(finest === undefined ? {} : { windowKey: finest.key }),
             ...(finest?.resetAt === undefined ? {} : { resetAt: finest.resetAt }),
           });
-          // 套餐本期结束时刻：**优先于**额度窗口粒度（用户 2026-10-19 的要求）。
+          // 套餐本期结束时刻：**优先于**额度窗口粒度。
           const periodEnd = account.quota?.plan?.periodEnd;
           if (periodEnd !== undefined) planEnds.set(key, periodEnd);
           const periodStart = account.quota?.plan?.periodStart;
@@ -650,7 +650,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
       planPeriodStartOf: (vendor, account) => planStarts.get(`${vendor}\u0000${account}`),
       spentOf: (vendor, account) => spent.get(`${vendor}\u0000${account}`),
     });
-    // 「最近一次请求」：侧边栏据此跟随当前会话（用户 2026-10-19 要求取代轮播）。
+    // 「最近一次请求」：侧边栏据此跟随当前会话。
     // 只收**仍然存在的账号**：台账里可能留着已删除的 ref，拿它显示会对不上名字。
     const known = new Set(windows.keys());
     const lastUsed = lastUsedAccountOf(records, (vendor, account) => known.has(`${vendor}\u0000${account}`));

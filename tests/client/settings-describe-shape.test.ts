@@ -284,7 +284,7 @@ describeSuite("remote.settings.describe() shape", () => {
 
     const shell = PageShell({ state, entries: ENTRIES, t: (key) => key, onSelectTab: () => undefined, onSetField: () => undefined, onSave: () => undefined });
     const rendered = flatten(shell);
-    // 用户 2026-10-20：三家设置合并成四张卡片，不再有厂商 tab / 设置对象下拉。
+    // 需求：三家设置合并成四张卡片，不再有厂商 tab / 设置对象下拉。
     // （这份 fixture 的 vendors 没有声明任何字段，所以四张卡都是空的 —— 这里只钉
     //  「没有 tab」与「不报空态」两件事，字段级行为由 page.test.ts 覆盖。）
     expect(rendered.some((node) => node.props?.["data-tab"] !== undefined)).toBe(false);

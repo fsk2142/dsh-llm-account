@@ -1,7 +1,7 @@
 /**
- * 「搜索方式」下拉必须真的出现在搜索设置卡里（2026-10-20 用户报障）。
+ * 「搜索方式」下拉必须真的出现在搜索设置卡里。
  *
- * 用户原话：「搜索设置里面没有第三方API和网关API的选择按钮」。
+ * 需求：「搜索设置里面没有第三方API和网关API的选择按钮」。
  *
  * 根因：`settings-cards.ts` 的 search 卡里还写着**旧字段名** `searchPreferGateway`，
  * 而 `shell.ts` 已经把它换成了 `searchStrategy`。卡片按字段名匹配，匹配不上就一个都不渲染
@@ -53,7 +53,7 @@ describe("卡片声明与厂商声明必须对得上", () => {
 
   it("搜索卡里不再声明 API key 引用字段（密钥由添加/删除动作维护）", () => {
     const search = SETTINGS_CARDS.find((card) => card.id === "search");
-    // 2026-10-20 用户要求「只保留保存密钥那个」：引用名列表不再是用户编辑的字段。
+    // 2026-10-20 需求「只保留保存密钥那个」：引用名列表不再是用户编辑的字段。
     expect(search?.shared).not.toContain("searchApiKeyRefs");
   });
 

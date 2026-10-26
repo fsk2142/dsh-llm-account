@@ -199,7 +199,7 @@ describe("设置页容器仿真", () => {
     const error = find(page.tree(), "data-save-error", "llm-commandcode");
     expect(textsOfSim(page.tree())).toContain("保存失败，请重试。");
     expect(error.props["data-save-error-reason"]).toBe("the credentials service rejected the write");
-    // 底部没有保存条（用户 2026-10-20 要求去掉）——错误挂在卡片里。
+    // 底部没有保存条——错误挂在卡片里。
     expect(findSim(page.tree(), "data-save-bar")).toBeUndefined();
 
     // 再点一次保存（重试）：这次写成功，错误消失。
@@ -233,7 +233,7 @@ describe("设置页容器仿真", () => {
   });
 
 
-  it("按账户刷新模型：点账号行的刷新只重读**那一家**的目录（2026-10-18 用户要求）", async () => {
+  it("按账户刷新模型：点账号行的刷新只重读**那一家**的目录", async () => {
     const mini = await runtime();
     await freshSeams();
     // 两家各给一个账号（第三家无账号）：刷新按钮在每个账号行上（不再有面板头部的全局按钮）。
@@ -296,7 +296,7 @@ describe("设置页容器仿真", () => {
     expect(findSim(second.tree(), "data-account-models", "oc-1")).toBeDefined();
   });
 
-  it("读数不完整（额度带失败项/缺失）一律不进缓存：重开设置必须现读（2026-10-18 用户报障根因）", async () => {
+  it("读数不完整（额度带失败项/缺失）一律不进缓存：重开设置必须现读", async () => {
     const mini = await runtime();
     await freshSeams();
     const host = fakeHost(mini, {
@@ -513,7 +513,7 @@ describe("侧边栏卡片容器仿真", () => {
 
     expect(cardView.tree()).not.toBeNull();
     // 保存的是「通用显示设置」→ 三家一起打开。三家都没有账号，于是轮播逐家试一遍
-    // （2026-10-18 用户要求：没有账号的厂商自动跳过，不显示「未配置」），
+    //，
     // 一轮都试完仍没有可显示的账号时停在最后一家显示空态。
     const probed = host.statusCalls.slice(baseline);
     expect(new Set(probed)).toEqual(new Set(["commandcode", "dsh-opencode-go", "opendesign"]));
@@ -987,7 +987,7 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
   });
 });
 
-it("侧边栏不再轮播：时间推进不会换账号（用户 2026-10-19 明确要求去掉轮播）", async () => {
+it("侧边栏不再轮播：时间推进不会换账号", async () => {
   const mini = await runtime();
   await freshSeams();
   vi.useFakeTimers();
@@ -1026,7 +1026,7 @@ it("轮播跳过没有账号的厂商：第一家未配置 → 显示第二家�
   const host = fakeHost(mini, {
     commandcodeToggle: true,
     opencodeToggle: true,
-    // 只有 opencode 有账号：commandcode 不进轮播清单（2026-10-18 用户要求）。
+    // 只有 opencode 有账号：commandcode 不进轮播清单。
     accounts: { "dsh-opencode-go": [{ ref: "oc-1", label: "OC", configured: true, active: true, effective: true }] },
   });
   const { card } = await applyLikeHost(host);
@@ -1184,7 +1184,7 @@ it("usageReport 返回空值或坏形状时不崩：只是少显示用量块", a
   }
 });
 
-it("opendesign 也参与侧边栏（旧版只开 commandcode 时它永远不显示 —— 用户报障）", async () => {
+it("opendesign 也参与侧边栏（旧版只开 commandcode 时它永远不显示）", async () => {
   const mini = await runtime();
   await freshSeams();
   vi.useFakeTimers();
@@ -1209,7 +1209,7 @@ it("opendesign 也参与侧边栏（旧版只开 commandcode 时它永远不显�
 });
 
 it("侧边栏跟随 lastUsed：报表给了最近一次的账号就用它（不再固定清单第一个）", async () => {
-  // 用户 2026-10-19 报障：「侧边栏一直固定是 commandcode」。
+  // 需求：「侧边栏一直固定是 commandcode」。
   // 根因：`reportOf` 重建报表对象时**丢了 `lastUsed`**，客户端永远拿不到，
   // 于是每次都退回清单第一个。这条测试从远程读数一路断言到卡片显示。
   const mini = await runtime();
@@ -1237,7 +1237,7 @@ it("侧边栏跟随 lastUsed：报表给了最近一次的账号就用它（不�
 });
 
 it("重新打开侧边栏时首帧就显示上次那家（不再先闪 commandcode）", async () => {
-  // 用户 2026-10-19：「为什么每次默认打开就是显示 commandcode 而不是上一次的缓存」。
+  // 需求：「为什么每次默认打开就是显示 commandcode 而不是上一次的缓存」。
   // 根因：`lastUsed` 的 useState 初值是 undefined，要等一次异步 usageReport 才回来，
   // 于是首帧只能显示清单第一个（commandcode），随后才跳过去。
   // 现在初值取自模块级缓存，重新挂载时首帧就是上次那家。

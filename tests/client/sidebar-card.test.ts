@@ -106,7 +106,7 @@ it("两行额度：5 小时 + 每周，每行都是「标签 — 条 — 重置�
   // 只画两档：5 小时与每周。月度不在侧边栏（去用量面板看）。
   const windows = elementsOf(tree).filter((element) => element.props["data-sidebar-window"] !== undefined);
   expect(windows.map((element) => element.props["data-sidebar-window"])).toEqual(["5h", "weekly"]);
-  // 每行都有条 + 重置时间（用户要求「5小时---进度条---重置时间」这种结构，第二行同样）。
+  // 每行都有条 + 重置时间（需求「5小时---进度条---重置时间」这种结构，第二行同样）。
   for (const window of windows) {
     expect(elementsOf(window).some((element) => element.props["data-sidebar-track"] !== undefined)).toBe(true);
     expect(elementsOf(window).some((element) => element.props["data-sidebar-reset"] !== undefined)).toBe(true);
@@ -118,8 +118,8 @@ it("两行额度：5 小时 + 每周，每行都是「标签 — 条 — 重置�
   expect(rowsMarker).toEqual(["primary", "secondary"]);
 });
 
-it("**只剩月度额度时不显示月度**（2026-10-20 用户要求：短周期缺席不能拿月度顶替）", () => {
-  // 用户原话：「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」。
+it("**只剩月度额度时不显示月度**（短周期缺席不能拿月度顶替）", () => {
+  // 需求：「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」。
   // 这在新设备上是真实出现的：周额度查询失败 → 只剩月度窗口 → 旧逻辑的兜底
   // 「一档都认不出来就用第一个能读的」会把月度单独画上去。
   const tree = renderCard(
@@ -354,7 +354,7 @@ it("accounts 不是数组时也不崩（跨边界的半成品载荷）", () => {
 });
 
 it("重置时间用日期格式，不再写「今天/明天」", () => {
-  // 用户 2026-10-19：「小时那个也用日期表示，不用明天这种」。两行上下并排时相对说法对不齐。
+  // 需求：「小时那个也用日期表示，不用明天这种」。两行上下并排时相对说法对不齐。
   const now = new Date(2026, 9, 19, 15, 0, 0);
   const laterToday = new Date(2026, 9, 19, 20, 0, 0).getTime();
   const nextWeek = new Date(2026, 9, 25, 10, 0, 0).getTime();
@@ -397,7 +397,7 @@ it("两条进度条共享同一套列宽（对齐：grid 定义在外层容器�
   expect(rowsInContainer.map((element) => element.props["data-sidebar-row"])).toEqual(["primary", "secondary"]);
 });
 
-it("额度区有表头「用量周期 / 重置时间」（用户 2026-10-19 的版式）", () => {
+it("额度区有表头「用量周期 / 重置时间」", () => {
   const tree = renderCard(
     statusOf({
       effective: { ref: "a", at: 1 },

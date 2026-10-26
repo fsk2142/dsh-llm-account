@@ -294,7 +294,7 @@ function planOf(subscriptions: unknown, credits: unknown): QuotaPlan | undefined
   const periodEnd = subscription === undefined ? undefined : epochMillis(subscription.currentPeriodEnd);
   if (periodEnd !== undefined) plan.periodEnd = periodEnd;
   // 本期起点同样可能公布（与 Open Design 的 `subscriptionCurrentPeriodStart` 同名同义）：
-  // 有它，统计的账期就是厂商自己的两个边界（用户 2026-10-19：「按套餐有效期统计」）。
+  // 有它，统计的账期就是厂商自己的两个边界。
   const periodStart = subscription === undefined ? undefined : epochMillis(subscription.currentPeriodStart);
   if (periodStart !== undefined) plan.periodStart = periodStart;
   return plan;
@@ -462,7 +462,7 @@ export function createCommandCodeQuota(deps: CommandCodeQuotaDeps): QuotaPort {
         ...(subscriptions === undefined ? {} : { subscriptions }),
         failures: QUOTA_ENDPOINTS.filter((name) => failed.has(name)),
       });
-      // **重置时间估算**（用户 2026-10-20：「如果没有提供就给出估算值」）：
+      // **重置时间估算**：
       // 这个端点不给 5 小时/周窗口的 `resetAt`，只能用「`used` 从 0 变正的时刻 + 窗口长度」
       // 推算。锚点按账号分开保存在本闭包里（跨轮询保持），且结论一律标 `estimated: true`。
       return { ...snapshot, windows: withEstimatedResets(ref, snapshot.windows) };

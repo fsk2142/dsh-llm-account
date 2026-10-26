@@ -1,5 +1,5 @@
 /**
- * **各套餐下「这个模型能用多少额度」**（用户 2026-10-21 要的功能）。
+ * **各套餐下「这个模型能用多少额度」**。
  *
  * ## 为什么需要一张表
  *
@@ -21,7 +21,7 @@
  *
  * ## 会过期，所以查不到就不显示
  *
- * 官网会调价（用户 2026-10-21 明确提到「GOAT 现在是 70，后边变成 80」）。这张表和
+ * 官网会调价。这张表和
  * 官方一旦不一致，显示出来的就是**错的数字**，而错数字比没有数字更糟 —— 用户会照着它
  * 安排用量。
  *
@@ -112,7 +112,7 @@ function amountOf(raw: string): ModelQuotaAmount | undefined {
  *
  * 为什么单独一张：GOAT 是用户实际在用的档位，而官方在这一页把**全部 60 个模型**都列了
  * 各自的 monthly credits（含 Claude / GPT / Gemini 等闭源模型）。pricing 页那张只有 7 个
- * 开源模型的五档表覆盖不了它 —— 用户 2026-10-21 报障「commandcode 没看到每个模型各自的
+ * 开源模型的五档表覆盖不了它 —— 需求 报障「commandcode 没看到每个模型各自的
  * 可用额度」，根因就是当时用的是那张 7 行表。
  *
  * 数据特点（官方原样）：
@@ -682,7 +682,7 @@ export const OPENDESIGN_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENDESIGN_RAW
 export const OPENCODE_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENCODE_RAW, OPENCODE_PLAN_ORDER);
 
 /**
- * **某个套餐到底包含哪些模型**（用户 2026-10-21 要求：不要把本套餐用不了的模型也列出来）。
+ * **某个套餐到底包含哪些模型**。
  *
  * 与 {@link PlanModelQuotaTable} 的区别很重要：
  * - 额度表回答「这个模型能用多少额度」，只有官方公布了数字的模型才在表里；

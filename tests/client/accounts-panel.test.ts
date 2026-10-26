@@ -122,7 +122,7 @@ it("账号平铺在同一列表：没有供应商分组标题，账号名后跟�
 
 it("全局添加入口只剩「网页登录」：每家一个，各自路由到自己的厂商", () => {
   const { tree, props } = render();
-  // 2026-10-20 用户要求去掉「使用 API Key」入口（官方入口已提供 API 添加）。
+  // 2026-10-20 需求去掉「使用 API Key」入口（官方入口已提供 API 添加）。
   expect(elementsOf(tree).some((element) => element.props["data-add-for"] !== undefined)).toBe(false);
   const loginCc = elementsOf(tree).find((element) => element.props["data-login-for"] === "commandcode");
   const loginOc = elementsOf(tree).find((element) => element.props["data-login-for"] === "dsh-opencode-go");
@@ -139,7 +139,7 @@ it("添加入口按厂商分组：每家一个小标题 + 一个「网页登录�
   // 平铺按钮时「往哪家加」只在按钮文字的前缀里；现在每家一块，标题就是厂商名。
   expect(textsOf(groups[0]).join(" ")).toContain("Command Code");
   expect(textsOf(groups[0]).join(" ")).toContain("网页登录");
-  // 「使用 API Key」不再出现（用户要求只保留网页授权）。
+  // 「使用 API Key」不再出现（需求只保留网页授权）。
   expect(textsOf(groups[0]).join(" ")).not.toContain("使用 API Key");
   // 按钮文字不再重复厂商名（标题已经写了），厂商在 data-* 上，自动化与测试都能直接定位。
   expect(textsOf(groups[0]).join(" ")).not.toContain("Command Code · ");
@@ -222,7 +222,7 @@ it("按账户刷新模型：每个账号行有自己的刷新按钮，回调带�
   // 没传回调时不渲染任何刷新按钮（旧调用方不受影响）。
   const base = render();
   expect(elementsOf(base.tree).some((element) => element.props["data-account-refresh-models"] !== undefined)).toBe(false);
-  // 面板头部不再有全局「重新获取模型」按钮（2026-10-18 用户要求：不是刷新所有的）。
+  // 面板头部不再有全局「重新获取模型」按钮。
   expect(elementsOf(base.tree).some((element) => element.props["data-refresh-models"] !== undefined)).toBe(false);
 
   const { tree, props } = render({ onRefreshModels });

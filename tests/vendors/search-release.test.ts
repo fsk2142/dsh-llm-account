@@ -1,7 +1,7 @@
 /**
  * 搜索关闭时让出 `web.searchProvider` 槽位（2026-10-23）。
  *
- * ## 为什么需要（用户报障的场景）
+ * ## 为什么需要（实际情况的场景）
  *
  * 用户的 profile 显式写着 `searchProvider: llm-account-deepseek`。宿主的选路是
  * 「按 id 精确匹配，命中就用」，于是：

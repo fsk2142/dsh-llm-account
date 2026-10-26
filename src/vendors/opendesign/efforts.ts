@@ -9,7 +9,7 @@
  * （`use one of none, minimal, low, medium, high, xhigh, ultra, max` /
  * `expected one of "max"|"xhigh"|…`）。2026-10-18 用本机登录产物对每个可用模型各打一次
  * `reasoning_effort: __probe__`，把网关自己说的白名单抄成了 {@link MEASURED_EFFORTS}。
- * 这份表比推断可靠得多 —— 之前按族给的 `low/high` 漏掉了 DeepSeek 的 `max`（用户报障：
+ * 这份表比推断可靠得多 —— 之前按族给的 `low/high` 漏掉了 DeepSeek 的 `max`（实际情况：
  * 「opendesign 的 DeepSeek 不能设置 max 思考吗？」），而实测它支持到 8 档。
  *
  * 纪律：

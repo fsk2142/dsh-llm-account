@@ -165,7 +165,7 @@ export function officialModelName(id: string): string {
   }
 
   // 拼接：**全部用连字符**。官方名称就是这种写法（`Claude-Sonnet-4.5`、`GPT-5.1-Codex`、
-  // `Qwen3-Max`、`DeepSeek-V4-Pro`、`GLM-5`），空格写法与厂商文档对不上（用户报障：官方名
+  // `Qwen3-Max`、`DeepSeek-V4-Pro`、`GLM-5`），空格写法与厂商文档对不上（实际情况：官方名
   // 中间是有中心线的）。
   return words.join("-");
 }

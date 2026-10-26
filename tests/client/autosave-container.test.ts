@@ -1,9 +1,9 @@
 /**
- * 改了就存 + 卡片内保存（2026-10-20 用户要求，两轮收敛后）。
+ * 改了就存 + 卡片内保存。
  *
- * 用户原话（第一轮）：「任何选项修改了就是直接保存，不需要那个保存按钮了，除非是需要填写什么东西的
+ * 需求（第一轮）：「任何选项修改了就是直接保存，不需要那个保存按钮了，除非是需要填写什么东西的
  * 逻辑，然后再对应的卡片中显示保存就可以，不需要在最下面保留那个保存按钮了」。
- * 用户原话（第二轮）：「不用那个填入了，一个卡片保留一个保存按钮，点完保存后按钮消失，
+ * 需求（第二轮）：「不用那个填入了，一个卡片保留一个保存按钮，点完保存后按钮消失，
  * 如果复原则不显示保存」。
  *
  * 这个文件钉住**容器层**的行为：
@@ -76,7 +76,7 @@ describe("开关：改了就存", () => {
     const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
 
-    // 页面底部没有保存条（用户要求去掉）。
+    // 页面底部没有保存条（需求去掉）。
     expect(findSim(page.tree(), "data-save-bar")).toBeUndefined();
 
     fireSim(findSim(page.tree(), "data-field-input", "showSidebarQuota"), "onChange", {
@@ -106,7 +106,7 @@ describe("输入框：卡片里的保存按钮", () => {
       target: { value: "https://manual.example" },
     });
     await settleSim(mini);
-    // 还没写：输入类要等用户点保存（用户 2026-10-20 第二轮要求）。
+    // 还没写：输入类要等用户点保存。
     expect(host.mutations).toHaveLength(0);
     // 但按钮出现了，且属于 opencode 那一家。
     const save = findSim(page.tree(), "data-save", "llm-opencode-go");

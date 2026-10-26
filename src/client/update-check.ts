@@ -1,5 +1,5 @@
 /**
- * 插件自身的**更新检查**（2026-10-20 用户要求：不用每次卸载重装）。
+ * 插件自身的**更新检查**。
  *
  * ## 为什么不是「一个更新按钮」那么简单
  *
@@ -40,7 +40,7 @@ export const UPDATE_PACKAGE = "dsh-llm-account";
  * 为什么不从更新接口取：那个接口只暴露 commit SHA、不暴露版本号 ——
  * `routes.js` 里是 `installedVersion: update.current ?? update.version`，
  * 而 `current` 是 git commit 且**优先**。所以 git 安装时界面上只能拿到一串 SHA
- * （用户 2026-10-21 报障：「不是版本号，是一串字符」）。
+ *。
  *
  * 客户端 bundle 跑在浏览器里读不到 `package.json`，所以只能构建期注入。
  */
@@ -176,7 +176,7 @@ export async function checkForUpdate(deps: UpdateCheckDeps = {}): Promise<Update
  *   "operation": { "operationId": "boot-update-1", "state": "running", ... } }
  * ```
  *
- * 2026-10-21 用户报障「查不到更新信息：宿主接受了请求但没有给出 operationId」就是
+ * 2026-10-21 实际情况「查不到更新信息：宿主接受了请求但没有给出 operationId」就是
  * 只看顶层导致的：请求其实**成功了**，操作也在跑，只是 id 没被取到，界面据此判定失败，
  * 于是更新永远点不动。
  *

@@ -700,7 +700,7 @@ export function dispatchAccountAction(
     }
     case "restoreName": {
       /**
-       * 一键恢复默认名（2026-10-22 用户要求）。
+       * 一键恢复默认名。
        *
        * 与「改名」的区别：不打开表单、不需要用户再确认一次 —— 恢复成默认名是个**确定
        * 且可逆**的操作（默认名就在账号条目里），多一步确认只是麻烦。
@@ -754,7 +754,7 @@ export const LOGIN_POLL_MAX_MISSES = 3;
  * 等待授权的默认期限（毫秒），只在宿主**没有**报 `expiresAt` 时兜底。
  *
  * 为什么需要：不登录时宿主状态会一直停在 `waiting`，界面若只等「状态变终态」，
- * 授权链接就会一直挂着（用户报障：必须手动点取消）。Command Code 的真实窗口是 120 秒
+ * 授权链接就会一直挂着（实际情况：必须手动点取消）。Command Code 的真实窗口是 120 秒
  * （`LOGIN_TIMEOUT_MS`），这里用同一档兜底；宿主报了自己的期限时以宿主为准。
  */
 export const LOGIN_WAITING_TTL_MS = 120_000;
@@ -1372,7 +1372,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
             if (status.state === "waiting") {
               // 期限：宿主报了 `expiresAt` 就用它；没报（旧宿主/其它厂商）就按首次观察 + 默认 TTL。
               // **不登录时状态会一直停在 `waiting`**，所以到期必须由界面自己收尾 ——
-              // 否则授权链接会一直挂着，只能手点取消（用户报障）。
+              // 否则授权链接会一直挂着，只能手点取消（实际情况）。
               const deadline = status.expiresAt ?? loginDeadlines.current[vendor] ?? Date.now() + LOGIN_WAITING_TTL_MS;
               loginDeadlines.current[vendor] = deadline;
               if (Date.now() >= deadline) {
@@ -1416,7 +1416,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
 
     // 搜索 key 的引用名（逗号/空白分隔）→ 查一次「库里到底有没有」。
     //
-    // 用户报障：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个输入框填的是
+    // 实际情况：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个输入框填的是
     // **引用名**，真 key 在凭据库里 —— 不查一次，界面就只能沉默。
     //
     // 读取走 `currentKeyRefsOf()`（草稿优先，见那里的注释）：刚添加的那条还在草稿里，
@@ -1496,7 +1496,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       }
       // 依赖里的 `accountRevision`：**账号变了目录也会变** —— 目录要鉴权（Open Design 的
       // `/v1/models` 不带密钥回 401），加完账号/换完密钥不重读的话，界面会一直停在挂载时
-      // 那次「读不到」的空目录上（用户报障：加了 API 却没模型）。失败读数不进缓存，
+      // 那次「读不到」的空目录上（实际情况：加了 API 却没模型）。失败读数不进缓存，
       // 所以这里必定会真读一次。
       return () => {
         alive = false;
@@ -1504,7 +1504,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     }, [usage, modelVendorKey, accountRevision]);
 
     // 合并账户面板：两家放在同一张卡片里，动作按厂商路由（设计 §7.2）。
-    // 按账户刷新模型目录（2026-10-18 用户要求：「重新获取模型不是刷新所有的，应该是刷新
+    // 按账户刷新模型目录（需求：「重新获取模型不是刷新所有的，应该是刷新
     // 单个账户的」）：账号行上每个账号都有自己的刷新按钮，点的就是**这一家**的目录重读 ——
     // 目录是厂商级资源（`models()` 按厂商寻址），一次读取惠及该厂商的所有账号，但不碰别家，
     // 也不重跑挂载时那个「读全部」的 effect。远程面还没挂上时静默返回：那时任何点击都发不出去。
@@ -1577,7 +1577,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         }
         if (status.state === "waiting") {
           // 记下这次等待的期限：宿主报了 `expiresAt` 就用它，否则按现在 + 默认 TTL 兜底。
-          // 不登录时状态会一直停在 `waiting`，没有期限界面就只能等用户手点取消（用户报障）。
+          // 不登录时状态会一直停在 `waiting`，没有期限界面就只能等用户手点取消（实际情况）。
           loginDeadlines.current[vendor] = status.expiresAt ?? Date.now() + LOGIN_WAITING_TTL_MS;
           setLoginDismissed((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: false }));
         }
@@ -1604,7 +1604,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
 
     // —— 用量统计的 state 与读取 ——
     //
-    // 必须**在 `accountsPanel` 之前**声明：账号行要内嵌各自的用量（用户要求「单个账号的
+    // 必须**在 `accountsPanel` 之前**声明：账号行要内嵌各自的用量（需求「单个账号的
     // 统计放在该账号下面」），而构造面板时就要用到 `usageReport`。所有 Hook 仍然集中在
     // 渲染体顶部，顺序在每次渲染之间不变。
     const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
@@ -1613,7 +1613,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * 凭据引用名 → 是否真的配置了（搜索 key 的「已添加 / 未添加」徽标）。
      *
      * 缺省 `undefined` 表示**还没读到**：那时页面不显示任何徽标，而不是猜「未添加」
-     * （用户 2026-10-20 报障：加完 key 之后界面没有任何反馈）。
+     *。
      */
     const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean> | undefined>(undefined);
     /** 「保存密钥」的草稿 / 进行中 / 失败原因（搜索卡里那一块）。 */
@@ -1623,7 +1623,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     /**
      * 插件自身的更新状态（`undefined` = 还没查过）。
      *
-     * **打开设置页就自动查一次**（2026-10-21 用户要求：「每次打开设置页就自动检查更新并提示吧，
+     * **打开设置页就自动查一次**（需求：「每次打开设置页就自动检查更新并提示吧，
      * 别手动点了」）。早先刻意不自动查（怕每次开关设置页都打一次网络），但用户显然更在意
      * 「一进来就知道有没有新版」；折中办法是**模块级缓存**：同一页面会话内查过一次就不再问，
      * 反复开关设置页不会重复打网络，而刷新页面后会重新查。
@@ -1640,7 +1640,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     /**
      * 密钥实测结论（`ref → 结论`）与正在测试的那一把。
      *
-     * 用户 2026-10-20：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话就进行提示」
+     * 需求：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话就进行提示」
      * +「多增加一个测试按钮，让用户可以自行测试密钥的有效性」。
      * 结论**只在真的测过之后**存在：没测过就是 `undefined`，界面不给任何暗示。
      */
@@ -1831,7 +1831,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     };
 
     /**
-     * 每个模型在**该账号当前套餐**下的可用额度（用户 2026-10-21 要的功能）。
+     * 每个模型在**该账号当前套餐**下的可用额度。
      *
      * 数据表是内置的官方表格（`core/model-quota-table`），没有 API 可查。查不到的
      * 三种情况一律返回 `undefined`（界面留空）：这家厂商没有表、套餐认不出、
@@ -1862,7 +1862,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     };
 
     /**
-     * 这个模型在**该账号当前套餐**下能不能用（用户 2026-10-21：不要把本套餐用不了的
+     * 这个模型在**该账号当前套餐**下能不能用（需求：不要把本套餐用不了的
      * 模型也列出来）。
      *
      * 只有拿到官方「该档位包含哪些模型」的清单时才返回 `false`；没有清单（如 Open
@@ -2044,7 +2044,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       ...(clearError === undefined ? {} : { clearError }),
     });
     const accounts = availableEntries.length === 0 ? undefined : accountsPanel;
-    // 统计**全在账号下面**（用户 2026-10-19：「只在每个账号下面统计本身的用量」）：
+    // 统计**全在账号下面**：
     // 页面上不再有跨账号的用量卡片，所以这里不再往 `PageShell` 传 `usage`。
     /**
      * 测试一把密钥能不能用（添加后自动调一次；「测试」按钮也调它）。
@@ -2073,7 +2073,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     };
 
     /**
-     * **打开设置页就自动查一次**（2026-10-21 用户要求，不再需要手动点）。
+     * **打开设置页就自动查一次**。
      *
      * 三条约束：
      * 1. 只在**本页面会话还没查过**时发起（`updateCheckCache` 命中就直接用）；
@@ -2142,7 +2142,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
              */
             const diskVersionAfterUpdate = await readInstalledVersion(usage);
             /**
-             * **同时弹一个全局提示**（2026-10-22 用户要求「更新完自动弹出」）。
+             * **同时弹一个全局提示**。
              *
              * 为什么不能只靠 `reloadHint`：那个提示画在**设置页**里，而用户更新完常常
              * 直接去看侧边栏额度卡片 —— 他在那里看不到任何提示，只看到渲染异常的旧界面。
@@ -2217,7 +2217,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       t,
       accounts,
       mergeTabs: true,
-      // 「插件已更新，刷新页面」提示（用户 2026-10-20）。
+      // 「插件已更新，刷新页面」提示。
       //
       // 判据：本页已经能渲染设置页，说明客户端 bundle 跑过了；但共享界面**没有**注册成功
       // （`apply` 的注册那一步没跑 / 抛错），或者侧边栏槽位在本页压根没被宿主渲染。
@@ -2229,7 +2229,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       onReload: () => {
         reloadPage();
       },
-      // —— 插件自身的更新（用户 2026-10-20：git 链接安装，希望直接点更新而不是卸载重装）——
+      // —— 插件自身的更新——
       //
       // 走宿主官方插件入口的公开更新 API（`/dsh-market/api/v1/*`）。它认 github 安装：
       // 比的是仓库的 commit / 版本，所以对「git 链接安装」真的会有「有新版本」这个结论。
@@ -2246,7 +2246,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       },
       onSelectTab: (ns) => setState((current) => selectTab(current, ns)),
       onSetField: (ns, key, value) => {
-        // 用户 2026-10-20 的两条要求，合成一条规则（判据在 `registry.ts` 的 `savesImmediately`）：
+        // 需求 的两条要求，合成一条规则（判据在 `registry.ts` 的 `savesImmediately`）：
         //
         // 1. 「任何选项修改了就是直接保存，不需要那个保存按钮了」→ 开关/下拉：改了就落盘；
         // 2. 「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」
@@ -2303,7 +2303,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                 // 这里走 `saveOneField`：它不依赖输入类字段的「卡片保存按钮」那条路。
                 await saveOneField(FEATURE_TAB_NS, "searchApiKeyRefs", [...existing, ref]);
                 setState((current) => ({ ...current, credentialRevision: current.credentialRevision + 1 }));
-                // **加完立刻验一次**（用户 2026-10-20：「添加了 key 后就发起一次小请求验证一下
+                // **加完立刻验一次**（需求：「添加了 key 后就发起一次小请求验证一下
                 // 是否可用，不可用的话就进行提示」）。这样「存进去了但用不了」当场可见，
                 // 而不是等到某次搜索失败才发现。
                 void testSecret(ref);
@@ -2641,7 +2641,7 @@ export function createSidebarCardView(options: {
     );
     /**
      * 轮播清单的勾选：`keys` 是 `vendor:ref`，`configured` 表示用户是否显式配置过。
-     * 未配置 = 全部账号轮播（用户 2026-10-19 要的默认）。
+     * 未配置 = 全部账号轮播。
      */
     const [selection, setSelection] = useState(() => ({
       keys: sidebarAccountKeys(),
@@ -2657,9 +2657,9 @@ export function createSidebarCardView(options: {
      */
     const targets = sidebarTargetsOf(vendors, statuses, selection);
     /**
-     * 现在该显示哪个账号。**不轮播**（用户 2026-10-19 明确要求去掉）。
+     * 现在该显示哪个账号。**不轮播**。
      *
-     * 用户原话：「根据该会话的模型所属账号显示当前账号信息，就不需要轮播显示了」，
+     * 需求：「根据该会话的模型所属账号显示当前账号信息，就不需要轮播显示了」，
      * 随后又说「不用轮播那个了，直接去掉」。宿主的 `remote.session` 没有「前端当前打开
      * 哪个会话」的接口（扫过 asar 里全部调用点确认），所以用**最近一次请求的账号**代替
      * —— 刚发过请求的会话几乎必然就是用户在看的那个。
@@ -2821,7 +2821,7 @@ export function createSidebarCardView(options: {
     /**
      * 轮询间隔的取值指纹：只有它变了才需要重建控制器（读一次新的间隔）。
      *
-     * **轮播已移除**（用户 2026-10-19：「不用轮播那个了，直接去掉」）：不再有`setTurn` /
+     * **轮播已移除**：不再有`setTurn` /
      * `setInterval`，对应的设置项 `sidebarRotateMinutes` 也一并从设置页删掉了。
      */
     const refreshKey = quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"]);
@@ -2891,7 +2891,7 @@ export function createSidebarCardView(options: {
     return SidebarCard({
       t,
       status: view.status,
-      // 厂商显示名（用户 2026-10-21：标题要能看出是哪家网关）。取该行的文案键，
+      // 厂商显示名。取该行的文案键，
       // 查不到这一行时不给 —— 卡片会跳过，不显示内部标识符。
       ...(vendorLabelKeyOf(entries, target?.vendor ?? view.status?.vendor) === undefined
         ? {}
@@ -2899,7 +2899,7 @@ export function createSidebarCardView(options: {
       ...(target === undefined ? {} : { accountRef: target.ref }),
       ...(view.failure === undefined ? {} : { failure: view.failure }),
       ...(view.stale ? { stale: true } : {}),
-      // 整张卡片点下去就打开用量面板（2026-10-19 用户要求：去掉卡片上那个「打开用量面板」
+      // 整张卡片点下去就打开用量面板（需求：去掉卡片上那个「打开用量面板」
       // 按钮，手动刷新也搬到面板里 —— 面板上本来就有刷新图标）。
       onOpen: () => options.onOpen(),
     });
@@ -3019,7 +3019,7 @@ export function createDashboardView(options: {
     /**
      * 用量报表（每账号自己的账期）。
      *
-     * 用户 2026-10-19：「用量面板中还没有这个统计」。与设置页**同一份数据、同一份渲染**，
+     * 需求：「用量面板中还没有这个统计」。与设置页**同一份数据、同一份渲染**，
      * 所以这里也只存报表，渲染交给 `AccountUsageBlock`。
      *
      * **不设定时器**：面板是用户打开的、带显式刷新按钮的视图。给它挂 30 秒轮询会让一个
@@ -3028,7 +3028,7 @@ export function createDashboardView(options: {
      */
     const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
     /**
-     * 是否正在读取（2026-10-22 用户报障「点刷新既不转圈也不刷新内容」）。
+     * 是否正在读取。
      *
      * 旧实现里 `load()` 是同步函数，把结果吞在 `.then` 里立刻返回 —— 于是点刷新后
      * 面板**没有任何可观测变化**，用户只能怀疑按钮坏了。
@@ -3253,7 +3253,7 @@ export const CATALOG_READING_TTL_MS = 300_000;
 /**
  * 状态读数的新鲜期：**跟随用户设置的「用量刷新间隔」**。
  *
- * 2026-10-18 用户报障「刷新频率到底有没有用？我每次点设置它都自己刷一遍」。事实是旧的
+ * 2026-10-18 实际情况「刷新频率到底有没有用？我每次点设置它都自己刷一遍」。事实是旧的
  * TTL 写死 60 秒、和设置里的 `quotaRefreshMinutes`（默认 1 分钟）无关，改设置只影响侧边栏
  * 轮询。现在缓存新鲜期就是那个设置值：设 10 分钟，10 分钟内重开设置直接吃缓存，不再重打
  * 网络；设 1 分钟，1 分钟后才重读。
@@ -3267,7 +3267,7 @@ const catalogReadings = new ReadingCache<CatalogModelsResult>(CATALOG_READING_TT
 /**
  * 更新检查的**结论**（模块级，2026-10-21）。
  *
- * 为什么单独放一份：用户要求「打开设置页就自动检查」，而设置页会被反复开关。
+ * 为什么单独放一份：需求「打开设置页就自动检查」，而设置页会被反复开关。
  * 没有这份缓存，每次开关都打一次更新接口 —— 那是纯浪费。这里只存**结论**
  * （而不是「要重查」），所以重开设置页直接显示上次结果，`undefined` 才表示该查了。
  *
@@ -3288,7 +3288,7 @@ function noteUpdateState(state: UpdateState | undefined): void {
 /**
  * 这份状态读数够格进缓存吗？—— **不完整就不缓存**。
  *
- * 2026-10-18 用户报障「重新点开设置后原来显示的额度信息又不见了」的根因：缓存本意是省一次
+ * 2026-10-18 实际情况「重新点开设置后原来显示的额度信息又不见了」的根因：缓存本意是省一次
  * 网络，但它把**部分失败**的读数也当成功存了下来 —— 一次瞬时故障（端点超时、某个端点坏了）
  * 就此在 60 秒 TTL 里变成「事实」，重开设置吃缓存，额度数字看起来凭空消失。判据：
  * 1. 厂商级没有任何失败项；
@@ -3493,7 +3493,7 @@ const sidebarSettingsListeners = new Set<() => void>();
  *
  * **为什么插件需要它**：宿主把客户端启动图在页面加载那一刻定下来，之后新装/更新的插件不会
  * 自动进图 —— 侧边栏卡片与中台面板于是「不出现」，只有重启宿主才行。刷新页面会让浏览器重走
- * 一遍启动图，效果与重启等价、成本却低得多（用户 2026-10-20 的要求）。
+ * 一遍启动图，效果与重启等价、成本却低得多。
  *
  * 非浏览器环境（测试 / SSR）是空操作：`location` 不存在时什么也不做。
  * @returns 是否真的发起了刷新。

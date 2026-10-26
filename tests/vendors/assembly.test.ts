@@ -986,7 +986,7 @@ it("commandcode 的备用账号服务成功也不提位：固定账号保持不�
   }
 });
 
-// —— 限额换模型（用户 2026-10-19）——
+// —— 限额换模型——
 
 it("限额时换到同名模型：目录里先记下候选，配一个能服务的第二个模型", async () => {
   const { noteCatalogModels, resetCatalogSources, cachedModelCandidates } = await import("../../src/vendors/model-catalog-registry");

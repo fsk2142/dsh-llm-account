@@ -99,7 +99,7 @@ export function apply(ctx: unknown): void {
   // 面板是独立的 React 根，设置页关掉不该带走它们的数据源。幂等：两行各调一次无副作用。
   guarded("shared state (usage remote + settings mirror)", () => startSharedState(seamContext, VENDORS));
   // 设置页组件工厂：`settings.section` 用它在设置里渲染账号管理页（唯一的使用方；
-  // 2026-10-18 用户要求去掉用量面板的「转到设置」跳转，主栏面板不再注册）。
+  // 2026-10-18 需求去掉用量面板的「转到设置」跳转，主栏面板不再注册）。
   const pageComponent = (t: (key: string) => string): unknown =>
     createConnectedPage({
       entries: VENDORS,
@@ -109,10 +109,10 @@ export function apply(ctx: unknown): void {
   guarded("shell registration (settings section + sidebar card + dashboard)", () =>
     applyShell(ctx, {
       copy: { zh: COPY.zh, en: COPY.en },
-      // 设置页（`settings.section`）用这一份；「转到设置」面板已按用户要求去掉。
+      // 设置页（`settings.section`）用这一份；「转到设置」面板已按需求去掉。
       pageComponent,
       // 侧边栏卡片与中栏面板：常驻注册一次（守卫在 shell 里），门控在组件里按已存储的开关做。
-      // 2026-10-18 起不再注册「转到设置」面板（用户要求去掉那个跳转），所以也不传页面工厂。
+      // 2026-10-18 起不再注册「转到设置」面板（需求去掉那个跳转），所以也不传页面工厂。
       sharedSurfaces: (context, t) =>
         registerSharedSurfaces({
           ctx: context as ClientSeamContext,

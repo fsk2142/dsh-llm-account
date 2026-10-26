@@ -1,5 +1,5 @@
 /**
- * 刷新必须**绕过目录缓存**（用户 2026-10-19 报障「opendesign 的账号刷新不起作用」，
+ * 刷新必须**绕过目录缓存**（需求 报障「opendesign 的账号刷新不起作用」，
  * commandcode 正常）。
  *
  * 根因：`catalogModels()` 走 `#catalog` 的 60 秒 TTL 缓存。TTL 内点刷新拿到的是缓存，

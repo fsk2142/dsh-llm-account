@@ -1,5 +1,5 @@
 /**
- * 模型行上的「这个模型在这个套餐下能用多少额度」（2026-10-21 用户要求）。
+ * 模型行上的「这个模型在这个套餐下能用多少额度」。
  *
  * 用户指定的位置是 `[模型名] ...... [额度信息] [开关]`，所以这里除了「显示什么」，
  * 还要钉住「摆在开关左边」这个顺序 —— 摆错位置用户会看成另一个模型的额度。
@@ -65,7 +65,7 @@ describe("模型行上的额度信息", () => {
   });
 
   it("**额度摆在开关左边**：同一行里额度元素的序号小于开关", () => {
-    // 用户 2026-10-21 指定的顺序是 `[模型名] ...... [额度信息] [开关]`。
+    // 需求的顺序是 `[模型名] ...... [额度信息] [开关]`。
     // 额度如果跑到开关右边（或与开关重叠），看起来就像在描述下一个模型。
     const tree = renderWith((_account, modelId) => (modelId === "minimax-m3" ? "$47" : undefined));
     // 找承载这一行的那层 label：它的 children 里同时有 data-model-quota 与 data-account-model。
@@ -93,7 +93,7 @@ describe("模型行上的额度信息", () => {
     expect(quotaIndex).toBeLessThan(toggleIndex);
   });
 
-  it("**查不到时显示「未知」**（用户 2026-10-21：留空看起来像坏了）", () => {
+  it("**查不到时显示「未知」**（留空看起来像坏了）", () => {
     const tree = renderWith(() => undefined);
     const nodes = elements(tree).filter((element) => element.props["data-model-quota"] !== undefined);
     // 每个模型都有一行「未知」，而不是留空。

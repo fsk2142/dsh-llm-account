@@ -324,7 +324,7 @@ export const VENDORS: readonly VendorEntry[] = [
               { value: "api-first", labelKey: "options.searchApiFirst" },
               { value: "gateway-only", labelKey: "options.searchGatewayOnly" },
               { value: "api-only", labelKey: "options.searchApiOnly" },
-              // 用户 2026-10-20：下拉里要有「不使用网页搜索」。
+              // 需求：下拉里要有「不使用网页搜索」。
               { value: "off", labelKey: "options.searchOff" },
             ],
             fallback: "gateway-first",

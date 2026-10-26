@@ -254,7 +254,7 @@ it("真实挂载：保存条、侧边栏、仪表盘的按钮也都有类", asyn
   const { createConnectedPage, registerSharedSurfaces, startSharedState, DASHBOARD_PANEL_ID, SIDEBAR_SLOT } = await import("../../src/client/seams");
   const { VENDORS, PAGE_LOCALE_NS } = await import("../../src/client/shell");
 
-  // ① 设置页：改了字段就落盘，底部**没有**保存条（2026-10-20 用户要求去掉）。
+  // ① 设置页：改了字段就落盘，底部**没有**保存条。
   // 这里仍然逐棵子树检查类名 —— 保存条没了，但卡片里的按钮（含密钥「添加」）必须有档位类。
   const page = mini.mount(createConnectedPage({ entries: VENDORS, ctx: host.ctx as never, t }));
   await settleSim(mini);

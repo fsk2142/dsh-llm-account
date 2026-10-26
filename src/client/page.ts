@@ -39,7 +39,7 @@ export interface PageShellProps {
   /**
    * 保存**一张卡片**里某一家尚未落盘的输入（卡片底部的「保存」按钮）。
    *
-   * 用户 2026-10-20：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
+   * 需求：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
    * @param ns - 要保存的那一家（宿主按条目 id 寻址，容器负责把 ns 换成行名）。
    */
   onSave: (ns: string) => void;
@@ -82,7 +82,7 @@ export interface PageShellProps {
   /**
    * 测试一把密钥能不能用（每行的「测试」按钮）。
    *
-   * 用户 2026-10-20：「或者多增加一个测试按钮，让用户可以自行测试密钥的有效性」。
+   * 需求：「或者多增加一个测试按钮，让用户可以自行测试密钥的有效性」。
    * 缺省时按钮不渲染（老宿主没有实测通道 —— 不留一个点了没反应的死按钮）。
    */
   onTestSecret?: (ref: string) => void;
@@ -140,7 +140,7 @@ export function PageShell(props: PageShellProps): ReactElement {
 }
 
 /**
- * 「插件已更新，刷新页面即可」的提示条（用户 2026-10-20 要求）。
+ * 「插件已更新，刷新页面即可」的提示条。
  *
  * 为什么需要它：宿主把**客户端启动图**在页面加载那一刻就定下来了，之后新装/更新的插件不会
  * 自动进图 —— 于是侧边栏卡片、中台面板都「不出现」，只有重启宿主才行。而**刷新页面**会让
@@ -174,7 +174,7 @@ function reloadNotice(props: PageShellProps, t: (key: string) => string): ReactE
 }
 
 /**
- * 「检查更新 / 更新」区块（用户 2026-10-20：「希望加一个更新，这样有新版本的时候直接更新
+ * 「检查更新 / 更新」区块（需求：「希望加一个更新，这样有新版本的时候直接更新
  * 就可以，就不用每次卸载后重新装」）。
  *
  * 三种结论分别渲染，**尤其不把「链接安装」说成「已是最新」**：
@@ -214,9 +214,9 @@ function formatVersionLabel(value: string | undefined): string | undefined {
 }
 
 /**
- * 标题行右侧的**版本与更新**控件（2026-10-21 用户要求）。
+ * 标题行右侧的**版本与更新**控件。
  *
- * 用户原话：「检查更新那个建议放到设置页最开头 LL 账号的最右边，检查完就提示是否有新版本，
+ * 需求：「检查更新那个建议放到设置页最开头 LL 账号的最右边，检查完就提示是否有新版本，
  * 版本号多少，显示是否更新」。
  *
  * 版式（一行，从左到右）：`当前版本 v0.1.0` → 状态文字 → 动作按钮。
@@ -256,7 +256,7 @@ function updateMeter(props: PageShellProps, t: (key: string) => string): ReactEl
   const canUpdate = state?.kind === "available";
   const latest = state?.kind === "available" ? state.latest : undefined;
   // 版本文案经 `formatVersionLabel` 统一格式化：git 安装的 `latestVersion` 是 commit SHA，
-  // 直接拼 `v` 会得到 `v032c5469…` 这种一长串（用户 2026-10-21 报障）。
+  // 直接拼 `v` 会得到 `v032c5469…` 这种一长串。
   const installedText = formatVersionLabel(installed);
   const latestText = formatVersionLabel(latest);
   const versionText =
@@ -303,7 +303,7 @@ function updateMeter(props: PageShellProps, t: (key: string) => string): ReactEl
                   : "",
     },
     // 版本号统一经 `formatVersionLabel`：git 安装给的是 commit SHA，无条件加 `v`
-    // 会显示成一长串（用户原话「不是版本号，是一串字符」）。
+    // 会显示成一长串（需求「不是版本号，是一串字符」）。
     versionText === undefined
       ? null
       : createElement(
@@ -365,7 +365,7 @@ function pageBody(props: PageShellProps): ReactElement {  const { state, entries
     createElement(
       "header",
       { className: CSS_CLASS.header },
-      // 标题行：左边是名字，**最右边是版本与更新控件**（2026-10-21 用户要求）。
+      // 标题行：左边是名字，**最右边是版本与更新控件**。
       // 单独一层 `dsl-title-row` 是因为 `dsl-header` 是纵向 flex（标题 + 介绍），
       // 只有这一行需要横向两端对齐。
       createElement(
@@ -395,13 +395,13 @@ function pageBody(props: PageShellProps): ReactElement {  const { state, entries
               ),
         )
       : null,
-    // 四张卡片（按功能分组，三家合并）。用户 2026-10-20：「三家设置合并在一起，
+    // 四张卡片（按功能分组，三家合并）。需求：「三家设置合并在一起，
     // 除非某个设置是专门针对某一家网关的」「不要那个设置对象，就按照可收起的卡片形式」。
     //
     // 卡片**永远都在**：主开关（启用自动切换 / 启用网页搜索）关掉时只把下方配置置灰，
     // 卡片不消失 —— 用户随时能重新打开，也不会分不清「自己关掉了」还是「坏了」。
     ...SETTINGS_CARDS.map((card) => settingsCardElement(props, vendors, card)),
-    // 底部**不再有保存条**（用户 2026-10-20：「任何选项修改了就是直接保存，不需要那个保存
+    // 底部**不再有保存条**（需求：「任何选项修改了就是直接保存，不需要那个保存
     // 按钮了」）。改动由容器在 `onSetField` 里立刻落盘；失败原因挂在**各自卡片里**显示。
   );
 }
@@ -413,7 +413,7 @@ function pageBody(props: PageShellProps): ReactElement {  const { state, entries
  * 形状：
  * 1. 共有字段只渲染**一次**（三家同名同义，写回时会镜像）；
  * 2. `specific` 字段只渲染它归属的那一家，并标注厂商徽标；
- * 3. 没有卡片级开关 —— 收起/展开由 `<details>` 的箭头负责（2026-10-20 用户要求去掉
+ * 3. 没有卡片级开关 —— 收起/展开由 `<details>` 的箭头负责（2026-10-20 需求去掉
  *    「启用自动切换 / 开启网页搜索」两个界面开关：卡片本来就能收起，多一个开关反而
  *    让人误以为关掉会禁用功能）。
  * @param props - 页面属性。
@@ -458,7 +458,7 @@ function settingsCardElement(
   // 所以这里直接从承载行的值读，而不是通过字段声明。
   if (card.id === "search") nodes.push(secretBlockOf(props, vendors));
 
-  // 4) 保存条：**本卡有未保存输入时**才出现（用户 2026-10-20：「一个卡片保留一个保存按钮，
+  // 4) 保存条：**本卡有未保存输入时**才出现（需求：「一个卡片保留一个保存按钮，
   // 点完保存后按钮消失，如果复原则不显示保存」）。开关/下拉改了就存，不产生草稿，所以它们
   // 永远不点亮这根按钮 —— 只有输入类（文本/数字/时长）会。
   const pending = pendingSavesOf(props, vendors, card);
@@ -642,7 +642,7 @@ function isFirstCarryingCard(
 /**
  * 搜索密钥那一块：**输入框 + 添加按钮 + 已添加列表**。
  *
- * 用户 2026-10-20：「只保留保存密钥那个，没添加一个就自动显示添加了一个，然后还可以点 x
+ * 需求：「只保留保存密钥那个，没添加一个就自动显示添加了一个，然后还可以点 x
  * 删除已经添加的」。所以：
  * 1. 不再让用户填「引用名」—— 那份列表（`searchApiKeyRefs`）由添加/删除动作维护；
  * 2. 添加成功就出现在下面的列表里（每条显示「已添加 / 未添加」）；
@@ -682,7 +682,7 @@ function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): 
         ]
       : refs.map((ref) => {
           const configured = props.credentialStatus?.[ref];
-          // 实测结论（`undefined` = 还没测过）：用户 2026-10-20 要求「添加后就验证一次」+
+          // 实测结论（`undefined` = 还没测过）：需求「添加后就验证一次」+
           // 「多一个测试按钮让他自己测」。三档都显示出来 —— `unknown` 不能说成「不可用」。
           const probe = props.keyProbes?.[ref];
           const probing = props.keyProbing === ref;
@@ -807,7 +807,7 @@ function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): 
 /**
  * 一组通用字段卡片。
  *
- * 「集成与显示」与「高级」都用原生 `<details>` **默认折叠**（用户 2026-10-19 要求前者
+ * 「集成与显示」与「高级」都用原生 `<details>` **默认折叠**（需求前者
  * 也能收）：这两组都是配置一次就不常动的字段，摊开会让设置页显得很长；账号与额度是
  * 常用区，保持展开。
  */
@@ -834,7 +834,7 @@ function fieldElement(
   const hint = spec.hintKey === undefined ? null : createElement("small", { "data-field-hint": spec.key }, t(spec.hintKey));
   // 凭据类字段的「已添加 / 未添加」徽标。
   //
-  // 用户报障：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个框填的是**引用名**，
+  // 实际情况：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个框填的是**引用名**，
   // 真 key 在凭据库里 —— 填了名字不等于库里有 key，所以必须去查一次并显示出来。
   // 查不到（还没读回来）时**什么都不显示**：猜「未添加」会误报。
   const credentialBadge = credentialBadgeOf(props, field);
@@ -881,7 +881,7 @@ function fieldElement(
 /**
  * 一张卡片底部的保存按钮：**只有真有未落盘的输入时才渲染**。
  *
- * 用户 2026-10-20：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
+ * 需求：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
  *
  * 三条都由这里保证：
  * 1. 没有未保存的输入 → 返回 `null`（按钮不出现，页面不常驻一根没用的按钮）；

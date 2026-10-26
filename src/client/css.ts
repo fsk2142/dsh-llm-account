@@ -60,7 +60,7 @@ export const PAGE_CSS = `
   font-family: var(--dsw-font-family); font-size: 14px; line-height: 22px;
   color: var(--dsw-alias-label-primary); }
 .dsl-header { display: flex; flex-direction: column; gap: 4px; }
-/* 标题行：名字在左、版本与更新控件在右（2026-10-21 用户要求「放到最右边」）。
+/* 标题行：名字在左、版本与更新控件在右。
    两端对齐 + 允许换行：窄侧边栏里控件掉到第二行，而不是把标题挤没。 */
 .dsl-title-row { display: flex; align-items: center; justify-content: space-between;
   gap: 8px; flex-wrap: wrap; }
@@ -137,11 +137,11 @@ export const PAGE_CSS = `
 .dsl-model-add .dsl-actions { justify-content: flex-end; }
 /* 「这个模型在这个套餐下能用多少额度」：次要文字，紧挨在开关左边。
    margin-inline-start:auto 让它靠右（模型名在左、额度与开关在右），
-   与用户 2026-10-21 指定的「模型名 …… 额度信息 开关」顺序一致。 */
+   与「模型名 …… 额度信息 开关」的出现顺序一致。 */
 .dsl-model-quota { flex: none; margin-inline-start: auto; padding-inline-end: 8px;
   font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
-/* 「未知」：官方没公布这个模型的额度（2026-10-21 用户要求用文字说明而不是留空）。
+/* 「未知」：官方没公布这个模型的额度。
    比正常额度更淡一档，读作「这里没有数据」而不是「额度是这个词」。 */
 .dsl-model-quota-unknown { color: var(--dsw-alias-label-tertiary); }
 .dsl-card > summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
@@ -194,7 +194,7 @@ export const PAGE_CSS = `
   background: var(--dsw-alias-state-business-primary); }
 
 /* ═══ 搜索密钥列表（已添加的那几条） ═══
- * 用户 2026-10-20：「添加后那个默认名占的位置太宽，降低一下高度」。
+ * 需求：「添加后那个默认名占的位置太宽，降低一下高度」。
  *
  * 这些是**列表项**，不是可编辑的设置行，所以不复用 14px 字号 + 上下 8px 内边距：
  * 那条设置行给的是「标签 + 说明 + 控件」的三段高度，而这里只有「一个名字 + 一个 ×」。
@@ -231,7 +231,7 @@ export const PAGE_CSS = `
 
 /* ═══ vela 缺失时的安装指引（只在这一种登录失败时出现） ═══
  * 三档可执行路径 + 一行可复制的命令。刻意用内嵌面板（dsl-inset）而不是一句话：
- * 用户 2026-10-20 要的是「如何快速安装环境」，不是「请先安装」。
+ * 需求 要的是「如何快速安装环境」，不是「请先安装」。
  */
 .dsl-vela-guide-title { font-size: 13px; line-height: 20px; font-weight: 600;
   color: var(--dsw-alias-label-primary); }
@@ -589,7 +589,7 @@ export const PAGE_CSS = `
 .dsl-boundary > button { align-self: flex-start; }
 
 /* ═══ 卡片内的保存条（只在有未保存输入时出现；放在卡片末尾，不浮动遮挡） ═══
- * 用户 2026-10-20：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
+ * 需求：「一个卡片保留一个保存按钮，点完保存后按钮消失，如果复原则不显示保存」。
  * 它现在住在**卡片里**（data-card-save），不再是页面底部那条 —— 所以这里只负责
  * 「一行按钮 + 一行小字」的排布，像一条分隔线，而不是一条横贯页面的操作栏。
  */
@@ -617,7 +617,7 @@ export const PAGE_CSS = `
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-secondary);
   font-size: 12px; line-height: 18px; }
-/* 整张卡片是一个按钮（2026-10-19 用户要求）：点哪里都打开用量面板。
+/* 整张卡片是一个按钮：点哪里都打开用量面板。
    所以它要长得像能点的：左对齐、指针、悬停浮起；且**不能**沿用按钮的居中与内边距。 */
 .dsl-sidebar-button { width: 100%; text-align: left; font: inherit; cursor: pointer;
   transition: background 140ms ease, border-color 140ms ease; }
@@ -629,25 +629,25 @@ export const PAGE_CSS = `
 .dsl-sidebar-head { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; }
 .dsl-sidebar-head > h3 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   text-wrap: nowrap; }
-/* 标题行的三种文字，视觉权重按「账号 > 厂商 > 套餐徽标」递减（用户 2026-10-21 定）：
+/* 标题行的三种文字，视觉权重按「账号 > 厂商 > 套餐徽标」递减：
  * 只有**账号名**是深色加粗的主信息；厂商与套餐跟「用量周期」同色（tertiary），
  * 读作陪衬而不是第二个标题。
  *
  * **字号必须写死**：账号与厂商在 h3 里（13px），而套餐徽标是 h3 的兄弟节点、
- * 继承的是 .dsl-sidebar 的 12px —— 不加这一行两者会差 1px（用户 2026-10-21 问
+ * 继承的是 .dsl-sidebar 的 12px —— 不加这一行两者会差 1px（需求 问
  * 「确认一下字号是否是统一的」，就是这一处）。 */
 .dsl-sidebar-account { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); }
 .dsl-sidebar-vendor { font-size: 13px; font-weight: 400; color: var(--dsw-alias-label-tertiary); }
 .dsl-sidebar-vendor::before { content: " · "; }
-/* 套餐徽标：**靠右对齐**（用户 2026-10-21 的版式：账号 · 厂商 ……… [套餐]）。
+/* 套餐徽标：**靠右对齐**。
  * margin-inline-start:auto 把它推到行尾；不换行，太长时由标题让位（h3 已可省略号）。
  * 字号与 h3 对齐见上一条注释。 */
 .dsl-sidebar-plan { flex: none; margin-inline-start: auto; font-size: 13px; font-weight: 400;
   color: var(--dsw-alias-label-tertiary); text-wrap: nowrap; }
-/* 额度行：**一条一行**，「标签 — 进度条 — 重置时间」横向三样（用户 2026-10-19 定稿）。
+/* 额度行：**一条一行**，「标签 — 进度条 — 重置时间」横向三样。
  *
  * **对齐的关键**：列宽必须定义在**外层容器**上，不能每个行各写一套 —— 每一行是独立网格时，
- * 「5 小时」与「每周」标签宽度不同，后两列的起点就会错开（用户报障「对齐一下两个进度条」）。
+ * 「5 小时」与「每周」标签宽度不同，后两列的起点就会错开（实际情况「对齐一下两个进度条」）。
  * 现在容器定义一次三列，每行用 display: contents 把子元素直接交给外层网格。 */
 .dsl-sidebar-row-primary,
 .dsl-sidebar-row-secondary { display: contents; }
@@ -680,7 +680,7 @@ export const PAGE_CSS = `
 
 /* ═══ 中栏仪表盘 ═══
  *
- * **必须能滚动**（用户 2026-10-19：「打开用量面板后无法滚动下滑」）：面板内容随账号数无限
+ * **必须能滚动**：面板内容随账号数无限
  * 增长（每个账号一段额度 + 用量块），而中栏高度是固定的。给容器高度上限并让它自己滚 ——
  * 否则内容被裁掉、又没有滚动条，后面的账号根本看不到。
  *

@@ -1,7 +1,7 @@
 /**
  * 统一搜索的**选路判定**（纯函数）。
  *
- * 用户要求：「统一都用 deepseek 的搜索，API 优先用我们登录的供应商账号额度，
+ * 需求：「统一都用 deepseek 的搜索，API 优先用我们登录的供应商账号额度，
  * 如果没有就使用我们自己添加的 API 调用搜索」。
  *
  * ## 为什么必须先判定再发请求
@@ -38,7 +38,7 @@ export type SearchRoute =
  * - `api` 走 `POST /v1/tools/search`，按**请求次数**计费（每 1000 次 5 元），不烧 token。
  *
  * `*-first` 是「优先但可回退」，`*-only` 是「不许回退，不可用就明确失败」，
- * `off` 是「完全不启用网页搜索」（用户 2026-10-20 要求：下拉里要有这一项）。
+ * `off` 是「完全不启用网页搜索」。
  */
 export type SearchStrategy = "gateway-first" | "api-first" | "gateway-only" | "api-only" | "off";
 

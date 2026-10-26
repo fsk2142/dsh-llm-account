@@ -94,7 +94,7 @@ export interface OpenDesignQuotaDeps {
    * 账单摘要的第二来源（生产传 `vela billing summary --format json`）。
    *
    * 实测：控制面的 `GET /billing/summary` 对登录产物里的两把密钥都回 **403**，而同一份数据
-   * vela CLI 能拿到 —— 没有这条回退，套餐与换算率在真机上永远是空的（用户报障「套餐信息也没有」）。
+   * vela CLI 能拿到 —— 没有这条回退，套餐与换算率在真机上永远是空的（实际情况「套餐信息也没有」）。
    */
   summaryFallback?: () => Promise<unknown | undefined>;
   /**
@@ -275,7 +275,7 @@ function windowKeyOf(duration: unknown): string {
 /**
  * 归一化一个 preflight 窗口。
  *
- * **上限（`cap`）优先用官方公布的美元值**，而不是从 credits 换算 —— 用户 2026-10-21
+ * **上限（`cap`）优先用官方公布的美元值**，而不是从 credits 换算 —— 需求
  * 明确要求「按照官方的实际口径来而不是靠推算」。
  *
  * 理由：接口给的 `creditsPerUsd`（实测 10000）与官方文档的窗口额度（Go 周 $30）
@@ -372,7 +372,7 @@ function windowsOf(preflight: unknown, creditsPerUsd: number | undefined, tier?:
  *
  * 为什么需要这条来源（2026-10-21 实测）：`billing/summary` 与
  * `vela billing summary` **都回 403**，而套餐名一直是从前者读的 —— 于是真机上
- * 套餐徽标永远是空的（用户报障「opendesign 部分显示不全」）。同一个账号的
+ * 套餐徽标永远是空的（实际情况「opendesign 部分显示不全」）。同一个账号的
  * `billing preflight` 却稳定给出 `codingPlan.tier`（实测 `"go"`），而这份数据本来
  * 每次都在读（额度窗口就来自它），等于**白拿**。
  *

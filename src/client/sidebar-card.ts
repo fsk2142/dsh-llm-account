@@ -7,7 +7,7 @@
  * 纪律与其它卡片相同（Ruling 22/29）：**纯 props → 元素树**，没有 Hook、没有内部状态，也不会在
  * 这里发起任何请求 —— 轮询由 `seams.ts` 的控制器按挂载/开关状态起停。
  *
- * 视觉（2026-10-19 用户要求定稿）：
+ * 视觉：
  * - **整张卡片就是一个按钮**：点哪里都打开用量面板。原先底部那个「打开用量面板」通栏按钮
  *   删掉了 —— 它占一整行却只做一件「点卡片」也能做的事；
  * - **手动刷新搬到面板里**：侧边栏是常驻的窄条，上面摆一个刷新图标容易被误点，而它要刷的
@@ -62,7 +62,7 @@ export interface SidebarCardProps {
 /**
  * 一行里要显示的三档窗口，按这个顺序找（键的写法各家不一，见 {@link windowOfKind}）。
  *
- * 用户 2026-10-19：「看看能不能在一行空间内显示 5 小时、一周、一个月的额度消耗情况」。
+ * 需求：「看看能不能在一行空间内显示 5 小时、一周、一个月的额度消耗情况」。
  * 找不到的档位**不占位**（`undefined` 直接跳过）——三家并不都有月度窗口：
  *
  * - **Open Design**：厂商只发五小时与每周两档，**没有月度**（曾本地补过一个，2026-10-23 移除）；
@@ -147,16 +147,16 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
         createElement(
           "h3",
           { "data-sidebar-title": "true" },
-          // 标题 = 账号名 · 厂商名（用户 2026-10-21：「只有账号名显示，没有对应个网关厂商显示了」）。
+          // 标题 = 账号名 · 厂商名。
           // 厂商名放在同一行，用 `·` 分隔：侧边栏只有两百多像素，多占一行会把额度条挤下去。
           createElement("span", { "data-sidebar-account": "true" }, titleOf(props, currentRow)),
           vendorOf(props) === undefined
             ? null
             : createElement("span", { "data-sidebar-vendor": "true", className: CSS_CLASS.sidebarVendor }, vendorOf(props)),
         ),
-        // 套餐徽标靠**右对齐**（用户 2026-10-21 定的版式：账号 · 厂商 ……… 套餐）。
+        // 套餐徽标靠**右对齐**。
         // 读不到套餐时不占位。只显示档位名，不带金额、也不加悬浮提示 ——
-        // 用户 2026-10-21 明确不要那个提示（一行能读到的信息不必再藏进 title）。
+        // 需求 明确不要那个提示（一行能读到的信息不必再藏进 title）。
         planBadgeOf(currentRow) === undefined
           ? null
           : createElement(
@@ -172,7 +172,7 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
         ? [
             // 两行：第一行 5 小时（带重置时间），第二行周 + 月。
             ...quotaRows(props, currentRow),
-            // 有账号数据、但**没有 5 小时/每周这两档**时如实说明（2026-10-20 用户要求：
+            // 有账号数据、但**没有 5 小时/每周这两档**时如实说明（需求：
             // 「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」）——
             // 不拿月度顶替，也不留一片空白让人以为卡坏了。
             ...(quotaRows(props, currentRow).length === 0
@@ -216,14 +216,14 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
 }
 
 /**
- * 额度概览：**两行**，每行一条「标签 — 进度条 — 重置时间」（用户 2026-10-19 定稿）。
+ * 额度概览：**两行**，每行一条「标签 — 进度条 — 重置时间」。
  *
  * 第一行 5 小时档、第二行周档。为什么不并排：侧边栏只有两百多像素宽，并排后档位名要截断、
  * 重置时间完全放不下；横排一行一条才塞得下这三样，而且和「还剩多少 + 什么时候恢复」的
  * 阅读顺序一致。
  *
  * 缺少某一档时**不占位**（三家并不都有周窗口）。两档都缺时**一行都不画**，由调用方
- * 显示「没有短周期数据」的说明 —— 绝不拿月度等其它档位顶替（2026-10-20 用户要求：
+ * 显示「没有短周期数据」的说明 —— 绝不拿月度等其它档位顶替（需求：
  * 「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」）。
  * @param props - 卡片属性。
  * @param row - 当前账号。
@@ -237,12 +237,12 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
   const week = windowOfKind(windows, "week");
   const shown = [fiveHour, week].filter((item): item is QuotaWindow => item !== undefined);
   /**
-   * **只显示「5 小时」与「每周」这两档**（用户 2026-10-20 明确要求）。
+   * **只显示「5 小时」与「每周」这两档**。
    *
    * 以前的兜底是「一档都认不出来就用第一个能读的窗口」——于是当小时/周读数缺失、只剩月度窗口
    * 时，界面会**单独显示月度额度**。那是不对的：侧边栏的版式与语义就是「本周期还剩多少」的
    * 短周期视图，缺了短周期数据时正确做法是**如实说没有**，而不是拿一档不相干的数字顶上去
-   * （用户原话：「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」）。
+   * （需求：「小时额度信息和周额度信息没有的话也不能显示月度额度信息啊」）。
    */
   const rows = shown;
   if (rows.length === 0) return [];
@@ -253,7 +253,7 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
       "div",
       { key: "windows", "data-sidebar-windows": "true", className: CSS_CLASS.sidebarWindows },
       // 表头：把「中间那列是条、右边那列是重置时间」讲清楚，也让两行的对齐有参照物
-      // （用户 2026-10-19 给的版式：账号 / 用量周期 / 重置时间）。
+      //。
       createElement(
         "div",
         { key: "head", "data-sidebar-head": "true", className: CSS_CLASS.sidebarWindowsHead },
@@ -276,7 +276,7 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
   ];
 }
 /**
- * 一档窗口的一行读数：**标签 — 进度条 — 重置时间**（横向三样，用户 2026-10-19 定稿）。
+ * 一档窗口的一行读数：**标签 — 进度条 — 重置时间**（横向三样，需求 定稿）。
  *
  * 条的长度是两个读数的比值：左侧填色 = **剩余**比例（与 QuotaBar 同一口径），
  * 所以「条越长越安全」。百分比数字不再单列一行 —— 条本身已经表达了比例，重置时间更重要。
@@ -294,7 +294,7 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
   const reading = quotaReading(window);
   const level = unlimited ? "unlimited" : remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
   // 日期格式（`10-19 20:00`）而不是「今天/明天」：两行上下并排时相对说法对不齐，
-  // 也不好比较（用户 2026-10-19：「小时那个也用日期表示，不用明天这种」）。
+  // 也不好比较。
   const reset = quotaResetDateText(window.resetAt, Date.now(), window.resetEstimated === true) ?? t("quota.resetUnknown");
   const bar =
     meter === undefined || unlimited
@@ -366,7 +366,7 @@ function titleOf(props: SidebarCardProps, row: AccountUsageStatus | undefined): 
 /**
  * 这家厂商的显示名（`Command Code` / `Open Design` / `OpenCode`）。
  *
- * 用户 2026-10-21 报障：「侧边栏现在只有账号名显示，没有对应个网关厂商显示了」——
+ * 需求：「侧边栏现在只有账号名显示，没有对应个网关厂商显示了」——
  * 多账号轮播到别家时，光看账号名分不清是哪家。
  * @param props - 卡片属性。
  * @returns 显示名；认不出这家时为 `undefined`（不占位）。
@@ -383,7 +383,7 @@ function vendorOf(props: SidebarCardProps): string | undefined {
 /**
  * 当前套餐的**短徽标**（`[GOAT]` / `[GO]` / `[PRO]`…），显示在标题行右侧。
  *
- * 用户 2026-10-21：「套餐建议加一个[]括起来，另外都用大写表示」——
+ * 需求：「套餐建议加一个[]括起来，另外都用大写表示」——
  * 方括号把它与账号名、厂商名区分开（否则一长串会被读成同一个名字）；
  * 大写是档位标识的惯例写法。
  *

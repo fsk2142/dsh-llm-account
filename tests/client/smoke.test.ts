@@ -160,7 +160,7 @@ it("两个 profile 行各调一次 apply：页面与各插槽条目都只注册�
   const sidebar = host.registered.filter((item) => item.slot === "sidebar.footer.action");
   const panels = host.registered.filter((item) => item.slot === "main");
   expect(sidebar).toHaveLength(1);
-  // 主栏只剩一条：用量仪表盘（「转到设置」面板已按用户要求去掉，2026-10-18）。
+  // 主栏只剩一条：用量仪表盘（「转到设置」面板已按需求去掉，2026-10-18）。
   expect(panels).toHaveLength(1);
   expect(sidebar[0]!.entry).toMatchObject({ id: "llm-account-quota", order: 1, locale: "settings.llm-account" });
   // `main` 用 key（不是 id）：抄错会让面板永远打不开。

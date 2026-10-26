@@ -72,7 +72,7 @@ export interface AccountCardProps {
   /**
    * 上一次「确定」没提交出去的原因（人话）。
    *
-   * 存在的理由（2026-10-18 用户报障「新增账号的操作逻辑」）：空名称/空密钥时
+   * 存在的理由：空名称/空密钥时
    * `dispatchAccountAction` 按规矩**不发调用**，界面于是没有任何可见反应 —— 按钮看起来像坏的。
    * 现在由容器把原因放进来，编辑器里显示这一行。
    */
@@ -117,7 +117,7 @@ export interface AccountCardProps {
   /** 覆盖某个账号的模型；同一模型可属于多个账号。 */
   onSetAccountModels?: (ref: string, models: readonly string[]) => void;
   /**
-   * 查一个模型在**当前套餐**下能用多少额度（用户 2026-10-21 要的功能）。
+   * 查一个模型在**当前套餐**下能用多少额度。
    *
    * 返回 `undefined` 表示官方没给这个组合的数据（套餐认不出 / 模型不在表里）——
    * 这时卡片显示「未知」，绝不编一个数字出来。判断与格式化都在容器里做，
@@ -128,7 +128,7 @@ export interface AccountCardProps {
    */
   modelQuotaOf?: (account: AccountUsageStatus, modelId: string) => string | undefined;
   /**
-   * 这个模型在**该账号当前套餐**下能不能用（用户 2026-10-21：不要把本套餐用不了的
+   * 这个模型在**该账号当前套餐**下能不能用（需求：不要把本套餐用不了的
    * 模型也列出来）。
    *
    * 三档语义：`true` 可用；`false` **明确不可用**（隐藏）；`undefined` 没有官方清单
@@ -141,7 +141,7 @@ export interface AccountCardProps {
   /**
    * 该账号的用量统计（容器按 ref 提供）。
    *
-   * 放在**账号行内**（额度条下方）而不是另起一张大卡：用户 2026-10-19 要求「单个账号的
+   * 放在**账号行内**（额度条下方）而不是另起一张大卡：需求「单个账号的
    * 统计放在该账号下面」—— 额度与用量本来就是同一个账号的两面，分开看要来回找。
    * 返回 `undefined` 表示这一行不画（还没读到数据）。
    */
@@ -156,9 +156,9 @@ export interface AccountCardProps {
 }
 
 /**
- * 「恢复默认名称」这个动作**应当恢复成什么**（2026-10-22 用户要求）。
+ * 「恢复默认名称」这个动作**应当恢复成什么**。
  *
- * 用户原话：「账号名称修改后如果不想用了可以恢复为默认名称，就是账户原本的名称」，
+ * 需求：「账号名称修改后如果不想用了可以恢复为默认名称，就是账户原本的名称」，
  * 并明确默认名称 = 登录邮箱。
  *
  * 三个返回 `undefined` 的情形，对界面都是同一件事（菜单项不显示）：
@@ -361,7 +361,7 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
               },
               t("account.use"),
             ),
-        // 按账户刷新模型（2026-10-18 用户要求「每个账户缺少单独刷新的按钮」）：刷的是这个
+        // 按账户刷新模型：刷的是这个
         // 账号所属厂商的目录。加载中禁用并转圈（`aria-busy` 挂给样式层）。
         ...(props.onRetryCatalog === undefined
           ? []
@@ -419,7 +419,7 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
   if (props.onSetAccountModels === undefined) return null;
   // 目录还没读出来时，这一节**不消失**：加载中说加载中，读失败时说失败并给重试。
   // 旧行为是整体返回 null —— 用户看到的是「这个账号没有模型可选」，与「正在读」
-  // 「读失败」三种病因混为一谈，且没有任何入口补救（2026-10-18 用户要求补上）。
+  // 「读失败」三种病因混为一谈，且没有任何入口补救。
   if (props.catalog === undefined) {
     if (props.catalogLoading === true) {
       return createElement(
@@ -459,7 +459,7 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
   }
   const selected = new Set(props.modelRules?.find((rule) => rule.account === account.ref)?.models ?? []);
   /**
-   * **只列出本套餐真正能用的模型**（用户 2026-10-21 要求）。
+   * **只列出本套餐真正能用的模型**。
    *
    * 网关返回的是全站目录（不知道你的档位），所以过滤必须在客户端做。判据由容器给
    * （`props.modelAvailable`）：返回 `false` 才是「明确不可用」并隐藏；返回
@@ -559,10 +559,10 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
               { className: CSS_CLASS.fieldText },
               createElement("span", { className: CSS_CLASS.mono }, model?.name ?? id),
             ),
-            // 额度信息摆在开关**左边**（用户 2026-10-21 指定：
+            // 额度信息摆在开关**左边**（需求：
             // `[模型名] ...... [额度信息] [开关]`）。
             //
-            // **查不到时写「未知」而不是留空**（用户 2026-10-21 要求）：留空看起来像
+            // **查不到时写「未知」而不是留空**：留空看起来像
             // 功能坏了，而「未知」明确表达「官方没给这个数据」，与「额度缺失不倒成 0」
             // 是同一条纪律 —— 只是把沉默换成了说明。
             createElement(
@@ -672,7 +672,7 @@ function closeMenu(event: { currentTarget?: { closest?: (selector: string) => { 
 function menuButtons(props: AccountCardProps, account: AccountUsageStatus): ReactNode[] {
   const { t } = props;
   /**
-   * 可恢复的默认名称（2026-10-22 用户要求）。
+   * 可恢复的默认名称。
    *
    * `undefined` 时**不显示**这个菜单项：没有记录默认名的老账号、默认名是空白、
    * 或当前名已等于默认名 —— 三种情况都没有「可恢复」的东西（见 `restoreDefaultLabelOf`）。
@@ -882,7 +882,7 @@ function loginSection(props: AccountCardProps): ReactNode[] {
       );
     }
     // 缺环境是**唯一**一种用户自己就能修好的失败：给出可执行的安装步骤，而不是一句
-    // 「请先安装」（用户 2026-10-20：「用户缺少环境的时候给出提示，如何快速安装环境」）。
+    // 「请先安装」。
     const guide = velaInstallGuide(t, login.reason, props.onLoginBegin === undefined ? undefined : () => props.onLoginBegin());
     if (guide !== null) detail.push(guide);
   }
@@ -908,7 +908,7 @@ export function reasonText(t: (key: string) => string, reason: string | undefine
 /**
  * `vela` 缺失时的**安装指引**块（只对这一种原因渲染，其余失败保持一句话）。
  *
- * 用户 2026-10-20：「opendesign 新增账户的时候如果使用网页登录，用户缺少环境的时候给出提示，
+ * 需求：「opendesign 新增账户的时候如果使用网页登录，用户缺少环境的时候给出提示，
  * 如何快速安装环境」。为什么值得单独做一块：
  *
  * - 这是**唯一**一种用户自己就能修好的登录失败（其余是网络/未批准/凭据问题，用户改不了）；
@@ -962,7 +962,7 @@ export function velaInstallGuide(
  * 「第一次输入即打开 add」的幂等接线（`openAction` 对同一 kind 返回原对象），这样即便宿主
  * 或未来调用方绕过入口直接改字段，操作状态也已经是打开的。
  *
- * 2026-10-18 用户要求「新增账号那个地方优化一下操作逻辑」，这一版补了五件事：
+ * 2026-10-18 需求「新增账号那个地方优化一下操作逻辑」，这一版补了五件事：
  * ① 表单顶上写明**在往哪家加账户**（面板底部只有一个表单位置，两家共用）；
  * ② 名称框自动聚焦（点开就能打字）；③ 回车 = 确定（单行表单的默认预期）；
  * ④ 空名称点确定会看到一行人话原因（`actionError`），不再是死按钮；

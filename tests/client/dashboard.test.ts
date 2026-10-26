@@ -85,7 +85,7 @@ it("逐账号列出状态与额度（每个窗口一行，缺失不写 0）", ()
   const first = rows[0]!;
   expect(textsOf(first)).toContain("Account A");
   expect(textsOf(first)).toContain("已用 10 / 共 100");
-  // 订阅套餐也要出现在仪表盘上：名称 + 每月额度（2026-10-18 用户要求套餐信息）。
+  // 订阅套餐也要出现在仪表盘上：名称 + 每月额度。
   const plan = elementsOf(first).find((element) => element.props["data-dashboard-plan"] !== undefined)!;
   expect(plan.props["data-dashboard-plan"]).toBe("individual-pro-v1");
   expect(textsOf(plan)).toContain("套餐 Pro · 每月 $80.00");
@@ -165,7 +165,7 @@ it("多厂商视图：每家的账号用自己厂商的兜底窗口与固定标�
 });
 
 it("厂商级失败项给人话：端点短名与超时都不再原样上屏，原文留 data 属性", () => {
-  // 2026-10-18 用户报障「用量面板里多了一些英文」：`status.failures` 里是端口记的端点短名
+  // 2026-10-18 实际情况「用量面板里多了一些英文」：`status.failures` 里是端口记的端点短名
   // （`whoami`）与包装过的诊断（`quota: commandcode "Work" read failed (timeout …)`）。
   const { tree } = render({
     status: statusOf([row("a")], {
@@ -235,7 +235,7 @@ it("状态还没到时给出占位说明；关闭与刷新按钮把意图报出�
 });
 
 
-it("每个账号下面也画用量块（用户 2026-10-19：用量面板中还没有这个统计）", () => {
+it("每个账号下面也画用量块", () => {
   const marker = { type: "div", props: { "data-usage-account": "a" }, key: null } as unknown as StubElement;
   const calls: { vendor: string; ref: string }[] = [];
   const { tree } = render({

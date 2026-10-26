@@ -291,7 +291,7 @@ const ERROR_REASON_LIMIT = 300;
 /**
  * 从厂商的**错误正文**里抽出可读原因（诊断用）。
  *
- * 为什么需要（2026-10-20 用户报障）：`Open Design stream error (status 400)` 这句话里只有
+ * 为什么需要：`Open Design stream error (status 400)` 这句话里只有
  * 状态码，而 400 的**真实原因**（上下文超限 / 参数错 / 该模型不支持这个字段）全在正文里。
  * 正文早已被 `readErrorBody` 读出来并存进 `body`，却从来没人把它转成人话 —— 用户只能拿一个
  * 「400」去猜。

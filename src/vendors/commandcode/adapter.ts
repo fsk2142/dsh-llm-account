@@ -161,7 +161,7 @@ export interface CommandCodeAdapterDeps {
    */
   usage?: UsagePort;
   /**
-   * **限额时换模型**的候选提供者（可选；用户 2026-10-19 要求）。
+   * **限额时换模型**的候选提供者（可选；需求）。
    *
    * 只在所有账号都被限额拒绝之后被调用一次（失败路径），所以可以是异步的：候选清单要读
    * 各家的模型目录，而目录是网络资源。缺省 = 不换模型（旧行为）。
@@ -173,7 +173,7 @@ export interface CommandCodeAdapterDeps {
    */
   fallbackCandidates?: () => readonly ModelFallbackCandidate[] | undefined | Promise<readonly ModelFallbackCandidate[]>;
   /**
-   * **额度用尽后是否自动切换模型**（用户 2026-10-19：默认关闭）。
+   * **额度用尽后是否自动切换模型**。
    *
    * 关着的时候，账号全部被限额拒绝就直接报错 —— 不替用户换模型。打开后才按四级优先
    * （同网关同名 → 跨网关同名 → 同网关异名 → 跨网关异名）随机挑一个。
@@ -661,7 +661,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   }
 
   /**
-   * 额度用尽后换模型的判定（用户 2026-10-19 的四级优先）。
+   * 额度用尽后换模型的判定。
    *
    * 只在**所有账号都被拒绝**之后调用，且必须先过开关（`autoSwitchModel`，默认关闭）。
    *

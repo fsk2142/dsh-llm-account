@@ -3,7 +3,7 @@
  *
  * 这层存在的理由：有的网关（Open Design 的 `/v1/models`）只回 id、不回 name。界面直接印
  * `claude-sonnet-4-5-20250929` 会让同一张列表里「Command Code 是 Claude Sonnet 4.5、
- * Open Design 是原始 slug」——用户要求统一成官方名。
+ * Open Design 是原始 slug」——需求统一成官方名。
  */
 import { describe, expect, it } from "vitest";
 

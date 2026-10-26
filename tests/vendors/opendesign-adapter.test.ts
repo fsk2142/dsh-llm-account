@@ -433,7 +433,7 @@ it("beforeRequest 只对普通对话调用（辅助调用跳过），且失败�
 });
 
 it("resolveModel：目录不声明档位时按模型族兜底（宿主的思考强度选择器靠它）", async () => {
-  // OpenAI 形状的目录只有 id：没有兜底就永远没有档位可选（用户报障）。
+  // OpenAI 形状的目录只有 id：没有兜底就永远没有档位可选（实际情况）。
   const fetchImpl = scriptedFetch([() => catalogResponse([{ id: "claude-sonnet-4-5-20250929" }])]);
   const adapter = createOpenDesignAdapter(adapterDeps({ fetchImpl }));
 

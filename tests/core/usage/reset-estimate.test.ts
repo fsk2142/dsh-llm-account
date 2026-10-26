@@ -1,5 +1,5 @@
 /**
- * 重置时间估算（2026-10-20 用户要求：「如果没有提供就给出估算值」）。
+ * 重置时间估算。
  *
  * Command Code 的 `/alpha/billing/credits` 只给窗口的 `used` 与 `cap`，**不给 `resetAt`**：
  *

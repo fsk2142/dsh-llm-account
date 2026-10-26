@@ -1,5 +1,5 @@
 /**
- * `Open Design stream error (status 400)` 要说出真实原因（2026-10-20 用户报障）。
+ * `Open Design stream error (status 400)` 要说出真实原因。
  *
  * ## 为什么报错里没有原因
  *

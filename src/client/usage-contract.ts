@@ -165,7 +165,7 @@ export interface UsageReportView {
   /**
    * **最近一次请求**是哪个账号（侧边栏「跟随当前会话」用）。
    *
-   * 用户 2026-10-19：「根据该会话的模型所属账号显示当前账号信息，就不需要轮播」。
+   * 需求：「根据该会话的模型所属账号显示当前账号信息，就不需要轮播」。
    * 宿主的 `remote.session` 没有「当前打开哪个会话」的接口，所以用「最近一次请求」代替
    * ——刚发过请求的那个会话几乎必然就是用户在看的那个（见 `core/last-used` 的说明）。
    * 没有可用记录时缺失（那就退回轮播）。
@@ -965,7 +965,7 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     // 写入一把密钥：搜索设置卡里的「保存密钥」走这条（与账号卡片「更换密钥」同一条路径）。
     makeDescriptor("setCredential", "Void", parseVoid, [REF_PARAM, SECRET_PARAM]),
     // 密钥实测：加完立刻发一次最小搜索请求，把「能不能用」当场告诉用户。
-    // 用户 2026-10-20：「添加了key后就发起一次小请求验证一下是否可用，不可用的话就进行提示」。
+    // 需求：「添加了key后就发起一次小请求验证一下是否可用，不可用的话就进行提示」。
     // 只回结论与原因，**绝不回密钥**。
     makeDescriptor("probeSearchCredential", "CredentialProbes", parseCredentialProbes, [REFS_PARAM]),
   ];

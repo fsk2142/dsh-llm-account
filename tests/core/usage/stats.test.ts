@@ -201,7 +201,7 @@ describe("记账周期", () => {
   });
 });
 
-describe("套餐周期：按订阅有效期统计（用户 2026-10-19 的要求）", () => {
+describe("套餐周期：按订阅有效期统计", () => {
   // 本机实测的 Open Design 账期：2026-10-18 10:21 → 2026-11-18 10:21（北京时间 18:21）。
   const periodStart = new Date(2026, 9, 18, 18, 21, 12).getTime();
   const periodEnd = new Date(2026, 10, 18, 18, 21, 12).getTime();

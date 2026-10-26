@@ -1,7 +1,7 @@
 /**
- * 「每个模型在这个套餐下能用多少额度」的数据表（2026-10-21 用户要求）。
+ * 「每个模型在这个套餐下能用多少额度」的数据表。
  *
- * 用户原话：「各家套餐对于不同的模型有不同的额度限制，所以每个模型上能否增加一下额度
+ * 需求：「各家套餐对于不同的模型有不同的额度限制，所以每个模型上能否增加一下额度
  * 信息显示……打个比方说 deepseek 就是 120，那就写 120 美刀，使用 gpt6.1 sol 只有
  * 30 美刀 那就写 30 美刀」。
  *
@@ -70,7 +70,7 @@ describe("planKeyOf：套餐展示名归一化", () => {
 
 describe("Command Code：官方逐模型额度", () => {
   it("**GOAT 用 docs/plans/goat 的 60 行完整表**：闭源模型也有额度", () => {
-    // 用户 2026-10-21 报障「commandcode 没看到每个模型各自的可用额度」。
+    // 需求 报障「commandcode 没看到每个模型各自的可用额度」。
     // 根因是当时用的是 pricing 页那张 7 行表（只有开源模型），查不到 Claude 系列；
     // 官方 docs/plans/goat 页把全部 60 个模型的 monthly credits 都列了出来。
     expect(modelQuotaOf(COMMANDCODE_MODEL_QUOTA, "GOAT", "Claude Sonnet 5.5")).toEqual({ kind: "usd", amount: 10 });
@@ -160,7 +160,7 @@ describe("OpenCode：官方逐模型额度", () => {
   });
 });
 
-describe("按套餐判断模型可用性（用户 2026-10-21）", () => {
+describe("按套餐判断模型可用性", () => {
   it("GOAT 清单覆盖 71 个模型", () => {
     expect(COMMANDCODE_PLAN_MODELS.goat.size).toBe(71);
   });

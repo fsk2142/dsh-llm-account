@@ -1,5 +1,5 @@
 /**
- * Search API 路：直连 `POST /v1/tools/search`（2026-10-20 用户要求）。
+ * Search API 路：直连 `POST /v1/tools/search`。
  *
  * 与网关路的区别（官方文档确认）：
  * - 端点：`https://api.deepseek.com/v1/tools/search`，`Authorization: Bearer <key>`

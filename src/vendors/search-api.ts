@@ -10,7 +10,7 @@
  * | 结果 | 夹在对话流里的 `web_search_tool_result` 块 | 干净的结构化 `results[]` |
  * | 依赖 | 必须是 opendesign + DeepSeek 模型 | 任何 DeepSeek API key |
  *
- * 用户 2026-10-20 要求两条都保留、可切优先策略（见 `core/switching/search-route`）。
+ * 需求两条都保留、可切优先策略（见 `core/switching/search-route`）。
  *
  * ## 文档要点（api-docs.deepseek.com/zh-cn/guides/search）
  *

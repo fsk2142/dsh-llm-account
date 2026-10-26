@@ -1,7 +1,7 @@
 /**
  * open-design 的套餐档位从 **preflight** 兜底（2026-10-21 实测发现）。
  *
- * 用户报障「opendesign 部分显示不全」，根因是套餐名一直从 `billing/summary` 读，
+ * 实际情况「opendesign 部分显示不全」，根因是套餐名一直从 `billing/summary` 读，
  * 而那个端点（以及 `vela billing summary` 回退）**都回 403**。
  *
  * 同一个账号的 `billing preflight` 却稳定给出 `codingPlan.tier`，而且这份数据本来

@@ -168,7 +168,7 @@ export const Config: PluginConfigSchema = z.object(
      */
     quotaRefreshMinutes: z.number().step(1).min(1).max(120).default(1),
       /**
-       * **额度用尽后是否自动切换模型**（用户 2026-10-19：默认关闭）。
+       * **额度用尽后是否自动切换模型**。
        *
        * 关着时：账号全被限额拒绝就直接报错，不替用户换模型。
        * 打开后按四级优先（同网关同名 → 跨网关同名 → 同网关异名 → 跨网关异名）随机挑一个，
@@ -359,11 +359,11 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     beforeRequest: (input) => switching.beforeRequest(input),
     // 用量采集：三条 provider 行共用一本台账（见 `usage-store`）。
     usage: createUsagePort(),
-    // 限额换模型（用户 2026-10-19）：候选来自跨厂商注册表（三家各自登记目录读口）。
+    // 限额换模型：候选来自跨厂商注册表（三家各自登记目录读口）。
     fallbackCandidates: () => modelCandidates(),
-    // 自动切换模型白名单（用户 2026-10-19）：每次现读设置，改完即时生效。
+    // 自动切换模型白名单：每次现读设置，改完即时生效。
     // 空数组 = 不限制（候选退回「模型选择器里开启的那些」）。
-    // 额度用尽后是否自动换模型（用户 2026-10-19：**默认关闭**）。
+    // 额度用尽后是否自动换模型。
     // 关着时账号全被限额拒绝就直接报错，不替用户换。
     autoSwitchModel: () => document()["autoSwitchModelOnQuota"] === true,
   };
@@ -451,7 +451,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     capabilities,
     // 设置页的模型勾选：未过滤的完整目录。
     // 刷新按钮的落点：**必须 fresh**（绕过目录缓存）。TTL 内点刷新若拿缓存，
-    // 界面上就是「点了没反应」（用户 2026-10-19 报障 opendesign 刷新不起作用）。
+    // 界面上就是「点了没反应」。
     models: () => adapter.catalogModels(true),
     switchState: () => switching.snapshot(),
     switchNow: () => switching.switchNow(),

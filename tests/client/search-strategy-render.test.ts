@@ -1,5 +1,5 @@
 /**
- * 搜索设置卡要**真的渲染出「搜索方式」下拉**（2026-10-20 用户报障的端到端验证）。
+ * 搜索设置卡要**真的渲染出「搜索方式」下拉**。
  *
  * 上一层测试只保证「卡片声明的字段名与厂商声明一致」；这一层再往前走一步：
  * 真的渲染页面，确认那个 `<select>` 出现在搜索卡里，且四个选项齐全。
@@ -75,7 +75,7 @@ describe("搜索设置卡里的控件", () => {
       "api-first",
       "gateway-only",
       "api-only",
-      // 用户 2026-10-20：下拉里要有「不使用网页搜索」。
+      // 需求：下拉里要有「不使用网页搜索」。
       "off",
     ]);
   });
@@ -89,7 +89,7 @@ describe("搜索设置卡里的控件", () => {
       .filter((element) => element.props["data-field"] !== undefined)
       .map((element) => element.props["data-field"]);
     expect(fields).toContain("searchStrategy");
-    // 密钥列表不是设置字段（2026-10-20 用户要求），而是卡片里挂的「密钥管理」块。
+    // 密钥列表不是设置字段，而是卡片里挂的「密钥管理」块。
     expect(inside.some((element) => element.props["data-secret-block"] !== undefined)).toBe(true);
   });
 

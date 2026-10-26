@@ -1,7 +1,7 @@
 /**
  * 自动继续的判定（纯函数）。
  *
- * 用户要求：「如果当前会话非人为停止然后出现了中断，就自动继续进行」。
+ * 需求：「如果当前会话非人为停止然后出现了中断，就自动继续进行」。
  * 宿主的两个接缝各负责一半（签名读自 `dsh-agent-loop/lib/index.js`）：
  *
  * 1. **`agent/request-error`**（waterfall，payload `{turn, step, provider, failure,

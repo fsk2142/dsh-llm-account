@@ -1,7 +1,7 @@
 /**
  * 合并账户面板：各厂商的账号**平铺**在同一张卡片里，账号名后跟供应商标签。
  *
- * 为什么平铺（2026-10-18 用户要求）：账号是「这台机器上有哪些额度」，按厂商分组会让同一个
+ * 为什么平铺：账号是「这台机器上有哪些额度」，按厂商分组会让同一个
  * 列表出现多个标题、多个添加入口；用户想直接看到所有账号，再决定用哪家的。
  *
  * 添加/网页登录是**全局入口**：先选供应商（Command Code / OpenCode），再选手动或网页登录；
@@ -69,7 +69,7 @@ export interface AccountsPanelProps {
    * 「添加账户」区块被**收起**时调用（用户再点一次「新增账户」）。
    *
    * 收起 = 后退一步：还开着的添加表单与等待中的网页登录都该一起收掉 —— 那两者都渲染在
-   * `<details>` 外面，只折叠摘要的话它们会留在卡片上（用户报障：再点新增账户也取消不掉）。
+   * `<details>` 外面，只折叠摘要的话它们会留在卡片上（实际情况：再点新增账户也取消不掉）。
    */
   onCollapseAddChooser?: () => void;
   /**
@@ -100,7 +100,7 @@ export interface AccountsPanelProps {
    */
   usageOf?: (vendor: string, ref: string) => ReactNode;
   /**
-   * 查一个模型在**该账号当前套餐**下能用多少额度（用户 2026-10-21 要的功能）。
+   * 查一个模型在**该账号当前套餐**下能用多少额度。
    *
    * 返回 `undefined` = 官方没给这个组合的数据，界面显示「未知」（不编数字）。
    * 格式化由容器做。
@@ -111,7 +111,7 @@ export interface AccountsPanelProps {
    */
   modelQuotaOf?: (vendor: string, account: AccountUsageStatus, modelId: string) => string | undefined;
   /**
-   * 该账号当前套餐能不能用这个模型（用户 2026-10-21：不要把用不了的也列出来）。
+   * 该账号当前套餐能不能用这个模型。
    *
    * `false` 才隐藏；`undefined` 表示没有官方清单，照常显示。
    * @param vendor - 厂商行 id。
@@ -123,7 +123,7 @@ export interface AccountsPanelProps {
   /**
    * 重新读取**一家**的模型目录（按账户刷新的落点）。
    *
-   * 2026-10-18 用户要求：「重新获取模型不是刷新所有的，应该是刷新单个账户的」—— 入口从
+   * 需求：「重新获取模型不是刷新所有的，应该是刷新单个账户的」—— 入口从
    * 面板头部的全局按钮改成**每个账号行自己的刷新按钮**（见 `account-card.ts` 的行内动作），
    * 目录是厂商级资源，所以回调带厂商而不带账号：点任一账号刷的都是它所属那一家的目录，
    * 惠及该厂商的所有账号，但不碰别家。**不传 = 那些按钮不渲染**（旧调用方/纯测试不受影响）。
@@ -241,9 +241,9 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
       },
       createElement("summary", { className: CSS_CLASS.addSummary }, t("account.addAccount")),
       createElement("small", { className: CSS_CLASS.note }, t("account.addAccount.hint")),
-      // 每家只有一个入口：**网页登录**（2026-10-20 用户要求）。
+      // 每家只有一个入口：**网页登录**。
       //
-      // 为什么去掉「新增账号（填 API key）」：用户原话「API 登录基本没什么用处，毕竟官方入口
+      // 为什么去掉「新增账号（填 API key）」：需求「API 登录基本没什么用处，毕竟官方入口
       // 也留了 API 添加」。核对下来对 Open Design 尤其成立 —— 纯 API key 账号拿不到套餐、
       // workspaceId 与周期额度（账单只走 vela 控制面，而控制面凭据只有网页登录产物产出）。
       //
@@ -488,11 +488,11 @@ function accountPropsFor(props: AccountsPanelProps, group: AccountsPanelVendor):
       : { onSetAccountModels: (ref: string, models: readonly string[]) => props.onSetAccountModels?.(vendor, ref, models) }),
     // 该账号自身的用量（容器给）；缺省就不渲染，与其它可选块同一条纪律。
     ...(props.usageOf === undefined ? {} : { usageOf: (ref: string) => props.usageOf?.(vendor, ref) }),
-    // 每个模型在当前套餐下的额度（用户 2026-10-21 要的功能）：查不到就不渲染。
+    // 每个模型在当前套餐下的额度：查不到就不渲染。
     ...(props.modelQuotaOf === undefined
       ? {}
       : { modelQuotaOf: (account: AccountUsageStatus, modelId: string) => props.modelQuotaOf?.(vendor, account, modelId) }),
-    // 本套餐能不能用这个模型（用户 2026-10-21：不要把用不了的也列出来）。
+    // 本套餐能不能用这个模型。
     ...(props.modelAvailable === undefined
       ? {}
       : { modelAvailable: (account: AccountUsageStatus, modelId: string) => props.modelAvailable?.(vendor, account, modelId) }),

@@ -668,7 +668,7 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
     /**
      * **登录开始前**产物的内容，用来判断「文件变了没有」。
      *
-     * 为什么必须有它（2026-10-22 用户报障「登录第二个 opendesign 没有出现新账户」）：
+     * 为什么必须有它：
      * `~/.amr/config.json` 是 vela 的**固定槽位**文件（`profiles.prod`）—— 无论登录哪个
      * 账号都写同一处。所以登录第二个账号时，文件里**已经有第一个账号的内容**。
      *

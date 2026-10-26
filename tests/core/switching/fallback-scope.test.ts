@@ -1,5 +1,5 @@
 /**
- * 换模型的候选**必须来自用户可选范围**（用户 2026-10-19：
+ * 换模型的候选**必须来自用户可选范围**（需求：
  * 「根据当前的可选模型配置切换模型名单」）。
  *
  * 这是本功能最容易做错的地方：目录端点返回的是**全部**模型，而 `visibleModels` /
@@ -33,7 +33,7 @@ describe("可见性规则（换模型的输入就是它）", () => {
     expect(isModelIdVisible("deepseek-v4.1-flash", visibility)).toBe(true);
   });
 
-  it("从没配过可见性时默认全部关闭（2026-10-18 用户要求）", () => {
+  it("从没配过可见性时默认全部关闭", () => {
     // 这条决定了「换模型」在用户没勾选任何模型时**没有候选**——安全默认。
     expect(isModelIdVisible("deepseek-v4.1-flash", normalizeVisibility({}))).toBe(false);
   });
@@ -41,7 +41,7 @@ describe("可见性规则（换模型的输入就是它）", () => {
 
 describe("候选只在可选范围内", () => {
   it("候选池之外的同名模型不会被选中（只在该账号已勾选的模型里换）", () => {
-    // 用户 2026-10-19 确认的语义：「可以降级，但**严格限定在该账号已勾选的模型里**」。
+    // 需求：「可以降级，但**严格限定在该账号已勾选的模型里**」。
     // 这里验证「池外」——只有当前模型自己在池里时，换不了（因为排除自己）。
     const all = ["deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash", "kimi-k3"];
     const visibility = normalizeVisibility({ visibleModels: ["deepseek-v4.1-flash"] });
