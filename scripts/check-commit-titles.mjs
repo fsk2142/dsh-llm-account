@@ -76,11 +76,23 @@ function problemsOf(subject) {
   if (/（20\d\d-\d\d/.test(subject) || /\(20\d\d-\d\d/.test(subject)) {
     problems.push("标题里有日期，应移到正文");
   }
-  // 一个提交做多件事：拆开更好。
-  if (/ \+ /.test(subject)) {
-    problems.push("标题里出现「 + 」，一个提交应当只做一件事");
-  }
   return problems;
+}
+
+/**
+ * 标题里的「软信号」：不阻塞，但值得提醒。
+ *
+ * ` + ` 只在**两侧都是动宾短语**时才算「做了两件事」。像
+ * `重写为「功能 + 操作」两段结构` 里的 ` + ` 是在描述一个结构名，
+ * 不是两件事 —— 直接当错误会误伤。所以这条降级为提示。
+ * @param subject - 提交标题。
+ * @returns 提示文本，或 `undefined`。
+ */
+function hintOf(subject) {
+  if (!/ \+ /.test(subject)) return undefined;
+  // 去掉引号/括号里的内容再看：`「功能 + 操作」` 这种不算两件事。
+  const outside = subject.replace(/「[^」]*」|\([^)]*\)|（[^）]*）/g, "");
+  return / \+ /.test(outside) ? "标题里出现「 + 」，确认是否一个提交做了两件事" : undefined;
 }
 
 /** 主流程。 */
@@ -93,10 +105,21 @@ function main() {
 
   const failed = [];
   const long = [];
+  const hinted = [];
   for (const subject of subjects) {
     const problems = problemsOf(subject);
-    if (problems.length > 0) failed.push({ subject, problems });
-    else if (subject.length > SOFT_LEN) long.push({ subject, len: subject.length });
+    if (problems.length > 0) {
+      failed.push({ subject, problems });
+      continue;
+    }
+    if (subject.length > SOFT_LEN) long.push({ subject, len: subject.length });
+    const hint = hintOf(subject);
+    if (hint !== undefined) hinted.push({ subject, hint });
+  }
+
+  if (hinted.length > 0) {
+    console.log(`提交标题：${hinted.length} 个需要确认（不阻塞）`);
+    for (const item of hinted) console.log(`  ? ${item.subject}\n      · ${item.hint}`);
   }
 
   if (long.length > 0) {
