@@ -1,29 +1,22 @@
 # dsh-llm-account
 
-一个 DeepSeek Harness 插件：把 **Command Code**、**OpenCode Go**、**Open Design**
-三家 LLM 网关的账号管理、额度查询与模型选择收进同一套界面。
-
-## 它解决什么问题
-
-同一家网关往往可以挂多个账号，而各家都有：
-
-- 多账号之间的自动轮换（某个账号额度用尽时切到下一个）
-- 五小时 / 每周 / 每月三档额度窗口，各自的重置时间还不一样
-- 套餐档位不同，可用的模型与模型额度也不同
-
-这些信息散在各家的网页控制台里。本插件把它们聚合到一处：侧边栏一张卡片看额度，
-设置页统一管理账号与模型。
+DeepSeek Harness 插件，把 **Command Code**、**OpenCode Go**、**Open Design** 三家网关的
+账号管理、额度查询与模型选择收进同一套界面。
 
 ## 功能
 
 | 能力 | 说明 |
 | --- | --- |
-| 多账号轮换 | 按顺序 / 按额度自动切换；可固定某个账号 |
-| 额度窗口 | 五小时 / 每周 / 每月，显示已用、上限与重置时刻 |
+| 多账号轮换 | 额度用尽或出错时自动切到下一个账号；也可固定某个账号 |
+| 自动换模型 | 所有账号都不可用时按四级优先换模型（同网关同名 → 跨网关同名 → 同网关异名 → 跨网关异名） |
+| 自动继续 | 请求瞬时失败时自动重试；回答被输出上限截断时自动续写 |
+| 额度窗口 | 显示已用、上限与重置时刻（五小时 / 每周 / 每月，各网关提供的档位不同） |
 | 用量统计 | 每账号的请求数、成功率、花费、Token（含缓存命中） |
-| 模型管理 | 按套餐过滤不可用的模型，显示每个模型的可用额度 |
-| 网页登录 | 通过设备授权登录，不需要手工复制密钥 |
-| 用量导出 | 导出为 CSV |
+| 模型管理 | 按套餐过滤不可用模型，显示每个模型的可用额度 |
+| 网页登录 | 设备授权登录，不需手工复制密钥 |
+| 账号改名 | 可改显示名；保留登录时的默认名，可一键恢复 |
+| 用量导出 | 导出 CSV |
+| 网页搜索 | 注册为宿主的搜索 provider，支持直连 API 与网关工具两条路 |
 
 ## 安装
 
@@ -31,9 +24,9 @@
 dsh plugin --profile <你的profile> add github:fsk2142/dsh-llm-account
 ```
 
-装好后重启 DSH（或在插件市场里更新后刷新页面），设置页会出现「LLM 账号」入口。
+装完重启 DSH。设置页出现「LLM 账号」入口。
 
-## 支持的网关
+## 使用的网关
 
 | 网关 | 额度单位 | 套餐档位 |
 | --- | --- | --- |
@@ -41,17 +34,94 @@ dsh plugin --profile <你的profile> add github:fsk2142/dsh-llm-account
 | OpenCode Go | 美元 | Go / Go Plus |
 | Open Design | 美元 | Go / Plus / Pro / Max |
 
+## 操作
+
+### 添加账号
+
+**Command Code / OpenCode Go**：设置页 →「LLM 账号」→ 添加账户 → 填 API key。
+
+**Open Design**：添加账户 → 网页登录（浏览器完成设备授权，自动导入两把密钥）。
+也可手工填控制面密钥（`vela_ctrl…`）。
+
+### 切换账号
+
+**手动**：账号卡片行尾的 `⋯` → 菜单。或在全局切换面板里选择。
+
+**自动**：设置页打开「自动切换账号」（配置项 `autoSwitch`）。开启后额度用尽时自动选
+下一个可用账号。
+
+### 自动换成其他模型
+
+设置页打开「额度用尽后自动切换模型」（配置项 `autoSwitchModelOnQuota`）。
+
+触发条件：**所有账号都被拒绝之后**。四级优先——同网关同名 → 跨网关同名 → 同网关异名
+（按上下文窗口与推理档位接近度排序）→ 跨网关异名。
+
+### 自动继续
+
+| 配置项 | 作用 |
+| --- | --- |
+| `autoContinueOnError` | 请求瞬时失败（网络、5xx、超时）时自动重试 |
+| `autoContinueOnTruncate` | 回答被输出上限截断时自动续写 |
+| `autoContinueMaxAttempts` | 每轮最多自动继续几次（默认 3） |
+
+额度用尽与鉴权失败**不算**瞬时失败，走「换账号」与「换模型」两条路。
+
+### 查看额度
+
+**侧边栏卡片**：需在该网关的配置里开 `showSidebarQuota: true`。
+
+**设置页**：每个账号一行，显示各额度窗口的进度条与重置时刻。
+
+**刷新间隔**：配置项 `quotaRefreshMinutes`（1–120 分钟，默认 1）。标签页隐藏时暂停刷新。
+
+### 网页搜索
+
+配置项 `searchStrategy`：
+
+| 值 | 行为 | 计费 |
+| --- | --- | --- |
+| `api-first` | 优先直连 DeepSeek Search API，失败回退网关 | 按请求次数 |
+| `gateway-first` | 优先用网关的 `web_search` 工具，失败回退 API | 按 token（走套餐额度） |
+| `api-only` / `gateway-only` | 只用其中一条，不可用就明确失败 | — |
+| `off` | 关闭本插件的搜索，并把 host 的 `searchProvider` 槽位让出来 | — |
+
+选 `off` 后本插件不再占用该槽位，其他搜索插件可以接管。
+
+### 改账号名称
+
+账号卡片行尾 `⋯` → 重命名。
+
+若当前名与登录时的默认名不同，菜单里会多出「恢复默认名称」，点一下即回到默认名。
+
+### 导出用量
+
+设置页 →「用量」→ 导出，得到 CSV。
+
+### 常用配置项
+
+| 字段 | 说明 |
+| --- | --- |
+| `apiKeyEnv` | 当前固定使用的账号（凭据引用名） |
+| `accounts` | 账号列表 |
+| `visibleModels` / `modelVisibility` | 显示哪些模型 |
+| `autoSwitch` | 额度不足时自动换账号 |
+| `autoSwitchModelOnQuota` | 账号都不可用时自动换模型 |
+| `showSidebarQuota` | 在侧边栏显示本网关的账号卡片 |
+| `quotaRefreshMinutes` | 额度刷新间隔（分钟） |
+| `baseURL` | 网关地址（一般不用改） |
+| `requestTimeoutMs` / `streamIdleTimeoutMs` | 请求与流空闲超时 |
+
 ## 文档
 
-开发与排查的详细文档在 [`docs/`](docs/)：
-
-| 文档 | 讲什么 |
+| 文档 | 内容 |
 | --- | --- |
-| [docs/INDEX.md](docs/INDEX.md) | 索引：哪份文档讲什么、什么时候读 |
-| [docs/SPEC.md](docs/SPEC.md) | 设计规格（唯一权威） |
-| [docs/operations.md](docs/operations.md) | 排查手册：**出问题时第一个读** |
-| [docs/vendors.md](docs/vendors.md) | 三家网关的端点事实与额度口径 |
-| [docs/RELEASING.md](docs/RELEASING.md) | 发版清单 |
+| [docs/INDEX.md](docs/INDEX.md) | 索引：哪份文档讲什么 |
+| [docs/SPEC.md](docs/SPEC.md) | 设计规格 |
+| [docs/operations.md](docs/operations.md) | 排查手册 |
+| [docs/vendors.md](docs/vendors.md) | 三家网关的端点与额度口径 |
+| [docs/RELEASING.md](docs/RELEASING.md) | 发版流程 |
+| [docs/DSH-VERSION-RANGE.md](docs/DSH-VERSION-RANGE.md) | 版本兼容声明怎么写 |
 
 ## 开发
 
@@ -62,20 +132,16 @@ pnpm test          # vitest
 pnpm build         # tsdown → lib/
 ```
 
-**`lib/` 是构建产物，必须提交** —— 宿主直接从 `lib/` 加载。改完源码要
-`pnpm build` 并一起提交，否则别人装到的还是旧代码。
+`lib/` 是构建产物，需一并提交——宿主直接从 `lib/` 加载。
 
-### 发版
+发版：
 
 ```bash
-# 需要 GITHUB_TOKEN（细粒度 token，权限 Contents = Read and write）
 node scripts/release.mjs --note "这次改了什么"
 ```
 
-它会算版本号、重建产物、跑全量验证、提交、打 tag、推送，并建 GitHub Release
-（插件市场靠 Release 显示更新说明）。
-
-版本号按 conventional commits 自动推导，规则见 [docs/RELEASING.md](docs/RELEASING.md)。
+需要 `GITHUB_TOKEN`（细粒度 token，权限 Contents = Read and write）。它会算版本号、
+重建产物、跑验证、提交、打 tag、推送并建 GitHub Release。
 
 ## 许可
 
