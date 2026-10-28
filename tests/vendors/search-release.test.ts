@@ -26,6 +26,8 @@ import {
   SEARCH_PROVIDER_ID,
   WEB_ROW_ID,
   syncSearchProviderSlot,
+  createSearchSlotSync,
+  resetSearchSlotSyncForTest,
 } from "../../src/vendors/search-release";
 
 /** 造一个只含 `web` 行的设置端口替身，并记录写入。 */
@@ -217,5 +219,45 @@ describe("同步 web.searchProvider 槽位", () => {
     expect(changed, "启用态也不抢").toBe(false);
     expect(store.value().searchProvider, "别人的留着").toBe("ddg");
     expect(store.writes).toHaveLength(0);
+  });
+
+});
+
+describe("createSearchSlotSync 的同拍合并（2026-10-28）", () => {
+  /**
+   * 三家 provider 行都挂 `loader/volatile-update` 后，**一次设定变更会触发三次**
+   * （UI 镜像写三行，或宿主把三条行都判脏）。三个并发 `mutate` 打同一条 `web` 行
+   * 会撞乐观锁 —— 后两个失败并各记一条 warning，纯噪音。
+   *
+   * 用共享 in-flight Promise 合并：同一拍里的第二、三次直接复用第一次的结果。
+   */
+  it("**同拍三次调用只写一次配置**", async () => {
+    resetSearchSlotSyncForTest();
+    const store = webSettings({ searchProvider: SEARCH_PROVIDER_ID });
+    const sync = createSearchSlotSync({
+      settings: store.settings as never,
+      strategy: () => "off",
+    });
+
+    const results = await Promise.all([sync(), sync(), sync()]);
+
+    expect(store.writes, "三次并发只写一次").toHaveLength(1);
+    expect(results, "三次都拿到同一个结果").toEqual([true, true, true]);
+    expect(store.value().searchProvider).toBe(HOST_DEFAULT_SEARCH_PROVIDER);
+  });
+
+  it("串行两次调用各写一次（不是时间窗去重）", async () => {
+    resetSearchSlotSyncForTest();
+    const store = webSettings({ searchProvider: SEARCH_PROVIDER_ID });
+    const sync = createSearchSlotSync({
+      settings: store.settings as never,
+      strategy: () => "off",
+    });
+
+    await sync();
+    const second = await sync();
+
+    expect(second, "第二次已是期望终态，不写").toBe(false);
+    expect(store.writes, "只有第一次写").toHaveLength(1);
   });
 });

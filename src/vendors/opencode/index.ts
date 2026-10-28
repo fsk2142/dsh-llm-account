@@ -84,6 +84,7 @@ import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort } from "../usage-store";
 import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
+import { createSearchSlotSync } from "../search-release";
 import { createOpencodeLogin } from "./login";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opencode-go`）。 */
@@ -425,8 +426,19 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
 
   applyRoute();
   // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判（与旧插件同一事件名）。
+  /**
+   * 搜索槽位同步（2026-10-28 补）：三家 provider 行都触发，`createSearchSlotSync`
+   * 内部合并同拍调用。手改 profile 只动本行的 `searchStrategy` 时也要能同步槽位。
+   */
+  const syncSearchSlot = createSearchSlotSync({
+    settings,
+    strategy: () => document()["searchStrategy"],
+    warn,
+  });
+
   ctx.on("loader/volatile-update", () => {
     applyRoute();
+    void syncSearchSlot();
   });
   // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
   // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。

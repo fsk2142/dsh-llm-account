@@ -200,3 +200,57 @@ export async function syncSearchProviderSlot(input: {
   }
   return false;
 }
+
+/**
+ * 正在进行的同步（同一拍里的合并）。
+ *
+ * 三家都挂 `loader/volatile-update` 后，**一次设定变更会触发三次**（UI 镜像写三行、
+ * 或宿主把三条行都判为脏）。三个并发 `mutate` 打同一条 `web` 行会撞乐观锁 ——
+ * 后两个失败并各记一条 warning，噪音但无害。
+ *
+ * 用一个共享的 in-flight Promise 合并：同一拍里的第二、三次调用直接复用第一次的结果。
+ * 不用时间窗去重 —— 那会让「用户连改两次」丢掉第二次。
+ */
+let inFlight: Promise<boolean> | undefined;
+
+/**
+ * 装配「搜索槽位同步」：三家 provider 行各调一次，内部合并同拍调用。
+ *
+ * 为什么要三家都挂（2026-10-28）：原来只挂在 commandcode 行。手改 profile 只动
+ * opencode / opendesign 的 `searchStrategy` 时，那两行的 `volatile-update` 只重判
+ * 路由、不碰槽位 —— 于是关掉搜索后宿主仍绑着本插件，搜索整体不可用，直到下一次
+ * commandcode 行设定变更或 UI 重渲染。UI 路径不受影响（`shared` 字段会镜像写三行），
+ * 但「手改配置」是常见操作，不该留这个坑。
+ *
+ * @param input - 设置端口、策略读取器与日志出口。
+ * @returns 一个「触发同步」的函数（同步里并发合并、串行排队）。
+ */
+export function createSearchSlotSync(input: {
+  settings: SearchReleaseSettings;
+  strategy: () => unknown;
+  warn?: (message: string) => void;
+}): () => Promise<boolean> {
+  const warn = input.warn;
+  return async (): Promise<boolean> => {
+    // 已有同步在跑：复用它的结果（同拍去重）。
+    if (inFlight !== undefined) return await inFlight;
+    const run = syncSearchProviderSlot({ settings: input.settings, strategy: input.strategy, ...(warn === undefined ? {} : { warn }) })
+      .catch((error: unknown) => {
+        (warn ?? ((message: string) => console.warn(message)))(
+          `[dsh-llm-account] 搜索 provider 槽位同步失败：${String(error)}`,
+        );
+        return false;
+      })
+      .finally(() => {
+        // 只清自己那一份：若期间已有新的在跑，别把它的清掉。
+        if (inFlight === run) inFlight = undefined;
+      });
+    inFlight = run;
+    return await run;
+  };
+}
+
+/** 仅供测试：清掉 in-flight 状态。 */
+export function resetSearchSlotSyncForTest(): void {
+  inFlight = undefined;
+}

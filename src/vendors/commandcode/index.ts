@@ -66,7 +66,7 @@ import { applyAutoContinue } from "../auto-continue";
 import { applySearch } from "../search";
 import { gatewayAccessOf } from "../gateway-access";
 import { registerSearchProvider } from "../search-provider";
-import { syncSearchProviderSlot } from "../search-release";
+import { createSearchSlotSync } from "../search-release";
 import { probeSearchKey } from "../search-api";
 import { normalizeSearchKeyRefs } from "../../core/switching/search-keys";
 import { createUsagePort } from "../usage-store";
@@ -381,23 +381,25 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判
   // （2026-10-20 补齐：opencode / opendesign 早有这条，唯独本行没有 ——
   //  后果是手改 profile 的 `enabled: false` 要重载宿主才生效）。
+  /**
+   * 搜索槽位同步：三家 provider 行**都**触发（2026-10-28 补），由
+   * `createSearchSlotSync` 合并同拍调用（并发 mutate 同一条 `web` 行会撞乐观锁）。
+   *
+   * 为什么是三家而不是只挂这一行：手改 profile 只动 opencode / opendesign 的
+   * `searchStrategy` 时，那两行的 `volatile-update` 也要能把槽位让出去 / 收回来。
+   */
+  const syncSearchSlot = createSearchSlotSync({
+    settings,
+    strategy: () => document()["searchStrategy"],
+    warn,
+  });
+
   ctx.on("loader/volatile-update", () => {
     applyRoute();
-    /**
-     * 设定变了 → 如果搜索被关掉（或重新打开），把宿主 `web` 行的 `searchProvider`
-     * 槽位让出 / 收回（2026-10-23，见 `search-release.ts` 的完整理由）。
-     *
-     * 为什么在这里做而不是每次启动：只在**用户动作**的瞬间改配置，因果关系清楚；
-     * 启动时改会让人以为自己从没写过那一行。失败只记一条 warning —— 改不动配置
-     * 不该让整行挂掉（搜索仍按 `available()` 的意见工作）。
-     */
-    void syncSearchProviderSlot({
-      settings,
-      strategy: () => document()["searchStrategy"],
-      warn,
-    }).catch((error: unknown) => {
-      warn(`[dsh-llm-account] 搜索 provider 槽位同步失败：${String(error)}`);
-    });
+    // 设定变了 → 如果搜索被关掉（或重新打开），把宿主 `web` 行的 `searchProvider`
+    // 槽位让出 / 收回（见 `search-release.ts` 的完整理由）。不在每次启动做：只在
+    // **用户动作**的瞬间改配置，因果关系清楚。
+    void syncSearchSlot();
   });
 
   // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
