@@ -179,4 +179,41 @@ describe("思考强度回落", () => {
   it("替代模型没有档位时交给厂商决定", () => {
     expect(fallbackEffort("max", [])).toBeUndefined();
   });
+
+});
+
+describe("pickFallbackModel 的 sameGatewayOnly（2026-10-28）", () => {
+  /**
+   * 网络层失败（`fetch failed` / DNS / 代理不通）意味着**这台机器出不去** ——
+   * 换到另一家网关走同一条路由，必然同样失败，只白烧一次请求。
+   * 所以那种情况只该在同一网关内换模型。
+   */
+  const current = { provider: "commandcode", model: "deepseek/deepseek-v4.1-flash" };
+  const crossGateway = { provider: "opendesign", model: "deepseek-v4.1-flash" };
+  const sameGatewayOtherModel = { provider: "commandcode", model: "deepseek-v4.1-pro" };
+
+  it("**网络失败时不会选到别的网关**", () => {
+    const picked = pickFallbackModel(current, [crossGateway, sameGatewayOtherModel], {
+      sameGatewayOnly: true,
+      random: () => 0,
+    });
+
+    expect(picked, "同网关内还有候选，应当选它").toEqual(sameGatewayOtherModel);
+    expect(picked?.provider, "绝不能跨网关").toBe("commandcode");
+  });
+
+  it("网络失败且同网关内无候选时**停手**（不跨网关）", () => {
+    const picked = pickFallbackModel(current, [crossGateway], {
+      sameGatewayOnly: true,
+      random: () => 0,
+    });
+
+    expect(picked, "跨网关候选不算，返回 undefined").toBeUndefined();
+  });
+
+  it("服务侧失败（不带 sameGatewayOnly）仍可跨网关", () => {
+    const picked = pickFallbackModel(current, [crossGateway], { random: () => 0 });
+
+    expect(picked, "额度/鉴权类失败换一家真可能绕过").toEqual(crossGateway);
+  });
 });

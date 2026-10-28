@@ -52,6 +52,24 @@ export interface AutoContinueProbe {
 export const CONTINUE_PROMPT = "继续";
 
 /**
+ * 重试退避的基数（毫秒）：第 1/2/3 次分别等 0.5s / 1s / 2s。
+ *
+ * 为什么需要：宿主收到 `{ kind: "retry" }` 后**立即** `continue`，中间没有任何等待
+ * （实测 `dsh-agent-loop` 无 backoff）。网络抖动时会在几百毫秒内连打数次 ——
+ * 台账实测有 0.1 秒的相邻失败，那反而可能加剧拥塞。
+ */
+const BACKOFF_BASE_MS = 500;
+
+/**
+ * 等一会儿（不阻塞事件循环）。
+ * @param ms - 毫秒。
+ * @returns 到点后 resolve 的 Promise。
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * 注册自动继续的两个事件。
  * @param ctx - 宿主 context（只用 `on`）。
  * @param settings - 开关与次数上限。
@@ -86,11 +104,26 @@ export function applyAutoContinue(
           ? (record.failure as Record<string, unknown>)
           : {};
       const code = typeof failure.code === "string" ? failure.code : undefined;
-      if (!shouldRetryFailure(settings, code, attemptsOf(turn))) {
+      const attempts = attemptsOf(turn);
+      if (!shouldRetryFailure(settings, code, attempts)) {
         // 交给宿主：不返回 retry，它会按终态处理。
         return undefined;
       }
       bump(turn);
+      /**
+       * **退避**（2026-10-28 加）。
+       *
+       * 宿主收到 `{ kind: "retry" }` 就立刻 `continue` —— **它自己不做任何等待**
+       * （实测 `dsh-agent-loop` 里没有 backoff / setTimeout）。所以网络抖动时重试会
+       * 在几百毫秒内连着打好几次（台账实测有 0.1 秒的相邻失败），反而可能加剧拥塞。
+       *
+       * 这里按「第几次重试」等 0.5s / 1s / 2s（上限 2s）。等待不阻塞事件循环
+       * （`setTimeout` + Promise），取消信号能中断。
+       *
+       * 为什么上限只有 2s：自动继续是「救一次瞬时抖动」，不是长期重连。等太久会让
+       * 用户以为卡死了 —— 真正的长故障该让它报错。
+       */
+      await delay(BACKOFF_BASE_MS * 2 ** Math.min(attempts, 2));
       return { kind: "retry" };
     });
     if (typeof off === "function") disposers.push(off as () => void);

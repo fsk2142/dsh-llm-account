@@ -388,7 +388,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
         // 没解析到（`MISSING_CREDENTIAL`），那种情况换模型毫无意义，而且查候选要读各家目录
         // （会发额外请求）。先抛确定性的失败，别为一次注定失败的请求去打网络。
         if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
-          const swapped = await this.#fallbackModel(options);
+          const swapped = await this.#fallbackModel(options, lastFailure.rejection.kind);
           if (swapped !== undefined && swapped.model !== options.model) {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
@@ -667,10 +667,15 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
    *
    * 四级优先由 `core/model-fallback` 的纯函数实现：同网关同名 → 跨网关同名 →
    * 同网关异名（按上下文窗口与推理档位接近度收窄）→ 跨网关异名；同一级里随机。
+   *
+   * **网络层失败只在同网关内换**（2026-10-28）：`fetch failed` / DNS / 代理不通意味着
+   * 这台机器出不去，换到另一家走的是同一条路由 —— 必然同样失败，只是白烧一次请求。
+   * 服务侧的失败（额度、鉴权、上游 5xx）不设这个限制：换一家真的可能绕过。
    * @param options - 当前请求。
+   * @param failureKind - 触发本次换模型的失败分类（缺省按服务侧处理）。
    * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
    */
-  async #fallbackModel(options: GenerateOptions): Promise<ModelFallbackCandidate | undefined> {
+  async #fallbackModel(options: GenerateOptions, failureKind?: string): Promise<ModelFallbackCandidate | undefined> {
     // 开关（默认关闭）：关着就完全不换，让调用方抛原来的限额错误。
     if (this.#deps.autoSwitchModel?.() !== true) return undefined;
     const candidates = await this.#deps.fallbackCandidates?.();
@@ -697,6 +702,8 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
         ...(item.contextWindow === undefined ? {} : { contextWindow: item.contextWindow }),
         ...(item.effortCount === undefined ? {} : { effortCount: item.effortCount }),
       })),
+      // 网络层失败（`network`）不跨网关：换一家走的是同一条路由，必然同样失败。
+      { sameGatewayOnly: failureKind === "network" },
     );
     if (picked === undefined) return undefined;
     this.#deps.onModelFallback?.({ provider: options.provider, model: options.model }, picked);

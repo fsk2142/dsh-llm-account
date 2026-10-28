@@ -434,7 +434,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         // 只在「确实有账号被拒绝」时才尝试 —— `lastFailure === undefined` 意味着一条凭据都
         // 没解析到，那种情况换模型毫无意义，而且查候选要读各家目录（会发额外请求）。
         if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
-          const swapped = await this.#fallbackModel(options);
+          const swapped = await this.#fallbackModel(options, lastFailure.rejection.kind);
           if (swapped !== undefined && swapped.model !== options.model) {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
@@ -786,7 +786,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param options - 当前请求。
    * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
    */
-  async #fallbackModel(options: GenerateOptions): Promise<ModelFallbackCandidate | undefined> {
+  async #fallbackModel(options: GenerateOptions, failureKind?: string): Promise<ModelFallbackCandidate | undefined> {
     // 开关（默认关闭）：关着就完全不换，让调用方抛原来的限额错误。
     if (this.#deps.autoSwitchModel?.() !== true) return undefined;
     const candidates = await this.#deps.fallbackCandidates?.();
@@ -813,6 +813,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         ...(item.contextWindow === undefined ? {} : { contextWindow: item.contextWindow }),
         ...(item.effortCount === undefined ? {} : { effortCount: item.effortCount }),
       })),
+      // 网络层失败（`network`）不跨网关：换一家走的是同一条路由，必然同样失败。
+      { sameGatewayOnly: failureKind === "network" },
     );
     if (picked === undefined) return undefined;
     this.#deps.onModelFallback?.({ provider: options.provider, model: options.model }, picked);

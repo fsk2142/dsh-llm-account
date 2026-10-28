@@ -159,4 +159,42 @@ describe("回答截断：往 nextStep 推一条消息", () => {
     await ctx.fire("agent/turn-stopping", { turn: 1 });
     expect(appended).toHaveLength(1);
   });
+
+});
+
+describe("重试退避（2026-10-28）", () => {
+  /**
+   * 宿主收到 `{ kind: "retry" }` 后**立即** `continue`，中间没有任何等待
+   * （实测 `dsh-agent-loop` 无 backoff）。所以退避必须由插件自己加 ——
+   * 网络抖动时在几百毫秒内连打数次反而可能加剧拥塞。
+   */
+  it("**重试前会等待**（第一次约 0.5s）", async () => {
+    const ctx = fakeCtx();
+    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+
+    const started = Date.now();
+    const action = await ctx.fire("agent/request-error", {
+      turn: 1,
+      failure: { code: "TRANSPORT" },
+    });
+    const elapsed = Date.now() - started;
+
+    expect(action).toEqual({ kind: "retry" });
+    expect(elapsed, "至少等了 400ms（基数 500ms）").toBeGreaterThanOrEqual(400);
+  });
+
+  it("不可重试的失败**不等待**（立即返回 undefined）", async () => {
+    const ctx = fakeCtx();
+    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+
+    const started = Date.now();
+    const action = await ctx.fire("agent/request-error", {
+      turn: 1,
+      failure: { code: "QUOTA" },
+    });
+    const elapsed = Date.now() - started;
+
+    expect(action).toBeUndefined();
+    expect(elapsed, "不该为不重试的失败白等").toBeLessThan(100);
+  });
 });
