@@ -25,6 +25,8 @@ const CLIENT_HOST_MODULES = ["react", "react/jsx-runtime", "@deepseek-ai/dsh-cli
  */
 const HOST_BUNDLES: ReadonlyArray<{ path: string; specifiers: readonly string[] }> = [
   {
+    // 根入口只转发 opencode 的实现（见 `src/index.ts`）：它从本地 chunk 取符号，
+    // **没有** bare import —— 这条断言保证根入口不会悄悄内联一份宿主包。
     path: fileURLToPath(new URL("../../lib/index.js", import.meta.url)),
     specifiers: [],
   },
@@ -33,8 +35,13 @@ const HOST_BUNDLES: ReadonlyArray<{ path: string; specifiers: readonly string[] 
     specifiers: ["@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
   },
   {
+    /**
+     * 2026-10-28：`lib/opencode.js` 与 `lib/index.js` 共用同一个 chunk
+     * （`opencode-<hash>.js`），两者都只是转发壳，bare import 落在 chunk 里。
+     * 所以这里期望**空**——chunk 那层由下面 `emittedBundles()` 的全量扫描兜住。
+     */
     path: fileURLToPath(new URL("../../lib/opencode.js", import.meta.url)),
-    specifiers: ["@deepseek-ai/dsh-llm", "@deepseek-ai/schemastery"],
+    specifiers: [],
   },
   {
     // 第三家：与另两家同一档依赖（LLM 适配器基类 + Config schema）。

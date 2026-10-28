@@ -94,20 +94,52 @@ describe("cordis.patch.yml boot-graph contract", () => {
     );
   });
 
-  it("keeps the opencode row the single scan-visible name, as a path into this package", () => {
+  it("keeps exactly one scan-visible row, and it is the bare package name", () => {
+    /**
+     * 宿主 `reconcilePackage` 对同一包名收到 >1 个 source 会抛
+     * `resolves from multiple active Loader sources`（整个客户端启动失败）；
+     * 而 0 个 source 则界面完全不出现。所以必须**恰好一条**。
+     *
+     * 2026-10-28 起用裸包名而不是 `./lib/opencode.js`：两者都能被扫描识别，
+     * 但裸名在界面上显示 `dsh-llm-account`，路径写法会被 `anchorInsertedPluginNames`
+     * 改写成绝对 `file:` URL —— 又长又暴露本机路径。
+     */
     const visible = rows.filter((row) => scanVisible(row.name));
     expect(visible.map((row) => row.id)).toEqual(["opencode-go"]);
-    expect(visible[0]?.name).toBe("./lib/opencode.js");
+    expect(visible[0]?.name, "裸包名（不含 / 与 :）").toBe("dsh-llm-account");
+    expect(packageRootSpecifier(visible[0]!.name)).toBe("dsh-llm-account");
+  });
+
+  it("根入口导出 apply：裸包名那行靠它成为有效插件", () => {
+    /**
+     * 裸包名解析到 `exports["."]` → `lib/index.js`。那一行要能加载，根入口必须
+     * 有 `apply`（现在转发 `opencode` 的实现）。没有 `apply` 的行在宿主侧不是插件。
+     *
+     * **断言的是 `export { … }` 列表本身，不是正文里出现过 `apply`** —— 文件头注释
+     * 里就写着 `apply`，用 `/\bapply\b/` 会让「删掉导出」的变异照样通过。
+     */
+    const rootEntry = readFileSync(
+      fileURLToPath(new URL("../../lib/index.js", import.meta.url)),
+      "utf8",
+    );
+    const exported = [...rootEntry.matchAll(/export\s*\{([^}]*)\}/gu)]
+      .flatMap((match) => match[1]!.split(","))
+      .map((part) => part.trim().split(/\s+as\s+/u).pop()!.trim())
+      .filter((name) => name !== "");
+    expect(exported, "根入口必须导出 apply").toContain("apply");
+    expect(exported, "同时保留 PACKAGE_NAME").toContain("PACKAGE_NAME");
   });
 
   it("anchors every inserted path name to a file that exists beside the patch", () => {
     // The host anchors path rows beside THIS file, not beside the profile: a name
     // that only resolves from the profile directory imports as ERR_MODULE_NOT_FOUND,
     // leaves the entry fiber-less, and the client scan drops it without a word.
+    //
+    // 现在三条都是裸名或子路径名，**没有**路径写法 → `anchored` 为空是期望结果。
     const anchored = rows
       .map((row) => ({ id: row.id, target: anchoredRowTarget(row.name) }))
       .filter((row): row is { id: string; target: string } => row.target !== undefined);
-    expect(anchored.length).toBeGreaterThan(0);
+    expect(anchored, "不再有路径写法（2026-10-28）").toEqual([]);
     for (const row of anchored) {
       expect(existsSync(row.target), `${row.id} anchors to a missing file: ${row.target}`).toBe(true);
     }

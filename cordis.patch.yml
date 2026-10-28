@@ -4,29 +4,44 @@
 # 按 id 覆盖（`config:` 那些字段）继续生效，账号与白名单零迁移。同一行 id 只能由一个层插入，
 # 因此本包与两个旧插件互斥：切换必须是「卸旧装新」（设计 §5.3）。
 #
-# `name` 分两类，受宿主 `client-modules` 的启动图扫描规则约束（2026-10-17 实测，证据见
-# `docs/superpowers/notes/2026-10-17-client-boot-graph.md`）：
+# `name` 的写法受宿主 `client-modules` 的启动图扫描规则约束（2026-10-17 实测，
+# 2026-10-28 按宿主源码 `dsh-client-modules/lib/index.js` 复核并改写）：
 #
-# - **子路径说明符**（`dsh-llm-account/commandcode`）：宿主加载器能挂载（走 Node 的
-#   `exports`），但扫描的 `exactPackageSpecifier` 对子路径返回 undefined，这一行**不产生
-#   客户端 source**——不报错，`./client` bundle 也永远不进浏览器启动图。
-# - **路径说明符**（`./lib/opencode.js`）：扫描按 `pathLike` 分支解析后向上找最近的
-#   `package.json`，命中本包（声明了 `dsh.client`），成为**唯一客户端 source**。入口与
-#   `./opencode` 子路径导出指向同一产物（`lib/opencode.js`），只是换成扫描认得的写法。
-#   **基准目录不是 profile**：宿主解析 patch 时会把插入行里的相对/绝对路径改写成
-#   「以本 patch 文件所在目录（本包根）为基准」的绝对 `file:` URL
-#   （`anchorInsertedPluginNames`）。所以这里必须写**包内相对路径**；写成 profile 相对
-#   路径（`./node_modules/dsh-llm-account/...`）会被改写成不存在的路径，导入抛
-#   `ERR_MODULE_NOT_FOUND` → 该行没有 fiber → 扫描静默跳过（不报错、不进启动图）。
+# 扫描链是 `resolveMeta` → `locatePkgJson`，两条出口决定「这一行产不产客户端 source」：
 #
-# 一个声明 `dsh.client` 的包**只能有一个** source：两行同时可见会让组合阶段抛
-# `ClientPackageCompositionError`（整个客户端启动失败）。因此这里**恰好一行用路径名**。
+# ```js
+# locatePkgJson(name, base) {
+#   const pathLike = name.startsWith(".") || name.startsWith("file:") || isAbsolute(name);
+#   const expected = pathLike ? undefined : exactPackageSpecifier(name);
+#   if (!pathLike && expected === undefined) return undefined;   // ← 出口：不产 source
+#   ...
+# }
+# // exactPackageSpecifier：不含 "/" 也不含 ":" 才算包根 —— 子路径一律 undefined
+# ```
+#
+# - **子路径说明符**（`dsh-llm-account/commandcode`）：加载器能挂载（走 Node `exports`），
+#   但含 `/` → `exactPackageSpecifier` 返回 undefined → 这一行**不产生客户端 source**。
+#   不报错，`./client` bundle 只是不进浏览器启动图。
+# - **裸包名**（`dsh-llm-account`）：不含 `/` → 识别为包根 → 按包名解析 `package.json`
+#   → 命中本包 → **产生客户端 source**，且界面上就显示这个短名。
+# - **路径说明符**（`./lib/opencode.js`）：走 `pathLike` 分支，向上找最近的 `package.json`
+#   → 也产生 source，但**界面会显示成宿主改写后的绝对 `file:` URL**
+#   （`anchorInsertedPluginNames` 把插入行的相对路径按「本 patch 所在目录」改写），
+#   既长又暴露本机路径。**2026-10-28 起不再用这种写法。**
+#
+# **一个声明 `dsh.client` 的包只能有一个 source**：`reconcilePackage` 收齐所有
+# `packageName` 相同的 source，`sources.length > 1` 时抛
+# `client-modules: package ... resolves from multiple active Loader sources`
+# （整个客户端启动失败）。所以三条**恰好一条**用裸包名，另两条用子路径写法。
+#
+# 裸包名解析到 `src/index.ts`（产物 `lib/index.js`），所以根入口**必须导出 `apply`**
+# —— 它转发 `opencode` 那家的实现。这条是约定：谁用裸包名，谁就是默认入口。
 #
 # 值统一加引号：YAML 里以 `@`、`.` 或特殊字符开头的标量会被当成指示符而解析失败。
 - insert:
     - id: llm-commandcode
       name: "dsh-llm-account/commandcode"
     - id: opencode-go
-      name: "./lib/opencode.js"
+      name: "dsh-llm-account"
     - id: opendesign
       name: "dsh-llm-account/opendesign"
