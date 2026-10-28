@@ -65,6 +65,30 @@ export { SEARCH_PROVIDER_ID };
 export const WEB_ROW_ID = "web";
 
 /**
+ * 宿主自带的搜索 provider id（`dsh-web-search-deepseek` 注册的那个）。
+ *
+ * 写死而不是运行时发现：`dsh-web` 只暴露 `registerSearchProvider` / `search` /
+ * `fetch`，**没有枚举接口**（`searchProviders` 是私有 Map）。插件侧拿不到「现在有
+ * 哪些 provider」，只能记住已知的 id。
+ *
+ * 这也是 dsh-base bundle 里 `web.searchProvider` 的默认值 —— 我们把槽位让回给它，
+ * 等价于「回到出厂状态」。
+ */
+export const HOST_DEFAULT_SEARCH_PROVIDER = "deepseek-official";
+
+/**
+ * 让位时写回的值。
+ *
+ * **不能写空串**（2026-10-28 修）：空串让宿主走「未指定 id」的自动选路，而我们和
+ * 宿主的 `deepseek-official` 都注册了 —— 两个都 `available()` 时报
+ * `WEB_PROVIDER_AMBIGUOUS`，**两个都用不了**。那正是用户报的「关掉我们的搜索后，
+ * 自带的也用不了」。
+ *
+ * 写回宿主默认 id 则明确指向它：即使我们也注册着，选路是精确匹配，不会歧义。
+ */
+const RELEASE_TARGET = HOST_DEFAULT_SEARCH_PROVIDER;
+
+/**
  * 写设置时用到的端口形状。
  *
  * 直接复用 `SettingsPort` —— 它的 `describe` / `mutate` 都按**profile 行 id** 取参数
@@ -119,37 +143,49 @@ export async function syncSearchProviderSlot(input: {
   const disabled =
     typeof strategy() === "string" && (strategy() as string).trim().toLowerCase() === "off";
 
+  /**
+   * **关闭态：把槽位让回宿主自带的 provider**（2026-10-28 修正）。
+   *
+   * 旧行为是写空串，期望宿主走「未指定 id」的自动选路 —— 但那条路有个致命前提：
+   * **恰好一个** provider 可用。我们又注册着（关闭态的模型外调用仍可能触发搜索），
+   * 宿主自带的 `deepseek-official` 也在，于是 `available()` 两个都真 →
+   * `WEB_PROVIDER_AMBIGUOUS` → **两个都用不了**。
+   *
+   * 用户的原话是「关掉自己的搜索就要自动切到软件自带的，除非两边都没启用」。所以：
+   *
+   * 1. 关掉我们的 → 把 `searchProvider` 写回宿主默认 id（精确匹配，无歧义）；
+   * 2. 已经是宿主默认 id → 无事可做；
+   * 3. 指向别的第三方 provider → **不动**（用户的选择，可能是别家插件）。
+   */
   if (disabled) {
-    // 已经是空的了：没有可让的槽位。
-    if (current === undefined || current === "") return false;
-    // 只在**指向本插件**时让位 —— 用户可能显式指向了别人的 provider，那不关我们的事。
-    if (current !== SEARCH_PROVIDER_ID) return false;
+    // 已经指向宿主默认：无需动作（这是期望的终态）。
+    if (current === RELEASE_TARGET) return false;
+    // 空串 / 未配置：也补成宿主默认 —— 否则「两边都没启用」的用户会落到
+    // `WEB_PROVIDER_UNAVAILABLE`，而宿主其实自带一个能用的。
+    const needsFix = current === undefined || current === "" || current === SEARCH_PROVIDER_ID;
+    if (!needsFix) return false; // 指向第三方：不关我们的事
+    const nextValue = RELEASE_TARGET;
     try {
-      await settings.mutate(WEB_ROW_ID, [{ op: "set", path: [FIELD], value: "" }], snapshot.revision);
+      await settings.mutate(WEB_ROW_ID, [{ op: "set", path: [FIELD], value: nextValue }], snapshot.revision);
       return true;
     } catch (error) {
-      warn(`[dsh-llm-account] 未能让出 web.searchProvider（搜索已关闭，但宿主仍会把它交给我们）：${String(error)}`);
+      warn(`[dsh-llm-account] 未能把 web.searchProvider 让回 ${RELEASE_TARGET}（搜索已关闭）：${String(error)}`);
       return false;
     }
   }
 
   /**
-   * 启用态：**只在「显式空串」时写回**。
+   * **启用态：把槽位拿回来**（2026-10-28 修正）。
    *
-   * 2026-10-26 修审查 LOW-B：这里原来判 `current === undefined || current === ""`，
-   * 把两种来源不同的空值混为一谈 ——
+   * 判据从「只认显式空串」放宽为「空串 / 未配置 / 指向宿主默认」——
+   * 因为关闭态现在把值写成 `RELEASE_TARGET`（宿主默认 id），不再是空串。
+   * 不这样改的话，「关一次再开」会让槽位永远留在宿主那边，我们的搜索启用了却不生效。
    *
-   * - `""`：**我们让位时写下的痕迹**（上面的 `mutate` 写的就是空串）→ 该写回；
-   * - `undefined`：这一行**从来没有过** `searchProvider` 字段 → 那是用户的初始状态，
-   *   我们不该替他绑定。
-   *
-   * 混用的后果：装了第二个搜索插件、从没绑定任何一方的用户，只要改一次无关设定，
-   * 就会被静默绑到本插件 → 宿主不再走「未指定 id」的自动选路，别的插件永远轮不到。
-   *
-   * 用配置值本身（而不是内存标记）作判据：它跨进程存活，重启后仍能认出
-   * 「这是我让出的」。
+   * 仍然**不动**指向第三方的配置（用户显式选了别家插件）。
    */
-  if (current === "") {
+  const oursToTake =
+    current === undefined || current === "" || current === RELEASE_TARGET;
+  if (oursToTake) {
     try {
       await settings.mutate(
         WEB_ROW_ID,

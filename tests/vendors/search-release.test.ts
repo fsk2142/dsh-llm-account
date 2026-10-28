@@ -21,7 +21,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { SettingsOp } from "../../src/core/adapter";
-import { SEARCH_PROVIDER_ID, WEB_ROW_ID, syncSearchProviderSlot } from "../../src/vendors/search-release";
+import {
+  HOST_DEFAULT_SEARCH_PROVIDER,
+  SEARCH_PROVIDER_ID,
+  WEB_ROW_ID,
+  syncSearchProviderSlot,
+} from "../../src/vendors/search-release";
 
 /** 造一个只含 `web` 行的设置端口替身，并记录写入。 */
 function webSettings(initial: Record<string, unknown>): {
@@ -58,7 +63,13 @@ function webSettings(initial: Record<string, unknown>): {
 }
 
 describe("同步 web.searchProvider 槽位", () => {
-  it("**切到 off 时把本插件的绑定置空**（让出名额给别的搜索插件）", async () => {
+  it("**切到 off 时把槽位让回宿主自带的 provider**", async () => {
+    /**
+     * 旧行为是写空串、指望宿主「未指定 id」自动选路。但那条路要求**恰好一个**
+     * provider 可用 —— 我们还注册着（关闭态的模型外调用仍可能搜索），宿主的
+     * `deepseek-official` 也在，两个都 available 就报 `WEB_PROVIDER_AMBIGUOUS`，
+     * **两个都用不了**。那正是用户报的「关掉自己的搜索，自带的也用不了」。
+     */
     const store = webSettings({ searchProvider: SEARCH_PROVIDER_ID });
     const changed = await syncSearchProviderSlot({
       settings: store.settings as never,
@@ -66,8 +77,19 @@ describe("同步 web.searchProvider 槽位", () => {
     });
 
     expect(changed, "应当真的改了配置").toBe(true);
-    expect(store.value().searchProvider, "置空后宿主走「未指定 id」的选路").toBe("");
+    expect(store.value().searchProvider, "明确指向宿主自带的那个").toBe(HOST_DEFAULT_SEARCH_PROVIDER);
     expect(store.writes, "只写一次").toHaveLength(1);
+  });
+
+  it("已经是宿主自带 provider 时 off 态不再写（幂等）", async () => {
+    const store = webSettings({ searchProvider: HOST_DEFAULT_SEARCH_PROVIDER });
+    const changed = await syncSearchProviderSlot({
+      settings: store.settings as never,
+      strategy: () => "off",
+    });
+
+    expect(changed, "已是期望终态").toBe(false);
+    expect(store.writes).toHaveLength(0);
   });
 
   it("**切回启用态时写回**本插件的 id", async () => {
@@ -136,7 +158,7 @@ describe("同步 web.searchProvider 槽位", () => {
 
     expect(changed).toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("未能让出");
+    expect(warn.mock.calls[0]?.[0]).toContain("未能把 web.searchProvider 让回");
   });
 
   it("策略值形状不可信（undefined / 数字 / 空串）时按启用处理", async () => {
@@ -151,15 +173,14 @@ describe("同步 web.searchProvider 槽位", () => {
     }
   });
 
-  it("**字段从未配置（undefined）时不替用户绑定**（2026-10-26 修审查 LOW-B）", async () => {
+  it("**启用态时从未配置也接过来**（2026-10-28 改）", async () => {
     /**
-     * 空值有两种来源，语义完全不同：
+     * 语义变更：以前「从未配置」不替他绑定（怕抢第三方插件）。
      *
-     * - `""` —— 我们让位时写下的痕迹 → 切回启用态应当写回；
-     * - `undefined` —— 这一行从来没有过这个字段 → 那是用户的初始状态，不该被我们改。
+     * 但现在关闭态会把值写成宿主默认 id，所以「关一次再开」的终态是
+     * `deepseek-official` —— 若不接过来，用户启用了我们的搜索却不生效。
      *
-     * 混用的后果：装了第二个搜索插件、从没绑定任何一方的用户，改一次无关设定就会被
-     * 静默绑到本插件，宿主随之不再走「未指定 id」的自动选路。
+     * 判据仍守住一条：**指向第三方时绝不抢**（下面那条测试）。
      */
     const store = webSettings({});
     const changed = await syncSearchProviderSlot({
@@ -167,9 +188,8 @@ describe("同步 web.searchProvider 槽位", () => {
       strategy: () => "api-first",
     });
 
-    expect(changed, "从未配置过 → 不写").toBe(false);
-    expect(store.value().searchProvider, "字段仍然没有").toBeUndefined();
-    expect(store.writes, "一次都不写").toHaveLength(0);
+    expect(changed, "启用态 → 接过来").toBe(true);
+    expect(store.value().searchProvider).toBe(SEARCH_PROVIDER_ID);
   });
 
   it("**空串（我们让位的痕迹）时才写回**（同上）", async () => {
@@ -181,5 +201,21 @@ describe("同步 web.searchProvider 槽位", () => {
 
     expect(changed).toBe(true);
     expect(store.value().searchProvider).toBe(SEARCH_PROVIDER_ID);
+  });
+
+  it("**启用态也绝不抢第三方**（2026-10-28 新逻辑的守门）", async () => {
+    /**
+     * 启用态现在判「空串 / 未配置 / 宿主默认」三种都接手 —— 判据放宽了，
+     * 但**必须**仍然守住这条线：用户显式指向别家插件时一律不动。
+     */
+    const store = webSettings({ searchProvider: "ddg" });
+    const changed = await syncSearchProviderSlot({
+      settings: store.settings as never,
+      strategy: () => "api-first",
+    });
+
+    expect(changed, "启用态也不抢").toBe(false);
+    expect(store.value().searchProvider, "别人的留着").toBe("ddg");
+    expect(store.writes).toHaveLength(0);
   });
 });
