@@ -2,9 +2,12 @@
  * Task 3 测试：宿主侧「账号中心」远程命名空间。
  *
  * 这一层把 Task 2 的生效账号/切换通知与两个厂商的账号、额度端口合成一个远程面，供客户端
- * （Task 4+ 的统一页面与侧边栏卡片）读取。**接缝未验证**：`ctx.typert.register(contribution)`
- * 的形状逐字取自本机已装的 `@mars-sea/dsh-commandcode-provider/lib/index.js:8965-8976`，
- * 真机判定在计划 1c。
+ * （Task 4+ 的统一页面与侧边栏卡片）读取。
+ *
+ * **接缝状态（2026-10-24 更正）**：这里原本写着「接缝未验证」。那已经过时 ——
+ * `ctx.typert.register(contribution)` 的形状逐字取自本机已装的
+ * `@mars-sea/dsh-commandcode-provider/lib/index.js:8965-8976`，且用量面板与账户卡片
+ * 在真机上一直正常取数。
  *
  * 测试用**真** cordis `Context`（服务构造需要真的 Service 基类），只在 `typert` 与厂商端口上
  * 放假件；`inject` 回调是异步的，所以 mount 之后要让出一个微任务。
