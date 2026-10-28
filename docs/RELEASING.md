@@ -132,7 +132,7 @@ fix(opendesign): 去掉合成的月度额度条
 现在只发布厂商真实返回的窗口。另外两家（OpenCode Go / Command Code）的月度是厂商
 真数据，不受影响。
 
-1491/1491 通过。
+（跑 `pnpm test` / `npx tsc --noEmit`，把实际数字写在这里）
 ```
 
 ---

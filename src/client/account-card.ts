@@ -712,7 +712,10 @@ function menuButtons(props: AccountCardProps, account: AccountUsageStatus): Reac
       t("account.replaceKey"),
     ),
   ];
-  // 「使用此账户」已移除（2026-10-19）：切换账号改到全局切换面板的顺序列表。
+  // 菜单里**没有**「使用此账户」（2026-10-19）：换号走全局切换面板的顺序列表。
+  //
+  // 注意别和卡片上那个「使用」按钮搞混 —— 它还在（本文件 L354 附近，
+  // `data-account-use`，只在账号未生效时显示）。这里说的是**行尾 ⋯ 菜单**里的项。
   buttons.push(
     createElement(
       "button",

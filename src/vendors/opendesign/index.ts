@@ -135,6 +135,14 @@ export const Config: PluginConfigSchema = z.object(
       .default(null),
     /** 手动排序覆盖；缺省时沿用派生顺序（顶层 `apiKeyEnv` + `accounts[]`）。 */
     accountOrder: z.array(z.string()),
+    /**
+     * 自动切换开关：关闭后轮换只试当前账号（固定账号；未固定时是顶层默认账号）。
+     *
+     * **默认 `false`**，与 Command Code 的 `true` 不同 —— Command Code 那边是为了让
+     * 旧插件的既有用户零迁移（它一直允许额度耗尽时回落）。本网关没有那个历史包袱，
+     * 按「危险能力默认关」的原则留给用户显式打开（与 `autoSwitchModelOnQuota`、
+     * 两个自动继续开关同一条纪律）。
+     */
     autoSwitch: z.boolean().default(false),
     /** 切换策略：手动顺序（只在耗尽时切）或额度优先。 */
     switchStrategy: z.union(["order", "best-quota", "scheduled"]).default("best-quota"),
