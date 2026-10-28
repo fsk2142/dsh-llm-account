@@ -22,7 +22,7 @@
 import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, TokenUsage } from "@deepseek-ai/dsh-llm";
 
-import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
+import type { AccountPort, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
@@ -702,7 +702,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param options - 当前请求。
    * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
    */
-  async #fallbackModel(options: GenerateOptions, failureKind?: string): Promise<ModelFallbackCandidate | undefined> {
+  async #fallbackModel(options: GenerateOptions, failureKind?: FailureKind): Promise<ModelFallbackCandidate | undefined> {
     // 开关（默认关闭）：关着就完全不换，让调用方抛原来的限额错误。
     if (this.#deps.autoSwitchModel?.() !== true) return undefined;
     const candidates = await this.#deps.fallbackCandidates?.();

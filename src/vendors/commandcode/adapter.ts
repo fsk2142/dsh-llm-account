@@ -24,7 +24,7 @@ import type {
   TokenUsage,
 } from "@deepseek-ai/dsh-llm";
 
-import type { AccountPort, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
+import type { AccountPort, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
@@ -675,7 +675,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param failureKind - 触发本次换模型的失败分类（缺省按服务侧处理）。
    * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
    */
-  async #fallbackModel(options: GenerateOptions, failureKind?: string): Promise<ModelFallbackCandidate | undefined> {
+  async #fallbackModel(options: GenerateOptions, failureKind?: FailureKind): Promise<ModelFallbackCandidate | undefined> {
     // 开关（默认关闭）：关着就完全不换，让调用方抛原来的限额错误。
     if (this.#deps.autoSwitchModel?.() !== true) return undefined;
     const candidates = await this.#deps.fallbackCandidates?.();
