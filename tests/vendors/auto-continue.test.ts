@@ -35,42 +35,38 @@ function fakeCtx() {
 }
 
 describe("注册", () => {
-  it("两个开关都关时**不注册任何事件**（关掉即静默，不起后台逻辑）", () => {
+  it("总开关关着时**不注册任何事件**（关掉即静默，不起后台逻辑）", () => {
     const ctx = fakeCtx();
     applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE });
     expect(ctx.size()).toBe(0);
   });
 
-  it("只开 onError 时只注册请求失败那一个", () => {
+  it("总开关开着、但没有宿主探针时只注册请求失败那一个", () => {
+    // `agent/turn-stopping` 那条路要 `probe.inbox` 才能往队列里推消息，没有就无从续写。
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onError: true });
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 3, intervalMs: 0 });
     expect(ctx.has("agent/request-error")).toBe(true);
-    expect(ctx.has("agent/turn-stopping")).toBe(false);
+    expect(ctx.has("agent/turn-stopping"), "没有探针就不注册").toBe(false);
   });
 
-  it("只开 onTruncate 但**没有**宿主探针时也不注册（没有 inbox 就无从续写）", () => {
-    const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onTruncate: true });
-    expect(ctx.size()).toBe(0);
-  });
-
-  it("只开 onTruncate 且提供了探针时，只注册本轮结束那一个", () => {
+  it("总开关开着 + 有探针时，两个接缝都注册", () => {
     const ctx = fakeCtx();
     const appended: unknown[] = [];
     applyAutoContinue(
       ctx as never,
-      { ...DEFAULT_AUTO_CONTINUE, onTruncate: true },
+      { enabled: true, maxAttempts: 3, intervalMs: 0 },
       { inbox: { append: (message: unknown) => appended.push(message) } },
     );
+    expect(ctx.has("agent/request-error")).toBe(true);
     expect(ctx.has("agent/turn-stopping")).toBe(true);
-    expect(ctx.has("agent/request-error")).toBe(false);
   });
+
 });
 
 describe("请求失败：返回 { kind: 'retry' } 才重试", () => {
   it("瞬时失败 + 开关开 → 返回 retry", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onError: true });
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 3, intervalMs: 0 });
     const action = await ctx.fire("agent/request-error", {
       turn: 1,
       step: 1,
@@ -82,7 +78,7 @@ describe("请求失败：返回 { kind: 'retry' } 才重试", () => {
 
   it("用户主动中止 → 不返回 retry（把决定权交回宿主）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onError: true });
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 3, intervalMs: 0 });
     const action = await ctx.fire("agent/request-error", {
       turn: 1,
       step: 1,
@@ -94,7 +90,7 @@ describe("请求失败：返回 { kind: 'retry' } 才重试", () => {
 
   it("确定性失败 → 不重试", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onError: true });
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 3, intervalMs: 0 });
     const action = await ctx.fire("agent/request-error", {
       turn: 1,
       step: 1,
@@ -106,7 +102,7 @@ describe("请求失败：返回 { kind: 'retry' } 才重试", () => {
 
   it("次数用尽后不再重试（同一轮次内计数）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onError: true, maxAttempts: 2 });
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 2, intervalMs: 0 });
     const payload = { turn: 7, step: 1, provider: "commandcode", failure: { code: "TRANSPORT" } };
     expect(await ctx.fire("agent/request-error", payload)).toEqual({ kind: "retry" });
     expect(await ctx.fire("agent/request-error", payload)).toEqual({ kind: "retry" });
@@ -116,7 +112,7 @@ describe("请求失败：返回 { kind: 'retry' } 才重试", () => {
 
   it("换一个 turn 后计数重新开始（每个轮次各自限额）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onError: true, maxAttempts: 1 });
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 1, intervalMs: 0 });
     expect(await ctx.fire("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } })).toEqual({ kind: "retry" });
     expect(await ctx.fire("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } })).toBeUndefined();
     // 新一轮重新获得额度。
@@ -128,7 +124,7 @@ describe("回答截断：往 nextStep 推一条消息", () => {
   it("截断 + 开关开 → 调 append 让本轮保持打开", async () => {
     const appended: unknown[] = [];
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onTruncate: true }, {
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 3, intervalMs: 0 }, {
       // 宿主在 turn-stopping 之后检查 `inbox.nextStep.length`；这里注入最小形状。
       inbox: { append: (message: unknown) => appended.push(message) },
       lastFinishReason: () => "length",
@@ -140,7 +136,7 @@ describe("回答截断：往 nextStep 推一条消息", () => {
   it("正常结束（stop）→ 不推消息（不破坏正常对话）", async () => {
     const appended: unknown[] = [];
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onTruncate: true }, {
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 3, intervalMs: 0 }, {
       inbox: { append: (message: unknown) => appended.push(message) },
       lastFinishReason: () => "stop",
     });
@@ -151,7 +147,7 @@ describe("回答截断：往 nextStep 推一条消息", () => {
   it("次数用尽 → 不推消息", async () => {
     const appended: unknown[] = [];
     const ctx = fakeCtx();
-    applyAutoContinue(ctx as never, { ...DEFAULT_AUTO_CONTINUE, onTruncate: true, maxAttempts: 1 }, {
+    applyAutoContinue(ctx as never, { enabled: true, maxAttempts: 1, intervalMs: 0 }, {
       inbox: { append: (message: unknown) => appended.push(message) },
       lastFinishReason: () => "length",
     });
@@ -168,9 +164,10 @@ describe("重试退避（2026-10-28）", () => {
    * （实测 `dsh-agent-loop` 无 backoff）。所以退避必须由插件自己加 ——
    * 网络抖动时在几百毫秒内连打数次反而可能加剧拥塞。
    */
-  it("**重试前会等待**（第一次约 0.5s）", async () => {
+  it("**重试前按配置的间隔等待**（默认 2s）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+    // 用真实默认间隔 —— 这条测试钉的就是「间隔被真正用上」。
+    applyAutoContinue(ctx, { enabled: true, maxAttempts: 3, intervalMs: 2000 });
 
     const started = Date.now();
     const action = await ctx.fire("agent/request-error", {
@@ -183,9 +180,20 @@ describe("重试退避（2026-10-28）", () => {
     expect(elapsed, "固定等 2s 才重试").toBeGreaterThanOrEqual(1900);
   });
 
+  it("间隔可配置：设成 100ms 就只等 100ms", async () => {
+    const ctx = fakeCtx();
+    applyAutoContinue(ctx, { enabled: true, maxAttempts: 3, intervalMs: 100 });
+
+    const started = Date.now();
+    await ctx.fire("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } });
+    const elapsed = Date.now() - started;
+
+    expect(elapsed, "不该等满默认的 2s").toBeLessThan(1000);
+  });
+
   it("不可重试的失败**不等待**（立即返回 undefined）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+    applyAutoContinue(ctx, { enabled: true, maxAttempts: 3, intervalMs: 0 });
 
     const started = Date.now();
     const action = await ctx.fire("agent/request-error", {
@@ -211,7 +219,7 @@ describe("waterfall 交接（2026-10-29）", () => {
    */
   it("**不归我们重试时必须调用 next()**（否则吞掉宿主的重试链）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+    applyAutoContinue(ctx, { enabled: true, maxAttempts: 3, intervalMs: 0 });
     let handedOff = 0;
 
     const action = await ctx.fire(
@@ -229,7 +237,7 @@ describe("waterfall 交接（2026-10-29）", () => {
 
   it("下游返回 retry 时原样透传（不覆盖别人的决策）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+    applyAutoContinue(ctx, { enabled: true, maxAttempts: 3, intervalMs: 0 });
 
     const action = await ctx.fire(
       "agent/request-error",
@@ -242,7 +250,7 @@ describe("waterfall 交接（2026-10-29）", () => {
 
   it("我们决定重试时**返回决策并终止链路**（不调 next）", async () => {
     const ctx = fakeCtx();
-    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+    applyAutoContinue(ctx, { enabled: true, maxAttempts: 3, intervalMs: 0 });
     let handedOff = 0;
 
     const action = await ctx.fire(

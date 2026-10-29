@@ -18,18 +18,28 @@
  * @module dsh-llm-account/src/core/switching/auto-continue
  */
 
-/** 自动继续的两台开关与次数上限。 */
+/**
+ * 自动重试的设置。
+ *
+ * 2026-10-29 合并：原来 `onError` / `onTruncate` 是两个开关，界面上一堆相邻的复选框
+ * 让用户分不清该开哪个（实际两者都是「异常中断后接着跑」）。现在一个 `enabled`
+ * 总开关，两件事都归它管。
+ */
 export interface AutoContinueSettings {
-  /** 模型请求失败时是否自动重试（`agent/request-error`）。 */
-  onError: boolean;
-  /** 回答被截断时是否自动续写（`agent/turn-stopping`）。 */
-  onTruncate: boolean;
-  /** 一次轮次内最多自动继续多少次（两个开关共用，防止无限续写）。 */
+  /** 总开关：任意异常中断（请求失败 / 输出被截断）后是否自动接着跑。 */
+  enabled: boolean;
+  /** 一次轮次内最多自动继续多少次（防止无限续写烧额度）。 */
   maxAttempts: number;
+  /** 每次重试/续写前的等待（毫秒）。 */
+  intervalMs: number;
 }
 
-/** 默认值：两个开关都关、最多 3 次。 */
-export const DEFAULT_AUTO_CONTINUE: AutoContinueSettings = { onError: false, onTruncate: false, maxAttempts: 3 };
+/** 默认值：关着、最多 3 次、每次间隔 2 秒。 */
+export const DEFAULT_AUTO_CONTINUE: AutoContinueSettings = {
+  enabled: false,
+  maxAttempts: 3,
+  intervalMs: 2000,
+};
 
 /**
  * **绝不重试**的失败码 —— 只有用户的意图和「重试必然失败且会烧额度」的少数几类。
@@ -85,7 +95,7 @@ export function shouldRetryFailure(
   code: string | undefined,
   attempts: number,
 ): boolean {
-  if (!settings.onError) return false;
+  if (!settings.enabled) return false;
   if (attempts >= settings.maxAttempts) return false;
   return isTransientFailure(code);
 }
@@ -105,7 +115,7 @@ export function shouldContinueOnTruncate(
   finishReason: string | undefined,
   attempts: number,
 ): boolean {
-  if (!settings.onTruncate) return false;
+  if (!settings.enabled) return false;
   if (attempts >= settings.maxAttempts) return false;
   /**
    * 认**两种**写法（2026-10-29）：

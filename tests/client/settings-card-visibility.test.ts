@@ -55,10 +55,11 @@ describe("四张卡片仍然齐全（功能没有被删掉）", () => {
     expect(SETTINGS_CARDS.map((card) => card.id)).toEqual(["display", "switching", "search", "advanced"]);
   });
 
-  it("切换设置里仍有换模型与自动继续", () => {
+  it("切换设置里仍有换模型与自动重试", () => {
     const switching = SETTINGS_CARDS.find((card) => card.id === "switching");
     expect(switching?.shared).toContain("autoSwitchModelOnQuota");
-    expect(switching?.shared).toContain("autoContinueOnError");
+    // 2026-10-29 合并：原来两个开关（onError / onTruncate）并成一个 `autoContinue`。
+    expect(switching?.shared).toContain("autoContinue");
   });
 
   it("搜索设置里仍有网关优先与 API key 引用", () => {

@@ -61,7 +61,7 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     id: "switching",
     labelKey: "card.switching",
     hintKey: "card.switching.hint",
-    shared: ["autoSwitchModelOnQuota", "autoContinueOnError", "autoContinueOnTruncate", "autoContinueMaxAttempts"],
+    shared: ["autoSwitchModelOnQuota", "autoContinue", "autoContinueMaxAttempts", "autoContinueIntervalMs"],
     specific: [],
   },
   {

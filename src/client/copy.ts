@@ -79,12 +79,12 @@ export type CopyKey =
   | "options.openai"
   | "options.messages"
   | "options.cli"
-  | "field.autoContinueOnError"
-  | "field.autoContinueOnError.hint"
-  | "field.autoContinueOnTruncate"
-  | "field.autoContinueOnTruncate.hint"
+  | "field.autoContinue"
+  | "field.autoContinue.hint"
   | "field.autoContinueMaxAttempts"
   | "field.autoContinueMaxAttempts.hint"
+  | "field.autoContinueIntervalMs"
+  | "field.autoContinueIntervalMs.hint"
   | "field.searchStrategy"
   | "field.searchStrategy.hint"
   | "options.searchGatewayFirst"
@@ -478,12 +478,12 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
-    "field.autoContinueOnError": "请求失败时自动重试",
-    "field.autoContinueOnError.hint": "只重试瞬时失败（网络/服务端/限流）；主动停止与确定性错误（上下文超长、密钥无效）不重试。",
-    "field.autoContinueOnTruncate": "回答被截断时自动续写",
-    "field.autoContinueOnTruncate.hint": "只在达到输出上限（finish=length）时补一句「继续」；正常结束不会多说话。",
-    "field.autoContinueMaxAttempts": "每轮最多自动继续次数",
-    "field.autoContinueMaxAttempts.hint": "两个开关共用这个上限，防止无限续写烧额度。缺省 3。",
+    "field.autoContinue": "异常中断时自动重试",
+    "field.autoContinue.hint": "任意异常中断（请求失败 / 回答被截断）都接着跑；只有手动停止不重试。上下文超长、密钥无效、额度用尽这类重试必然失败的除外。",
+    "field.autoContinueMaxAttempts": "每轮最多重试次数",
+    "field.autoContinueMaxAttempts.hint": "封顶，防止无限重试烧额度。缺省 3。",
+    "field.autoContinueIntervalMs": "重试间隔（毫秒）",
+    "field.autoContinueIntervalMs.hint": "每次重试前等待多久。缺省 2000 毫秒；三次重试共约 6 秒。",
     "field.searchStrategy": "搜索方式",
     "field.searchStrategy.hint": "网关路：模型调服务端搜索工具，按 token 计费。API 路：直连 /v1/tools/search，按请求次数计费，需填下面的 key。",
     "options.searchGatewayFirst": "网关优先（省 API 余额）",
@@ -825,12 +825,12 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
-    "field.autoContinueOnError": "Retry failed requests",
-    "field.autoContinueOnError.hint": "Retries transient failures only (network/server/rate limit); user stops and deterministic errors are not retried.",
-    "field.autoContinueOnTruncate": "Continue truncated answers",
-    "field.autoContinueOnTruncate.hint": "Only when the answer hit the output limit (finish=length); normal endings are untouched.",
-    "field.autoContinueMaxAttempts": "Max auto-continues per turn",
-    "field.autoContinueMaxAttempts.hint": "Shared by both switches, so a loop cannot burn quota forever. Default 3.",
+    "field.autoContinue": "Auto-retry interrupted runs",
+    "field.autoContinue.hint": "Retries any abnormal interruption (request failure / truncated answer); only a manual stop is left alone. Deterministic failures (context too long, invalid key, quota) are not retried.",
+    "field.autoContinueMaxAttempts": "Max retries per turn",
+    "field.autoContinueMaxAttempts.hint": "Caps the loop so it cannot burn quota forever. Default 3.",
+    "field.autoContinueIntervalMs": "Retry interval (ms)",
+    "field.autoContinueIntervalMs.hint": "Wait before each retry. Default 2000 ms; three retries take about 6 s.",
     "field.searchStrategy": "Search route",
     "field.searchStrategy.hint": "Gateway: the model calls the server-side search tool; billed per token. API: calls /v1/tools/search directly; billed per request, needs the key below.",
     "options.searchGatewayFirst": "Gateway first (save API balance)",

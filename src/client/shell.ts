@@ -289,20 +289,16 @@ export const VENDORS: readonly VendorEntry[] = [
         fields: [
           // 2026-10-20 用户去掉了「启用自动切换 / 开启网页搜索」两个界面开关：
           // 卡片本来就能用箭头收起，多一个开关反而让人误以为关掉会禁用功能。
-          // —— 自动继续（两台开关，默认都关）——
+          // —— 自动重试（2026-10-29 合并成一个总开关）——
+          //
+          // 原来拆成「请求失败时自动重试」与「回答被截断时自动续写」两个并排复选框，
+          // 用户分不清该开哪个 —— 两者都是「异常中断后接着跑」。现在一个开关管两件事。
           {
-            key: "autoContinueOnError",
+            key: "autoContinue",
             kind: "boolean",
-            labelKey: "field.autoContinueOnError",
-            hintKey: "field.autoContinueOnError.hint",
-            // 默认关：自动重试会改变对话内容、也可能烧额度。
-            fallback: false,
-          },
-          {
-            key: "autoContinueOnTruncate",
-            kind: "boolean",
-            labelKey: "field.autoContinueOnTruncate",
-            hintKey: "field.autoContinueOnTruncate.hint",
+            labelKey: "field.autoContinue",
+            hintKey: "field.autoContinue.hint",
+            // 默认关：重试会改变对话内容、也可能烧额度。
             fallback: false,
           },
           {
@@ -311,6 +307,13 @@ export const VENDORS: readonly VendorEntry[] = [
             labelKey: "field.autoContinueMaxAttempts",
             hintKey: "field.autoContinueMaxAttempts.hint",
             fallback: 3,
+          },
+          {
+            key: "autoContinueIntervalMs",
+            kind: "number",
+            labelKey: "field.autoContinueIntervalMs",
+            hintKey: "field.autoContinueIntervalMs.hint",
+            fallback: 2000,
           },
           // —— 搜索 ——
           {

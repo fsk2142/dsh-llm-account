@@ -32,9 +32,9 @@ describe("四张卡片", () => {
     expect(shared).toContain("showSidebarQuota");
     expect(shared).toContain("quotaRefreshMinutes");
     expect(shared).toContain("autoSwitchModelOnQuota");
-    expect(shared).toContain("autoContinueOnError");
-    expect(shared).toContain("autoContinueOnTruncate");
+    expect(shared).toContain("autoContinue");
     expect(shared).toContain("autoContinueMaxAttempts");
+    expect(shared).toContain("autoContinueIntervalMs");
     expect(shared).toContain("searchStrategy");
     
     expect(shared).toContain("requestTimeoutMs");

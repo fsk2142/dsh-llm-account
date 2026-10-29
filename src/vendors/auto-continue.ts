@@ -62,7 +62,6 @@ export const CONTINUE_PROMPT = "继续";
  * 用户要求「每次错误重试中间间隔要 2s」—— 均匀间隔对「网络刚恢复」这类场景更稳，
  * 也不会让第一次重试来得太急。
  */
-const RETRY_INTERVAL_MS = 2000;
 
 /**
  * 等一会儿（不阻塞事件循环）。
@@ -99,7 +98,7 @@ export function applyAutoContinue(
     }
   };
 
-  if (settings.onError) {
+  if (settings.enabled) {
     /**
      * `agent/request-error` 是 **waterfall**，签名是 `(payload, next) => decision`。
      *
@@ -153,13 +152,13 @@ export function applyAutoContinue(
        * 到取消。这是有意的取舍 —— 给 `delay` 接 `AbortSignal` 要多传参数、多一条竞速
        * 路径，而 2 秒的延迟无害。
        */
-      await delay(RETRY_INTERVAL_MS);
+      await delay(settings.intervalMs);
       return { kind: "retry" };
     });
     if (typeof off === "function") disposers.push(off as () => void);
   }
 
-  if (settings.onTruncate && probe !== undefined) {
+  if (settings.enabled && probe !== undefined) {
     const off = ctx.on("agent/turn-stopping", async (payload: unknown) => {
       const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const turn = typeof record.turn === "number" ? record.turn : 0;

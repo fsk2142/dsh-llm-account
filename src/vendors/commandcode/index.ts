@@ -150,9 +150,11 @@ export const Config: PluginConfigSchema = z.object(
        * 需要一个固定的承载行（详见设计文档 §4.2）。三家 schema 都声明它们，
        * 谁先加载都能读到同一个值。
        */
-      autoContinueOnError: z.boolean().default(false),
-      autoContinueOnTruncate: z.boolean().default(false),
-      autoContinueMaxAttempts: z.number().default(3),
+      // 自动重试（2026-10-29 合并）：一个总开关管两件事 —— 请求失败重试、输出截断续写。
+      // 原来分成两个开关，界面上并排的复选框反而让人分不清该开哪个。
+      autoContinue: z.boolean().default(false),
+      autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
+      autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
       /** 功能页的两台开关：关掉只隐藏界面那一块，不影响已配置的能力。 */
       /** 搜索：是否优先用网关订阅额度（默认是；没有可用网关时回退 API key）。 */
       searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only", "off"]).default("gateway-first"),
@@ -420,13 +422,19 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   // 同一批字段，所以三个 provider 行里任意一行读到的都是同一份值。在这里注册可以避免
   // 同一次请求被三条链路各重试一遍（那会把重试次数放大三倍）。
   //
-  // 开关全关时 `applyAutoContinue` 不注册任何事件（关掉即静默）。
+  // 总开关关着时 `applyAutoContinue` 不注册任何事件（关掉即静默）。
   applyAutoContinue(
     ctx as unknown as { on(event: string, listener: (...args: unknown[]) => unknown): unknown },
     {
-      onError: document()["autoContinueOnError"] === true,
-      onTruncate: document()["autoContinueOnTruncate"] === true,
-      maxAttempts: typeof document()["autoContinueMaxAttempts"] === "number" ? (document()["autoContinueMaxAttempts"] as number) : 3,
+      enabled: document()["autoContinue"] === true,
+      maxAttempts:
+        typeof document()["autoContinueMaxAttempts"] === "number"
+          ? (document()["autoContinueMaxAttempts"] as number)
+          : 3,
+      intervalMs:
+        typeof document()["autoContinueIntervalMs"] === "number"
+          ? (document()["autoContinueIntervalMs"] as number)
+          : 2000,
     },
   );
 

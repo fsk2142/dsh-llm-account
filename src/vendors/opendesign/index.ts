@@ -167,9 +167,11 @@ export const Config: PluginConfigSchema = z.object(
        */
       autoSwitchModelOnQuota: z.boolean().default(false),
       // 自动继续 / 功能页 / 搜索：**全局**设置，三家 schema 都声明，谁先加载都读到同一个值。
-      autoContinueOnError: z.boolean().default(false),
-      autoContinueOnTruncate: z.boolean().default(false),
-      autoContinueMaxAttempts: z.number().default(3),
+      // 自动重试（2026-10-29 合并）：一个总开关管两件事 —— 请求失败重试、输出截断续写。
+      // 原来分成两个开关，界面上并排的复选框反而让人分不清该开哪个。
+      autoContinue: z.boolean().default(false),
+      autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
+      autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
       searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only", "off"]).default("gateway-first"),
       searchApiKeyRefs: z.array(z.string().role("credential-ref")).default(["DEEPSEEK_API_KEY"]),
     /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */

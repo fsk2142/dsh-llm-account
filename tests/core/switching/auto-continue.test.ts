@@ -21,17 +21,20 @@ import {
   type AutoContinueSettings,
 } from "../../../src/core/switching/auto-continue";
 
-/** 一份默认设置（两个开关都关 —— 与项目里其它危险开关一致）。 */
+/** 一份默认设置（总开关关 —— 与项目里其它危险开关一致）。 */
 const OFF: AutoContinueSettings = { ...DEFAULT_AUTO_CONTINUE };
 
 describe("默认值", () => {
-  it("两个开关默认都关（自动续写会改变对话内容，不能默认开）", () => {
-    expect(DEFAULT_AUTO_CONTINUE.onError).toBe(false);
-    expect(DEFAULT_AUTO_CONTINUE.onTruncate).toBe(false);
+  it("总开关默认关（重试会改变对话内容，不能默认开）", () => {
+    expect(DEFAULT_AUTO_CONTINUE.enabled).toBe(false);
   });
 
-  it("默认最多重试 3 次（防止无限续写烧钱）", () => {
+  it("默认最多重试 3 次（防止无限重试烧钱）", () => {
     expect(DEFAULT_AUTO_CONTINUE.maxAttempts).toBe(3);
+  });
+
+  it("默认间隔 2 秒（2026-10-29 需求：每次错误重试中间间隔要 2s）", () => {
+    expect(DEFAULT_AUTO_CONTINUE.intervalMs).toBe(2000);
   });
 });
 
@@ -89,18 +92,18 @@ describe("重试的准入（开关 + 次数）", () => {
   });
 
   it("开关开着 + 瞬时失败 + 还有次数 → 重试", () => {
-    expect(shouldRetryFailure({ ...OFF, onError: true }, "TRANSPORT", 0)).toBe(true);
+    expect(shouldRetryFailure({ ...OFF, enabled: true }, "TRANSPORT", 0)).toBe(true);
   });
 
   it("次数用尽就停手（不再无限重试）", () => {
-    const on = { ...OFF, onError: true, maxAttempts: 3 };
+    const on = { ...OFF, enabled: true, maxAttempts: 3 };
     expect(shouldRetryFailure(on, "TRANSPORT", 2)).toBe(true);
     expect(shouldRetryFailure(on, "TRANSPORT", 3)).toBe(false);
     expect(shouldRetryFailure(on, "TRANSPORT", 99)).toBe(false);
   });
 
   it("确定性失败在开关开着时也不重试", () => {
-    expect(shouldRetryFailure({ ...OFF, onError: true }, "CONTEXT_WINDOW_EXCEEDED", 0)).toBe(false);
+    expect(shouldRetryFailure({ ...OFF, enabled: true }, "CONTEXT_WINDOW_EXCEEDED", 0)).toBe(false);
   });
 });
 
@@ -110,19 +113,19 @@ describe("回答被截断时是否续写", () => {
   });
 
   it("开关开着 + finish.reason 是 length + 还有次数 → 续写", () => {
-    expect(shouldContinueOnTruncate({ ...OFF, onTruncate: true }, "length", 0)).toBe(true);
+    expect(shouldContinueOnTruncate({ ...OFF, enabled: true }, "length", 0)).toBe(true);
   });
 
   it("正常结束（stop）不续写", () => {
-    expect(shouldContinueOnTruncate({ ...OFF, onTruncate: true }, "stop", 0)).toBe(false);
+    expect(shouldContinueOnTruncate({ ...OFF, enabled: true }, "stop", 0)).toBe(false);
   });
 
   it("工具调用结束时也不续写（那也是正常完成）", () => {
-    expect(shouldContinueOnTruncate({ ...OFF, onTruncate: true }, "tool-call", 0)).toBe(false);
+    expect(shouldContinueOnTruncate({ ...OFF, enabled: true }, "tool-call", 0)).toBe(false);
   });
 
   it("次数用尽就停手", () => {
-    const on = { ...OFF, onTruncate: true, maxAttempts: 2 };
+    const on = { ...OFF, enabled: true, maxAttempts: 2 };
     expect(shouldContinueOnTruncate(on, "length", 1)).toBe(true);
     expect(shouldContinueOnTruncate(on, "length", 2)).toBe(false);
   });
@@ -134,7 +137,7 @@ describe("回答被截断时是否续写", () => {
      * 适配器也映射成 `{ kind: "max-tokens" }`。原来这里只认 `"length"` ——
      * 与实际传入的值对不上，于是「截断续写」从未触发过。
      */
-    const on = { onError: false, onTruncate: true, maxAttempts: 3 };
+    const on = { ...OFF, enabled: true };
     expect(shouldContinueOnTruncate(on, "max-tokens", 0), "宿主形态").toBe(true);
     expect(shouldContinueOnTruncate(on, "length", 0), "厂商字面量").toBe(true);
     // 正常结束与交给工具都不该续写。
