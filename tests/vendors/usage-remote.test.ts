@@ -112,14 +112,35 @@ function vendorDeps(options: {
   };
 }
 
-/** 假 `ctx.typert`：只实现本项目用到的一个方法，并记下贡献。 */
-function fakeTypert(): { service: unknown; register: ReturnType<typeof vi.fn>; contributions: unknown[] } {
+/**
+ * 假 `ctx.typert`：实现本项目用到的 `register` 与 `remotes.get`，并记下贡献。
+ *
+ * 2026-10-29 起 `publishInvocations` 靠 `remotes.get` 判定幂等 —— 假件必须镜像这个
+ * 查询面，否则「两家只注册一次」那条测试会因为假件查不到而每家都注册。
+ */
+function fakeTypert(): {
+  service: unknown;
+  register: ReturnType<typeof vi.fn>;
+  contributions: unknown[];
+  descriptors: Map<string, unknown>;
+} {
   const contributions: unknown[] = [];
+  /** 镜像宿主 `RemoteStore` 的描述符表：register 之后 get 能查到。 */
+  const descriptors = new Map<string, unknown>();
   const register = vi.fn((contribution: unknown) => {
     contributions.push(contribution);
+    const invocations =
+      (contribution as { invocations?: readonly { namespace?: string; method?: string }[] }).invocations ?? [];
+    for (const item of invocations) {
+      if (typeof item.method === "string") descriptors.set(`${item.namespace}/${item.method}`, item);
+    }
     return () => Promise.resolve();
   });
-  return { service: { register }, register, contributions };
+  const remotes = {
+    get: (endpoint: string) => descriptors.get(endpoint),
+    list: () => [...descriptors.values()],
+  };
+  return { service: { register, remotes }, register, contributions, descriptors };
 }
 
 /** 起一个真 Context + 假 typert，按顺序 apply 每个厂商（模拟两个 profile 行）。 */
@@ -494,4 +515,36 @@ it("密钥实测：一家都没实现时如实说「没能判定」，不谎称�
     { ref: "K1", state: "unknown", reason: "这个版本不支持密钥实测" },
     { ref: "K2", state: "unknown", reason: "这个版本不支持密钥实测" },
   ]);
+
 });
+
+it("**描述符被撤回后能补注册**（2026-10-29 修 definition-unavailable）", async () => {
+    /**
+     * 服务实例与描述符是两套独立状态：服务挂在 root 上、描述符随 `typert` 的 ctx
+     * 销毁而 withdraw。原来调用方用「服务在不在」当判据，于是服务还在、描述符没了时
+     * 永远跳过注册 → 客户端拿到 gateway/definition-unavailable。
+     */
+    const { ctx, typert } = await mount([vendorDeps({ vendor: "commandcode" })]);
+    expect(typert.register, "首次注册").toHaveBeenCalledTimes(1);
+
+    // 模拟宿主撤回描述符（服务实例仍在 root 上）。
+    typert.descriptors.clear();
+
+    // 再装配一行（真实场景是另一家 profile 行或同一行重载）。
+    applyUsageRemote(ctx, vendorDeps({ vendor: "dsh-opencode-go" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(typert.register, "缺了就补注册").toHaveBeenCalledTimes(2);
+    expect(typert.descriptors.size, "描述符表恢复").toBeGreaterThan(0);
+
+});
+
+it("描述符都在时**不重复注册**（幂等）", async () => {
+    const { ctx, typert } = await mount([vendorDeps({ vendor: "commandcode" })]);
+    expect(typert.register).toHaveBeenCalledTimes(1);
+
+    applyUsageRemote(ctx, vendorDeps({ vendor: "dsh-opencode-go" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(typert.register, "不应该再注册").toHaveBeenCalledTimes(1);
+  });

@@ -254,6 +254,22 @@ function realHost(services: Readonly<Record<string, unknown>> = {}): {
         typert.contributions.push(contribution);
         return () => Promise.resolve();
       },
+      /**
+       * 镜像宿主 `RemoteStore` 的查询面（2026-10-29）。
+       *
+       * `publishInvocations` 现在靠它判定幂等：描述符都在就不重复注册。假件必须
+       * 反映 register 的结果，否则「只登记一次」会变成每次装配都登记。
+       */
+      remotes: {
+        get: (endpoint: string) =>
+          typert.contributions.some((contribution) =>
+            ((contribution as { invocations?: readonly { namespace?: string; method?: string }[] }).invocations ?? []).some(
+              (item) => `${item.namespace}/${item.method}` === endpoint,
+            ),
+          )
+            ? {}
+            : undefined,
+      },
     },
     ...services,
   };
