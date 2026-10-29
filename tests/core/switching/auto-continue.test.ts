@@ -42,17 +42,29 @@ describe("哪些失败算「中断」（该重试）", () => {
     }
   });
 
-  it("确定性失败不算：上下文超长、无效凭据、额度用尽、不支持选项", () => {
-    // 这些重试多少次都是同样的错，只会白烧额度。
+  it("**只有四类**永远不重试：中止、上下文超长、凭据失效、额度用尽", () => {
+    /**
+     * 2026-10-29 改：从白名单换成黑名单。用户要求「除非手动暂停，剩下的异常中断都要
+     * 自动重试三次」—— 白名单会漏掉宿主新增的或本插件没预料到的码。
+     */
+    for (const code of ["ABORTED", "CONTEXT_WINDOW_EXCEEDED", "INVALID_CREDENTIAL", "QUOTA"]) {
+      expect(isTransientFailure(code), `${code} 应不重试`).toBe(false);
+    }
+  });
+
+  it("**其余全部重试**（含以前被白名单排除的码）", () => {
     for (const code of [
-      "CONTEXT_WINDOW_EXCEEDED",
-      "INVALID_CREDENTIAL",
       "MISSING_CREDENTIAL",
-      "QUOTA",
       "UNSUPPORTED_OPTION",
       "PROVIDER_HTTP_ERROR",
+      "SERVER",
+      "TIMEOUT",
+      "TRANSPORT",
+      "RATE_LIMIT",
+      "EMPTY_RESPONSE",
+      "THROTTLED",
     ]) {
-      expect(isTransientFailure(code), code).toBe(false);
+      expect(isTransientFailure(code), `${code} 应重试`).toBe(true);
     }
   });
 
@@ -60,9 +72,14 @@ describe("哪些失败算「中断」（该重试）", () => {
     expect(isTransientFailure("ABORTED")).toBe(false);
   });
 
-  it("未知错误码保守处理：不重试（猜它是瞬时的代价是无限循环）", () => {
-    expect(isTransientFailure("SOME_NEW_CODE")).toBe(false);
-    expect(isTransientFailure(undefined)).toBe(false);
+  it("**未知码与缺失码都重试**（新语义：宁可多试三次）", () => {
+    /**
+     * 与白名单时代相反：那时未知码按「不重试」处理（怕无限循环）。
+     * 现在由 `maxAttempts` 封顶（默认 3），无限循环的风险不存在了，
+     * 而漏掉一个真实故障的代价是用户要手动补救。
+     */
+    expect(isTransientFailure("SOME_NEW_CODE")).toBe(true);
+    expect(isTransientFailure(undefined)).toBe(true);
   });
 });
 
@@ -108,5 +125,21 @@ describe("回答被截断时是否续写", () => {
     const on = { ...OFF, onTruncate: true, maxAttempts: 2 };
     expect(shouldContinueOnTruncate(on, "length", 1)).toBe(true);
     expect(shouldContinueOnTruncate(on, "length", 2)).toBe(false);
+  });
+
+
+  it("截断判定认 **max-tokens**（宿主用的）与 length（厂商字面量）", () => {
+    /**
+     * 宿主 `dsh-agent-loop` 内部是 `finish.kind === "max-tokens"`，本插件三家
+     * 适配器也映射成 `{ kind: "max-tokens" }`。原来这里只认 `"length"` ——
+     * 与实际传入的值对不上，于是「截断续写」从未触发过。
+     */
+    const on = { onError: false, onTruncate: true, maxAttempts: 3 };
+    expect(shouldContinueOnTruncate(on, "max-tokens", 0), "宿主形态").toBe(true);
+    expect(shouldContinueOnTruncate(on, "length", 0), "厂商字面量").toBe(true);
+    // 正常结束与交给工具都不该续写。
+    expect(shouldContinueOnTruncate(on, "stop", 0)).toBe(false);
+    expect(shouldContinueOnTruncate(on, "tool-calls", 0)).toBe(false);
+    expect(shouldContinueOnTruncate(on, undefined, 0)).toBe(false);
   });
 });

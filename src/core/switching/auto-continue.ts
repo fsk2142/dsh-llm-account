@@ -32,40 +32,45 @@ export interface AutoContinueSettings {
 export const DEFAULT_AUTO_CONTINUE: AutoContinueSettings = { onError: false, onTruncate: false, maxAttempts: 3 };
 
 /**
- * 可以安全重试的**瞬时**失败码。
+ * **绝不重试**的失败码 —— 只有用户的意图和「重试必然失败且会烧额度」的少数几类。
  *
- * 这份白名单而不是黑名单，理由是错了代价不对称：
- * - 漏掉一个瞬时码 → 用户手动再发一次，损失很小；
- * - 把确定性失败当成瞬时 → 重试 N 次都必然失败，白烧额度、还把一次明确的错误拖成 N 倍延迟。
+ * 2026-10-29 改：从「白名单」（只重试已知瞬时码）改成「黑名单」
+ * （除下面这些外全部重试）。用户的原话是「除非手动暂停，剩下的异常中断都要自动重试
+ * 三次」—— 白名单会漏掉宿主新增的或本插件没预料到的码，那种情况用户只能手动再发。
  *
- * `TRANSPORT` / `SERVER` / `TIMEOUT` / `EMPTY_RESPONSE` / `RATE_LIMIT` / `THROTTLED`
- * 都来自宿主的 `DEFAULT_RETRYABLE_CODES` 与本插件的两个超时码。
+ * 黑名单里每一项的理由：
+ *
+ * - `ABORTED`：**用户按了停止**。把它当异常去重试等于覆盖用户的意图；
+ * - `CONTEXT_WINDOW_EXCEEDED`：上下文超长，重试多少次都一样长 —— 只会把一次明确的
+ *   错误拖成 N 倍延迟；
+ * - `INVALID_CREDENTIAL`：密钥失效，等 2 秒不会自己恢复（本插件的适配器在抛给宿主
+ *   之前已经换过账号了，到这里说明全都不可用）；
+ * - `QUOTA`：额度用尽，同上 —— 适配器已试过换账号与换模型。
+ *
+ * **未知码按「重试」处理**（与白名单时代相反）：这是本次改动的核心 —— 宁可多试三次
+ * 也不让用户手动补救。
  */
-const TRANSIENT_CODES: ReadonlySet<string> = new Set([
-  "TRANSPORT",
-  "SERVER",
-  "TIMEOUT",
-  "EMPTY_RESPONSE",
-  "RATE_LIMIT",
-  "THROTTLED",
-  "LLM_REQUEST_TIMEOUT",
-  "LLM_STREAM_IDLE_TIMEOUT",
+const NEVER_RETRY_CODES: ReadonlySet<string> = new Set([
+  "ABORTED",
+  "CONTEXT_WINDOW_EXCEEDED",
+  "INVALID_CREDENTIAL",
+  "QUOTA",
 ]);
 
 /**
- * 一个失败码是否属于「中断」这一类（值得重试）。
+ * 一个失败码是否值得自动重试。
  *
  * **用户主动中止永远不算** —— 他按了停止，我们就必须停；把它当成中断去重试，
  * 等于把用户的意图覆盖掉。
- * 未知码按**不重试**处理（见 `TRANSIENT_CODES` 的说明）。
+ *
+ * 其余情况：只要不在 `NEVER_RETRY_CODES` 里就重试（含**未知码**）。
  * @param code - 宿主的失败码（形状不可信）。
- * @returns 是否瞬时失败。
+ * @returns 是否值得重试。
  */
 export function isTransientFailure(code: string | undefined): boolean {
-  if (code === undefined) return false;
-  // 用户意图的终点：绝不重试。
-  if (code === "ABORTED") return false;
-  return TRANSIENT_CODES.has(code);
+  // 拿不到码也重试：宿主诊断信息缺失不该让用户手动补救。
+  if (code === undefined) return true;
+  return !NEVER_RETRY_CODES.has(code);
 }
 
 /**
@@ -102,5 +107,16 @@ export function shouldContinueOnTruncate(
 ): boolean {
   if (!settings.onTruncate) return false;
   if (attempts >= settings.maxAttempts) return false;
-  return finishReason === "length";
+  /**
+   * 认**两种**写法（2026-10-29）：
+   *
+   * - `"max-tokens"`：宿主 `dsh-agent-loop` 内部用的就是这个（`finish.kind ===
+   *   "max-tokens"` → `turnEnds = { kind: "max-tokens" }`）。本插件的三家适配器也把
+   *   厂商的 `length` / `max_tokens` 映射成 `{ kind: "max-tokens" }`；
+   * - `"length"`：厂商原始字面量。留着是为了**探针实现变了也不静默失效** ——
+   *   原来只认 `"length"`，而实际拿到的是 `max-tokens`，于是这条路径从未触发过。
+   *
+   * `stop`（正常结束）与 `tool-calls`（交给工具）都是**正常**完成，绝不续写。
+   */
+  return finishReason === "max-tokens" || finishReason === "length";
 }
