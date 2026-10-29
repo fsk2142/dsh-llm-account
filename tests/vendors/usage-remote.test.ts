@@ -548,3 +548,38 @@ it("描述符都在时**不重复注册**（幂等）", async () => {
 
     expect(typert.register, "不应该再注册").toHaveBeenCalledTimes(1);
   });
+
+it("**旧宿主没有 remotes.get 时也不炸**（退化到直接注册）", async () => {
+  /**
+   * `remotes.get` 是 2026-10-29 才用来判定幂等的查询面。旧宿主可能没有 ——
+   * 那种情况下必须退化成「直接注册」，并且**宿主拒绝重复时只记 warning**，
+   * 不能让第二、第三家 profile 行挂掉。
+   */
+  const ctx = new Context();
+  const contributions: unknown[] = [];
+  // 只实现 register，**没有** remotes —— 模拟旧宿主。
+  const register = vi.fn((contribution: unknown) => {
+    if (contributions.length > 0) throw new Error(`typert: Remote package "x" is already registered`);
+    contributions.push(contribution);
+    return () => Promise.resolve();
+  });
+  ctx.provide("typert");
+  ctx.set("typert", { register });
+
+  const warnings: string[] = [];
+  vi.spyOn(ctx.logger, "warn").mockImplementation((message: unknown) => {
+    warnings.push(String(message));
+  });
+
+  applyUsageRemote(ctx, vendorDeps({ vendor: "commandcode" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  applyUsageRemote(ctx, vendorDeps({ vendor: "dsh-opencode-go" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(register, "两家都尝试过").toHaveBeenCalledTimes(2);
+  expect(contributions, "只有第一次成功").toHaveLength(1);
+  expect(warnings.some((line) => line.includes("refused to re-register")), "第二次只记 warning").toBe(true);
+  // 服务本身仍然可用（两家读口都登记上了）。
+  const service = ctx.get("llmAccountUsage") as { status(v: string): Promise<unknown> };
+  expect(service).toBeDefined();
+});
