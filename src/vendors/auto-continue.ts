@@ -96,7 +96,31 @@ export function applyAutoContinue(
   };
 
   if (settings.onError) {
-    const off = ctx.on("agent/request-error", async (payload: unknown) => {
+    /**
+     * `agent/request-error` 是 **waterfall**，签名是 `(payload, next) => decision`。
+     *
+     * `cordis` 的实现（`EventsService.waterfall`）：
+     *
+     * ```js
+     * const next = () => (cbs.shift() ?? inner)(...args);
+     * return next();
+     * ```
+     *
+     * 也就是说：**监听器不调用 `next()`，链路就在这里终止** —— 后面的监听器永远收不到
+     * 这次失败。宿主自带的 `dsh-llm-retry` 也挂在这个事件上，它是个中间件
+     * （`(payload, next) => recover(payload, next)`），靠 `next()` 交棒。
+     *
+     * 原来的写法是 `return undefined` 而不调 `next()`：如果我们排在 `llm-retry`
+     * **前面**，宿主那条重试链就被我们吞掉了 —— 表现为「fetch failed 没有自动继续」。
+     *
+     * 现在两条出口都显式接力：不重试 → `next()`；重试 → 返回决策（终止链路，这是
+     * waterfall 的正确用法）。
+     */
+    const off = ctx.on("agent/request-error", async (payload: unknown, next?: unknown) => {
+      /** 调用下游；没有 `next`（旧宿主/假 ctx）时退化成 `undefined`。 */
+      const handOff = async (): Promise<unknown> =>
+        typeof next === "function" ? await (next as () => Promise<unknown>)() : undefined;
+
       const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const turn = typeof record.turn === "number" ? record.turn : 0;
       const failure =
@@ -106,8 +130,8 @@ export function applyAutoContinue(
       const code = typeof failure.code === "string" ? failure.code : undefined;
       const attempts = attemptsOf(turn);
       if (!shouldRetryFailure(settings, code, attempts)) {
-        // 交给宿主：不返回 retry，它会按终态处理。
-        return undefined;
+        // 不归我们重试：**必须交棒**，否则会截断宿主自己的重试链。
+        return await handOff();
       }
       bump(turn);
       /**

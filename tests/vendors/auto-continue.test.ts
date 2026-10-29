@@ -197,4 +197,64 @@ describe("重试退避（2026-10-28）", () => {
     expect(action).toBeUndefined();
     expect(elapsed, "不该为不重试的失败白等").toBeLessThan(100);
   });
+
+});
+
+describe("waterfall 交接（2026-10-29）", () => {
+  /**
+   * `agent/request-error` 是 **waterfall**：`cordis` 的实现是
+   * `const next = () => (cbs.shift() ?? inner)(...args); return next();` ——
+   * **监听器不调 `next()`，链路就在这里终止**，后面的监听器永远收不到。
+   *
+   * 宿主自带的 `dsh-llm-retry` 也挂在这个事件上（中间件形态）。我们原来
+   * `return undefined` 而不调 `next()`，排在它前面时会把宿主那条重试链吞掉。
+   */
+  it("**不归我们重试时必须调用 next()**（否则吞掉宿主的重试链）", async () => {
+    const ctx = fakeCtx();
+    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+    let handedOff = 0;
+
+    const action = await ctx.fire(
+      "agent/request-error",
+      { turn: 1, failure: { code: "QUOTA" } }, // 不在白名单 → 不重试
+      async () => {
+        handedOff += 1;
+        return undefined;
+      },
+    );
+
+    expect(handedOff, "必须交棒给下游").toBe(1);
+    expect(action).toBeUndefined();
+  });
+
+  it("下游返回 retry 时原样透传（不覆盖别人的决策）", async () => {
+    const ctx = fakeCtx();
+    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+
+    const action = await ctx.fire(
+      "agent/request-error",
+      { turn: 1, failure: { code: "QUOTA" } },
+      async () => ({ kind: "retry" }),
+    );
+
+    expect(action, "下游的决策要透出去").toEqual({ kind: "retry" });
+  });
+
+  it("我们决定重试时**返回决策并终止链路**（不调 next）", async () => {
+    const ctx = fakeCtx();
+    applyAutoContinue(ctx, { onError: true, onTruncate: false, maxAttempts: 3 });
+    let handedOff = 0;
+
+    const action = await ctx.fire(
+      "agent/request-error",
+      { turn: 1, failure: { code: "TRANSPORT" } }, // 白名单 → 我们重试
+      async () => {
+        handedOff += 1;
+        return undefined;
+      },
+    );
+
+    expect(action).toEqual({ kind: "retry" });
+    expect(handedOff, "返回决策即终止链路，不该再问下游").toBe(0);
+  });
 });
