@@ -52,13 +52,17 @@ export interface AutoContinueProbe {
 export const CONTINUE_PROMPT = "继续";
 
 /**
- * 重试退避的基数（毫秒）：第 1/2/3 次分别等 0.5s / 1s / 2s。
+ * 每次重试前的固定等待（毫秒）。
  *
  * 为什么需要：宿主收到 `{ kind: "retry" }` 后**立即** `continue`，中间没有任何等待
  * （实测 `dsh-agent-loop` 无 backoff）。网络抖动时会在几百毫秒内连打数次 ——
  * 台账实测有 0.1 秒的相邻失败，那反而可能加剧拥塞。
+ *
+ * **固定 2 秒**（2026-10-29 按需求改）：原来是 0.5s / 1s / 2s 的递增退避，
+ * 用户要求「每次错误重试中间间隔要 2s」—— 均匀间隔对「网络刚恢复」这类场景更稳，
+ * 也不会让第一次重试来得太急。
  */
-const BACKOFF_BASE_MS = 500;
+const RETRY_INTERVAL_MS = 2000;
 
 /**
  * 等一会儿（不阻塞事件循环）。
@@ -135,23 +139,21 @@ export function applyAutoContinue(
       }
       bump(turn);
       /**
-       * **退避**（2026-10-28 加）。
+       * **固定等待 2 秒再重试**（2026-10-29 按需求改）。
        *
        * 宿主收到 `{ kind: "retry" }` 就立刻 `continue` —— **它自己不做任何等待**
        * （实测 `dsh-agent-loop` 里没有 backoff / setTimeout）。所以网络抖动时重试会
        * 在几百毫秒内连着打好几次（台账实测有 0.1 秒的相邻失败），反而可能加剧拥塞。
        *
-       * 这里按「第几次重试」等 0.5s / 1s / 2s（上限 2s）。等待用 `setTimeout` +
-       * Promise，不阻塞事件循环。
+       * 用户要求「每次错误重试中间间隔要 2s」，所以是**固定间隔**而不是递增退避：
+       * 均匀间隔对「网络刚恢复」这类场景更稳，也避免第一次重试来得太急。
+       * 等待用 `setTimeout` + Promise，不阻塞事件循环。
        *
-       * **等待期间不响应取消信号**（2026-10-28 修注释）：用户按停止后最多还要等 2 秒，
-       * 宿主在下一轮才感知到取消。这是有意的取舍 —— 给 `delay` 接 `AbortSignal` 要多
-       * 传参数、多一条竞速路径，而 2 秒的延迟无害。
-       *
-       * 为什么上限只有 2s：自动继续是「救一次瞬时抖动」，不是长期重连。等太久会让
-       * 用户以为卡死了 —— 真正的长故障该让它报错。
+       * **等待期间不响应取消信号**：用户按停止后最多还要等 2 秒，宿主在下一轮才感知
+       * 到取消。这是有意的取舍 —— 给 `delay` 接 `AbortSignal` 要多传参数、多一条竞速
+       * 路径，而 2 秒的延迟无害。
        */
-      await delay(BACKOFF_BASE_MS * 2 ** Math.min(attempts, 2));
+      await delay(RETRY_INTERVAL_MS);
       return { kind: "retry" };
     });
     if (typeof off === "function") disposers.push(off as () => void);

@@ -180,7 +180,7 @@ describe("重试退避（2026-10-28）", () => {
     const elapsed = Date.now() - started;
 
     expect(action).toEqual({ kind: "retry" });
-    expect(elapsed, "至少等了 400ms（基数 500ms）").toBeGreaterThanOrEqual(400);
+    expect(elapsed, "固定等 2s 才重试").toBeGreaterThanOrEqual(1900);
   });
 
   it("不可重试的失败**不等待**（立即返回 undefined）", async () => {
