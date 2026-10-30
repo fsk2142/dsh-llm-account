@@ -372,17 +372,54 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     automaticSwitch: true,
   };
 
-  /** 额度端口：每次读数都用当时的配置；`snapshot(ref)` 可读指定账号（切换策略用）。 */
-  const quota: QuotaPort = {
-    async snapshot(accountRef?: string) {
-      const apiBase = normalizeKey(document().apiBase) ?? DEFAULT_API_BASE;
-      const ref = accountRef ?? selectedRefOf(document());
-      return createCommandCodeQuota({
-        ref: () => ref,
+  /**
+   * 额度端口：每次读数都用当时的配置；`snapshot(ref)` 可读指定账号（切换策略用）。
+   *
+   * ## 工厂必须**复用**，不能每次新建（2026-10-30 修 P1-F01）
+   *
+   * `createCommandCodeQuota` 的闭包里有一个 `resetAnchors` Map，用来估算「额度什么
+   * 时候重置」——它**必须跨轮询存活**（`quota.ts` 的注释就是这么写的）。
+   *
+   * 但原来的写法是：
+   *
+   * ```ts
+   * async snapshot(ref) {
+   *   return createCommandCodeQuota({ ... }).snapshot();   // ← 每次新建工厂
+   * }
+   * ```
+   *
+   * 工厂一建完就被丢弃，Map 活不过一次请求 —— 于是**每次轮询都从零开始估算**，界面
+   * 上的「重置时间」会一直往前漂（实测相隔 60 秒的两次读数漂 60000 ms）。
+   *
+   * 现在按 `apiBase` 缓存工厂实例：配置的基地址没变就复用（锚点延续）；变了就重建
+   * （旧锚点属于另一个端点，本来也不该继承）。`ref` 仍用 getter 现取，所以换账号
+   * 不需要重建。
+   */
+  let quotaPortBase: string | undefined;
+  let quotaPort: ReturnType<typeof createCommandCodeQuota> | undefined;
+  /**
+   * 取当前的额度工厂（同一个 `apiBase` 复用，变了重建）。
+   * @returns 工厂实例。
+   */
+  const commandCodeQuotaPort = (apiBase: string): ReturnType<typeof createCommandCodeQuota> => {
+    if (quotaPort === undefined || quotaPortBase !== apiBase) {
+      quotaPortBase = apiBase;
+      quotaPort = createCommandCodeQuota({
+        ref: () => selectedRefOf(document()),
         resolveKey: (candidate) => resolveAccountKey(ctx, document(), credentials, candidate),
         fetchImpl: fetch,
         apiBase,
-      }).snapshot();
+      });
+    }
+    return quotaPort;
+  };
+
+  const quota: QuotaPort = {
+    async snapshot(accountRef?: string) {
+      const apiBase = normalizeKey(document().apiBase) ?? DEFAULT_API_BASE;
+      const port = commandCodeQuotaPort(apiBase);
+      // `snapshot(accountRef)` 让调用方指定账号；不传则用工厂的 `ref` getter（现取）。
+      return accountRef === undefined ? port.snapshot() : port.snapshot(accountRef);
     },
   };
 

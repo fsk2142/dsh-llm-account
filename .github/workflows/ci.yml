@@ -59,27 +59,44 @@ jobs:
       - name: 构建
         run: pnpm run build
 
-      - name: 构建产物可被加载（不比对 hash）
+      - name: 构建产物齐全且语法合法（不比对 hash）
         # `lib/` 是必须提交的发布产物，但**不能在这里做逐字节比对**：
         # tsdown 的 chunk 文件名含内容 hash，而 hash 与平台相关 —— 在 Linux 上重建
         # 会产出不同的 `<name>-<hash>.js`，`git status` 必然显示「删除旧 chunk +
         # 新增新 chunk」（2026-10-30 实测：`lib/node-BH9lUFMg.js` 被删、
-        # `lib/index.js` 被改）。
+        # `lib/index.js` 被改）。逐字节比对交给发版脚本（本机同平台）。
         #
-        # 所以这里只验证**构建成功且产物可解析**，把「提交的产物是否与源码同步」
-        # 留给发布流程（`release.mjs` 在**本机同平台**构建后再比对）。
+        # ## 这里**不允许吞错**（第七轮复审 P2-C04）
         #
-        # 代价：Linux CI 抓不到「源码改了但忘了提交产物」。缓解方式是把这条检查
-        # 放进本地发版脚本（那里平台一致，比对才有意义）。
+        # 上一版写成：
+        #
+        #     node --check "$f" 2>/dev/null || node -e "require('./$f')" 2>/dev/null || true
+        #
+        # `|| true` 让前面都失败时仍返回 0 —— 一个完全非法的 JS 文件也能通过，
+        # 这步永远输出「✓ 产物齐全」。实测：往 `lib/bad.js` 写 `const = ;`，
+        # 上面的命令退出码是 0。
+        #
+        # 现在 `set -euo pipefail` + 每个检查独立失败，任何一步非零就让 CI 变红。
         run: |
+          set -euo pipefail
           for f in lib/index.js lib/commandcode.js lib/opencode.js lib/opendesign.js lib/client.js; do
-            if [ ! -f "$f" ]; then
-              echo "::error::构建后缺少 $f"
-              exit 1
-            fi
-            node --check "$f" 2>/dev/null || node -e "require('./$f')" 2>/dev/null || true
+            test -f "$f"
+            node --check "$f"
+            echo "  ✓ $f"
           done
-          echo "✓ 构建产物齐全"
+          echo "✓ 构建产物齐全且语法合法"
+
+      - name: 客户端产物的入口形状正确
+        # `lib/client.js` 是**浏览器**包（第一行就 `window.__ModuleLoader__.load(...)`），
+        # 在 Node 里 `import()` 会因 `window` 未定义而失败 —— 那不代表产物坏了。
+        #
+        # 这里只查它确实以 loader 调用开头（tsdown 的 banner 就是干这个的），
+        # 若 banner 丢了，客户端插件在浏览器里根本不会注册。
+        run: |
+          set -euo pipefail
+          head -c 200 lib/client.js | grep -q "__ModuleLoader__.load" \
+            || { echo "::error::lib/client.js 缺少 __ModuleLoader__ banner"; exit 1; }
+          echo "✓ lib/client.js 的 loader banner 在位"
 
       - name: 换行与提交标题规范
         run: |

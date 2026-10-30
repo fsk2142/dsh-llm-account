@@ -583,3 +583,37 @@ it("**旧宿主没有 remotes.get 时也不炸**（退化到直接注册）", as
   const service = ctx.get("llmAccountUsage") as { status(v: string): Promise<unknown> };
   expect(service).toBeDefined();
 });
+
+it("**30 秒内两次 usageReport 只打一轮上游额度**（P1-P01）", async () => {
+  /**
+   * `usageReport` 需要每账号的窗口边界来定位「统计周期」，而那份信息来自
+   * `status()` —— 后者会对每个已配置账号并发打额度端点。
+   *
+   * 设置页每 30 秒刷一次报表：不缓存的话，用户只是看着页面不动，也会持续产生
+   * `账号数 × 端点` 次上游请求。窗口边界最小 5 小时，30 秒内不可能变。
+   */
+  let snapshotCalls = 0;
+  const deps = vendorDeps({
+    vendor: "commandcode",
+    views: [{ ref: "a", label: "A", configured: true } as never],
+    snapshot: async () => {
+      snapshotCalls += 1;
+      return { ...SNAPSHOT, windows: [{ key: "fiveHour", used: 3, cap: 10, resetAt: Date.now() + 3_600_000 } as never] };
+    },
+  });
+  const { ctx } = await mount([deps]);
+  const service = ctx.get("llmAccountUsage") as { usageReport(w?: string): Promise<unknown> };
+
+  await service.usageReport("today");
+  const afterFirst = snapshotCalls;
+  expect(afterFirst, "第一次会读上游").toBeGreaterThan(0);
+
+  // 立刻再读一次（模拟 30 秒后的下一次刷新）：应当命中缓存。
+  await service.usageReport("today");
+  expect(snapshotCalls, "TTL 内不该再打上游").toBe(afterFirst);
+
+  // 再刷几次也一样。
+  await service.usageReport("today");
+  await service.usageReport("today");
+  expect(snapshotCalls, "多次刷新仍只打一轮").toBe(afterFirst);
+}, 10_000);

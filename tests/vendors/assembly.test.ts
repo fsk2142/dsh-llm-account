@@ -1381,3 +1381,62 @@ it("**读取设置失败时关闭自动重试**（V55-07，fail-closed）", asyn
   });
   expect(decision, "读不到设置 → fail-closed").toBeUndefined();
 }, 10_000);
+
+it("**装配层复用同一个额度工厂**，重置锚点因此跨轮询存活（P1-F01）", async () => {
+  /**
+   * 这是第七轮复审 P1-F01 的**装配层**回归：只看纯函数 `estimateReset` 发现不了
+   * 「工厂每次新建 → 闭包里的 resetAnchors 丢失」。
+   *
+   * 这里走 `apply().quota.snapshot()` 真实路径：两次读数之间推进时钟，
+   * 若工厂被复用，估算的重置时间**不变**；若每次新建，会往后漂。
+   */
+  let now = 1_700_000_000_000;
+  const fixedNow = (): number => now;
+  // 让 quota 用可控时钟（生产用 Date.now）。
+  const nowSpy = vi.spyOn(Date, "now").mockImplementation(fixedNow);
+  let usedAmount = 3;
+  vi.stubGlobal(
+    "fetch",
+    (async (input: unknown) => {
+      const url = new URL(String(input));
+      const json = (payload: unknown): Response =>
+        new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+      if (url.pathname === "/alpha/whoami") return json({ user: { id: "u1" }, org: { id: "org_1" } });
+      if (url.pathname === "/alpha/usage/summary") return json({ totalCredits: 12 });
+      if (url.pathname === "/alpha/billing/credits")
+        return json({
+          credits: { monthlyCredits: 55, planId: "pro" },
+          windowLimits: {
+            fiveHour: { used: usedAmount, cap: 10, exceeded: false },
+            weekly: { used: 30, cap: 100, exceeded: false },
+          },
+        });
+      return json({ success: true, data: { planId: "individual-goat", status: "active" } });
+    }) as typeof fetch,
+  );
+  try {
+    const settings = fakeSettings([
+      { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE }, revision: 1 },
+    ]);
+    const credentials = fakeCredentials({ COMMANDCODE_API_KEY: "sk-live" });
+    const host = fakeHost({ settings: settings.service, credentials: credentials.service });
+    const bundle = commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE } as never));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const first = await bundle.quota.snapshot("COMMANDCODE_API_KEY");
+    const firstReset = first.windows.find((window) => window.key === "fiveHour")?.resetAt;
+
+    // 过 60 秒，用量稍有增加（远未到重置）。
+    now += 60_000;
+    usedAmount = 5;
+    const second = await bundle.quota.snapshot("COMMANDCODE_API_KEY");
+    const secondReset = second.windows.find((window) => window.key === "fiveHour")?.resetAt;
+
+    expect(firstReset, "首次读数应有估算的重置时间").toBeDefined();
+    expect(secondReset, "第二次也有").toBeDefined();
+    expect(secondReset, "装配层复用工厂 → 锚点延续 → 重置时间不变").toBe(firstReset);
+  } finally {
+    nowSpy.mockRestore();
+    vi.unstubAllGlobals();
+  }
+}, 10_000);

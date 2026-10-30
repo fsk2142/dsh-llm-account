@@ -189,6 +189,26 @@ export interface UsageVendorDeps {
 }
 
 /**
+ * **单个账号**的额度窗口提示（报表口径需要的几项）。
+ *
+ * 只存「用来定位统计周期」的内容，不存整份 `QuotaSnapshot` —— 报表用不到那么多，
+ * 少存少错。
+ */
+interface AccountWindowHint {
+  /** 账号 ref。 */
+  ref: string;
+  /** 最细那一档窗口的 key（`fiveHour` / `weekly`…）。 */
+  windowKey?: string;
+  /** 该窗口的重置时刻。 */
+  resetAt?: number;
+  /** 套餐本期结束 / 开始（厂商公布了才有）。 */
+  planEnd?: number;
+  planStart?: number;
+  /** 权威已用金额（只来自与套餐账期同口径的美元窗口）。 */
+  spent?: { amount: number; window: string };
+}
+
+/**
  * 宿主 `ctx.typert` 的最小形状（只认本项目用到的部分）。
  *
  * `remotes` 是宿主 `RemoteStore.view(ctx)` 暴露的**只读查询面**（`get` / `list`）——
@@ -245,6 +265,37 @@ function warnOn(ctx: Context, message: string): void {
  */
 export class LlmAccountUsageService extends TypertRemoteService {
   private readonly vendorDeps = new Map<VendorId, UsageVendorDeps>();
+
+  /**
+   * 额度窗口快照的**短期缓存**（2026-10-30 修 P1-P01）。
+   *
+   * ## 为什么需要
+   *
+   * 设置页每 30 秒刷一次 `usageReport()`。而那个报表同时会去问**每家、每个已配置
+   * 账号**的实时额度 —— 只为拿到「周期窗口的起止时刻」来定位统计口径。账号一多，
+   * 30 秒一次的代价就是成倍的上游 HTTP。
+   *
+   * 报表本身的**数据源是本地用量台账**（`sharedUsageLedger()`），额度只用来选窗口。
+   * 窗口边界（5 小时 / 周 / 套餐期）**不会在 30 秒内变化**，所以按账号缓存一小段
+   * 时间完全不影响正确性。
+   *
+   * ## 语义约束
+   *
+   * - 缓存**只影响报表的口径选择**，不影响账号卡片/侧边栏的实时额度展示（那些走
+   *   `status()` 本身，不经过这里）；
+   * - TTL 到点后重新读；读失败**保留上一次的值**（口径沿用上次已知的窗口比退回自然
+   *   周期更稳）；
+   * - 键里带账号 ref，不同账号不会串用。
+   */
+  private readonly quotaWindowCache = new Map<string, { at: number; value: readonly AccountWindowHint[] }>();
+
+  /**
+   * 额度窗口缓存的有效期（毫秒）。
+   *
+   * 取 60 秒：设置页 30 秒刷一次，于是最多「每两次刷新打一轮上游」，且窗口边界
+   * （最小是 5 小时）在这段时间里不可能变。
+   */
+  private static readonly QUOTA_WINDOW_TTL_MS = 60_000;
 
   /**
    * @param ctx - 拥有本服务的 cordis 上下文（基类会用 `serviceKey` 注册自己并盖上 typert 绑定）。
@@ -584,6 +635,74 @@ export class LlmAccountUsageService extends TypertRemoteService {
   }
 
   /**
+   * 取某厂商各账号的**额度窗口提示**（带 TTL 缓存）。
+   *
+   * ## 为什么要缓存（第七轮复审 P1-P01）
+   *
+   * `usageReport()` 被设置页每 30 秒调一次。它需要每个账号的窗口边界来定位「统计
+   * 周期」，而这份信息来自 `status(vendor)` —— 后者会对**每个已配置账号并发打额度
+   * 端点**（Command Code 每账号最多 4 个请求）。
+   *
+   * 也就是说：用户只是看着用量页面不动，每 30 秒就会产生 `账号数 × 端点` 次上游
+   * 请求。而窗口边界（最小 5 小时）在这段时间根本不会变。
+   *
+   * 缓存 60 秒后，最长「每两次刷新打一轮」。
+   *
+   * ## 失败处理
+   *
+   * 读失败时**保留上一次成功的值** —— 沿用已知窗口比退回自然周期更符合用户预期
+   * （报表不会在 30 秒后突然换口径）。缓存过期且从未成功过时返回空数组，调用方
+   * 自然回退到自然周期。
+   * @param vendor - 厂商 id。
+   * @returns 各账号的窗口提示（可能为空）。
+   */
+  private async quotaWindowHintsOf(vendor: VendorId): Promise<readonly AccountWindowHint[]> {
+    const cached = this.quotaWindowCache.get(vendor);
+    if (cached !== undefined && Date.now() - cached.at < LlmAccountUsageService.QUOTA_WINDOW_TTL_MS) {
+      return cached.value;
+    }
+    try {
+      const status = await this.status(vendor);
+      const hints: AccountWindowHint[] = [];
+      for (const account of status.accounts ?? []) {
+        // 选**最细**的一档窗口（5 小时比周/月更能反映「本周期」）。
+        const ranked = [...(account.quota?.windows ?? [])].sort(
+          (left, right) => rankOfWindow(left.key) - rankOfWindow(right.key),
+        );
+        const finest = ranked[0];
+        // 套餐本期结束时刻：**优先于**额度窗口粒度。
+        const periodEnd = account.quota?.plan?.periodEnd;
+        const periodStart = account.quota?.plan?.periodStart;
+        // 权威金额要**跟周期同口径**：旧写法按「最细」挑，于是拿到 5 小时窗口的已用
+        // （$0.16），却配在「本周期」（按套餐是一个月）的标题下 —— 一个月的统计配五小时
+        // 的金额，用户一眼就觉得数是错的（2026-10-19 报障）。
+        // 现在只认**重置时间与套餐账期一致**的美元窗口；没有就留空，让报表用本机口径
+        // （`localSpent`）回答「这台机器这一期用了多少」。
+        const usdWindows = ranked.filter((window) => window.unit === "usd" && window.used !== undefined);
+        const sameAsPlan =
+          periodEnd === undefined
+            ? undefined
+            : usdWindows.find((window) => window.resetAt !== undefined && Math.abs(window.resetAt - periodEnd) < 60_000);
+        // 没有套餐信息时退回最细那一档（那是当时唯一能拿到的口径）。
+        const usd = sameAsPlan ?? (periodEnd === undefined ? usdWindows[0] : undefined);
+        hints.push({
+          ref: account.ref,
+          ...(finest === undefined ? {} : { windowKey: finest.key }),
+          ...(finest?.resetAt === undefined ? {} : { resetAt: finest.resetAt }),
+          ...(periodEnd === undefined ? {} : { planEnd: periodEnd }),
+          ...(periodStart === undefined ? {} : { planStart: periodStart }),
+          ...(usd?.used === undefined ? {} : { spent: { amount: usd.used, window: usd.key } }),
+        });
+      }
+      this.quotaWindowCache.set(vendor, { at: Date.now(), value: hints });
+      return hints;
+    } catch {
+      // 这一家的额度读不到：有旧值就沿用（口径不跳变），没有就让调用方退回自然周期。
+      return cached?.value ?? [];
+    }
+  }
+
+  /**
    * 用量报表：读共享台账，按「每账号自己的记账周期」+ 一份总账聚合。
    *
    * **跨厂商**：台账是三条 provider 行共用的那一本，所以这里不按 vendor 取读口。
@@ -606,48 +725,32 @@ export class LlmAccountUsageService extends TypertRemoteService {
       console.warn("[dsh-llm-account] could not read the usage ledger:", error);
     }
     // 当前各账号的额度窗口：用来定位周期（失败就让报表退回自然周期）。
-    const windows = new Map<string, { windowKey?: string; resetAt?: number }>();
-    /** 每账号的**套餐本期结束**时刻（需求「按套餐有效期统计」，优先级最高）。 */
+    const windows = new Map<string, { windowKey?: string; resetAt?: number }>();    /** 每账号的**套餐本期结束**时刻（需求「按套餐有效期统计」，优先级最高）。 */
     const planEnds = new Map<string, number>();
     /** 每账号的套餐本期开始时刻（厂商公布了才填）。 */
     const planStarts = new Map<string, number>();
     /** 每账号的**权威已用金额**（只来自 `unit === "usd"` 的窗口）。 */
     const spent = new Map<string, { amount: number; window: string }>();
+    /**
+     * 取各厂商的额度窗口提示 —— **带 TTL 缓存**（2026-10-30 修 P1-P01）。
+     *
+     * 原来这里直接 `await this.status(vendor)`，而 `status()` 会对每个已配置账号并发
+     * 打额度端点。设置页每 30 秒刷一次报表，账号一多就是成倍的上游 HTTP —— 而报表
+     * 本身的数据源是**本地台账**，额度只用来选「统计周期」。
+     *
+     * 窗口边界最小是 5 小时，不可能在 60 秒内变化，所以缓存完全不影响口径正确性。
+     */
     for (const vendor of this.vendorDeps.keys()) {
-      try {
-        const status = await this.status(vendor);
-        for (const account of status.accounts ?? []) {
-          // 选**最细**的一档窗口（5 小时比周/月更能反映「本周期」）。
-          const ranked = [...(account.quota?.windows ?? [])].sort(
-            (left, right) => rankOfWindow(left.key) - rankOfWindow(right.key),
-          );
-          const finest = ranked[0];
-          const key = `${vendor}\u0000${account.ref}`;
-          windows.set(key, {
-            ...(finest === undefined ? {} : { windowKey: finest.key }),
-            ...(finest?.resetAt === undefined ? {} : { resetAt: finest.resetAt }),
-          });
-          // 套餐本期结束时刻：**优先于**额度窗口粒度。
-          const periodEnd = account.quota?.plan?.periodEnd;
-          if (periodEnd !== undefined) planEnds.set(key, periodEnd);
-          const periodStart = account.quota?.plan?.periodStart;
-          if (periodStart !== undefined) planStarts.set(key, periodStart);
-          // 权威金额要**跟周期同口径**：旧写法按「最细」挑，于是拿到 5 小时窗口的已用
-          // （$0.16），却配在「本周期」（按套餐是一个月）的标题下 —— 一个月的统计配五小时
-          // 的金额，用户一眼就觉得数是错的（2026-10-19 报障）。
-          // 现在只认**重置时间与套餐账期一致**的美元窗口；没有就留空，让报表用本机口径
-          // （`localSpent`）回答「这台机器这一期用了多少」。
-          const usdWindows = ranked.filter((window) => window.unit === "usd" && window.used !== undefined);
-          const sameAsPlan =
-            periodEnd === undefined
-              ? undefined
-              : usdWindows.find((window) => window.resetAt !== undefined && Math.abs(window.resetAt - periodEnd) < 60_000);
-          // 没有套餐信息时退回最细那一档（那是当时唯一能拿到的口径）。
-          const usd = sameAsPlan ?? (periodEnd === undefined ? usdWindows[0] : undefined);
-          if (usd?.used !== undefined) spent.set(key, { amount: usd.used, window: usd.key });
-        }
-      } catch {
-        // 这一家的额度读不到：它的账号退回自然周期，不影响别的家。
+      const hints = await this.quotaWindowHintsOf(vendor);
+      for (const hint of hints) {
+        const key = `${vendor}\u0000${hint.ref}`;
+        windows.set(key, {
+          ...(hint.windowKey === undefined ? {} : { windowKey: hint.windowKey }),
+          ...(hint.resetAt === undefined ? {} : { resetAt: hint.resetAt }),
+        });
+        if (hint.planEnd !== undefined) planEnds.set(key, hint.planEnd);
+        if (hint.planStart !== undefined) planStarts.set(key, hint.planStart);
+        if (hint.spent !== undefined) spent.set(key, hint.spent);
       }
     }
     const report = buildUsageReport({
