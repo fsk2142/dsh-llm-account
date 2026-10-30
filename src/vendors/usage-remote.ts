@@ -302,6 +302,25 @@ export class LlmAccountUsageService extends TypertRemoteService {
   private static readonly QUOTA_WINDOW_TTL_MS = 60_000;
 
   /**
+   * 每个厂商的**缓存代际**（第八轮复审 BUG-01：在途请求竞态）。
+   *
+   * ## 为什么光删缓存不够
+   *
+   * 失效原来只是 `Map.delete`。但如果此时**正有一个读取在途**：
+   *
+   * ```
+   * T0  报表调用 → 缓存 miss → 开始 await status(vendor)（要点几秒）
+   * T1  用户新增账号 → invalidateWindowHints() 删掉缓存
+   * T2  T0 那个请求返回 → **把不含新账号的旧结果写回缓存**
+   * ```
+   *
+   * 用户的账号变更被旧请求覆盖，又要等 60 秒。所以写入前必须确认「我还是最新那代」。
+   *
+   * 每次失效把该厂商的代际 +1；读取开始时记下当时的代际，写回时若已变化就丢弃。
+   */
+  private readonly quotaCacheGeneration = new Map<VendorId, number>();
+
+  /**
    * 让某厂商的额度窗口缓存失效。
    *
    * ## 为什么需要（第七轮复审 BUG-01）
@@ -313,14 +332,22 @@ export class LlmAccountUsageService extends TypertRemoteService {
    * - 同 ref 换密钥 → 仍显示用旧密钥读到的金额。
    *
    * 这些都是**账号生命期事件**，缓存必须立刻作废，不能等 TTL。
+   *
+   * 同时**递增代际**，让在途请求返回后不会把旧值写回来（见
+   * {@link quotaCacheGeneration}）。
    * @param vendor - 要失效的厂商；缺省清空全部（厂商卸载/重挂时用）。
    */
   private invalidateWindowHints(vendor?: VendorId): void {
     if (vendor === undefined) {
       this.quotaWindowCache.clear();
+      // 全部失效：把每个已知代际都推进（在途读取会在写回时看到变化而丢弃）。
+      for (const [key, generation] of this.quotaCacheGeneration) {
+        this.quotaCacheGeneration.set(key, generation + 1);
+      }
       return;
     }
     this.quotaWindowCache.delete(vendor);
+    this.quotaCacheGeneration.set(vendor, (this.quotaCacheGeneration.get(vendor) ?? 0) + 1);
   }
 
   /**
@@ -725,6 +752,11 @@ export class LlmAccountUsageService extends TypertRemoteService {
     if (cached !== undefined && now - cached.at < cached.ttlMs) {
       return cached.value;
     }
+    /**
+     * 记下**读取开始时的代际**。写回前若已变化，说明期间发生过账号变更
+     * （`invalidateWindowHints` 把它 +1 了）—— 这次读到的结果已经过期，丢弃。
+     */
+    const generationAtStart = this.quotaCacheGeneration.get(vendor) ?? 0;
     try {
       const status = await this.status(vendor);
       /** 上一次成功的值按 ref 建索引，供「这次失败的账号」沿用。 */
@@ -787,6 +819,15 @@ export class LlmAccountUsageService extends TypertRemoteService {
         nearestEdge === undefined
           ? LlmAccountUsageService.QUOTA_WINDOW_TTL_MS
           : Math.max(1_000, Math.min(LlmAccountUsageService.QUOTA_WINDOW_TTL_MS, nearestEdge - now));
+      /**
+       * **只有代际未变才写回**（第八轮复审 BUG-01 的在途竞态）。
+       *
+       * 若期间发生过账号增删/换钥，这次读到的清单已经过期 —— 写回去就是用一个旧
+       * 结果覆盖用户刚做的变更，然后还要再等一个 TTL。这次丢弃，下次调用重读。
+       */
+      if ((this.quotaCacheGeneration.get(vendor) ?? 0) !== generationAtStart) {
+        return hints; // 本次结果仍返回给当前调用方，但不落缓存
+      }
       this.quotaWindowCache.set(vendor, { at: now, ttlMs, value: hints });
       return hints;
     } catch {

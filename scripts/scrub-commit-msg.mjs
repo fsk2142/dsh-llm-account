@@ -55,11 +55,43 @@ function identityRulesOf() {
   if (identityRules !== undefined) return identityRules;
   const path = identityMapPath();
   if (!existsSync(path)) {
+    /**
+     * 映射缺失时**给出提示**（第八轮复审 SEC-02）。
+     *
+     * 原来静默返回空表 —— 用户以为「脱敏跑过了」，其实具体身份值一个都没替换，
+     * 只做了语法层清理。这对「清理历史」这种一次性、不可逆的操作是危险的：
+     * 跑完以为干净，实际还留着。
+     *
+     * 提示走 stderr（不污染 stdout —— 那个是 filter 的输出）。
+     */
+    if (process.env.SCRUB_IDENTITY_MAP !== undefined || process.env.CI !== "true") {
+      process.stderr.write(
+        `[scrub] 未找到私有身份映射，**只做语法层清理**（不含具体身份值）：${path}\n` +
+          `[scrub] 如需清理具体账号标识，创建该文件，每行一个 \`原文=占位符\`。\n`,
+      );
+    }
     identityRules = [];
     return identityRules;
   }
   const rules = [];
-  for (const line of readFileSync(path, "utf8").split(/\r?\n/u)) {
+  /**
+   * 读取失败**不抛错**，与注释「读不了返回空表」一致（第八轮复审 SEC-02）。
+   *
+   * 原来直接 `readFileSync` —— 文件存在但无权限时抛异常，整个滤镜失败，
+   * `filter-branch` 会中断在一半。对历史改写来说「半途中断」比「明确失败」更难查。
+   */
+  let raw;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    process.stderr.write(
+      `[scrub] 私有身份映射读不了（${error instanceof Error ? error.message : String(error)}），` +
+        `本次**只做语法层清理**：${path}\n`,
+    );
+    identityRules = [];
+    return identityRules;
+  }
+  for (const line of raw.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (trimmed === "" || trimmed.startsWith("#")) continue;
     const separator = trimmed.indexOf("=");

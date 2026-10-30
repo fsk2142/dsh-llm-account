@@ -60,16 +60,30 @@ if (appState === "running") {
   console.error("DeepSeek Harness is running. Quit the app first, then run this again.");
   process.exit(2);
 }
-if (appState === "unknown") {
+/**
+ * `--force`：**显式**绕过「无法确认进程状态」这一道。
+ *
+ * 第七轮复审 BUG-02 指出：上一版的错误提示让用户「加 `--force` 重跑」，但代码
+ * **从来没读过 `--force`** —— 提示是假的，加不加都 `exit(3)`。
+ *
+ * 现在真的实现了。它**只**绕过「状态未知」这一种情况（`tasklist` 不可用），
+ * 不绕过「确认在运行」—— 那个必须让用户先退出应用，`--force` 也不该覆盖。
+ */
+const forced = process.argv.includes("--force");
+if (appState === "unknown" && !forced) {
   console.error(
     [
       "无法确认 DeepSeek Harness 是否在运行（tasklist 不可用）。",
       "改动 Cookie 数据库时如果应用仍在写它，可能损坏数据或被覆盖回去。",
-      "请先手动确认应用已完全退出，再加 --force 重跑：",
+      "",
+      "请先手动确认应用已完全退出，然后加 --force 重跑：",
       "  node scripts/clear-desktop-auth-cookies.mjs --force",
     ].join("\n"),
   );
   process.exit(3);
+}
+if (appState === "unknown" && forced) {
+  console.warn("⚠ 已按 --force 跳过进程检测。请确认 DeepSeek Harness 已完全退出。");
 }
 
 /**

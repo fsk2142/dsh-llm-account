@@ -673,3 +673,44 @@ it("**删除账号后缓存立刻失效**（BUG-01）", async () => {
   await service.usageReport("today");
   expect(snapshotCalls, "删除账号后必须重新读").toBeGreaterThan(afterFirst);
 }, 10_000);
+
+it("**在途读取不会把旧结果写回缓存**（BUG-01 竞态）", async () => {
+  /**
+   * 失效原来只是 `Map.delete`。若此时正有一个**经过缓存**的读取在途：
+   *   T0  usageReport → 缓存 miss → await status(vendor)
+   *   T1  新增账号 → invalidate 删缓存 + 代际 +1
+   *   T2  T0 返回 → 把不含新账号的旧结果写回缓存
+   *
+   * 必须走 usageReport()（唯一经过 quotaWindowHintsOf 的入口）；直接调 status()
+   * 不经过缓存，测不到这个竞态。
+   */
+  let snapshotCalls = 0;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const deps = vendorDeps({
+    vendor: "commandcode",
+    views: [{ ref: "a", label: "A", configured: true } as never],
+    snapshot: async () => {
+      snapshotCalls += 1;
+      if (snapshotCalls === 1) await gate;
+      return { ...SNAPSHOT, windows: [{ key: "fiveHour", used: 3, cap: 10, resetAt: Date.now() + 3_600_000 } as never] };
+    },
+  });
+  const { ctx } = await mount([deps]);
+  const service = ctx.get("llmAccountUsage") as {
+    usageReport(w?: string): Promise<unknown>;
+    addAccount(v: string, i: unknown): Promise<unknown>;
+  };
+
+  const inFlight = service.usageReport("today");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await service.addAccount("commandcode", { label: "B", key: "k2" });
+  release();
+  await inFlight;
+  const afterOld = snapshotCalls;
+
+  await service.usageReport("today");
+  expect(snapshotCalls, "旧结果不该被写回，必须重新读").toBeGreaterThan(afterOld);
+}, 10_000);
