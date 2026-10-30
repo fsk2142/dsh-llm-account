@@ -617,3 +617,59 @@ it("**30 秒内两次 usageReport 只打一轮上游额度**（P1-P01）", async
   await service.usageReport("today");
   expect(snapshotCalls, "多次刷新仍只打一轮").toBe(afterFirst);
 }, 10_000);
+
+it("**新增账号后缓存立刻失效**（BUG-01）", async () => {
+  /**
+   * 缓存原来只按 vendor 做键、只在 TTL 到点才更新 —— 新增账号 B 后 60 秒内
+   * 报表仍用旧账号清单，B 根本不出现。账号生命期事件必须立刻作废缓存。
+   */
+  let snapshotCalls = 0;
+  const views = [{ ref: "a", label: "A", configured: true } as never];
+  const deps = vendorDeps({
+    vendor: "commandcode",
+    views,
+    snapshot: async () => {
+      snapshotCalls += 1;
+      return { ...SNAPSHOT, windows: [{ key: "fiveHour", used: 3, cap: 10, resetAt: Date.now() + 3_600_000 } as never] };
+    },
+  });
+  const { ctx } = await mount([deps]);
+  const service = ctx.get("llmAccountUsage") as {
+    usageReport(w?: string): Promise<unknown>;
+    addAccount(v: string, i: unknown): Promise<unknown>;
+  };
+
+  await service.usageReport("today");
+  const afterFirst = snapshotCalls;
+
+  // 新增账号：缓存必须失效，下一次报表要重新读。
+  views.push({ ref: "b", label: "B", configured: true } as never);
+  await service.addAccount("commandcode", { label: "B", key: "k2" });
+  await service.usageReport("today");
+
+  expect(snapshotCalls, "新增账号后必须重新读，不能命中旧缓存").toBeGreaterThan(afterFirst);
+}, 10_000);
+
+it("**删除账号后缓存立刻失效**（BUG-01）", async () => {
+  let snapshotCalls = 0;
+  const views = [{ ref: "a", label: "A", configured: true } as never];
+  const deps = vendorDeps({
+    vendor: "commandcode",
+    views,
+    snapshot: async () => {
+      snapshotCalls += 1;
+      return { ...SNAPSHOT, windows: [{ key: "fiveHour", used: 3, cap: 10, resetAt: Date.now() + 3_600_000 } as never] };
+    },
+  });
+  const { ctx } = await mount([deps]);
+  const service = ctx.get("llmAccountUsage") as {
+    usageReport(w?: string): Promise<unknown>;
+    removeAccount(v: string, r: string): Promise<void>;
+  };
+
+  await service.usageReport("today");
+  const afterFirst = snapshotCalls;
+  await service.removeAccount("commandcode", "a");
+  await service.usageReport("today");
+  expect(snapshotCalls, "删除账号后必须重新读").toBeGreaterThan(afterFirst);
+}, 10_000);

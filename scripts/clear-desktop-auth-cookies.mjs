@@ -21,7 +21,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -38,26 +38,64 @@ if (!existsSync(databasePath)) {
   process.exit(0);
 }
 
+/**
+ * 进程检测：**失败就中止**，不再「假定应用没运行」。
+ *
+ * 原来 `catch {}` 之后直接继续 —— 如果 `tasklist` 本身不可用（企业策略、精简系统），
+ * 而应用其实开着，就会在数据库被写入的同时改它：可能损坏库、也可能让改动被应用
+ * 覆盖回去。这种「不确定就动手」的做法在动用户真实数据时不该有。
+ */
+let appState = "unknown";
 try {
   const tasks = execFileSync(
     "tasklist",
     ["/FI", "IMAGENAME eq DeepSeek Harness.exe", "/FO", "CSV", "/NH"],
     { encoding: "utf8" },
   );
-  if (/DeepSeek Harness\.exe/i.test(tasks)) {
-    console.error("DeepSeek Harness is running. Quit the app first, then run this again.");
-    process.exit(2);
-  }
+  appState = /DeepSeek Harness\.exe/i.test(tasks) ? "running" : "stopped";
 } catch {
-  // tasklist unavailable: proceed; the app is probably not running anyway.
+  appState = "unknown";
+}
+if (appState === "running") {
+  console.error("DeepSeek Harness is running. Quit the app first, then run this again.");
+  process.exit(2);
+}
+if (appState === "unknown") {
+  console.error(
+    [
+      "无法确认 DeepSeek Harness 是否在运行（tasklist 不可用）。",
+      "改动 Cookie 数据库时如果应用仍在写它，可能损坏数据或被覆盖回去。",
+      "请先手动确认应用已完全退出，再加 --force 重跑：",
+      "  node scripts/clear-desktop-auth-cookies.mjs --force",
+    ].join("\n"),
+  );
+  process.exit(3);
 }
 
-const backupDirectory = join(tmpdir(), "dsh-cookie-backups");
-mkdirSync(backupDirectory, { recursive: true });
-const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-const backupPath = join(backupDirectory, `Cookies-${stamp}.sqlite`);
-copyFileSync(databasePath, backupPath);
-console.log("Backup:", backupPath);
+/**
+ * 备份策略：**默认不备份**（第七轮复审 SEC-03）。
+ *
+ * 原来无条件把**整个 Chromium Cookie 数据库**复制到系统临时目录
+ * （`%TEMP%/dsh-cookie-backups/`），按时间戳累积、没有权限限制、没有清理期限。
+ * 那份副本里不只有待删的 `dsh-auth-*`，还有该浏览器配置下的其它全部 Cookie。
+ *
+ * 现在：
+ * - 默认不备份（这个脚本的用途是清掉过期登录态，本来就不需要保留它）；
+ * - 真要备份时加 `--backup`，并落到**用户目录**（不是公共临时区），文件名带时间戳；
+ * - 备份后打印明确路径与「用完请删除」的提示。
+ */
+const wantsBackup = process.argv.includes("--backup");
+if (wantsBackup) {
+  const backupDirectory = join(homedir(), ".dsh", "cookie-backups");
+  mkdirSync(backupDirectory, { recursive: true });
+  const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  const backupPath = join(backupDirectory, `Cookies-${stamp}.sqlite`);
+  copyFileSync(databasePath, backupPath);
+  console.log("Backup:", backupPath);
+  console.log("注意：该副本含整个 Cookie 库，恢复完请自行删除。");
+} else {
+  console.log("（未备份。需要备份请加 --backup，副本会落到 ~/.dsh/cookie-backups/）");
+}
 
 const database = new DatabaseSync(databasePath);
 const removed = database

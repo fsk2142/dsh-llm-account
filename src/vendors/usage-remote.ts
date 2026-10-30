@@ -285,17 +285,43 @@ export class LlmAccountUsageService extends TypertRemoteService {
    *   `status()` 本身，不经过这里）；
    * - TTL 到点后重新读；读失败**保留上一次的值**（口径沿用上次已知的窗口比退回自然
    *   周期更稳）；
-   * - 键里带账号 ref，不同账号不会串用。
+   * - **账号集合/凭据变化立即失效**（见 `invalidateWindowHints`）。
    */
-  private readonly quotaWindowCache = new Map<string, { at: number; value: readonly AccountWindowHint[] }>();
+  private readonly quotaWindowCache = new Map<string, { at: number; ttlMs: number; value: readonly AccountWindowHint[] }>();
 
   /**
    * 额度窗口缓存的有效期（毫秒）。
    *
    * 取 60 秒：设置页 30 秒刷一次，于是最多「每两次刷新打一轮上游」，且窗口边界
-   * （最小是 5 小时）在这段时间里不可能变。
+   * （最小是 5 小时）在这段时间里不太可能变。
+   *
+   * **但「不太可能」不是「不可能」**：重置点恰好落在未来几十秒内时，`resetAt` 与本期
+   * 金额都会变。所以下面 `quotaWindowHintsOf` 还会按「最近的窗口到期时刻」缩短 TTL
+   * （第七轮复审 BUG-02）。
    */
   private static readonly QUOTA_WINDOW_TTL_MS = 60_000;
+
+  /**
+   * 让某厂商的额度窗口缓存失效。
+   *
+   * ## 为什么需要（第七轮复审 BUG-01）
+   *
+   * 缓存原来只按 `vendor` 做键、**只在 TTL 到点时**才更新。于是：
+   *
+   * - 新增账号 B → 60 秒内报表仍用旧账号清单，**B 不出现**；
+   * - 删除账号 A → A 仍留在 `known` 集合与「最近使用账号」判断里；
+   * - 同 ref 换密钥 → 仍显示用旧密钥读到的金额。
+   *
+   * 这些都是**账号生命期事件**，缓存必须立刻作废，不能等 TTL。
+   * @param vendor - 要失效的厂商；缺省清空全部（厂商卸载/重挂时用）。
+   */
+  private invalidateWindowHints(vendor?: VendorId): void {
+    if (vendor === undefined) {
+      this.quotaWindowCache.clear();
+      return;
+    }
+    this.quotaWindowCache.delete(vendor);
+  }
 
   /**
    * @param ctx - 拥有本服务的 cordis 上下文（基类会用 `serviceKey` 注册自己并盖上 typert 绑定）。
@@ -342,17 +368,34 @@ export class LlmAccountUsageService extends TypertRemoteService {
     // `acct_commandcode_work_ab12cd` 这种内部标识对用户没有任何意义（账户行早在
     // 2026-10-17 就不再显示 ref，这条路径漏掉了）。
     const quotas = new Map<string, QuotaSummary>();
-    await Promise.all(
-      views
-        .filter((view) => view.configured)
-        .map(async (view) => {
-          try {
-            quotas.set(view.ref, quotaSummaryOf(await quotaWithTimeout(deps.quota, view.ref)));
-          } catch (error) {
-            failures.push(`quota: ${vendor} "${view.label}" read failed (${messageOf(error)})`);
-          }
-        }),
-    );
+    /**
+     * **并发上限**（第七轮复审 PERF-01）。
+     *
+     * 原来是无限制 `Promise.all` —— 10 个账号就是 10 个额度读取同时在途，
+     * 每个账号内部还会再并发 3-4 个端点。账号多时既容易撞上游限流，也让超时窗口
+     * 更容易叠在一起。
+     *
+     * 4 是保守值：常见配置是 1-3 个账号，正常情况跑不满；账号多时把突发压下来。
+     * 不改成串行 —— 那会让延迟随账号数线性增长。
+     */
+    const configuredViews = views.filter((view) => view.configured);
+    const CONCURRENCY = 4;
+    /** 一个简单的「最多 n 个同时在跑」的池。 */
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, configuredViews.length) }, async () => {
+      for (;;) {
+        const index = cursor;
+        cursor += 1;
+        const view = configuredViews[index];
+        if (view === undefined) return;
+        try {
+          quotas.set(view.ref, quotaSummaryOf(await quotaWithTimeout(deps.quota, view.ref)));
+        } catch (error) {
+          failures.push(`quota: ${vendor} "${view.label}" read failed (${messageOf(error)})`);
+        }
+      }
+    });
+    await Promise.all(workers);
 
     const accounts = views.map((view): AccountUsageStatus => {
       const rejection = rejections.get(view.ref);
@@ -457,7 +500,10 @@ export class LlmAccountUsageService extends TypertRemoteService {
    * @returns 新账号的视图。
    */
   async addAccount(vendor: VendorId, input: AddAccountInput): Promise<AccountView> {
-    return this.requireVendor(vendor).accounts.add(input);
+    const added = await this.requireVendor(vendor).accounts.add(input);
+    // 账号集合变了：额度窗口缓存立刻作废（否则 60 秒内看不到新账号）。
+    this.invalidateWindowHints(vendor);
+    return added;
   }
 
   /**
@@ -501,6 +547,8 @@ export class LlmAccountUsageService extends TypertRemoteService {
    */
   async replaceKey(vendor: VendorId, ref: string, key: string): Promise<void> {
     await this.requireVendor(vendor).accounts.replaceKey(ref, key);
+    // 密钥变了：旧缓存里的金额是用旧密钥读的。
+    this.invalidateWindowHints(vendor);
   }
 
   /**
@@ -510,6 +558,8 @@ export class LlmAccountUsageService extends TypertRemoteService {
    */
   async removeAccount(vendor: VendorId, ref: string): Promise<void> {
     await this.requireVendor(vendor).accounts.remove(ref);
+    // 账号删了：别让它的窗口提示继续参与「最近使用账号」判断。
+    this.invalidateWindowHints(vendor);
   }
 
   /**
@@ -653,16 +703,32 @@ export class LlmAccountUsageService extends TypertRemoteService {
    * 读失败时**保留上一次成功的值** —— 沿用已知窗口比退回自然周期更符合用户预期
    * （报表不会在 30 秒后突然换口径）。缓存过期且从未成功过时返回空数组，调用方
    * 自然回退到自然周期。
+   *
+   * ## 缓存有效期不是固定 60 秒（第七轮复审 BUG-02）
+   *
+   * 原来只要没到 60 秒就直接用缓存。两个边界没处理好：
+   *
+   * 1. **部分失败被当成成功缓存**：`status()` 对单个账号的额度失败只记 `failures`、
+   *    不抛错。于是「A 超时、拿到没有窗口的 A」也会被缓存 60 秒 —— 网络恢复了却
+   *    还在用缺窗口的结果；
+   * 2. **窗口即将重置**：`resetAt` 就在未来几十秒时，本期的金额与窗口状态都会变，
+   *    但 60 秒 TTL 还挡着。
+   *
+   * 现在：缓存的有效期取 `min(TTL, 最近的 resetAt / planEnd)`；读到部分失败时
+   * **只更新成功的账号**，失败账号沿用上一次的完整值（若没有则留空，不假装知道）。
    * @param vendor - 厂商 id。
    * @returns 各账号的窗口提示（可能为空）。
    */
   private async quotaWindowHintsOf(vendor: VendorId): Promise<readonly AccountWindowHint[]> {
+    const now = Date.now();
     const cached = this.quotaWindowCache.get(vendor);
-    if (cached !== undefined && Date.now() - cached.at < LlmAccountUsageService.QUOTA_WINDOW_TTL_MS) {
+    if (cached !== undefined && now - cached.at < cached.ttlMs) {
       return cached.value;
     }
     try {
       const status = await this.status(vendor);
+      /** 上一次成功的值按 ref 建索引，供「这次失败的账号」沿用。 */
+      const previous = new Map((cached?.value ?? []).map((hint) => [hint.ref, hint]));
       const hints: AccountWindowHint[] = [];
       for (const account of status.accounts ?? []) {
         // 选**最细**的一档窗口（5 小时比周/月更能反映「本周期」）。
@@ -670,6 +736,14 @@ export class LlmAccountUsageService extends TypertRemoteService {
           (left, right) => rankOfWindow(left.key) - rankOfWindow(right.key),
         );
         const finest = ranked[0];
+        // 这个账号这一轮**没拿到任何窗口**（超时/失败）：沿用上次完整值，别缓存空壳。
+        if (finest === undefined) {
+          const before = previous.get(account.ref);
+          if (before !== undefined) {
+            hints.push(before);
+            continue;
+          }
+        }
         // 套餐本期结束时刻：**优先于**额度窗口粒度。
         const periodEnd = account.quota?.plan?.periodEnd;
         const periodStart = account.quota?.plan?.periodStart;
@@ -694,7 +768,26 @@ export class LlmAccountUsageService extends TypertRemoteService {
           ...(usd?.used === undefined ? {} : { spent: { amount: usd.used, window: usd.key } }),
         });
       }
-      this.quotaWindowCache.set(vendor, { at: Date.now(), value: hints });
+      /**
+       * 有效期取 `min(TTL, 最近的窗口到期时刻)`。
+       *
+       * 窗口边界通常离得很远（5 小时 / 周），这时就是 60 秒；但如果某个窗口**几十秒
+       * 后就要重置**，那之后 `resetAt` 与本期金额都会变 —— 缓存必须提前失效，否则
+       * 报表会拿旧账期算数（第七轮复审 BUG-02）。
+       */
+      const nearestEdge = hints.reduce<number | undefined>((earliest, hint) => {
+        const candidates = [hint.resetAt, hint.planEnd].filter(
+          (value): value is number => typeof value === "number" && value > now,
+        );
+        if (candidates.length === 0) return earliest;
+        const soonest = Math.min(...candidates);
+        return earliest === undefined ? soonest : Math.min(earliest, soonest);
+      }, undefined);
+      const ttlMs =
+        nearestEdge === undefined
+          ? LlmAccountUsageService.QUOTA_WINDOW_TTL_MS
+          : Math.max(1_000, Math.min(LlmAccountUsageService.QUOTA_WINDOW_TTL_MS, nearestEdge - now));
+      this.quotaWindowCache.set(vendor, { at: now, ttlMs, value: hints });
       return hints;
     } catch {
       // 这一家的额度读不到：有旧值就沿用（口径不跳变），没有就让调用方退回自然周期。
@@ -740,8 +833,22 @@ export class LlmAccountUsageService extends TypertRemoteService {
      *
      * 窗口边界最小是 5 小时，不可能在 60 秒内变化，所以缓存完全不影响口径正确性。
      */
-    for (const vendor of this.vendorDeps.keys()) {
-      const hints = await this.quotaWindowHintsOf(vendor);
+    /**
+     * **三家并行取**，不再逐家 `await`（第七轮复审 PERF-01）。
+     *
+     * 原来是 `for (const vendor of ...) await this.quotaWindowHintsOf(vendor)` ——
+     * 三家各有账号卡住时，等待时间**逐家累加**：单家最多等 30 秒超时，三家顺序就是
+     * 近 90 秒。而这份数据只是用来定位报表口径，不该让用户看 90 秒的加载。
+     *
+     * `allSettled` 而不是 `all`：一家抛错不该让另外两家的窗口丢掉。
+     */
+    const vendors = [...this.vendorDeps.keys()];
+    const settled = await Promise.allSettled(vendors.map((vendor) => this.quotaWindowHintsOf(vendor)));
+    for (let index = 0; index < vendors.length; index += 1) {
+      const vendor = vendors[index];
+      const outcome = settled[index];
+      if (vendor === undefined || outcome === undefined || outcome.status !== "fulfilled") continue;
+      const hints = outcome.value;
       for (const hint of hints) {
         const key = `${vendor}\u0000${hint.ref}`;
         windows.set(key, {

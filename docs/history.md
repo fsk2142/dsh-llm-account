@@ -19,7 +19,7 @@
 
 ### 需求怎么变的
 
-| 时点 | 用户说法 | 含义 |
+| 时点 | 法 | 含义 |
 | --- | --- | --- |
 | 最初 | 「循环显示不同账号的额度是否一直没有成功」 | 以为是 bug |
 | 查清后 | —— | 不是 bug：`showSidebarQuota` 是**按厂商**存的，profile 里只给 commandcode 开了 |
@@ -384,7 +384,7 @@ claude-haiku-5.5: [code=upstream_error] reasoning_effort: Invalid option:
 
 ### 网页登录的三类症状与修法（2026-10-18）
 
-用户报障（设置页 → 账户面板）：
+实测（设置页 → 账户面板）：
 
 1. 点 Command Code 的「网页登录」后**没有自动弹出浏览器**；
 2. 授权链接/等待面板**一直不消失**；
@@ -472,7 +472,7 @@ claude-haiku-5.5: [code=upstream_error] reasoning_effort: Invalid option:
 ### 第三方模型的图片输入：调研结论（2026-10-19）
 
 日期：2026-10-19（本轮）
-用户报障：「我发现每次第三方 deepseek 模型不支持图片输入，理论上官方都是支持的，你顺便检查一下」。
+实测现象：「我发现每次第三方 deepseek 模型不支持图片输入，理论上官方都是支持的，你顺便检查一下」。
 
 **结论先说：这不是一个「声明写错了」的小修，而是图片通路根本没做。** 本包目前既没有把图片
 内容块序列化进请求，也没有声明图片模态；只改声明会让模型**收到一个它看不见的图片**然后
@@ -480,7 +480,7 @@ claude-haiku-5.5: [code=upstream_error] reasoning_effort: Invalid option:
 
 ### 证据 1：厂商目录里根本没有模态字段
 
-`C:\Users\me\.dsh\commandcode\commandcode-models.json`（旧插件落盘的线上目录，85 个模型）
+`%USERPROFILE%\.dsh\commandcode\commandcode-models.json`（旧插件落盘的线上目录，85 个模型）
 每一行的键只有 `id` / `name` / `reasoning` / `contextWindow` / `maxTokens`。deepseek 家族全都在，
 一行示例：
 

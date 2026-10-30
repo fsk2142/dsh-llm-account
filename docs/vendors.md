@@ -151,8 +151,8 @@
 ## 6. 命令（PowerShell，先补 PATH）
 
 ```powershell
-$env:Path = "C:\Users\me\AppData\Local\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin;" + $env:Path
-cd D:\work\llm-acct-repo
+$env:Path = "%USERPROFILE%\AppData\Local\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin;" + $env:Path
+cd <WORKTREE>
 .\node_modules\.bin\tsc.CMD --noEmit          # 0 错
 .\node_modules\.bin\vitest.CMD run            # 全绿
 .\node_modules\.bin\tsdown.CMD                # 重建 lib/（含 lib/opendesign.js、lib/client.js）

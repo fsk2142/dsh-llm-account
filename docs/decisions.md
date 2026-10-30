@@ -19,12 +19,12 @@
 > 需要被删文档的原文时从 git 历史取回。
 
 Spec: docs/superpowers/specs/2026-10-13-dsh-llm-account-design.md（已读，是绑定权威；计划与它有冲突时按 spec 裁决）
-Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-phase1-host\
+Workspace: <WORKTREE>\.superpowers\sdd\2026-10-13-dsh-llm-account-phase1-host\
 
 ### 环境记录
 
 - 2026-10-13：本机 `bash` 不存在（Windows），SDD 技能自带的 `scripts/sdd-workspace` / `task-brief` / `review-package` 无法执行。以等价手工方式替代：workspace 目录手工创建；任务 brief 用手工抽取写入 `<workspace>/task-N-brief.md`；review package 用 `git log --oneline` + `git diff --stat` + `git diff -U10` 重定向到一个唯一命名文件（技能明确允许此替代）。
-- 2026-10-13：工作区权限修复已执行 —— `VERDICT=PRECONDITION`（缺少所有权权限）→ `GRANTED=1`、`verification.status=verified`；备份与回滚脚本在 `D:\work\llm-acct-repo-acl-recovery\acl-backup-4d04cebfe3244089a4dd32728fafd16c.json(.ps1)`。修复后在沙箱内重跑原操作成功（node 24.19.0 / git 2.55.0 / pnpm 11.24.0）。
+- 2026-10-13：工作区权限修复已执行 —— `VERDICT=PRECONDITION`（缺少所有权权限）→ `GRANTED=1`、`verification.status=verified`；备份与回滚脚本在 `<WORKTREE>\acl-backup-4d04cebfe3244089a4dd32728fafd16c.json(.ps1)`。修复后在沙箱内重跑原操作成功（node 24.19.0 / git 2.55.0 / pnpm 11.24.0）。
 - 2026-10-13：会话文件策略改为 danger-full-access，批准提示关闭；不再请求任何提权。
 
 ### Pre-flight scan（Task 1 之前，逐行核对后写出）
@@ -130,7 +130,7 @@ Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-pha
 - 最终全分支复核结论 = **0 Critical / 3 Important**，判定「With fixes」。复核独立核对：`src/core/` 里厂商字样只剩 `VendorId` 类型联合一处；`providerRetryPolicy`/Config 字段/凭据优先级与旧插件逐行一致；测试用真实 SSE fixture、真实回环 socket、真实 pi-ai + 注入 fetch、以及 `fallbackAllowed` 间谍证明「没切换」是门控的判定而非运气；`git grep` 无明文密钥；`lib/**` 只导入 peer 与 `node:*`（pi-ai 及其传递依赖已内联）。它还把 ledger 里 **34 条延期 Minor 逐条分诊**（结论：没有一条是 1a 的承重项），并列出 11 条「不予判定」项（1b/1c/第 2、3 期）。
 - **Ruling 46（最终复核的 3 条 Important + 1 条护栏，2026-10-13）**：全部接受并作为**一次修复波**派发（不按条拆开）：**I1** 账号端口 `list()` 缺默认槽、`active` 判错（用户真实配置下 CC 会看不到正在服务的账号、OC 直接是空列表）→ 单源化哨兵词汇 + 两个端口都合成默认槽；**I2** opencode 从设置文档读内联 `apiKey` 却未声明为 secret 槽（不脱敏、会明文下发到设置客户端，且与它自己的额度路径不一致）→ 整条配置面删掉，凭据来源只剩 stored → environment；**I3** `autoSwitch` 写了但从没读（开关无效且偏离旧插件语义）→ 在 `accountStateOf` 里认它；**护栏** `finish()`/`messagesStop()` 不查 `#finished`（畸形网关发两个终止事件会产生两条 finish）→ 补守卫。依据：这三条都是**下一期（1b 页面）会直接构建在其上的契约**，而 I1 在用户现有配置下已经真实错位。**若判断错误**：改动集中在两个账号端口与一个配置面，回退成本小。
 - 最终修复波完成，提交 `2e71aed`（11 文件，596 插入 / 97 删除），`pnpm typecheck` 干净、`pnpm test` **205/205**（+10 条新测试、改 4 条旧断言）、`pnpm build` 通过；5 次变异各自恰好失败对应测试。scoped re-review dispatched（agent `538f8d30-…`）。
-- **控制器留档（清理项，未执行）**：实现者做变异检验时在 `D:\work\mut` 留了一个仓库副本（含指回本项目 `node_modules` 的 junction）。它的删除被 dsh-safety 以「确认删除区」拦下，实现者按规则没有绕行；仓库 `node_modules` 已核对完好（14 条目）。处置需用户显式批准（先摘 junction 再 safe_delete）。同类残留还有更早的 `C:\Users\me\AppData\Local\Temp\dsh-prefix-probe-166099379`。
+- **控制器留档（清理项，未执行）**：实现者做变异检验时在 `<WORKTREE>` 留了一个仓库副本（含指回本项目 `node_modules` 的 junction）。它的删除被 dsh-safety 以「确认删除区」拦下，实现者按规则没有绕行；仓库 `node_modules` 已核对完好（14 条目）。处置需用户显式批准（先摘 junction 再 safe_delete）。同类残留还有更早的 `%USERPROFILE%\AppData\Local\Temp\dsh-prefix-probe-166099379`。
 - Task 13: minor (deferred，收尾分诊)：① `quota.ts` 的 `MISSING_CREDENTIAL` 分支丢掉了原始错误（旧插件两个分支都挂 `cause`，仅影响诊断）；② `{usage:{data:{...}}}` 这类「`usage` 仍是对象」的漂移仍会被当成干净空读数（空形状不是可证明的防漂移）；③ `protocol.ts` 成功路径上留了一个 abort 监听器注册（`{once:true}` 只在真正 abort 时触发；正常路径每次尝试新建 recorder，所以有界）；④ 空白密钥被判为缺失，而旧插件 `!key` 会当成存在并发出 `Bearer    `；⑤ 浅层 payload（窗口键在顶层）被接受，旧插件不接受；⑥ `accounts.ts` 把 `refOf` 读不出的条目也计入 `MAX_ACCOUNTS`；⑦ 一处 `.rejects.not.toThrow(/transport failure/)` 断言偏弱（承重断言在相邻行）。
 - Task 13: 与 Task 12 复核并行启动（只新增 `opencode/{quota,accounts}.ts` 与其测试，与在途文件零交集；依据 Ruling 34/36 的并行先例）。
 - Task 11: **complete** (commits `27fc044`, `f85a298`)。
@@ -141,7 +141,7 @@ Workspace: D:\work\llm-acct-repo\.superpowers\sdd\2026-10-13-dsh-llm-account-pha
 - Task 10: **complete** (commits `d7dce69`, `4fe97dd`, `f9e7091`；2 条 Important 修复 + 1 条修复引入的 Important 回归修复，全部复审通过)。
 - Task 10: minor (deferred)：交错测试里 `expect(settings.mutations).toHaveLength(1)` 比要求更严（假实现会在冲突检查前记账，另一种时序下 mutations=2 而 entries=1，会误报）；失败的并发 `add` 会静默丢弃自己的 key 并返回 `configured:false`（这是修复规定的行为，视图诚实）；`#mutate` 新增了「空 ops 不写」的路径（目前只有 `add` 能触发）。
 - **携带到 Task 14 的契约（Task 10 fix round 2 结论）**：重放的 `apply` 必须**按 `intent.ref` 对齐**，ref 已在文档里就视为已提交；**不得**让 `add` 去重写凭据槽（会覆盖已有 key）——补填密钥必须是显式的 `credentials.set`/`replaceKey` 步骤。
-- **控制器留档（清理项，未执行）**：复审在 `C:\Users\me\AppData\Local\Temp\dsh-prefix-probe-166099379` 留了一个临时副本，其中 `node_modules` 是指向本项目 `node_modules` 的目录联接。用 trash 通道移动它可能牵连真实依赖，因此**未删除**；它在 `%TEMP%` 下，收尾时告知用户手动清理更安全。
+- **控制器留档（清理项，未执行）**：复审在 `%USERPROFILE%\AppData\Local\Temp\dsh-prefix-probe-166099379` 留了一个临时副本，其中 `node_modules` 是指向本项目 `node_modules` 的目录联接。用 trash 通道移动它可能牵连真实依赖，因此**未删除**；它在 `%TEMP%` 下，收尾时告知用户手动清理更安全。
 
 - Task 9: fix round 1/5 —— 复核结论 **Needs fixes**（1 Critical + 2 Important），全部接受：① Critical：Messages 传输重复发出终止 `finish`（`message_delta` 与 `message_stop` 各发一次，`StreamAssembler.finish` 无幂等护栏），宿主取最后一个 → 每次 Claude 轮次终止原因错误，且 `max_tokens` 截断时会保留半个工具调用块（宿主只在该原因下丢弃它）；② Important：Messages 的 usage 忽略 `message_start`，导致输入 token/cache 记为 0（违反「缺失字段不得当 0」）；③ Important：4xx 文本扫描被收窄到 `parsed.message`，纯文本 400 或 `detail` 字段会分类为 `undefined` → 不标记账号、不轮换；同样收窄还会丢掉 429 位于 `error.message` 之外的 reset 证据。
 - **Ruling 21（Task 9 fix round 1 范围，2026-10-13）**：修复范围 = 上述 3 条 + 控制器额外授权的一条小修（`adapter.ts:307-309` 构造了 missing-credential 的拒绝却从不记录，导致无密钥账号每次请求都被重新选中）。其余 Minor 一律进 ledger、留给收尾分诊。依据：Critical/Important 必须修；那条小修与同一文件同一路径、成本一行，且不修会让「无密钥」状态每请求重试一次。**若判断错误**：修复轮 diff 略大，但都在同一模块内。

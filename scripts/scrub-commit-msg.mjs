@@ -1,24 +1,90 @@
 #!/usr/bin/env node
 /**
- * 清理提交信息里的「对话痕迹」，供 `git filter-branch --msg-filter` 调用。
+ * 清理提交信息里的「对话痕迹」与**身份标识**，供 `git filter-branch --msg-filter`
+ * 或 `scripts/run-msg-scrub.mjs` 调用。
  *
- * 为什么需要它：这个仓库的提交信息里长期写着「需求：…」「实际情况…」
- * 这类句子，把「AI 在与具体用户对话」这件事公开在 GitHub 上（需求
- * 提出隐私顾虑）。改写只动**提交信息文本**，不动任何文件内容。
+ * 改写只动**提交信息文本**，不动任何文件内容。
  *
- * 改写规则（保守：只删引用框架，保留技术内容）：
- * - `用户 YYYY-MM-DD：` / `实际情况「…」` / `需求「…」` → 删掉这个框架，句子本身若
- *   承载技术信息就保留其后的描述；
- * - `需求` / `用户确认` / `用户所见` → 换成中性主语（需求 / 实测 / 实际）；
- * - 孤立的日期署名（``）→ 删掉整段。
+ * ## 两类规则，存放方式不同（2026-10-30 修 SEC-01）
  *
- * 用法：git filter-branch --msg-filter 'node scripts/scrub-commit-msg.mjs'
+ * 1. **语法形态规则**（路径形状、对话框架）→ 写在这个文件里。它们只是正则，不含
+ *    任何真实的人或账号。
+ * 2. **具体身份值**（某个 QQ 号、某个本机用户名）→ **不写在这里**，从仓库外的私有
+ *    映射文件读（见 {@link applyIdentityMap}）。
+ *
+ * 为什么第 2 类必须外置：上一版把它们硬编码在源码里，而这个文件**公开在 GitHub
+ * 上** —— 为了从历史里清掉那些值，反而把它们写进了 HEAD。历史干净了，当前代码却
+ * 更明确地公布了它们。这是本轮报告 SEC-01 指出的问题。
+ *
+ * 用法：`git filter-branch --msg-filter 'node scripts/scrub-commit-msg.mjs'`
  */
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   input += chunk;
 });
+
+/**
+ * 私有身份映射文件的路径。
+ *
+ * 刻意**放在仓库外**：仓库里只保留「怎么替换」的语法，具体值属于本地配置。
+ * 可用 `SCRUB_IDENTITY_MAP` 覆盖。
+ * @returns 绝对路径。
+ */
+function identityMapPath() {
+  const configured = process.env.SCRUB_IDENTITY_MAP;
+  if (typeof configured === "string" && configured.trim() !== "") return configured.trim();
+  return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "scrub-identity.map");
+}
+
+/** 缓存已读的映射（一次进程只读一次）。 */
+let identityRules;
+
+/**
+ * 读私有映射：每行 `原文=占位符`，`#` 开头是注释。
+ *
+ * 文件不存在或读不了时返回空表 —— 脚本仍然可用（只做语法层清理），**不会因为缺
+ * 配置而失败**。这样公开仓库里的默认行为不含任何真实值。
+ * @returns 规则表。
+ */
+function identityRulesOf() {
+  if (identityRules !== undefined) return identityRules;
+  const path = identityMapPath();
+  if (!existsSync(path)) {
+    identityRules = [];
+    return identityRules;
+  }
+  const rules = [];
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) continue;
+    const from = trimmed.slice(0, separator).trim();
+    const to = trimmed.slice(separator + 1).trim();
+    if (from === "") continue;
+    rules.push([from, to === "" ? "<REDACTED>" : to]);
+  }
+  identityRules = rules;
+  return rules;
+}
+
+/**
+ * 按私有映射替换具体身份值。
+ * @param text - 待处理文本。
+ * @returns 替换后的文本。
+ */
+function applyIdentityMap(text) {
+  let output = text;
+  for (const [from, to] of identityRulesOf()) {
+    output = output.split(from).join(to);
+  }
+  return output;
+}
 
 /** 去掉引用框架，保留技术描述。 */
 function scrub(message) {
@@ -32,7 +98,7 @@ function scrub(message) {
    *
    * - `file:///C:/Users/<用户名>/…` / `C:\Users\<用户名>\…`：暴露 Windows 用户名
    *   与目录结构；
-   * - QQ 号、`FSK` 开头的本机标识：当作文档里的示例出现时并不必要。
+   * - 具体账号标识（QQ 号、本机标识）：见下方说明，**不在本文件里写死**。
    *
    * 顺序很重要：必须先替换**更长的形态**（`file:///C:/...`）再替换短形态
    * （`C:/...`），否则长形态会被拆坏、留下 `file:///<LOCAL_PATH>` 的残片。
@@ -44,8 +110,14 @@ function scrub(message) {
   text = text.replace(/C:\/Users\/[^/\s`"']+/gu, "<LOCAL_PATH>");
   text = text.replace(/C:\\\\Users\\\\[^\\\s`"']+/gu, "<LOCAL_PATH>");
   text = text.replace(/C:\\Users\\[^\\\s`"']+/gu, "<LOCAL_PATH>");
-  text = text.replace(/1018675245/gu, "<ACCOUNT_ID>");
-  text = text.replace(/\bFSK\d*\b/gu, "<USER>");
+  /**
+   * 具体身份值从**仓库外的私有映射**替换（2026-10-30 修 SEC-01）。
+   *
+   * 上一版在这里硬编码了真实的 QQ 号与本机用户名 —— 而这个文件公开在 GitHub 上。
+   * 为了从历史里清掉那些值，反而把它写进了 HEAD。现在仓库里只留语法，值走本地配置
+   * （`SCRUB_IDENTITY_MAP`，缺省 `<仓库外>/scrub-identity.map`）。
+   */
+  text = applyIdentityMap(text);
 
   // 1. `用户 YYYY-MM-DD：` 开头的整行删掉（原话本身没有技术价值）。
   //    用 [^\n]* 而不是 `.`（后者在 dotall 缺失时行为依赖标志，这里显式只吃一行）。

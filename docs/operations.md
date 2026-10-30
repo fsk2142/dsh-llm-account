@@ -354,8 +354,8 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 
 | 事实 | 证据 | 对试验的影响 |
 | --- | --- | --- |
-| 本机 PATH 上的 `dsh` CLI 是 **0.1.1-rc.2**（旧引擎） | 启动器 `C:\Users\me\AppData\Roaming\npm\dsh.ps1` → `C:\Users\me\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\package.json`，`"version": "0.1.1-rc.2"`（写作本文档时读文件核对；未执行任何 `dsh` 命令） | 用旧引擎建 profile 得到的宿主接缝结论不可信：桌面端不跑这个引擎 |
-| 桌面端实际引擎是 **0.2.0-rc.2** | `C:\Users\me\.dsh\dsh-runtimes\dsh-primary-runtime\runtime.json`，`"desktopVersion": "0.2.0-rc.2"`（写作本文档时读文件核对） | 结论必须在与桌面端同版本的引擎上取；本机没有 |
+| 本机 PATH 上的 `dsh` CLI 是 **0.1.1-rc.2**（旧引擎） | 启动器 `%USERPROFILE%\AppData\Roaming\npm\dsh.ps1` → `%USERPROFILE%\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\package.json`，`"version": "0.1.1-rc.2"`（写作本文档时读文件核对；未执行任何 `dsh` 命令） | 用旧引擎建 profile 得到的宿主接缝结论不可信：桌面端不跑这个引擎 |
+| 桌面端实际引擎是 **0.2.0-rc.2** | `%USERPROFILE%\.dsh\dsh-runtimes\dsh-primary-runtime\runtime.json`，`"desktopVersion": "0.2.0-rc.2"`（写作本文档时读文件核对） | 结论必须在与桌面端同版本的引擎上取；本机没有 |
 
 **第三条取消理由**：客户端 `apply` 被调用几次（假设 ②）只能在**真实浏览器**里观察，本机没有这条观察通道 —— 它不是 CLI 能回答的问题。
 
@@ -388,7 +388,7 @@ typecheck 0 错、全量 vitest 绿、`tsdown` 双产物重建；5 条修复各�
 
 ### 3. 旧插件的调用点形状（引用，本文档未验证）
 
-来源：**控制器的只读调研**。安装目录为 `C:\Users\me\.dsh\profiles\desktop\node_modules\`。本文档作者**没有打开**这些包，以下内容逐字来自任务书，未经独立复核。
+来源：**控制器的只读调研**。安装目录为 `%USERPROFILE%\.dsh\profiles\desktop\node_modules\`。本文档作者**没有打开**这些包，以下内容逐字来自任务书，未经独立复核。
 
 - Command Code 客户端 `@mars-sea/dsh-commandcode-provider/lib/client.js`：
   - `settings.section` 注册形状 `{ name, id, order, label, locale, inject }`（id `commandcode`，order 12）。

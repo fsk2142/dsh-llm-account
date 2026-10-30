@@ -49,3 +49,7 @@ Thumbs.db
 # 代价：每次改源码都必须重新 `pnpm build` 并把 lib/ 一起提交，否则仓库里的产物
 # 与源码不一致。验证方式：`pnpm build` 后 `git status` 里 lib/ 应当是唯一的变化
 # 来源；若 lib/ 有改动而 src/ 没有，说明上一次忘了提交产物。
+
+# 脱敏用的私有身份映射（含真实账号标识，**绝不进版本库**）
+scrub-identity.map
+*.map
