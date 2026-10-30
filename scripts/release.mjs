@@ -485,6 +485,34 @@ async function main() {
   run(["pnpm", "build"], { stdio: "inherit" });
   console.log("产物已重建");
 
+  /**
+   * **产物一致性检查放在这里，而不是 CI**（2026-10-30）。
+   *
+   * `lib/` 是必须提交的发布产物，用户安装后跑的就是它 —— 源码改了却没提交产物，
+   * 装出来还是旧行为。
+   *
+   * 但这个比对**只能在同平台做**：tsdown 的 chunk 文件名含内容 hash，而 hash 与平台
+   * 相关，Linux CI 上重建会产出不同的 `<name>-<hash>.js`，`git status` 必然显示
+   * 「删旧 chunk + 加新 chunk」。把这条放在 Linux CI 里只会永远红。
+   *
+   * 发版脚本在本机跑（与产出 `lib/` 的平台一致），此刻 `lib/` 刚被重建，**任何**
+   * 未提交差异都说明有问题 —— 除了 `package.json` 的版本号（上一步刚写）。
+   */
+  const libDiff = run(["git", "status", "--porcelain", "--", "lib"])
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+  if (libDiff.length > 0) {
+    throw new Error(
+      [
+        `发版中止：重建后的 lib/ 与仓库里的产物不一致 ——`,
+        ...libDiff.map((line) => `  ${line}`),
+        ``,
+        `这说明上一次改了源码却忘了提交产物。请检查后重新发版。`,
+      ].join("\n"),
+    );
+  }
+  console.log("产物与源码一致");
+
   // 4. 全量验证：任何一步失败都不该发出去。
   //
   // 提交标题也在这里查：GitHub 文件树悬停显示的是「该路径最后一次提交的标题」，
