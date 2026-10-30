@@ -34,14 +34,18 @@ jobs:
         with:
           node-version: "22"
 
-      # pnpm 版本必须与生成本仓库 `pnpm-lock.yaml` 的版本一致。
-      # lock 是 `lockfileVersion: '9.0'`（pnpm 9+ 的格式），但**本地实际用的是 11**
-      # —— 用 9 装会与 lock 的解析结果有差异，`--frozen-lockfile` 直接失败。
-      # 第一次加 CI 时写死 9，三次运行全部挂在「安装依赖」这一步（2026-10-30 修）。
-      - name: 启用 pnpm
+      # **不要在这里写 `version:`** —— `packageManager`（`pnpm@11.24.0`）已经是权威
+      # 声明，两处同时指定会让 action 报：
+      #
+      #   Error: Multiple versions of pnpm specified
+      #     - version pnpm@11.24.0 in the package.json with the key "packageManager"
+      #
+      # 省略 `version` 时 action 自动读 `packageManager`，版本只在一处维护。
+      #
+      # 历史：第一次加 CI 时写死 `version: 9`，而 lock 是 pnpm 11 生成的 → 三次运行
+      # 全红；改成 11 之后又因与 `packageManager` 冲突继续红。
+      - name: 启用 pnpm（版本取自 package.json 的 packageManager）
         uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - name: 安装依赖（锁文件优先）
         run: pnpm install --frozen-lockfile
