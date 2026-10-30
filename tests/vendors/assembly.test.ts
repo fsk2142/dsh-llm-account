@@ -86,6 +86,13 @@ interface FakeHost {
   liveRoutes(): string[][];
   /** 把一个事件投给假 ctx 上登记的监听器（宿主 `emit` 的最小替身）。 */
   emit(event: string, ...args: unknown[]): void;
+    /**
+     * 触发 **waterfall** 事件并拿到决策（2026-10-30 加，R11）。
+     *
+     * `emit` 返回 `void`，异步监听器的返回值拿不到 —— 只能断言「下游是否被调用」这种
+     * 间接信号。要断言 `{ kind: "retry" }` 就必须能 await 监听器的返回值。
+     */
+    fireWaterfall(event: string, payload: unknown): Promise<{ decision: unknown; handedOff: number }>;
   /** 某个事件当前登记了几个监听器。 */
   listenerCount(event: string): number;
   /** `effect` 里登记的资源释放器（宿主卸载时才会调用，测试只看有没有登记）。 */
@@ -136,6 +143,23 @@ function fakeHost(services: Readonly<Record<string, unknown>> = {}): FakeHost {
     liveRoutes: () => registrations.filter((record) => record.active).map((record) => record.routes),
     emit: (event, ...args) => {
       for (const listener of listeners.get(event) ?? []) listener(...args);
+    },
+    /**
+     * 触发 **waterfall** 事件并拿到决策（R11）。
+     *
+     * 按 cordis waterfall 的语义把 `next` 串起来：链上每个监听器拿同一个 `next`，
+     * 返回非 `undefined` 即终止（不再问下游）。`handedOff` 记录是否走到底。
+     */
+    fireWaterfall: async (event, payload) => {
+      const chain = [...(listeners.get(event) ?? [])];
+      /** 下一个监听器；链尾返回 `undefined`。 */
+      const next = async () => {
+        const listener = chain.shift();
+        if (listener === undefined) return undefined;
+        return await listener(payload, next);
+      };
+      const decision = await next();
+      return { decision, handedOff: chain.length === 0 ? 1 : 0 };
     },
     listenerCount: (event) => (listeners.get(event) ?? []).length,
     disposers: () => [...disposers],
@@ -1119,14 +1143,11 @@ it("网关路用 opendesign 行的基地址与密钥（provider 只在 commandco
   }
 });
 
-it("**旧设置字段仍能开启自动重试**（升级兼容，2026-10-30）", async () => {
+it("**旧字段能开启自动重试**：决策必须是 retry", async () => {
   /**
-   * v1.4.0 把 `autoContinueOnError` / `autoContinueOnTruncate` 合并成 `autoContinue`。
-   * 旧 profile 里没有新字段 → zod 落 `default(false)` → 升级后原本开着的自动重试
-   * 会被静默关掉（用户感知为「功能消失了」）。
-   *
-   * **关键**：`z.object` 默认剥掉未知字段，所以旧字段名必须在 schema 里显式声明，
-   * 否则 `document()` 读不到，兼容代码等于没写。这条测试同时覆盖 schema 声明与读侧回退。
+   * R11：原版只断言「下游没被调用」，那不能区分「自己重试了」和「监听器根本没跑」。
+   * 现在直接断言**决策**是 `{ kind: "retry" }`，并用 `TRANSPORT`（可重试码）而不是
+   * `QUOTA`（永不重试，任何实现都会通过）。
    */
   const legacy = { ...COMMAND_CODE_SHAPE, autoContinueOnError: true } as Record<string, unknown>;
   delete legacy["autoContinue"];
@@ -1135,33 +1156,29 @@ it("**旧设置字段仍能开启自动重试**（升级兼容，2026-10-30）",
   commandcode.apply(host.ctx, commandcode.Config(legacy as never));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  expect(host.listenerCount("agent/request-error"), "监听器总是注册").toBe(1);
-
-  // 事件进来时应当**决定重试**（返回 `{ kind: "retry" }`，且不调 next）。
-  let handedOff = 0;
-  const decisions: unknown[] = [];
-  host.emit(
-    "agent/request-error",
-    { turn: 1, failure: { code: "TRANSPORT" } },
-    async () => {
-      handedOff += 1;
-      return undefined;
-    },
-  );
-  // 间隔默认 2s，等够它。
-  await new Promise((resolve) => setTimeout(resolve, 2200));
-  void decisions;
-  expect(handedOff, "旧字段开着 → 自己重试，不交棒").toBe(0);
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision, "旧字段 true + 新字段缺失 → 开启").toEqual({ kind: "retry" });
 }, 10_000);
 
-it("新字段 `autoContinue: false` 显式关掉时**不**被旧字段打开", async () => {
+it("**新字段显式 false 压过残留旧字段**（R04）：决策必须是交棒", async () => {
   /**
-   * 用户在新版本里明确关掉后，残留的 `autoContinueOnError: true` 不该把它又打开 ——
-   * 否则「关不掉」。
+   * 用户在新界面关掉后，旧 profile 里残留的 `autoContinueOnError: true` 不该把它
+   * 重新打开 —— 那就是「关不掉」。
    *
-   * 注意读侧是 `autoContinue === true || 旧字段 === true`：这里 `autoContinue` 为
-   * `false`（不是 undefined）而旧字段为 true，**当前实现会重试**。这条测试记录该行为，
-   * 若将来改成「新字段为 false 时优先级更高」，这里会红 —— 那时同步改注释即可。
+   * 用 `TRANSPORT`：这个码**可重试**，所以如果 `enabled` 算错成 true，会返回
+   * `{ kind: "retry" }` 而被抓住。原来的测试用 `QUOTA`，那个码永不重试，实现怎么错
+   * 都通过（假阳性）。
+   */
+  /**
+   * **传原始对象而不是 `Config()` 的结果**（这是本测试的关键）。
+   *
+   * 宿主加载器给 `apply` 的是 profile 里的原始值，那时才能区分「用户写了
+   * `autoContinue: false`」与「根本没写这个键」。传 `Config(...)` 的话
+   * `default(false)` 会把键填上，看起来就像用户显式关掉了 —— 那种输入下没法判断
+   * 意图，我们的实现会退回旧字段（见 `rawAutoContinue` 里对 `isParsedConfig` 的处理）。
    */
   const merged = {
     ...COMMAND_CODE_SHAPE,
@@ -1169,21 +1186,43 @@ it("新字段 `autoContinue: false` 显式关掉时**不**被旧字段打开", a
     autoContinueOnError: true,
   } as Record<string, unknown>;
   const host = fakeHost();
-  commandcode.apply(host.ctx, commandcode.Config(merged as never));
+  commandcode.apply(host.ctx, merged);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  expect(host.listenerCount("agent/request-error"), "监听器总是注册").toBe(1);
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision, "显式 false 必须关闭").toBeUndefined();
+}, 10_000);
 
-  let handedOff = 0;
-  host.emit(
-    "agent/request-error",
-    { turn: 1, failure: { code: "QUOTA" } },
-    async () => {
-      handedOff += 1;
-      return undefined;
-    },
-  );
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  // `QUOTA` 在永不重试集里 → 无论开关如何都交棒。
-  expect(handedOff, "确定性失败 → 交棒").toBe(1);
+it("新字段显式 true + 旧字段 false → 开启", async () => {
+  const merged = {
+    ...COMMAND_CODE_SHAPE,
+    autoContinue: true,
+    autoContinueOnError: false,
+  } as Record<string, unknown>;
+  const host = fakeHost();
+  commandcode.apply(host.ctx, commandcode.Config(merged as never));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision).toEqual({ kind: "retry" });
+}, 10_000);
+
+it("全缺 → 关闭（默认值）", async () => {
+  const bare = { ...COMMAND_CODE_SHAPE } as Record<string, unknown>;
+  delete bare["autoContinue"];
+  delete bare["autoContinueOnError"];
+  delete bare["autoContinueOnTruncate"];
+  const host = fakeHost();
+  commandcode.apply(host.ctx, commandcode.Config(bare as never));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision).toBeUndefined();
 }, 10_000);

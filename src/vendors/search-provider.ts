@@ -421,8 +421,15 @@ export function createSearchProvider(deps: SearchProviderDeps): {
           if (!response.ok) {
             gatewayFailure = `搜索请求失败：HTTP ${response.status}`;
           } else {
-            const payload: unknown = await response.json();
+            /**
+             * `response.json()` **必须在 try 里**（2026-10-30 修 R05）。
+             *
+             * 代理 / 边缘网关可能返回 200 的 HTML、空正文或损坏的 JSON —— 那会让
+             * `json()` 抛 `SyntaxError`。原来它在这个 try **外面**，异常直接从
+             * `search()` 逸出，`gateway-first` 后面的 API 回退永远执行不到。
+             */
             try {
+              const payload: unknown = await response.json();
               const result = sourcesOf(payload);
               // 宿主自己也执行 maxResults：这里截一次以防 provider 侧超发。
               const max = request.maxResults;
@@ -431,7 +438,7 @@ export function createSearchProvider(deps: SearchProviderDeps): {
               }
               return result;
             } catch (error) {
-              gatewayFailure = error instanceof Error ? error.message : String(error);
+              gatewayFailure = `网关响应无效：${error instanceof Error ? error.message : String(error)}`;
             }
           }
         }

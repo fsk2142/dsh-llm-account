@@ -241,6 +241,47 @@ export interface CommandCodeBundle {
 export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   const parsed = parseConfig(config);
   const document = (): Record<string, unknown> => unwrapVolatileConfig(parsed);
+  /**
+   * **原始配置里**是否显式写了 `autoContinue` —— 在 `parseConfig` 之前算好。
+   *
+   * schema 里 `autoContinue` 带 `default(false)`，所以**解析之后**它恒为布尔值：
+   * 「用户填了 false」与「用户根本没填」完全分不出来。只有拿到 `apply` 的第一手
+   * `config` 看它自己有没有这个键，才能区分。
+   *
+   * `apply` 的 `config` 有两种来源：
+   * - 宿主加载器给的是**原始对象**（profile 里的值）→ 能判断键在不在；
+   * - 程序化构造 / 已解析（`isParsedConfig` 为真）→ 里面一定有 `autoContinue`
+   *   （default 填的），此时**不把它当成用户的显式选择**，否则旧字段永远失效。
+   * @returns 是否显式设置；`undefined` 表示无从判断。
+   */
+  const rawAutoContinue = ((): boolean | undefined => {
+    if (!isRecord(config)) return undefined;
+    if (isParsedConfig(config)) return undefined;
+    return Object.hasOwn(config, "autoContinue") ? config["autoContinue"] === true : undefined;
+  })();
+  /**
+   * 自动重试开关的**有效值**（2026-10-30 修 R04）。
+   *
+   * ## 为什么不能简单写 `a || b || c`
+   *
+   * v1.4.0 把 `autoContinueOnError` / `autoContinueOnTruncate` 合并成 `autoContinue`，
+   * 旧 profile 里只有旧字段。若写成「新字段 === true || 旧字段 === true」，那么
+   * **用户在新界面明确关掉之后**（`autoContinue: false`），残留的
+   * `autoContinueOnError: true` 会把它重新打开 —— 表现为「关不掉」。
+   *
+   * ## 优先级
+   *
+   * 1. 原始配置**显式**写了 `autoContinue`（`true` 或 `false`）→ 以它为准；
+   * 2. 否则退回旧字段（任一为 `true` 即开启）；
+   * 3. 都没有 → 取 schema 默认值（关）。
+   */
+  const autoContinueEnabled = (): boolean => {
+    if (rawAutoContinue !== undefined) return rawAutoContinue;
+    const current = document();
+    if (current["autoContinueOnError"] === true || current["autoContinueOnTruncate"] === true) return true;
+    // 没有显式设置、也没有旧字段 → 用解析后的值（即 schema 默认 false）。
+    return current["autoContinue"] === true;
+  };
   const warn = (message: string): void => {
     ctx.logger.warn(message);
   };
@@ -453,17 +494,14 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     // 快照会让「运行时改开关/次数/间隔」全部不生效（要重载宿主才行）。
     () => ({
       /**
-       * **兼容旧字段**（2026-10-30）。原来拆成 `autoContinueOnError` /
-       * `autoContinueOnTruncate` 两个开关，v1.4.0 合并成 `autoContinue`。
+       * **兼容旧字段**（2026-10-30，R04 修）：原来拆成 `autoContinueOnError` /
+       * `autoContinueOnTruncate` 两个开关，v1.4.0 合并成 `autoContinue`。旧 profile 里
+       * 没有新字段 → 升级后原本开着的自动重试会被静默关掉，所以旧字段仍要能开启。
        *
-       * 旧 profile 里没有新字段 → zod 落 `default(false)` → 升级后原本开着的自动重试
-       * 被**静默关掉**（用户感知为「功能消失」）。所以读的时候两个都看：
-       * 新字段优先，其次任一旧开关为 true 就当作开启。
+       * 但**显式关闭必须优先**：用户在新界面关掉之后，残留的旧字段不该把它重新打开。
+       * 优先级与「缺失 vs 显式 false」的区分见上面 `autoContinueEnabled` 的注释。
        */
-      enabled:
-        document()["autoContinue"] === true ||
-        document()["autoContinueOnError"] === true ||
-        document()["autoContinueOnTruncate"] === true,
+      enabled: autoContinueEnabled(),
       maxAttempts:
         typeof document()["autoContinueMaxAttempts"] === "number"
           ? (document()["autoContinueMaxAttempts"] as number)

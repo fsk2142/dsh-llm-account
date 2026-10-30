@@ -10,7 +10,7 @@
  * ```
  * node scripts/scrub-history.mjs            # 只扫描，报告有多少提交需要清理
  * node scripts/scrub-history.mjs --preview   # 展示改写前后的样例对比
- * node scripts/scrub-history.mjs --apply     # 真改写（自动建备份分支）
+ * node scripts/scrub-history.mjs --apply     # 真改写（先建离线 bundle 备份并校验）
  * ```
  *
  * ## 为什么默认不改写
@@ -190,20 +190,24 @@ function main() {
   if (left === 0) {
     console.log("✓ 痕迹已全部清除");
   } else {
-    // `--all` 会连备份分支与悬空对象一起扫到，所以「仍有 N 处」不等于失败。
+    // 全仓扫描会连其它 ref 与悬空对象一起扫到，所以「仍有 N 处」不等于失败。
     // 真正的判据是：**当前分支上还有没有**。
     const reachable = run(["git", "log", "HEAD", "--format=%H"]).split("\n").filter((line) => line !== "");
     const live = reachable.filter((sha) => TRACE_PATTERN.test(messageOf(sha)));
     if (live.length === 0) {
-      console.log(`✓ 当前分支已干净（另有 ${left} 处在备份分支/悬空对象里，属正常）`);
+      console.log(`✓ 当前分支已干净（另有 ${left} 处在其它 ref/悬空对象里，属正常）`);
     } else {
       console.log(`⚠ 当前分支仍有 ${live.length} 处未清理 —— 说明改写规则漏了某种写法`);
     }
   }
   console.log(`\n下一步（确认无误后）：`);
-  console.log(`  git push --force origin main`);
-  console.log(`  git tag --list | %{ git push --force origin "refs/tags/$_" }`);
-  console.log(`  git branch -D ${backup}    # 一切正常后删备份`);
+  console.log(`  git push --force-with-lease origin main`);
+  console.log(`\n本脚本**不改写 tag**（tag 指向已发布版本，改写它们会让按 SHA 固定安装的`);
+  console.log(`下游拿到不同对象）。若确实要清理 tag 里的历史，那是一次独立的、需要`);
+  console.log(`评估 GitHub Release / 下游克隆影响的决策 —— 不要顺手做。`);
+  console.log(`\n离线恢复包（保留到确认无需回滚为止）：`);
+  console.log(`  ${backupBundle}`);
+  console.log(`  恢复方式：git clone --mirror "${backupBundle}" <目录>`);
 }
 
 main();

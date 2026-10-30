@@ -151,7 +151,7 @@ export async function syncSearchProviderSlot(input: {
    * 宿主自带的 `deepseek-official` 也在，于是 `available()` 两个都真 →
    * `WEB_PROVIDER_AMBIGUOUS` → **两个都用不了**。
    *
-   * 用户的原话是「关掉自己的搜索就要自动切到软件自带的，除非两边都没启用」。所以：
+ * 需求：「关掉自己的搜索就要自动切到软件自带的，除非两边都没启用」。所以：
    *
    * 1. 关掉我们的 → 把 `searchProvider` 写回宿主默认 id（精确匹配，无歧义）；
    * 2. 已经是宿主默认 id → 无事可做；

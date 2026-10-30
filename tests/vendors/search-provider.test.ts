@@ -302,4 +302,43 @@ describe("取消（用户按了停止）", () => {
     await expect(provider.search({ query: "hello" })).rejects.toThrow(SearchUnavailableError);
     expect(calls.length, "只打了网关").toBe(1);
   });
+
+  it("gateway-first + gateway 200 invalid JSON -> fallback API (R05)", async () => {
+    // Proxy / edge gateway may return 200 HTML or broken JSON: response.json() throws
+    // SyntaxError. It used to sit OUTSIDE the try, so the error escaped search() and
+    // the API fallback never ran.
+    const calls: string[] = [];
+    const impl = (async (url: unknown) => {
+      const target = String(url);
+      calls.push(target);
+      if (target.includes("/messages")) return new Response("<html>upstream error</html>", { status: 200 });
+      return new Response(JSON.stringify({ results: [{ title: "From API", url: "https://api.example/x" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = createSearchProvider(deps({ fetchImpl: impl, strategy: () => "gateway-first" }));
+    const result = await provider.search({ query: "hello" });
+
+    expect(calls.length, "gateway + API, one each").toBe(2);
+    expect(result.sources.map((s) => s.url)).toEqual(["https://api.example/x"]);
+  });
+
+  it("gateway-first + gateway 200 empty body -> fallback API", async () => {
+    const calls: string[] = [];
+    const impl = (async (url: unknown) => {
+      const target = String(url);
+      calls.push(target);
+      if (target.includes("/messages")) return new Response("", { status: 200 });
+      return new Response(JSON.stringify({ results: [{ title: "A", url: "https://api.example/y" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = createSearchProvider(deps({ fetchImpl: impl, strategy: () => "gateway-first" }));
+    const result = await provider.search({ query: "hello" });
+    expect(result.sources.map((s) => s.url)).toEqual(["https://api.example/y"]);
+  });
 });

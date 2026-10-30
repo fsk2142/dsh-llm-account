@@ -24,7 +24,7 @@
  * 提交信息从 `git log` 自动汇总（自上一个 tag 起），`--note` 是给 Release 的补充说明。
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 /** 读一个命令的 stdout。 */
 function run(args, options = {}) {
@@ -101,11 +101,15 @@ async function createRelease({ owner, repo, tag, title, body }) {
  * `next.base` 才是正确来源：它是 `next-version.mjs` 里 `refExists()` **验证过的**
  * 起点（`since` 或 `v${current}`）。只有「没有任何起点 tag」时它是描述文字，那时
  * 退回全历史（不带范围），而不是拼一个不存在的 ref。
- * @param {{ tag: string, base: string, wholeHistory: boolean, note: string }} input
+ *
+ * `end` 是终点，缺省 `tag`。补建旧版本时**必须**显式传目标 tag（R06）：不带范围
+ * 的 `git log` 读的是 `HEAD`，补建 v1.5.0 会把 v1.5.1 之后的提交也混进去。
+ * @param {{ tag: string, base: string, wholeHistory: boolean, end?: string, note: string }} input
  * @returns Release 正文。
  */
-function releaseBody({ tag, base, wholeHistory, note }) {
-  const range = wholeHistory ? [] : [`${base}..${tag}`];
+function releaseBody({ tag, base, wholeHistory, end, note }) {
+  const head = end ?? tag;
+  const range = wholeHistory ? [head] : [`${base}..${head}`];
   const commits = run(["git", "log", "--oneline", ...range])
     .split("\n")
     .filter((line) => line !== "" && !line.includes("chore(release)"))
@@ -117,27 +121,75 @@ function releaseBody({ tag, base, wholeHistory, note }) {
 /**
  * 发版时**显式**暂存的路径（不用 `git add -A`）。
  *
- * 2026-10-30 改：原来 `git add -A` 会暂存工作树里所有非忽略文件。本项目 `.gitignore`
- * 只有 3 条，不含 `.env*` / `auth.json` / 本地日志 / Cookie 导出 —— 任何一个误落在
- * 仓库目录里的私密文件都会**随发版提交上去**。
+ * 原来 `git add -A` 会暂存工作树里所有非忽略文件，而私密文件一旦误落进仓库目录就会
+ * 随发版提交上去。
  *
- * 现在只暂存「发版确实会产出」的文件。新增构建产物时**必须**同步这个清单，
- * 否则提交会漏文件（`guardWorkingTree` 会把它报出来，不会静默漏掉）。
+ * **只列真实存在的路径**（2026-10-30 修 R01）。`git add -- <path>` 对不存在的
+ * pathspec 会 `fatal: pathspec ... did not match any files` 并中止发版 —— 之前这里
+ * 写了不存在的 `CHANGELOG.md`，会在「版本号已写、产物已重建、测试已跑」之后炸掉，
+ * 留下半完成的工作树。
+ *
+ * 所以：清单里的路径**必须存在**；可选文件（如将来的 CHANGELOG）由
+ * {@link existingPaths} 过滤，缺了不阻断发版。
  */
-const STAGED_PATHS = ["package.json", "lib", "src", "tests", "docs", "scripts", "README.md", "CHANGELOG.md", "cordis.patch.yml", ".gitignore"];
+const STAGED_PATHS = ["package.json", "lib", "src", "tests", "docs", "scripts", "README.md", "cordis.patch.yml", ".gitignore"];
+
+/**
+ * 从清单里挑出**真实存在**的路径。
+ *
+ * 缺失的可选项被静默跳过（发版不该因为少一个文档就失败）；一个都不剩才是真异常。
+ * @param {readonly string[]} candidates - 候选路径。
+ * @returns 存在的那些。
+ */
+function existingPaths(candidates) {
+  const present = candidates.filter((path) => existsSync(path));
+  if (present.length === 0) {
+    throw new Error(`发版中止：清单里没有任何一个路径存在（${candidates.join(", ")}）。先确认工作目录对不对。`);
+  }
+  return present;
+}
+
+/**
+ * 解析 `git diff --cached --name-only -z` 的输出。
+ *
+ * `-z` 用 NUL 分隔（路径里可能有空格或换行，按行拆会拆错）。末尾还有一个 NUL，
+ * 过滤空串即可。
+ * @param {string} raw - 命令原始输出。
+ * @returns 暂存路径列表。
+ */
+function parseNulList(raw) {
+  return raw.split("\u0000").filter((item) => item !== "");
+}
 
 /**
  * 发版前的安全闸门。
  *
- * 只检查**不该出现在提交里**的东西，不做过度猜测：
+ * 分三层，各管一件事（不混为一谈）：
  *
- * 1. 工作树里有没有 git 会跟踪的「看起来像机密」的文件（`.env*`、`auth.json`、
- *    `*.pem`、`*.key`、Cookie 库等）—— 有就硬失败，让人先处理；
- * 2. 未跟踪文件里同样扫一遍（`git add -A` 时代它们会被一起提交，现在虽然不暂存了，
- *    还是要提醒）；
+ * 1. **index 预检**（R02）：`git add -- <白名单>` 只更新所列路径，**不会清空** index
+ *    里已有的其他条目；而裸 `git commit` 提交的是**整个 index**。所以发版前必须
+ *    确认 index 是干净的 —— 有预暂存内容就停止，让人自己处理（**不擅自丢弃**）。
+ * 2. **工作树机密文件名扫描**：`.env*` / `auth.json` / `*.pem` / Cookie 库等，见到
+ *    就硬失败。注意 `git status` **看不到被 .gitignore 忽略的未跟踪文件**，所以这
+ *    一层只覆盖「会被 git 看见」的部分，不能宣称覆盖了全部机密。
  * 3. 打印 `git status`，让发版者看到本次到底会提交什么。
  */
 function guardWorkingTree() {
+  // —— 1. index 预检 ——
+  const staged = parseNulList(run(["git", "diff", "--cached", "--name-only", "-z"]));
+  if (staged.length > 0) {
+    throw new Error(
+      [
+        `发版中止：版本库 index 里已经有暂存内容 ——`,
+        ...staged.map((path) => `  ${path}`),
+        ``,
+        `发版脚本只应提交它自己白名单里的文件。请先人工处理这些暂存（git restore --staged <path>`,
+        `或把它们提交掉），**不要**在发版脚本里自动清空 index。`,
+      ].join("\n"),
+    );
+  }
+
+  // —— 2. 工作树机密文件名扫描 ——
   const SECRET_FILE = /(^|\/)(\.env[^/]*|auth\.json|credentials[^/]*|.*\.pem|.*\.key|.*cookies.*\.(sqlite|db))$/i;
   const risk = run(["git", "status", "--porcelain", "--untracked-files=all"])
     .split("\n")
@@ -149,6 +201,8 @@ function guardWorkingTree() {
       [`发版中止：工作树里有疑似机密文件，不该提交 ——`, ...risk.map((path) => `  ${path}`), ``, `处理掉（加进 .gitignore 或移出仓库）后再发版。`].join("\n"),
     );
   }
+
+  // —— 3. 让人看到会提交什么 ——
   const dirty = run(["git", "status", "--porcelain", "--untracked-files=all"]);
   if (dirty !== "") {
     console.log("本次会提交这些变更：");
@@ -157,14 +211,67 @@ function guardWorkingTree() {
 }
 
 /**
+ * 暂存本轮发版文件，并**校验最终 index** 严格落在白名单内。
+ *
+ * R02 的教训：`git add -- <path>` 不限定 `git commit` 的范围，所以「白名单暂存」
+ * 不等于「白名单提交」。这里在 add 之后**再查一次 index**，把实际会进提交的路径
+ * 与白名单比对 —— 多出来的立刻中止。
+ *
+ * @param {readonly string[]} paths - 本轮要暂存的白名单路径。
+ */
+function stageForRelease(paths) {
+  run(["git", "add", "--", ...paths]);
+  const staged = parseNulList(run(["git", "diff", "--cached", "--name-only", "-z"]));
+  if (staged.length === 0) {
+    throw new Error("发版中止：暂存后 index 是空的（没有可提交的变更）。");
+  }
+  /** 某个暂存路径是否落在白名单内（白名单项可以是目录前缀）。 */
+  const allowed = (path) => paths.some((entry) => path === entry || path.startsWith(`${entry}/`));
+  const outside = staged.filter((path) => !allowed(path));
+  if (outside.length > 0) {
+    throw new Error(
+      [
+        `发版中止：index 里有白名单之外的路径 ——`,
+        ...outside.map((path) => `  ${path}`),
+        ``,
+        `这些文件不该随发版提交。若确实是发布产物，把它们加进 STAGED_PATHS；否则移出仓库。`,
+      ].join("\n"),
+    );
+  }
+  return staged;
+}
+
+/**
+ * 找一个 tag 之前的**最近一个 tag**（按提交图，不是按版本号排序）。
+ *
+ * 用 `git describe --tags --abbrev=0 <tag>^`：从目标 tag 的父提交往上走，取最近
+ * 的可达 tag。比「按版本号排序后取前一个」可靠 —— 后者在以下情形会错：
+ * 同一提交上打了多个 tag、tag 不在主线、版本号与发布顺序不一致。
+ * @param {string} tag - 目标 tag（如 `v1.5.0`）。
+ * @returns 前一个 tag；没有则 `undefined`。
+ */
+function previousTagOf(tag) {
+  try {
+    const found = execFileSync("git", ["describe", "--tags", "--abbrev=0", `${tag}^`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return found === "" ? undefined : found;
+  } catch {
+    // `describe` 失败 = 父提交上没有任何可达 tag（首个 tag，或 tag 在根提交上）。
+    return undefined;
+  }
+}
+
+/**
  * 建（或补建）Release 并打印结果。
  *
  * 单独抽出来是为了让 `--release-only` 能复用同一条路径 —— 推送成功、建 Release
  * 失败时**补建**，而不是抬一个新版本重发。
- * @param {{ info: ReturnType<typeof packageInfo>, tag: string, base: string, wholeHistory: boolean, note: string }} input
+ * @param {{ info: ReturnType<typeof packageInfo>, tag: string, base: string, wholeHistory: boolean, end?: string, note: string }} input
  */
-async function publishRelease({ info, tag, base, wholeHistory, note }) {
-  const body = releaseBody({ tag, base, wholeHistory, note });
+async function publishRelease({ info, tag, base, wholeHistory, end, note }) {
+  const body = releaseBody({ tag, base, wholeHistory, ...(end === undefined ? {} : { end }), note });
   const result = await createRelease({ owner: info.owner, repo: info.repo, tag, title: tag, body });
   if (result === "no-token") {
     console.warn("⚠ 没设 GITHUB_TOKEN，跳过建 Release。市场将看不到这次的更新说明。");
@@ -200,14 +307,31 @@ async function main() {
     if (!refExists(`refs/tags/${releaseOnlyTag}`)) {
       throw new Error(`tag 不存在：${releaseOnlyTag}。先确认它真的推送过。`);
     }
-    // 起点：同 tag 的前一个版本（package.json 当前的版本就是那个）。
-    const base = `v${info.version}`;
-    const known = refExists(`refs/tags/${base}`);
+    /**
+     * 起点必须从**目标 tag 自己的历史**倒推，不能用 `package.json` 的版本。
+     *
+     * 原来的写法是 `base = "v" + package.json.version`，它只在「补建刚发布的那个
+     * tag」时碰巧正确。补建更早的版本就错了 —— 例如当前版本 1.5.1 时补 v1.5.0：
+     * `base = v1.5.1`，而 v1.5.0 是它的**祖先**，`git log v1.5.1..v1.5.0` 是**空**，
+     * Release 说明因此什么都没有（这正是 v1.5.0 补建时正文为空的原因）。
+     *
+     * 正确做法：从 `tag^` 往上找**最近的 tag**（`git describe --tags --abbrev=0`）。
+     * 找不到（第一个 tag）就退回「只读该 tag 的历史」，而不是读 `HEAD` —— 那会把
+     * 后续提交混进旧版本的说明里。
+     */
+    const previousTag = previousTagOf(releaseOnlyTag);
+    if (previousTag === undefined) {
+      console.log(`  ${releaseOnlyTag} 是首个 tag，说明将覆盖它之前的全部历史。`);
+    } else {
+      console.log(`  变更范围：${previousTag}..${releaseOnlyTag}`);
+    }
     await publishRelease({
       info,
       tag: releaseOnlyTag,
-      base: known ? base : releaseOnlyTag,
-      wholeHistory: !known,
+      base: previousTag ?? releaseOnlyTag,
+      wholeHistory: previousTag === undefined,
+      /** 补建时**始终以目标 tag 为终点**，不能用 HEAD（那会混入之后的提交）。 */
+      end: releaseOnlyTag,
       note,
     });
     return;
@@ -239,7 +363,7 @@ async function main() {
   // 4. 提交 + 打 tag + 推送。
   const tag = `v${next.next}`;
   guardWorkingTree();
-  run(["git", "add", "--", ...STAGED_PATHS]);
+  stageForRelease(existingPaths(STAGED_PATHS));
   run(["git", "commit", "-m", `chore(release): ${tag}`]);
   run(["git", "tag", tag]);
   run(["git", "push", "origin", "main", "--tags"]);
