@@ -42,6 +42,7 @@ import {
   statusEntries as statusEntriesIn,
   statusPaths as statusPathsIn,
 } from "./release-git.mjs";
+import { parseReleaseArgs } from "./release-cli.mjs";
 
 /** 读一个命令的 stdout。 */
 function run(args, options = {}) {
@@ -370,25 +371,29 @@ async function publishRelease({ info, tag, base, wholeHistory, end, note }) {
 
 /** 主流程。 */
 async function main() {
-  const argv = process.argv.slice(2);
-  const dryRun = argv.includes("--dry-run");
-  const noteIndex = argv.indexOf("--note");
-  const note = noteIndex >= 0 ? (argv[noteIndex + 1] ?? "") : "";
   /**
-   * `--release-only <tag>`：只补建 Release，不碰提交/tag/推送。
+   * **先解析成互斥模式，再做任何 Git/HTTP 动作**（2026-10-30 修 V55-01）。
    *
-   * 用于「推送成功、建 Release 失败」之后（v1.5.0 就是这种状态）。
-   * 起点由 `previousTagOf(targetTag)` 从**目标 tag 自己的历史**倒推（不是 `package.json` 的版本）；
- * 找不到前一个 tag（首个发布）就以该 tag 为终点读它之前的全部历史。
+   * 原来参数是分散读的，于是有两个安全缺陷：
+   * 1. `--release-only` 分支在 `if (dryRun) return` **之前**返回 →
+   *    `--release-only v1.5.5 --dry-run` 真的会 POST 建 Release；
+   * 2. `--release-only` 漏传 tag 时取到 `undefined` → 转空串 → 分支不成立 →
+   *    掉进完整发版流程（写版本、构建、推送）。
+   *
+   * 现在 `parseReleaseArgs` 在开头就给出明确模式；冲突/缺值/未知 flag 直接抛错，
+   * 不做「猜用户想要什么」。详见 `scripts/release-cli.mjs`。
    */
-  const releaseOnlyIndex = argv.indexOf("--release-only");
-  const releaseOnlyTag = releaseOnlyIndex >= 0 ? (argv[releaseOnlyIndex + 1] ?? "") : undefined;
+  const cli = parseReleaseArgs(process.argv.slice(2));
+  const dryRun = cli.dryRun;
+  const note = cli.note;
 
   const info = packageInfo();
 
-  if (releaseOnlyTag !== undefined && releaseOnlyTag !== "") {
-    if (!releaseOnlyTag.startsWith("v")) {
-      throw new Error(`--release-only 需要一个带 v 的 tag（如 v1.5.0），收到：${releaseOnlyTag}`);
+  if (cli.mode === "release-only") {
+    const releaseOnlyTag = cli.tag;
+    if (releaseOnlyTag === undefined) {
+      // `parseReleaseArgs` 已保证不会走到这里；留一道防线，避免将来改坏。
+      throw new Error("--release-only 缺少 tag。");
     }
     if (!refExists(`refs/tags/${releaseOnlyTag}`)) {
       throw new Error(`tag 不存在：${releaseOnlyTag}。先确认它真的推送过。`);
@@ -410,6 +415,24 @@ async function main() {
       console.log(`  ${releaseOnlyTag} 是首个 tag，说明将覆盖它之前的全部历史。`);
     } else {
       console.log(`  变更范围：${previousTag}..${releaseOnlyTag}`);
+    }
+    /**
+     * **`--dry-run` 在这里必须真正生效**（V55-01 的核心）。
+     *
+     * 演练时只打印「会写什么」，不发起任何 POST —— 原来这条分支在 dryRun 检查
+     * 之前就 `return` 了，所以 `--release-only vX --dry-run` 会真的建 Release。
+     */
+    if (dryRun) {
+      const preview = releaseBody({
+        tag: releaseOnlyTag,
+        base: previousTag ?? releaseOnlyTag,
+        wholeHistory: previousTag === undefined,
+        end: releaseOnlyTag,
+        note,
+      });
+      console.log("\n【dry-run】不会创建 Release。将要提交的正文如下：\n");
+      console.log(preview === "" ? "（空）" : preview);
+      return;
     }
     await publishRelease({
       info,

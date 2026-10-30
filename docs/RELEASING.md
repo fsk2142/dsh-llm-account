@@ -32,6 +32,11 @@ node scripts/release.mjs --note "这次改了什么"
 
 ## 三、手工发版（脚本不可用时）
 
+> **先读完这一段再动手。** 手工发版**必须沿用脚本的安全规则** —— 早期版本文档
+> 教的是「全量暂存」与「推送全部标签」两个命令，它们正好绕开自动脚本
+> 修过的两处防护（第六轮复审 V55-02，已实测：`--tags` 会把无关的
+> `private-draft-tag` 一起推上去）。
+
 ```bash
 # 1. 算版本号（只打印）
 node scripts/next-version.mjs
@@ -46,18 +51,30 @@ pnpm run build
 pnpm run typecheck
 pnpm test
 
-# 5. 提交（带上 lib/ —— 产物进版本库）
-git add -A
+# 5. 提交 —— **只暂存发版该带的文件**（不要用全量暂存）
+#    （`scripts/release-git.mjs` 的 existingPaths 就是同一套判定：存在或被跟踪）
+git add -- package.json lib src tests docs scripts README.md LICENSE icon.svg \
+          cordis.patch.yml .gitignore tsdown.config.ts pnpm-lock.yaml
+#    提交前自查：index 里不该有白名单之外的东西
+git diff --cached --name-only
 git commit -m "chore(release): v<新版本>"
 
-# 6. 打 tag 并推送
+# 6. 打 tag 并推送 —— **只推这一个 tag**，不要 `--tags`
 git tag v<新版本>
-git push origin main --tags
+git push --atomic origin main refs/tags/v<新版本>
 
 # 7. 建 GitHub Release（市场靠它显示更新说明）
-#    网页：仓库 → Releases → Draft a new release → 选已有 tag
-#    或设好 GITHUB_TOKEN 后：node scripts/release.mjs（会顺带做第 1–6 步）
+#    已有 tag 只想补建说明时：
+node scripts/release.mjs --release-only v<新版本>
+#    演练（只打印将要提交的正文，不会发请求）：
+node scripts/release.mjs --release-only v<新版本> --dry-run
 ```
+
+**为什么不能推送全部标签**：那会推送本地**所有**未上远端的标签，包括为测试、
+备份或未公开分支建的标签。若某个标签指向不该公开的提交，那条历史就跟着出去了。
+
+**为什么不能全量暂存**：它会把工作树里所有非忽略文件一起提交。一个误落在仓库目录里的
+私有笔记、临时导出都会随发版提交上去。
 
 ## 四、为什么必须打 tag
 

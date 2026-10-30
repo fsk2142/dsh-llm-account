@@ -137,13 +137,31 @@ export function existingPaths(cwd, candidates) {
 }
 
 /**
- * 正式发布标签的形态：`v<major>.<minor>.<patch>`，允许**数字开头**的预发布后缀。
+ * 正式发布标签的形态：`v<major>.<minor>.<patch>`，可带 SemVer 预发布后缀。
  *
- * 为什么要求后缀以数字或点开头（`-rc.1`、`-1`）：这样 `v1.0.0-backup`、
- * `v1.0.0-test` 这类**人工备份标签**不会被当成正式发布。
+ * ## 允许的预发布标识
+ *
+ * 只认 `alpha` / `beta` / `rc`（可带序号），即 SemVer 规范里常见的三种：
+ * `v1.6.0-rc.1`、`v1.6.0-beta.2`、`v1.6.0-alpha`。
+ *
+ * ## 为什么不能「后缀以数字开头就放行」
+ *
+ * 上一版是 `/^v\d+\.\d+\.\d+(?:-\d[0-9A-Za-z.-]*)?$/` —— 注释写着兼容 `-rc.1`，
+ * 但实际**不认** `-rc.1`（`-` 后面要求数字），反而**认** `v1.6.0-1-backup`
+ * 这种人工备份标签（数字开头即可）。两处都错（第六轮复审 V55-03，Node 实测确认）：
+ *
+ * | 标签 | 上一版 | 本版 |
+ * | --- | --- | --- |
+ * | `v1.6.0-rc.1` | ❌ false | ✅ true |
+ * | `v1.6.0-beta.2` | ❌ false | ✅ true |
+ * | `v1.6.0-1-backup` | ⚠️ true（误认） | ✅ false |
+ * | `v1.6.0-backup` | ✅ false | ✅ false |
+ *
+ * 用「明确的预发布关键字白名单」而不是「后缀首字符」判断 —— 后者无法区分
+ * 「合法的数字开头预发布」与「人工备份命名」。
  * @type {RegExp}
  */
-export const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:-\d[0-9A-Za-z.-]*)?$/u;
+export const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.[0-9A-Za-z]+)*)?$/u;
 
 /**
  * 找一个 tag 之前的**最近一个正式发布 tag**。
