@@ -1351,8 +1351,18 @@ it("**读取设置失败时关闭自动重试**（V55-07，fail-closed）", asyn
    * 他点了关闭就必须真的不重试 —— 宁可因一次读失败暂停，也不要在他以为关掉之后
    * 继续打请求。
    */
+  /**
+   * **这个桩必须同步 `throw`**（2026-10-30 修）。
+   *
+   * 宿主的 `settings.describe()` 是**同步**方法 —— `assembly.ts` 的
+   * `requireSettingsRow` 直接 `forms.describe()` 取数组，找不到行时同步抛错。
+   *
+   * 写成 `async` 的话，同步调用点拿到的是一个 **rejected Promise 而无人 await**
+   * → vitest 报「Unhandled Rejection」→ 退出码 1 → CI 永远红。实测踩到：CI 三次
+   * 运行全部失败，最后定位到就是这里。
+   */
   const failing = {
-    describe: async () => {
+    describe: () => {
       throw new Error("settings service unavailable");
     },
     configure: () => () => undefined,
