@@ -45,30 +45,13 @@ const TRACE_PATTERN = /用户|原话|报障/u;
  * 用户会以为自己查过了、干净了。
  *
  * 现在核心步骤（扫描、计数、建 bundle、取 tree、判断是否已清理）一律走这个严格版本。
- * 只有明确「不存在是正常结果」的探测才用 {@link runOptional}。
+ * 本脚本里每个 git 调用都是核心步骤 —— 失败就该中止，没有「不存在是正常答案」的探测。
  * @param {string[]} args - 命令与参数。
  * @param {object} [options] - 透传给 `execFileSync`。
  * @returns stdout（已 trim）。
  */
 function run(args, options = {}) {
   return execFileSync(args[0], args.slice(1), { encoding: "utf8", ...options }).trim();
-}
-
-/**
- * 读一个命令的 stdout，**失败返回 `undefined`**（不是空串 —— 那会与「真的没有输出」
- * 混淆）。
- *
- * 只用于探测性命令：例如「这个 ref 存在吗」这种失败就是正常答案的场景。
- * @param {string[]} args - 命令与参数。
- * @param {object} [options] - 透传给 `execFileSync`。
- * @returns stdout；失败时 `undefined`。
- */
-function runOptional(args, options = {}) {
-  try {
-    return execFileSync(args[0], args.slice(1), { encoding: "utf8", ...options }).trim();
-  } catch {
-    return undefined;
-  }
 }
 
 /** 取一个提交的完整信息。 */

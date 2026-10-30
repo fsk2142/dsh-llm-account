@@ -239,12 +239,21 @@ function guardWorkingTree() {
   }
 
   // —— 2. 工作树机密文件名扫描 ——
+  //
+  // **必须用 `-z`**（2026-10-30 修 A02）。`git status --porcelain` 会给含空格/特殊
+  // 字符的路径**加双引号并转义**：
+  //
+  // ```
+  //  M "src/private key.pem"
+  // ```
+  //
+  // 按行 split 再 `slice(3).trim()` 得到的是 `"src/private key.pem"`（带引号），
+  // 而 `SECRET_FILE` 要求以 `.pem` 结尾 —— 于是**漏检**。被 `git add -f` 强制跟踪过的
+  // 凭据文件改动就能混进发布提交。
+  //
+  // `-z` 输出以 NUL 分隔且**不加引号、不转义**，路径可以原样使用。
   const SECRET_FILE = /(^|\/)(\.env[^/]*|auth\.json|credentials[^/]*|.*\.pem|.*\.key|.*cookies.*\.(sqlite|db))$/i;
-  const risk = run(["git", "status", "--porcelain", "--untracked-files=all"])
-    .split("\n")
-    .map((line) => line.slice(3).trim())
-    .filter((path) => path !== "")
-    .filter((path) => SECRET_FILE.test(path));
+  const risk = statusPaths().filter((path) => SECRET_FILE.test(path));
   if (risk.length > 0) {
     throw new Error(
       [`发版中止：工作树里有疑似机密文件，不该提交 ——`, ...risk.map((path) => `  ${path}`), ``, `处理掉（加进 .gitignore 或移出仓库）后再发版。`].join("\n"),
@@ -252,11 +261,37 @@ function guardWorkingTree() {
   }
 
   // —— 3. 让人看到会提交什么 ——
-  const dirty = run(["git", "status", "--porcelain", "--untracked-files=all"]);
-  if (dirty !== "") {
+  const dirty = statusPaths();
+  if (dirty.length > 0) {
     console.log("本次会提交这些变更：");
-    console.log(dirty);
+    for (const path of dirty) console.log(`  ${path}`);
   }
+}
+
+/**
+ * 取工作树里**有变更的路径**（已跟踪的改动 + 未跟踪的新文件）。
+ *
+ * 用 `git status --porcelain=v1 -z`：NUL 分隔、**不加引号**，含空格/引号/Unicode 的
+ * 路径都能原样取出。记录格式是 `XY <path>`（两个状态字符 + 一个空格 + 路径），
+ * 重命名/复制会**额外**跟一段原路径（也用 NUL 分隔），这里一并消费掉。
+ * @returns 变更路径列表。
+ */
+function statusPaths() {
+  const raw = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const parts = raw.split("\u0000");
+  const paths = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const record = parts[index];
+    if (record === undefined || record.length < 4) continue;
+    const status = record.slice(0, 2);
+    paths.push(record.slice(3));
+    // 重命名（R）与复制（C）后面还跟着一条「原路径」记录，跳过它。
+    if (status.includes("R") || status.includes("C")) index += 1;
+  }
+  return paths;
 }
 
 /**
@@ -299,15 +334,45 @@ function stageForRelease(paths) {
  * @param {string} tag - 目标 tag（如 `v1.5.0`）。
  * @returns 前一个 tag；没有则 `undefined`。
  */
+/**
+ * 找一个 tag 之前的**最近一个发布 tag**（按提交图，不是按版本号排序）。
+ *
+ * ## 为什么不能直接用 `git describe --tags`
+ *
+ * `--tags` 认**所有**标签，包括开发用的临时标记。若两个版本之间有人打了
+ * `scratch-tag`：
+ *
+ * ```
+ * A feat: base              tag v1.0.0
+ * B feat: important change  tag scratch-tag
+ * C fix: last change        tag v1.1.0
+ * ```
+ *
+ * `git describe --tags --abbrev=0 v1.1.0^` 会返回 `scratch-tag`，于是
+ * `git log scratch-tag..v1.1.0` 只拿到 `C` —— **`B` 的改动从 Release 说明里消失**
+ * （2026-10-30 修 A03，已在独立仓库复现）。
+ *
+ * ## 做法
+ *
+ * 用 `--match 'v[0-9]*'` 先把候选收窄到**看起来像版本号**的标签，再用正则严格校验
+ * `v<major>.<minor>.<patch>`（`--match` 只是 glob，不是正则，必须二次确认）。
+ * 找不到就返回 `undefined`，由调用方退回「读目标 tag 之前的全部历史」——
+ * 宁可多列，也不静默漏掉改动。
+ * @param {string} tag - 目标 tag（如 `v1.5.0`）。
+ * @returns 前一个发布 tag；没有则 `undefined`。
+ */
 function previousTagOf(tag) {
+  /** 正式发布标签的形态：`v1.2.3`（可带预发布后缀）。 */
+  const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
   try {
-    const found = execFileSync("git", ["describe", "--tags", "--abbrev=0", `${tag}^`], {
+    const found = execFileSync("git", ["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0", `${tag}^`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    return found === "" ? undefined : found;
+    // `--match` 是 glob，可能仍命中 `v1.0.0-rc1-backup` 这类；这里按正式形态再筛一次。
+    return RELEASE_TAG.test(found) ? found : undefined;
   } catch {
-    // `describe` 失败 = 父提交上没有任何可达 tag（首个 tag，或 tag 在根提交上）。
+    // `describe` 失败 = 父提交上没有任何可达的版本 tag（首个发布，或 tag 在根提交上）。
     return undefined;
   }
 }

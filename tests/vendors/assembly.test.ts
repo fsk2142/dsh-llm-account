@@ -1279,3 +1279,62 @@ it("已解析配置 + 旧 true + 新字段缺失 → 兼容开启", async () => 
   });
   expect(decision, "旧字段 true → 兼容开启").toEqual({ kind: "retry" });
 }, 10_000);
+
+it("**热更新：关闭 → 打开后重试生效**（A01）", async () => {
+  /**
+   * 第一版只在 `apply` 读一次持久文档，之后一直用那份快照 —— 用户改完设置，
+   * `autoContinueEnabled()` 仍返回启动时的 false，监听器把控制权交给下游、根本不重试。
+   *
+   * 现在 `loader/volatile-update` 会重新读取文档（带序号防乱序）。
+   */
+  const settings = fakeSettings([
+    {
+      ns: "llm-commandcode",
+      value: { ...COMMAND_CODE_SHAPE, autoContinue: false, autoContinueOnError: true },
+      revision: 1,
+    },
+  ]);
+  const host = fakeHost({ settings: settings.service });
+  commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, autoContinue: false } as never));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  // 初始：显式 false → 不重试。
+  const before = await host.fireWaterfall("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } });
+  expect(before.decision, "初始 false").toBeUndefined();
+
+  // 用户在设置界面打开 → 写入持久文档 + 发 volatile-update。
+  // 直接改持久文档（`valueOf` 拿到的就是 state 里的引用），再发 volatile-update。
+  const doc = settings.valueOf("llm-commandcode");
+  if (doc === undefined) throw new Error("缺少设置行");
+  doc["autoContinue"] = true;
+  host.emit("loader/volatile-update");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const after = await host.fireWaterfall("agent/request-error", { turn: 2, failure: { code: "TRANSPORT" } });
+  expect(after.decision, "打开后应重试").toEqual({ kind: "retry" });
+}, 10_000);
+
+it("**热更新：打开 → 关闭后立即停止重试**（A01）", async () => {
+  const settings = fakeSettings([
+    {
+      ns: "llm-commandcode",
+      value: { ...COMMAND_CODE_SHAPE, autoContinue: true },
+      revision: 1,
+    },
+  ]);
+  const host = fakeHost({ settings: settings.service });
+  commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, autoContinue: true } as never));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const before = await host.fireWaterfall("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } });
+  expect(before.decision, "初始 true").toEqual({ kind: "retry" });
+
+  const doc = settings.valueOf("llm-commandcode");
+  if (doc === undefined) throw new Error("缺少设置行");
+  doc["autoContinue"] = false;
+  host.emit("loader/volatile-update");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const after = await host.fireWaterfall("agent/request-error", { turn: 2, failure: { code: "TRANSPORT" } });
+  expect(after.decision, "关闭后不重试").toBeUndefined();
+}, 10_000);

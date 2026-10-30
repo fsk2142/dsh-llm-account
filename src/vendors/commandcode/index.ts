@@ -271,21 +271,37 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
    * 2. 文档里没有、但有旧字段为 `true` → 视为开启（旧用户不丢功能）；
    * 3. 都没有 → 用解析后的值（schema 默认 `false`）。
    *
-   * 读文档是异步的：`describe` 走设置端口。这里缓存最近一次结果，由第一次调用触发
-   * 一次读取；读到之前先用解析后的值（等价于旧行为，不会误开）。
+   * ## 缓存必须跟着设置变（2026-10-30 二度修：A01）
+   *
+   * 第一版只在 `apply` 时读一次文档、之后一直用那份快照，于是：
+   *
+   * - 关 → 开：用户改了设置，但 `autoContinueEnabled()` 仍返回启动时的 `false`，
+   *   监听器把控制权交给下游、**根本不重试**；
+   * - 开 → 关：缓存还是 `true`，**关不掉**。
+   *
+   * 现在由 `loader/volatile-update` 触发重新读取，并用**递增序号**丢弃乱序响应
+   * （先发的慢响应不能盖掉后发的快响应）。
    */
   let rawDocument: Record<string, unknown> | undefined;
+  /** 已发出的读取序号；`describe` 返回时只有序号仍是最新的才写回。 */
+  let rawDocumentSeq = 0;
   /**
-   * 读一次持久文档（异步，失败时保持 `undefined` = 退回解析值）。
+   * 重新读一次持久文档（异步，失败时保留上一次的值）。
+   *
+   * 读不到文档不该影响重试判定：保持上次结果或退回解析值，**不抛**。
    */
   const refreshRawDocument = (): void => {
+    rawDocumentSeq += 1;
+    const seq = rawDocumentSeq;
     void settingsPort
       .describe(COMMAND_CODE_SETTINGS_NS)
       .then((snapshot) => {
+        // 乱序保护：期间又有更新的读取发出，就丢弃这次结果。
+        if (seq !== rawDocumentSeq) return;
         rawDocument = snapshot.value;
       })
       .catch(() => {
-        // 读不到文档不该影响重试判定：退回解析后的值即可，不要抛。
+        // 保持上一次的值（可能是 `undefined`）。
       });
   };
   refreshRawDocument();
@@ -477,6 +493,14 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
 
   ctx.on("loader/volatile-update", () => {
     applyRoute();
+    /**
+     * 设置变了 → 重读持久文档（2026-10-30 修 A01）。
+     *
+     * `autoContinueEnabled()` 要看「用户到底有没有显式写过 `autoContinue`」，而那个
+     * 信息只在**持久文档**里。首次读取发生在 `apply`，之后如果不跟着设置变更重读，
+     * 用户改完开关拿到的仍是启动时的快照 —— 表现就是「开了不生效 / 关不掉」。
+     */
+    refreshRawDocument();
     // 设定变了 → 如果搜索被关掉（或重新打开），把宿主 `web` 行的 `searchProvider`
     // 槽位让出 / 收回（见 `search-release.ts` 的完整理由）。不在每次启动做：只在
     // **用户动作**的瞬间改配置，因果关系清楚。
