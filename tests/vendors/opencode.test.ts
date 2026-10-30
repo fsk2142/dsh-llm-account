@@ -31,7 +31,11 @@ const LISTING = { object: "list", data: [{ id: "m1", name: "M1" }, { id: "m2", n
 /** 本文件里的假的账号端口：这些用例都不经账号写路径（Task 13 负责）。 */
 function stubAccounts(): AccountPort {
   return {
-    list: async () => [],
+    /**
+     * 2026-10-30：`listModels` 在没有账号时返回空清单（修「账号删了模型还在」）。
+     * 这些测试都假设「有账号、目录正常」，所以桩里给一个占位账号。
+     */
+    list: async () => [{ ref: "a", label: "a" } as never],
     add: async () => {
       throw new Error("not used in this test");
     },

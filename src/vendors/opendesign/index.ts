@@ -525,6 +525,14 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     // 每次请求现取服务：`ctx.get` 在服务可用之前返回 undefined，而插件可能在附件服务
     // 挂载之前就已加载（与 `resolveAttachments?.()` 的官方写法同一意图）。
     resolveImage: (ref, signal) => readImageBytes(ctx, ref, signal),
+    /**
+     * 一次请求内最多试几个账号 —— 与 `autoContinueMaxAttempts` 共用同一个上限
+     * （2026-10-30 统一）。原来适配器内是硬编码 16，与用户设的次数无关。
+     */
+    maxTried: () =>
+      typeof document()["autoContinueMaxAttempts"] === "number"
+        ? (document()["autoContinueMaxAttempts"] as number)
+        : undefined,
   };
   const adapter = createOpenDesignAdapter(deps);
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。

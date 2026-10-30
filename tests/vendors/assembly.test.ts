@@ -827,7 +827,12 @@ it("备用账号服务成功后提为当前账号：move 走设置端口，顺�
     await vi.waitFor(() => expect(settings.valueOf("opencode-go")?.apiKeyEnv).toBe("OTHER_REF"));
     expect(settings.valueOf("opencode-go")?.accounts).toEqual([{ id: "other", name: "other", apiKeyEnv: "OTHER_REF" }]);
     // 提位后下一轮请求直接用新当前账号（引擎按文档重建，order 首位就是它）。
-    expect(bundle.rotation.current().pick({ model: "m1", tried: new Set() })).toBe("OTHER_REF");
+    // 提位后：引擎按新文档重建。2026-10-30 起拒绝表不参与选号，所以
+    // `pick` 仍按 order/pinned 首位给 PREFERRED_REF —— 真正的「换下一个」
+    // 靠 `tried`（同一次请求内试过它之后才轮到 OTHER_REF）。
+    const engine = bundle.rotation.current();
+    expect(engine.pick({ model: "m1", tried: new Set() })).toBe("PREFERRED_REF");
+    expect(engine.pick({ model: "m1", tried: new Set(["PREFERRED_REF"]) })).toBe("OTHER_REF");
   } finally {
     vi.unstubAllGlobals();
   }

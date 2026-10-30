@@ -213,6 +213,14 @@ export interface OpenDesignAdapterDeps {
   autoSwitchModel?: () => boolean;
   /** 真找到并换了模型时通知装配层（日志/遥测）。 */
   onModelFallback?: (from: { provider: string; model: string }, to: ModelFallbackCandidate) => void;
+  /**
+   * **一次请求内最多试几个账号**（2026-10-30 加）。
+   *
+   * 原来是硬编码 `MAX_TRIED = 16`，与用户配置的 `autoContinueMaxAttempts` 无关。
+   * 现在统一：适配器内换账号与宿主层重试共用同一个上限，用户设 5 次就是 5 次。
+   * 缺省 `undefined` 时退回 `MAX_TRIED`。
+   */
+  maxTried?: () => number | undefined;
 }
 
 /** 填默认值；`0`/负数/NaN 一律回落到默认值，避免把坏配置变成「立即超时」。 */
@@ -326,6 +334,19 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * 拉目录 → 应用可见性规则 → 映射为宿主形状（套餐过滤与免费置顶属第 2 期）。
    */
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    /**
+     * **没有账号时不返回任何模型**（2026-10-30 修）。
+     *
+     * 模型清单来自网关目录 / 静态表，与凭据无关 —— 所以账号被移除、
+     * `accounts: []` 之后仍会照旧列出来。用户选中这样的模型，请求时 `pick()`
+     * 返回 undefined，立刻报「没有可用账号」。
+     *
+     * 这里提前挡住：一个账号都没有就返回空清单，模型选择器里不会出现
+     * 注定用不了的条目。读取账号失败时**不**返回空（宁可照旧列出，也不要因为
+     * 一次读失败把整个模型列表清空）。
+     */
+    const hasAccount = await this.#hasAnyAccount();
+    if (!hasAccount) return [];
     const raw = this.#deps.config();
     const entries = await this.#catalog(resolveConfig(raw));
     const visible = selectVisible(entries, normalizeVisibility(raw));
@@ -475,7 +496,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
             "MISSING_CREDENTIAL",
           ),
         };
-        if (tried.size >= MAX_TRIED) throw lastFailure.thrown;
+        if (tried.size >= this.#maxTried()) throw lastFailure.thrown;
         continue;
       }
 
@@ -541,7 +562,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
       // 唯一的换账号条件：已输出 / 已消耗 token / 已中止都不换。
       if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
-      if (tried.size >= MAX_TRIED) throw classified.thrown;
+      if (tried.size >= this.#maxTried()) throw classified.thrown;
     }
   }
 
@@ -786,6 +807,46 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param options - 当前请求。
    * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
    */
+  /**
+   * 一次请求内最多试几个账号（2026-10-30）。
+   *
+   * 与宿主层重试共用同一个上限（`autoContinueMaxAttempts`），用户设 5 次就是 5 次。
+   * 读不到/非正数时退回 {@link MAX_TRIED}。
+   * @returns 上限。
+   */
+  /**
+   * 当前是否**至少有一个**可用的账号条目。
+   *
+   * 「可用」= 账号端口能列出条目，且凭据能解析出 key（与发请求时的判定一致）。
+   * 读账号/读凭据失败时返回 `true`（**宁可放过**）：一次读失败不该把整个模型
+   * 列表清空，那比多列几个用不了的模型更糟。
+   * @returns 是否有账号。
+   */
+  async #hasAnyAccount(): Promise<boolean> {
+    let rows: readonly { ref: string }[];
+    try {
+      rows = await this.#deps.accounts.list();
+    } catch {
+      return true;
+    }
+    if (rows.length === 0) return false;
+    // 有条目但全都解析不出 key（凭据被删）：同样视为「没有可用账号」。
+    for (const row of rows) {
+      try {
+        const port = this.#deps.resolveStored;
+        if (port === undefined || (await port(row.ref)) !== undefined) return true;
+      } catch {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  #maxTried(): number {
+    const value = this.#deps.maxTried?.();
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : MAX_TRIED;
+  }
+
   async #fallbackModel(options: GenerateOptions, failureKind?: FailureKind): Promise<ModelFallbackCandidate | undefined> {
     // 开关（默认关闭）：关着就完全不换，让调用方抛原来的限额错误。
     if (this.#deps.autoSwitchModel?.() !== true) return undefined;

@@ -51,11 +51,18 @@ it("**用户选定的账号永远优先**，即使模型绑给了别的账号（
   expect(other.pick({ model: "m2", tried: new Set(["b"]) })).toBe("a");
 });
 
-it("固定账号优先，但被标记失效后回落到其它账号", () => {
+it("固定账号优先；**拒绝表不再让它回落**（2026-10-30）", () => {
+  /**
+   * 用户要求「不要拒绝表，直接更换下一个」：拒绝记录只用于界面说明，
+   * **不再参与选号**。所以固定账号即使被标记，下一次 `pick` 仍返回它 ——
+   * 真正「换下一个」发生在同一次请求内（`tried` 里有它之后）。
+   */
   const e = new RotationEngine({ order: ["a", "b"], pinned: "b", rules: [] });
   expect(e.pick({ model: "m", tried: new Set() })).toBe("b");
   e.markRejected("b", { kind: "quota", message: "exhausted", resetAt: Date.now() + 60_000 });
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
+  expect(e.pick({ model: "m", tried: new Set() }), "跨请求不记忆失败").toBe("b");
+  expect(e.pick({ model: "m", tried: new Set(["b"]) }), "同请求内换下一个").toBe("a");
+  expect(e.rejections().has("b"), "但记录仍保留（界面用）").toBe(true);
 });
 
 it("已尝试过的账号不重复选择；全部试过返回 undefined", () => {
@@ -75,80 +82,45 @@ it("已输出 / 已消耗 token / 已中止时禁止切换（Review Focus 2）",
   expect(e.fallbackAllowed({ emitted: false, totalTokens: 0, aborted: false })).toBe(true);
 });
 
-it("invalid-credential 在凭据更新后清除标记", () => {
+it("invalid-credential 记录可在凭据更新后清除（但选号不依赖它）", () => {
   const e = new RotationEngine({ order: ["a"], pinned: null, rules: [] });
   e.markRejected("a", { kind: "invalid-credential", message: "401" });
-  expect(e.pick({ model: "m", tried: new Set() })).toBeUndefined();
+  // 2026-10-30：拒绝记录不再挡选号 —— 单账号场景下挡了就等于「完全不可用」。
+  expect(e.pick({ model: "m", tried: new Set() }), "记录不影响选号").toBe("a");
+  expect(e.rejections().has("a"), "但记录仍在").toBe(true);
   e.clearCredentialRejection("a");
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
+  expect(e.rejections().has("a"), "清除后记录消失").toBe(false);
 });
 
-it("rate-limit 冷却 5 分钟后自动恢复", () => {
+it("拒绝记录的过期规则仍按分类计算（供界面显示，不影响选号）", () => {
   let now = 1_000;
-  const e = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
-  e.markRejected("a", { kind: "rate-limit", message: "429" });
-  expect(e.pick({ model: "m", tried: new Set() })).toBeUndefined();
-  now += RATE_LIMIT_COOLDOWN_MS + 1;
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
-});
-
-it("rate-limit 带 resetAt 时到 resetAt 即恢复（修复轮 1 裁决：与 quota 对称）", () => {
-  // resetAt 早于 5 分钟冷却：必须按 resetAt 放行，不能傻等冷却。
-  let now = 1_000;
-  const early = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
-  const resetAt = now + 20_000;
-  early.markRejected("a", { kind: "rate-limit", message: "429", resetAt });
-  now = resetAt - 1;
-  expect(early.pick({ model: "m", tried: new Set() })).toBeUndefined();
-  now = resetAt;
-  expect(early.pick({ model: "m", tried: new Set() })).toBe("a");
-
-  // resetAt 晚于冷却：仍以 resetAt 为准，冷却到点不得提前放行。
-  now = 1_000;
-  const late = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
-  late.markRejected("a", { kind: "rate-limit", message: "429", resetAt: now + 2 * RATE_LIMIT_COOLDOWN_MS });
-  now += RATE_LIMIT_COOLDOWN_MS;
-  expect(late.pick({ model: "m", tried: new Set() })).toBeUndefined();
-  now += RATE_LIMIT_COOLDOWN_MS;
-  expect(late.pick({ model: "m", tried: new Set() })).toBe("a");
-});
-
-// —— 控制器裁决补充：六种 FailureKind 的拒绝生命周期 ——
-
-it("quota 没有 resetAt 时按 RATE_LIMIT_COOLDOWN_MS 冷却", () => {
-  let now = 1_000;
-  const e = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
-  e.markRejected("a", { kind: "quota", message: "exhausted" });
-  expect(e.pick({ model: "m", tried: new Set() })).toBeUndefined();
-  now += RATE_LIMIT_COOLDOWN_MS - 1;
-  expect(e.pick({ model: "m", tried: new Set() })).toBeUndefined();
-  now += 1;
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
-});
-
-it("quota 带 resetAt 时到 resetAt（毫秒）为止，到点即恢复", () => {
-  let now = 1_000;
-  const e = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
-  e.markRejected("a", { kind: "quota", message: "exhausted", resetAt: now + 60_000 });
-  now += 59_999;
-  expect(e.pick({ model: "m", tried: new Set() })).toBeUndefined();
-  now += 1;
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
-});
-
-it("unavailable 与 quota 同规则：无 resetAt 按冷却，带 resetAt 到点恢复", () => {
-  let now = 5_000;
   const e = new RotationEngine({ order: ["a", "b"], pinned: null, rules: [], now: () => now });
-  e.markRejected("a", { kind: "unavailable", message: "套餐不含该模型" });
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("b");
-  now += RATE_LIMIT_COOLDOWN_MS + 1;
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
 
-  e.markRejected("a", { kind: "unavailable", message: "额度耗尽", resetAt: now + 30_000 });
-  now += 29_999;
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("b");
+  // rate-limit 无 resetAt → 冷却 RATE_LIMIT_COOLDOWN_MS
+  e.markRejected("a", { kind: "rate-limit", message: "429" });
+  expect(e.rejections().has("a")).toBe(true);
+  now += RATE_LIMIT_COOLDOWN_MS + 1;
+  expect(e.rejections().has("a"), "冷却到点后记录消失").toBe(false);
+
+  // quota 带 resetAt → 到点为止
+  now = 1_000;
+  e.markRejected("b", { kind: "quota", message: "exhausted", resetAt: now + 60_000 });
+  now += 59_999;
+  expect(e.rejections().has("b"), "未到 resetAt").toBe(true);
   now += 1;
-  expect(e.pick({ model: "m", tried: new Set() })).toBe("a");
+  expect(e.rejections().has("b"), "到 resetAt 后消失").toBe(false);
+});
+
+it("**同一次请求内**按顺序换下一个账号（这才是真正的「换号」）", () => {
+  const e = new RotationEngine({ order: ["a", "b", "c"], pinned: null, rules: [] });
+  const tried = new Set<string>();
+  expect(e.pick({ model: "m", tried })).toBe("a");
+  tried.add("a");
+  expect(e.pick({ model: "m", tried })).toBe("b");
+  tried.add("b");
+  expect(e.pick({ model: "m", tried })).toBe("c");
+  tried.add("c");
+  expect(e.pick({ model: "m", tried }), "全试过返回 undefined").toBeUndefined();
 });
 
 it("server 是瞬时失败：不进拒绝表，账号仍在轮换里", () => {
@@ -168,7 +140,7 @@ it("network 是瞬时失败：不进拒绝表，账号仍在轮换里", () => {
 
 it("瞬时失败既不写入也不清除既有拒绝条目", () => {
   let now = 1_000;
-  const e = new RotationEngine({ order: ["a"], pinned: null, rules: [], now: () => now });
+  const e = new RotationEngine({ order: ["a", "b"], pinned: null, rules: [], now: () => now });
   e.markRejected("a", { kind: "quota", message: "exhausted", resetAt: now + 60_000 });
   e.markRejected("a", { kind: "server", message: "500" });
   expect(e.rejections().get("a")?.kind).toBe("quota");
@@ -191,17 +163,20 @@ it("clearCredentialRejection 只清 invalid-credential，对其它分类无效�
     e.clearCredentialRejection(ref);
     expect(e.rejections().has(ref)).toBe(true);
   }
-  // 清不掉的条目仍然挡住轮换：只试 a 时无账号可选。
-  expect(e.pick({ model: "m", tried: new Set(["a"]) })).toBeUndefined();
+    // 2026-10-30：记录不再挡选号 —— 只试过 a 时按顺序给 b。
+    expect(e.pick({ model: "m", tried: new Set(["a"]) })).toBe("b");
   // 清除不存在的 ref 是恒等变换。
   e.clearCredentialRejection("nope");
   expect(e.rejections().size).toBe(3);
 });
 
-it("规则账号已被拒绝时继续往固定 → 顺序走，而不是直接返回 undefined", () => {
+it("规则账号被标记后**仍优先**；换下一个靠 tried（2026-10-30）", () => {
   const e = new RotationEngine({ order: ["a", "b"], pinned: "b", rules: [{ models: ["m1"], account: "b" }] });
   e.markRejected("b", { kind: "quota", message: "exhausted", resetAt: Date.now() + 60_000 });
-  expect(e.pick({ model: "m1", tried: new Set() })).toBe("a");
+  // 记录不参与选号：规则账号照样被选中。
+  expect(e.pick({ model: "m1", tried: new Set() })).toBe("b");
+  // 同一次请求内试过它之后才轮到下一个。
+  expect(e.pick({ model: "m1", tried: new Set(["b"]) })).toBe("a");
 });
 
 it("规则账号已在 tried 中时同样继续往固定 → 顺序走", () => {
@@ -217,12 +192,12 @@ it("pick 惰性清理已过期条目，且不改动调用方的 order / rules / 
   const e = new RotationEngine({ order, pinned: null, rules, now: () => now });
 
   e.markRejected("b", { kind: "quota", message: "exhausted", resetAt: now + 60_000 });
-  expect(e.pick({ model: "m1", tried })).toBe("a");
+  // 记录不参与选号：规则账号 b 仍被选中；只验证「读数时会惰性清理过期条目」。
   expect(e.rejections().has("b")).toBe(true);
 
   now += 60_000;
   expect(e.pick({ model: "m1", tried })).toBe("b");
-  expect(e.rejections().has("b")).toBe(false);
+  expect(e.rejections().has("b"), "过期条目在读取时被清掉").toBe(false);
 
   expect(order).toEqual(["a", "b"]);
   expect(rules).toEqual([{ models: ["m1"], account: "b" }]);
@@ -353,11 +328,11 @@ it("noteSelected 可被调用方显式上报（宿主重放/指定账号的路�
   expect(e.switchNotices()).toHaveLength(1);
 });
 
-it("pick 没有可选账号时不记录生效账号", () => {
+it("pick 没有可选账号时不记录生效账号（全部在 tried 里）", () => {
+  // 2026-10-30：拒绝表不再挡选号，所以「无账号可选」只能由 tried 全部覆盖造成。
   const e = new RotationEngine({ order: ["a"], pinned: null, rules: [] });
-  e.markRejected("a", { kind: "invalid-credential", message: "401" });
 
-  expect(e.pick({ model: "m", tried: new Set() })).toBeUndefined();
+  expect(e.pick({ model: "m", tried: new Set(["a"]) })).toBeUndefined();
   expect(e.effectiveAccount()).toBeUndefined();
 });
 

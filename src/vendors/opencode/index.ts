@@ -377,6 +377,14 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     // 额度用尽后是否自动换模型。
     // 关着时账号全被限额拒绝就直接报错，不替用户换。
     autoSwitchModel: () => document()["autoSwitchModelOnQuota"] === true,
+    /**
+     * 一次请求内最多试几个账号 —— 与 `autoContinueMaxAttempts` 共用同一个上限
+     * （2026-10-30 统一）。原来适配器内是硬编码 16，与用户设的次数无关。
+     */
+    maxTried: () =>
+      typeof document()["autoContinueMaxAttempts"] === "number"
+        ? (document()["autoContinueMaxAttempts"] as number)
+        : undefined,
   };
   const adapter = createOpencodeAdapter(deps);
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。

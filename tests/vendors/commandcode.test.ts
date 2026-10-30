@@ -13,7 +13,11 @@ import { buildRequestBody, decodeStream } from "../../src/vendors/commandcode/pr
 /** 本文件里的假的账号端口：这些用例都不经账号写路径（Task 10 负责）。 */
 function stubAccounts(): AccountPort {
   return {
-    list: async () => [],
+    /**
+     * 2026-10-30：`listModels` 在没有账号时返回空清单（修「账号删了模型还在」）。
+     * 这些测试都假设「有账号、目录正常」，所以桩里给一个占位账号。
+     */
+    list: async () => [{ ref: "a", label: "a" } as never],
     add: async () => {
       throw new Error("not used in this test");
     },
@@ -861,4 +865,48 @@ it("openai 流只缓冲了工具调用、随后断流：工具调用被交出，
   expect(chunks.filter((chunk) => chunk.type === "block-end")).toEqual([
     { type: "block-end", index: 0, block: { type: "tool-call", id: "call_1", name: "read_file", arguments: '{"path":"a.txt"}' } },
   ]);
+});
+
+
+it("**没有账号时不返回任何模型**（2026-10-30 修）", async () => {
+  /**
+   * 模型清单来自网关目录，与凭据无关 —— 所以账号被移除后仍会列出来。
+   * 用户选中这样的模型，请求时 `pick()` 返回 undefined，立刻报「没有可用账号」。
+   *
+   * 目录用与「可见性规则」那条测试**相同的形状**（`{ models: [...] }`），
+   * 只是账号端口返回空 —— 这样「有模型但无账号」才是可区分的场景。
+   */
+  const fetchImpl = (async (): Promise<Response> =>
+    new Response(JSON.stringify({ models: [{ id: "m1", name: "M1" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test", visibleModels: ["m1"] }),
+    rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: { ...stubAccounts(), list: async () => [] } as never,   // ← 没有账号
+    resolveStored: async () => "key-a",
+    fetchImpl,
+  });
+
+  await expect(adapter.listModels("commandcode")).resolves.toEqual([]);
+});
+
+it("账号条目在但凭据解析不出 key 时也不返回模型", async () => {
+  const fetchImpl = (async (): Promise<Response> =>
+    new Response(JSON.stringify({ models: [{ id: "m1", name: "M1" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test", visibleModels: ["m1"] }),
+    rotation: new RotationEngine({ order: [], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: stubAccounts(),                        // 有一个条目
+    resolveStored: async () => undefined,            // ← 但凭据没了
+    fetchImpl,
+  });
+
+  await expect(adapter.listModels("commandcode")).resolves.toEqual([]);
 });
