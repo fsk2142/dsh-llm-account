@@ -23,6 +23,8 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 /** 会被认作「对话痕迹」的模式。 */
 const TRACE_PATTERN = /用户|原话|报障/u;
@@ -119,9 +121,39 @@ function main() {
   }
 
   // —— 真正的改写 ——
-  const backup = `backup-before-scrub-${new Date().toISOString().replace(/[:.]/gu, "-").slice(0, 19)}`;
-  console.log(`\n创建备份分支：${backup}`);
-  run(["git", "branch", backup]);
+  //
+  // **备份必须是仓库之外的、独立的**（2026-10-30 修）。
+  //
+  // 原来用 `git branch backup-…` 建备份分支，然后 `filter-branch --all` 改写所有
+  // refs —— 那条备份分支**也在 `--all` 的范围内**，所以它保留的不是改写之前的
+  // 提交链。末尾还建议用它回滚，等于给了一个假的保险。
+  //
+  // 现在改成 `git bundle create <仓库外路径> --all`：产物是一个独立文件，
+  // 不在任何 ref 上，`filter-branch` 碰不到它。并且**校验它真的能克隆**，
+  // 校验失败就中止 —— 不给「以为有备份」的错觉。
+  const stamp = new Date().toISOString().replace(/[:.]/gu, "-").slice(0, 19);
+  const backupDir = process.env.SCRUB_BACKUP_DIR ?? join(tmpdir(), "dsh-scrub-backups");
+  mkdirSync(backupDir, { recursive: true });
+  const backupBundle = join(backupDir, `dsh-llm-account-before-scrub-${stamp}.bundle`);
+  console.log(`\n创建离线备份（不在任何 ref 上，filter-branch 改写不到）：${backupBundle}`);
+  run(["git", "bundle", "create", backupBundle, "--all"]);
+  // 校验：能从这个 bundle 独立克隆出完整历史。
+  const verifyDir = join(tmpdir(), `dsh-scrub-verify-${stamp}`);
+  try {
+    run(["git", "clone", "--quiet", "--mirror", backupBundle, verifyDir]);
+    const before = run(["git", "rev-list", "--all", "--count"]);
+    const after = execFileSync("git", ["-C", verifyDir, "rev-list", "--all", "--count"], { encoding: "utf8" }).trim();
+    if (before !== after) {
+      throw new Error(`备份不完整：原 ${before} 个提交，备份里 ${after} 个`);
+    }
+    console.log(`✓ 备份可独立克隆（${before} 个提交）`);
+  } catch (error) {
+    console.error(`\n⚠ 备份校验失败，**中止改写**（没有可靠的回滚手段时不该动手）：`);
+    console.error(`  ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`  已生成的 bundle 保留在：${backupBundle}`);
+    process.exitCode = 1;
+    return;
+  }
 
   // 关键：filter-branch 在临时目录执行，脚本必须用绝对路径。
   const here = dirname(fileURLToPath(import.meta.url));
@@ -129,22 +161,30 @@ function main() {
   console.log(`改写中（脚本：${filterScript}）…`);
 
   const beforeTree = run(["git", "rev-parse", "HEAD^{tree}"]);
-  execFileSync(
-    "git",
-    ["filter-branch", "-f", "--msg-filter", `node "${filterScript}"`, "--", "--all"],
-    { stdio: "inherit", env: { ...process.env, FILTER_BRANCH_SQUELCH_WARNING: "1" } },
-  );
+  /**
+   * 只改写**当前分支**，不再 `--all`。
+   *
+   * `--all` 会连所有 tag、远端跟踪分支一起改写 —— 而 tag 指向的是已发布的版本，
+   * 改写它们会让下游按 SHA 固定安装的人拿到不同的对象。真要清理 tag 应该单独
+   * 决策（并考虑 GitHub Release 的连带影响），不该混在提交信息清理里顺带做。
+   */
+  execFileSync("git", ["filter-branch", "-f", "--msg-filter", `node "${filterScript}"`, "--", "HEAD"], {
+    stdio: "inherit",
+    env: { ...process.env, FILTER_BRANCH_SQUELCH_WARNING: "1" },
+  });
 
   // 改写后校验：文件内容必须一个字节都没变。
   const afterTree = run(["git", "rev-parse", "HEAD^{tree}"]);
   if (beforeTree !== afterTree) {
     console.error("\n⚠ 文件内容发生了变化（tree 不一致）。请检查：");
-    console.error(`  git diff --stat ${backup} HEAD`);
-    console.error(`  git reset --hard ${backup}   # 需要回滚时`);
+    console.error(`  从离线备份恢复：`);
+    console.error(`    git clone --mirror "${backupBundle}" recovered && cd recovered`);
+    console.error(`  或从 reflog 找回：git reset --hard ORIG_HEAD`);
     process.exitCode = 1;
     return;
   }
   console.log("✓ 文件内容未变（只改了提交信息）");
+  console.log(`  回滚方式：从离线备份重克隆 —— git clone --mirror "${backupBundle}" <目录>`);
 
   const left = tracedCommits().length;
   if (left === 0) {

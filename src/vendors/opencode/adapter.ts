@@ -714,23 +714,6 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
 
 
   /**
-   * 额度用尽后换模型的判定。
-   *
-   * 只在**所有账号都被拒绝**之后调用，且必须先过开关（`autoSwitchModel`，默认关闭）。
-   *
-   * 四级优先由 `core/model-fallback` 的纯函数实现：同网关同名 → 跨网关同名 →
-   * 同网关异名（按上下文窗口与推理档位接近度收窄）→ 跨网关异名；同一级里随机。
-   * @param options - 当前请求。
-   * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
-   */
-  /**
-   * 一次请求内最多试几个账号（2026-10-30）。
-   *
-   * 与宿主层重试共用同一个上限（`autoContinueMaxAttempts`），用户设 5 次就是 5 次。
-   * 读不到/非正数时退回 {@link MAX_TRIED}。
-   * @returns 上限。
-   */
-  /**
    * 当前是否**至少有一个**可用的账号条目。
    *
    * 「可用」= 账号端口能列出条目，且凭据能解析出 key（与发请求时的判定一致）。
@@ -758,11 +741,28 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     return false;
   }
 
+  /**
+   * 一次请求内最多试几个账号（2026-10-30）。
+   *
+   * 与宿主层重试共用同一个上限（`autoContinueMaxAttempts`），用户设 5 次就是 5 次。
+   * 读不到/非正数时退回 {@link MAX_TRIED}。
+   * @returns 上限。
+   */
   #maxTried(): number {
     const value = this.#deps.maxTried?.();
     return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : MAX_TRIED;
   }
 
+  /**
+   * 额度用尽后换模型的判定。
+   *
+   * 只在**所有账号都被拒绝**之后调用，且必须先过开关（`autoSwitchModel`，默认关闭）。
+   *
+   * 四级优先由 `core/model-fallback` 的纯函数实现：同网关同名 → 跨网关同名 →
+   * 同网关异名（按上下文窗口与推理档位接近度收窄）→ 跨网关异名；同一级里随机。
+   * @param options - 当前请求。
+   * @returns 替代目标；开关关着 / 不该换 / 没有候选时都是 `undefined`。
+   */
   async #fallbackModel(options: GenerateOptions, failureKind?: FailureKind): Promise<ModelFallbackCandidate | undefined> {
     // 开关（默认关闭）：关着就完全不换，让调用方抛原来的限额错误。
     if (this.#deps.autoSwitchModel?.() !== true) return undefined;

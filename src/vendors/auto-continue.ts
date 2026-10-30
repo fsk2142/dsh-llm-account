@@ -52,36 +52,55 @@ export interface AutoContinueProbe {
 export const CONTINUE_PROMPT = "继续";
 
 /**
- * 每次重试前的固定等待（毫秒）。
+ * 等一会儿（不阻塞事件循环），**可被 abort 提前打断**。
  *
- * 为什么需要：宿主收到 `{ kind: "retry" }` 后**立即** `continue`，中间没有任何等待
- * （实测 `dsh-agent-loop` 无 backoff）。网络抖动时会在几百毫秒内连打数次 ——
- * 台账实测有 0.1 秒的相邻失败，那反而可能加剧拥塞。
+ * 2026-10-30 加信号支持：原来只 `setTimeout`，用户在这段等待里按停止也不会生效 ——
+ * 定时器照常走完，然后照样返回 `{ kind: "retry" }`，等于否认了用户的取消意图。
  *
- * **固定 2 秒**（2026-10-29 按需求改）：原来是 0.5s / 1s / 2s 的递增退避，
- * 用户要求「每次错误重试中间间隔要 2s」—— 均匀间隔对「网络刚恢复」这类场景更稳，
- * 也不会让第一次重试来得太急。
- */
-
-/**
- * 等一会儿（不阻塞事件循环）。
+ * 被取消时**不抛错**，而是正常 resolve 并让调用方检查 `signal.aborted` —— 抛
+ * `AbortError` 会把「用户取消」伪装成一次失败，污染上层的失败分类。
  * @param ms - 毫秒。
- * @returns 到点后 resolve 的 Promise。
+ * @param signal - 可选取消信号。
+ * @returns 到点或被取消后 resolve 的 Promise。
  */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    /** 取消时清掉定时器，立刻放行（**不抛错**）。 */
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /**
  * 注册自动继续的两个事件。
+ *
+ * `settings` 是**读取函数**而不是值快照（2026-10-30 修）。
+ *
+ * 原来是值快照，而 `loader/volatile-update`（用户改设置）**不会重跑 apply** ——
+ * 于是「关→开」时监听器从未注册、「开→关」时旧处理器按旧快照照跑、改次数/间隔也不
+ * 生效，全都要重载宿主。同文件的其他配置（`autoSwitchModel` / `maxTried`）都是
+ * getter，只有这里传了快照，是遗漏。
+ *
+ * 现在两个监听器**总是注册**，每次事件现读设置：
+ * - 开关关着 → 直接交棒（不重试），与「不注册」等价；
+ * - 开关开着 → 按当前次数与间隔判断。
+ * 这样 `enabled` 的语义从「装不装监听器」变成「事件时判不判」，行为可预期、可热改。
  * @param ctx - 宿主 context（只用 `on`）。
- * @param settings - 开关与次数上限。
+ * @param settings - **读取**当前开关与上限的函数。
  * @param probe - 截断路径所需的最小宿主探针（缺省则不启用续写）。
  * @returns 注销函数（把注册的事件都摘掉）。
  */
 export function applyAutoContinue(
   ctx: AutoContinueHost,
-  settings: AutoContinueSettings,
+  settings: () => AutoContinueSettings,
   probe?: AutoContinueProbe,
 ): () => void {
   const disposers: (() => void)[] = [];
@@ -98,8 +117,7 @@ export function applyAutoContinue(
     }
   };
 
-  if (settings.enabled) {
-    /**
+  {    /**
      * `agent/request-error` 是 **waterfall**，签名是 `(payload, next) => decision`。
      *
      * `cordis` 的实现（`EventsService.waterfall`）：
@@ -131,39 +149,52 @@ export function applyAutoContinue(
           ? (record.failure as Record<string, unknown>)
           : {};
       const code = typeof failure.code === "string" ? failure.code : undefined;
+      /**
+       * 取消信号（2026-10-30 起真正使用）。
+       *
+       * 宿主把被取消那次请求的信号放在 payload 上；拿不到就当没有。
+       * 用户在等待期间按停止 → `delay` 立刻放行 → 下面的 `aborted` 检查拒绝返回
+       * `retry`，把决定权交回下游。**这是用户意图优先于「多试一次」的地方。**
+       */
+      const signal = record.signal instanceof AbortSignal ? record.signal : undefined;
+      const current = settings();
       const attempts = attemptsOf(turn);
-      if (!shouldRetryFailure(settings, code, attempts)) {
+      if (!shouldRetryFailure(current, code, attempts)) {
         // 不归我们重试：**必须交棒**，否则会截断宿主自己的重试链。
         return await handOff();
       }
       bump(turn);
       /**
-       * **固定等待 2 秒再重试**（2026-10-29 按需求改）。
+       * **按配置的间隔等待再重试**。
        *
        * 宿主收到 `{ kind: "retry" }` 就立刻 `continue` —— **它自己不做任何等待**
        * （实测 `dsh-agent-loop` 里没有 backoff / setTimeout）。所以网络抖动时重试会
        * 在几百毫秒内连着打好几次（台账实测有 0.1 秒的相邻失败），反而可能加剧拥塞。
        *
-       * 用户要求「每次错误重试中间间隔要 2s」，所以是**固定间隔**而不是递增退避：
-       * 均匀间隔对「网络刚恢复」这类场景更稳，也避免第一次重试来得太急。
-       * 等待用 `setTimeout` + Promise，不阻塞事件循环。
+       * 缺省 2 秒、**固定间隔**而不是递增退避：均匀间隔对「网络刚恢复」这类场景更稳，
+       * 也避免第一次重试来得太急。等待用 `setTimeout` + Promise，不阻塞事件循环。
        *
-       * **等待期间不响应取消信号**：用户按停止后最多还要等 2 秒，宿主在下一轮才感知
-       * 到取消。这是有意的取舍 —— 给 `delay` 接 `AbortSignal` 要多传参数、多一条竞速
-       * 路径，而 2 秒的延迟无害。
+       * 等待**响应取消**：用户在等待期间按停止时定时器立刻清掉、放行，然后由下面
+       * 的 `aborted` 检查拒绝重试。原来这里不理会信号，等于把用户的停止意图拖后
+       * 一整段间隔，还可能返回一个与当前信号矛盾的 `retry`。
        */
-      await delay(settings.intervalMs);
+      await delay(current.intervalMs, signal);
+      if (signal?.aborted === true) {
+        // 用户在我们等待期间取消了：不重试，交棒给下游（它会看到同一个已取消的信号）。
+        return await handOff();
+      }
       return { kind: "retry" };
     });
     if (typeof off === "function") disposers.push(off as () => void);
   }
 
-  if (settings.enabled && probe !== undefined) {
+  if (probe !== undefined) {
     const off = ctx.on("agent/turn-stopping", async (payload: unknown) => {
       const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const turn = typeof record.turn === "number" ? record.turn : 0;
       const reason = probe.lastFinishReason?.();
-      if (!shouldContinueOnTruncate(settings, reason, attemptsOf(turn))) return undefined;
+      const current = settings();
+      if (!shouldContinueOnTruncate(current, reason, attemptsOf(turn))) return undefined;
       bump(turn);
       // 推一条消息 → 宿主随后检查 `inbox.nextStep.length` 时不再为 0，本轮继续。
       probe.inbox.append({ role: "user", content: CONTINUE_PROMPT });

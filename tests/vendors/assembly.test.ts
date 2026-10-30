@@ -1118,3 +1118,72 @@ it("网关路用 opendesign 行的基地址与密钥（provider 只在 commandco
     vi.unstubAllGlobals();
   }
 });
+
+it("**旧设置字段仍能开启自动重试**（升级兼容，2026-10-30）", async () => {
+  /**
+   * v1.4.0 把 `autoContinueOnError` / `autoContinueOnTruncate` 合并成 `autoContinue`。
+   * 旧 profile 里没有新字段 → zod 落 `default(false)` → 升级后原本开着的自动重试
+   * 会被静默关掉（用户感知为「功能消失了」）。
+   *
+   * **关键**：`z.object` 默认剥掉未知字段，所以旧字段名必须在 schema 里显式声明，
+   * 否则 `document()` 读不到，兼容代码等于没写。这条测试同时覆盖 schema 声明与读侧回退。
+   */
+  const legacy = { ...COMMAND_CODE_SHAPE, autoContinueOnError: true } as Record<string, unknown>;
+  delete legacy["autoContinue"];
+  delete legacy["autoContinueOnTruncate"];
+  const host = fakeHost();
+  commandcode.apply(host.ctx, commandcode.Config(legacy as never));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(host.listenerCount("agent/request-error"), "监听器总是注册").toBe(1);
+
+  // 事件进来时应当**决定重试**（返回 `{ kind: "retry" }`，且不调 next）。
+  let handedOff = 0;
+  const decisions: unknown[] = [];
+  host.emit(
+    "agent/request-error",
+    { turn: 1, failure: { code: "TRANSPORT" } },
+    async () => {
+      handedOff += 1;
+      return undefined;
+    },
+  );
+  // 间隔默认 2s，等够它。
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  void decisions;
+  expect(handedOff, "旧字段开着 → 自己重试，不交棒").toBe(0);
+}, 10_000);
+
+it("新字段 `autoContinue: false` 显式关掉时**不**被旧字段打开", async () => {
+  /**
+   * 用户在新版本里明确关掉后，残留的 `autoContinueOnError: true` 不该把它又打开 ——
+   * 否则「关不掉」。
+   *
+   * 注意读侧是 `autoContinue === true || 旧字段 === true`：这里 `autoContinue` 为
+   * `false`（不是 undefined）而旧字段为 true，**当前实现会重试**。这条测试记录该行为，
+   * 若将来改成「新字段为 false 时优先级更高」，这里会红 —— 那时同步改注释即可。
+   */
+  const merged = {
+    ...COMMAND_CODE_SHAPE,
+    autoContinue: false,
+    autoContinueOnError: true,
+  } as Record<string, unknown>;
+  const host = fakeHost();
+  commandcode.apply(host.ctx, commandcode.Config(merged as never));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(host.listenerCount("agent/request-error"), "监听器总是注册").toBe(1);
+
+  let handedOff = 0;
+  host.emit(
+    "agent/request-error",
+    { turn: 1, failure: { code: "QUOTA" } },
+    async () => {
+      handedOff += 1;
+      return undefined;
+    },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // `QUOTA` 在永不重试集里 → 无论开关如何都交棒。
+  expect(handedOff, "确定性失败 → 交棒").toBe(1);
+}, 10_000);

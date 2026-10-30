@@ -126,7 +126,7 @@ export function chooseSearchRoute(input: SearchRouteInput): SearchRoute {
       // 用户明确关掉了：两条路都不走，界面/宿主据此报「搜索未启用」。
       return { kind: "unavailable" };
     case "gateway-only":
-      // 用户明确要求只用网关：不可用时**明确失败**，不偷偷改用 API 烧他的余额。
+      // `*-only` 语义：该路不可用时**明确失败**，不偷偷改用另一条路（那会违背策略并产生额外计费）。
       return gatewayReady ? { kind: "gateway", provider: SEARCH_CAPABLE_GATEWAY } : { kind: "unavailable" };
     case "api-only":
       return apiReady ? { kind: "api" } : { kind: "unavailable" };

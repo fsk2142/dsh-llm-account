@@ -188,6 +188,20 @@ export const Config: PluginConfigSchema = z.object(
       // 自动重试（2026-10-29 合并）：一个总开关管两件事 —— 请求失败重试、输出截断续写。
       // 原来分成两个开关，界面上并排的复选框反而让人分不清该开哪个。
       autoContinue: z.boolean().default(false),
+      /**
+       * **旧字段**（v1.4.0 之前拆成两个开关），只为升级兼容保留。
+       *
+       * zod 的 `z.object` 默认**剥掉未知字段** —— 不在 schema 里声明，`document()`
+       * 就读不到它们，兼容代码等于没写。所以这里必须显式声明。
+       *
+       * 这些字段**不给 default** —— 未提供时就是 `undefined`，与「用户关着」区分得开。
+       *
+       * 不显示在界面上（`settings-cards.ts` 的 `shared` 列表里没有它们），
+       * 只在 `autoContinue` 缺失时作为回退依据：任一为 true 就当作开启。
+       * 读侧见 `applyAutoContinue` 调用点的注释。
+       */
+      autoContinueOnError: z.boolean(),
+      autoContinueOnTruncate: z.boolean(),
       autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
       autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
       searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only", "off"]).default("gateway-first"),

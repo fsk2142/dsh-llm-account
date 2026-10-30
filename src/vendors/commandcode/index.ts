@@ -153,6 +153,20 @@ export const Config: PluginConfigSchema = z.object(
       // 自动重试（2026-10-29 合并）：一个总开关管两件事 —— 请求失败重试、输出截断续写。
       // 原来分成两个开关，界面上并排的复选框反而让人分不清该开哪个。
       autoContinue: z.boolean().default(false),
+      /**
+       * **旧字段**（v1.4.0 之前拆成两个开关），只为升级兼容保留。
+       *
+       * zod 的 `z.object` 默认**剥掉未知字段** —— 不在 schema 里声明，`document()`
+       * 就读不到它们，兼容代码等于没写。所以这里必须显式声明。
+       *
+       * 这些字段**不给 default** —— 未提供时就是 `undefined`，与「用户关着」区分得开。
+       *
+       * 不显示在界面上（`settings-cards.ts` 的 `shared` 列表里没有它们），
+       * 只在 `autoContinue` 缺失时作为回退依据：任一为 true 就当作开启。
+       * 读侧见 `applyAutoContinue` 调用点的注释。
+       */
+      autoContinueOnError: z.boolean(),
+      autoContinueOnTruncate: z.boolean(),
       autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
       autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
       /** 功能页的两台开关：关掉只隐藏界面那一块，不影响已配置的能力。 */
@@ -430,11 +444,26 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   // 同一批字段，所以三个 provider 行里任意一行读到的都是同一份值。在这里注册可以避免
   // 同一次请求被三条链路各重试一遍（那会把重试次数放大三倍）。
   //
-  // 总开关关着时 `applyAutoContinue` 不注册任何事件（关掉即静默）。
+  // **两个监听器总是注册**，每次事件现读设置：开关关着就交棒（不重试），与「不注册」
+  // 等价。这样运行时改开关/次数/间隔能立即生效 —— 快照做不到（`volatile-update`
+  // 不会重跑 apply）。
   applyAutoContinue(
     ctx as unknown as { on(event: string, listener: (...args: unknown[]) => unknown): unknown },
-    {
-      enabled: document()["autoContinue"] === true,
+    // 传**读取函数**而不是快照：`loader/volatile-update` 不会重跑 apply，
+    // 快照会让「运行时改开关/次数/间隔」全部不生效（要重载宿主才行）。
+    () => ({
+      /**
+       * **兼容旧字段**（2026-10-30）。原来拆成 `autoContinueOnError` /
+       * `autoContinueOnTruncate` 两个开关，v1.4.0 合并成 `autoContinue`。
+       *
+       * 旧 profile 里没有新字段 → zod 落 `default(false)` → 升级后原本开着的自动重试
+       * 被**静默关掉**（用户感知为「功能消失」）。所以读的时候两个都看：
+       * 新字段优先，其次任一旧开关为 true 就当作开启。
+       */
+      enabled:
+        document()["autoContinue"] === true ||
+        document()["autoContinueOnError"] === true ||
+        document()["autoContinueOnTruncate"] === true,
       maxAttempts:
         typeof document()["autoContinueMaxAttempts"] === "number"
           ? (document()["autoContinueMaxAttempts"] as number)
@@ -443,7 +472,7 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
         typeof document()["autoContinueIntervalMs"] === "number"
           ? (document()["autoContinueIntervalMs"] as number)
           : 2000,
-    },
+    }),
   );
 
   // 统一搜索：网关订阅额度优先，没有则用 API key。

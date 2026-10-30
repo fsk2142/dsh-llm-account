@@ -150,7 +150,7 @@ export class SearchUnavailableError extends Error {
  * 这个策略失败后**允许**回退到另一条路吗。
  *
  * 与 `chooseSearchRoute` 里的语义严格对齐：`*-first` 是「优先但可回退」，`*-only` 与 `off`
- * 是「不许偷偷换路」（用户明确要求只用某一条，换过去会违背他的意图 —— 也可能烧他的余额）。
+ * 是「不许偷偷换路」（`*-only` 选了某一条，换过去会违背策略，也可能产生额外计费）。
  * @param strategy - 设置文档里的策略值。
  * @returns 失败后是否还可以试另一条路。
  */
@@ -349,6 +349,8 @@ export function createSearchProvider(deps: SearchProviderDeps): {
       }
 
       // —— API 路：直连 /v1/tools/search（不吃对话 token）——
+      /** 本路失败的原因（`undefined` = 成功返回了）。回退时要把两边的真实原因都说出来。 */
+      let apiFailure: string | undefined;
       if (chosen.kind === "api") {
         if (apiKeys.length === 0) throw new SearchUnavailableError("没有解析到 DeepSeek API key");
         const failure = await searchWithApiKeys(apiKeys, request, deps.fetchImpl, signal);
@@ -362,51 +364,103 @@ export function createSearchProvider(deps: SearchProviderDeps): {
         if (!strategyCanFallBack(deps.strategy()) || access === undefined) {
           throw new SearchUnavailableError(failure.reason);
         }
-        // 落到下面的网关路；若网关也失败，用户会看到网关的原因（那是最后一道）。
+        apiFailure = failure.reason;
+        // 落到下面的网关路；若网关也失败，用户会看到两边的原因。
       }
 
       // —— 网关路：模型在对话里调用服务端搜索工具 ——
-      if (access === undefined) {
+      //
+      // **两个方向都要能回退**（2026-10-30 修）。原来只有 `api-first` 会回退到网关，
+      // `gateway-first` 在网关 500 / 超时 / 没返回工具结果时**直接抛错** —— 与 README
+      // 承诺的「网关优先，失败回退 API」不符。
+      //
+      // 回退条件与 API 侧对称：
+      // - 策略允许回退（`*-first` 才行，`*-only` 不许）；
+      // - 目标路可用（这里是 `apiKeys` 非空）；
+      // - 用户**没有取消**（取消了就到此为止，不再打第二个网络请求）。
+      const gatewayAvailable = access !== undefined;
+      const apiAvailable = apiKeys.length > 0;
+      /** 网关可走，或（网关不可用但 API 可回退）时继续。 */
+      const canTryGateway = gatewayAvailable || (strategyCanFallBack(deps.strategy()) && apiAvailable);
+      if (!canTryGateway) {
+        if (apiFailure !== undefined) throw new SearchUnavailableError(apiFailure);
         throw new SearchUnavailableError("网关联署密钥不可用，搜索无法走订阅额度");
       }
-      const { baseURL, key } = access;
-      const body = {
-        model: SEARCH_MODEL,
-        max_tokens: 4_096,
-        messages: [{ role: "user", content: request.query }],
-        // **工具类型必须是这个版本串**：写裸 `web_search` 会被当成普通工具（实测 0 结果）。
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
-      };
-      let response: Response;
-      try {
-        response = await deps.fetchImpl(`${baseURL.replace(/\/$/, "")}/messages`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-api-key": key,
-            authorization: `Bearer ${key}`,
-            "anthropic-version": API_VERSION,
-          },
-          body: JSON.stringify(body),
-          ...(signal === undefined ? {} : { signal }),
-        });
-      } catch (error) {
-        // 取消可能发生在请求在途的那一刻（不是开始前）：同样给一句干净的话，
-        // 别把一个 DOMException 原样抛给宿主。
-        if (isAbortError(error)) throw new SearchUnavailableError("搜索已取消");
-        throw new SearchUnavailableError(`搜索请求没能发出：${error instanceof Error ? error.message : String(error)}`);
+
+      /** 网关路的失败原因；`undefined` = 成功。 */
+      let gatewayFailure: string | undefined;
+      if (gatewayAvailable) {
+        const { baseURL, key } = access;
+        const body = {
+          model: SEARCH_MODEL,
+          max_tokens: 4_096,
+          messages: [{ role: "user", content: request.query }],
+          // **工具类型必须是这个版本串**：写裸 `web_search` 会被当成普通工具（实测 0 结果）。
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+        };
+        let response: Response | undefined;
+        try {
+          response = await deps.fetchImpl(`${baseURL.replace(/\/$/, "")}/messages`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-api-key": key,
+              authorization: `Bearer ${key}`,
+              "anthropic-version": API_VERSION,
+            },
+            body: JSON.stringify(body),
+            ...(signal === undefined ? {} : { signal }),
+          });
+        } catch (error) {
+          // 取消可能发生在请求在途的那一刻（不是开始前）：同样给一句干净的话，
+          // 别把一个 DOMException 原样抛给宿主。
+          if (isAbortError(error)) throw new SearchUnavailableError("搜索已取消");
+          gatewayFailure = `搜索请求没能发出：${error instanceof Error ? error.message : String(error)}`;
+        }
+        if (response !== undefined && gatewayFailure === undefined) {
+          if (!response.ok) {
+            gatewayFailure = `搜索请求失败：HTTP ${response.status}`;
+          } else {
+            const payload: unknown = await response.json();
+            try {
+              const result = sourcesOf(payload);
+              // 宿主自己也执行 maxResults：这里截一次以防 provider 侧超发。
+              const max = request.maxResults;
+              if (typeof max === "number" && max > 0 && result.sources.length > max) {
+                return { sources: result.sources.slice(0, max), truncated: true };
+              }
+              return result;
+            } catch (error) {
+              gatewayFailure = error instanceof Error ? error.message : String(error);
+            }
+          }
+        }
       }
-      if (!response.ok) {
-        throw new SearchUnavailableError(`搜索请求失败：HTTP ${response.status}`);
+
+      // 网关也失败 → 若策略允许且 API 可用，回退到 API；否则把两边的真实原因都说出来。
+      if (signal?.aborted === true) throw new SearchUnavailableError("搜索已取消");
+      /**
+       * 回退到 API 的唯一条件：**API 还没试过**（`apiFailure === undefined`）。
+       *
+       * `api-first` 走到这里时 API 已经试过并失败（`apiFailure` 有值），再打一次是白烧
+       * 请求与计费 —— 那条路的回退方向是 API→网关，反过来不成立。
+       */
+      if (apiFailure === undefined && strategyCanFallBack(deps.strategy()) && apiAvailable) {
+        const retry = await searchWithApiKeys(apiKeys, request, deps.fetchImpl, signal);
+        if (retry.kind === "ok") return { sources: retry.sources, truncated: false };
+        // 这里不再重复检查 `signal.aborted`：上面已经抛过一次，而且 `searchWithApiKeys`
+        // 自己会把取消语境翻译成原因文本。多一层判断只会让类型收窄成 `false` 恒不成立。
+        throw new SearchUnavailableError(
+          `两条路都失败 —— 网关：${gatewayFailure ?? "不可用"}；API：${retry.reason}`,
+        );
       }
-      const payload: unknown = await response.json();
-      const result = sourcesOf(payload);
-      // 宿主自己也执行 maxResults：这里截一次以防 provider 侧超发。
-      const max = request.maxResults;
-      if (typeof max === "number" && max > 0 && result.sources.length > max) {
-        return { sources: result.sources.slice(0, max), truncated: true };
-      }
-      return result;
+      throw new SearchUnavailableError(
+        gatewayFailure === undefined
+          ? (apiFailure ?? "搜索不可用")
+          : apiFailure === undefined
+            ? gatewayFailure
+            : `两条路都失败 —— API：${apiFailure}；网关：${gatewayFailure}`,
+      );
     },
   };
 }

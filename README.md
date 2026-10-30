@@ -57,15 +57,30 @@ dsh plugin --profile <你的profile> add github:fsk2142/dsh-llm-account
 触发条件：**所有账号都被拒绝之后**。四级优先——同网关同名 → 跨网关同名 → 同网关异名
 （按上下文窗口与推理档位接近度排序）→ 跨网关异名。
 
-### 自动继续
+### 自动重试
 
 | 配置项 | 作用 |
 | --- | --- |
-| `autoContinueOnError` | 请求瞬时失败（网络、5xx、超时）时自动重试 |
-| `autoContinueOnTruncate` | 回答被输出上限截断时自动续写 |
-| `autoContinueMaxAttempts` | 每轮最多自动继续几次（默认 3） |
+| `autoContinue` | 总开关：异常中断（请求失败）后自动重试。默认关 |
+| `autoContinueMaxAttempts` | 每轮最多自动重试几次（默认 3，范围 1–20） |
+| `autoContinueIntervalMs` | 每次重试前等待多久（默认 2000，范围 500–60000） |
+
+不重试的失败码只有四类：`ABORTED`（用户按了停止）、`CONTEXT_WINDOW_EXCEEDED`、
+`INVALID_CREDENTIAL`、`QUOTA`。其余（含未知码）都会按上面的次数与间隔重试。
+
+**旧字段迁移**（v1.4.0 合并前）：
+
+| 旧配置项 | 现在 |
+| --- | --- |
+| `autoContinueOnError` | 并入 `autoContinue`（仍被读取，任一为 `true` 即视为开启） |
+| `autoContinueOnTruncate` | 并入 `autoContinue`（同上） |
 
 额度用尽与鉴权失败**不算**瞬时失败，走「换账号」与「换模型」两条路。
+
+> **「回答被截断时自动续写」当前不可用。** 它需要读宿主的完成原因并往对话队列里
+> 追加一条消息，而 DSH 目前没有暴露这样的公开 API —— 生产装配里那个探针从未传入，
+> 相应事件因此不会注册。要恢复这个能力，得先有稳定的宿主接口；在那之前可以靠自动
+> 重试（`autoContinue`）覆盖「请求失败」这一类中断。
 
 ### 查看额度
 

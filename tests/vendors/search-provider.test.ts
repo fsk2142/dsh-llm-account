@@ -238,4 +238,68 @@ describe("取消（用户按了停止）", () => {
     expect(result.sources).toHaveLength(1);
     expect(calls).toHaveLength(2);
   });
+
+  it("**`gateway-first`：网关失败后回退 API**（2026-10-30 修）", async () => {
+    /**
+     * 原来网关路（500 / 超时 / 无工具结果）**直接抛错**，不看 API key 是否可用 ——
+     * 与 README 承诺的「网关优先，失败回退 API」不符。这里模拟网关 500 → 回退成功。
+     */
+    const calls: string[] = [];
+    const impl = (async (url: unknown) => {
+      const target = String(url);
+      calls.push(target);
+      if (target.includes("/messages")) {
+        return new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ results: [{ title: "From API", url: "https://api.example/x" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = createSearchProvider(deps({ fetchImpl: impl, strategy: () => "gateway-first" }));
+    const result = await provider.search({ query: "hello" });
+
+    expect(calls.length, "两次请求").toBe(2);
+    expect(calls[0], "先网关").toContain("/messages");
+    expect(calls[1], "失败后回退 API").toBe("https://api.deepseek.com/v1/tools/search");
+    expect(result.sources.map((s) => s.url)).toEqual(["https://api.example/x"]);
+  });
+
+  it("`gateway-first` + 网关 200 但没有工具结果 → 也回退 API", async () => {
+    // 「200 静默忽略」是最危险的降级形态：不能误报「没有搜索结果」。
+    const calls: string[] = [];
+    const impl = (async (url: unknown) => {
+      const target = String(url);
+      calls.push(target);
+      if (target.includes("/messages")) {
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "no search" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ results: [{ title: "From API", url: "https://api.example/x" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = createSearchProvider(deps({ fetchImpl: impl, strategy: () => "gateway-first" }));
+    const result = await provider.search({ query: "hello" });
+
+    expect(calls.length).toBe(2);
+    expect(result.sources.map((s) => s.url)).toEqual(["https://api.example/x"]);
+  });
+
+  it("`gateway-only` 时网关失败**不回退**（`*-only` 边界不变）", async () => {
+    const calls: string[] = [];
+    const impl = (async (url: unknown) => {
+      calls.push(String(url));
+      return new Response("{}", { status: 500, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const provider = createSearchProvider(deps({ fetchImpl: impl, strategy: () => "gateway-only" }));
+    await expect(provider.search({ query: "hello" })).rejects.toThrow(SearchUnavailableError);
+    expect(calls.length, "只打了网关").toBe(1);
+  });
 });

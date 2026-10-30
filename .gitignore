@@ -1,17 +1,51 @@
+# 依赖与构建缓存
 node_modules/
 *.tsbuildinfo
 .superpowers/
 
+# —— 机密文件（2026-10-30 补）——
+#
+# 原来只忽略依赖与缓存，没有挡私密文件；发版脚本当时用 `git add -A`，于是任何
+# 误落在仓库目录里的 `.env` / 凭据导出 / 浏览器 Cookie 库都会被一起提交上去。
+#
+# 补齐后 `scripts/release.mjs` 的 `guardWorkingTree()` 用**同一套规则**做发版前
+# 检查（两处要一起改，否则会漏）。
+.env
+.env.*
+!.env.example
+auth.json
+credentials.json
+credentials.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+*Cookies.sqlite
+*Cookies.db
+**/cookies.sqlite
+**/cookies.db
+
+# 本地日志与临时导出
+*.log
+logs/
+tmp/
+.tmp/
+*.local
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+
 # lib/ 是**发布产物**，必须进版本库 —— 见下面这条的原因。
 #
-# 2026-10-20：用户从 GitHub 安装后「校验未通过、无法使用」。根因是本文件第 2 行曾忽略
-# `lib/`，而 package.json 的 main / exports 与 cordis.patch.yml 里的 `./lib/opencode.js`
-# 全部指向 lib/*.js —— 克隆下来的是纯源码仓库，宿主加载时文件根本不存在。
-# 「校验未通过」是**准确报告**而不是误报。
+# 2026-10-20 报障：从 GitHub 安装后「校验未通过、无法使用」。根因是本文件曾忽略
+# `lib/`，而 package.json 的 main / exports 与 cordis.patch.yml 里的
+# `./lib/opencode.js` 全部指向 lib/*.js —— 克隆下来的是纯源码仓库，宿主加载时
+# 文件根本不存在。「校验未通过」是准确报告，不是误报。
 #
 # 现在改为提交构建产物，于是 `git clone` + 安装即可直接使用，无需在目标机器上装
 # devDependencies 再跑一遍 tsdown。
 #
-# 代价（写在这里避免以后困惑）：**每次改源码都必须重新 `pnpm build` 并把 lib/ 一起提交**，
-# 否则仓库里的产物与源码不一致。验证方式：`pnpm build` 后 `git status` 里 lib/ 应当是
-# 唯一的变化来源；若 lib/ 有改动而 src/ 没有，说明上一次忘了提交产物。
+# 代价：每次改源码都必须重新 `pnpm build` 并把 lib/ 一起提交，否则仓库里的产物
+# 与源码不一致。验证方式：`pnpm build` 后 `git status` 里 lib/ 应当是唯一的变化
+# 来源；若 lib/ 有改动而 src/ 没有，说明上一次忘了提交产物。
