@@ -286,9 +286,19 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   /** 已发出的读取序号；`describe` 返回时只有序号仍是最新的才写回。 */
   let rawDocumentSeq = 0;
   /**
-   * 重新读一次持久文档（异步，失败时保留上一次的值）。
+   * 最近一次读取是否**失败**了（2026-10-30，按「偏安全」策略加）。
    *
-   * 读不到文档不该影响重试判定：保持上次结果或退回解析值，**不抛**。
+   * 用户的选择：读不到最新设置时**临时关闭自动重试**，而不是沿用旧值。
+   * 理由：开关是用户直接控制「要不要自动发请求」的东西 —— 他点了关闭就应该真的
+   * 不重试。设置服务抖一下导致的重试暂停是可接受的代价，反过来（用户以为关了、
+   * 实际还在重试）不可接受。
+   */
+  let rawDocumentFailed = false;
+  /**
+   * 重新读一次持久文档。
+   *
+   * **失败时标记 `rawDocumentFailed`**，由 `autoContinueEnabled()` 据此返回 `false`
+   * （fail-closed）。下一次读取成功会清掉标记、恢复按文档判断。
    */
   const refreshRawDocument = (): void => {
     rawDocumentSeq += 1;
@@ -299,17 +309,28 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
         // 乱序保护：期间又有更新的读取发出，就丢弃这次结果。
         if (seq !== rawDocumentSeq) return;
         rawDocument = snapshot.value;
+        rawDocumentFailed = false;
       })
       .catch(() => {
-        // 保持上一次的值（可能是 `undefined`）。
+        if (seq !== rawDocumentSeq) return;
+        // 偏安全：读不到就当「用户可能关了」，不再自动重试。
+        rawDocumentFailed = true;
       });
   };
   refreshRawDocument();
   /**
    * 自动重试开关的**有效值**。
+   *
+   * ## 失败策略：fail-closed（2026-10-30 按用户选择定）
+   *
+   * 读不到持久文档时**不重试**。开关决定的是「要不要自动发请求」，用户点了关闭就
+   * 必须真的不重试 —— 宁可因一次读失败暂停重试，也不要在他以为关掉之后继续打。
+   *
+   * 读到之后恢复正常判断（下次 `volatile-update` 会重试读取）。
    * @returns 是否开启。
    */
   const autoContinueEnabled = (): boolean => {
+    if (rawDocumentFailed) return false;
     const explicit = rawDocument === undefined ? undefined : Object.hasOwn(rawDocument, "autoContinue");
     if (explicit === true && rawDocument !== undefined) return rawDocument["autoContinue"] === true;
     const current = document();

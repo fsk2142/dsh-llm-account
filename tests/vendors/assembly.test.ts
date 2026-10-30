@@ -1152,7 +1152,10 @@ it("**旧字段能开启自动重试**：决策必须是 retry", async () => {
   const legacy = { ...COMMAND_CODE_SHAPE, autoContinueOnError: true } as Record<string, unknown>;
   delete legacy["autoContinue"];
   delete legacy["autoContinueOnTruncate"];
-  const host = fakeHost();
+      const settings = fakeSettings([
+        { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE, autoContinueOnError: true }, revision: 1 },
+      ]);
+      const host = fakeHost({ settings: settings.service });
   commandcode.apply(host.ctx, commandcode.Config(legacy as never));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1204,7 +1207,10 @@ it("新字段显式 true + 旧字段 false → 开启", async () => {
     autoContinue: true,
     autoContinueOnError: false,
   } as Record<string, unknown>;
-  const host = fakeHost();
+      const settings = fakeSettings([
+        { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE, autoContinue: true }, revision: 1 },
+      ]);
+      const host = fakeHost({ settings: settings.service });
   commandcode.apply(host.ctx, commandcode.Config(merged as never));
   await new Promise((resolve) => setTimeout(resolve, 0));
   const { decision } = await host.fireWaterfall("agent/request-error", {
@@ -1337,4 +1343,31 @@ it("**热更新：打开 → 关闭后立即停止重试**（A01）", async () =
 
   const after = await host.fireWaterfall("agent/request-error", { turn: 2, failure: { code: "TRANSPORT" } });
   expect(after.decision, "关闭后不重试").toBeUndefined();
+}, 10_000);
+
+it("**读取设置失败时关闭自动重试**（V55-07，fail-closed）", async () => {
+  /**
+   * 用户的选择：读不到最新设置就**不重试**。开关决定「要不要自动发请求」，
+   * 他点了关闭就必须真的不重试 —— 宁可因一次读失败暂停，也不要在他以为关掉之后
+   * 继续打请求。
+   */
+  const failing = {
+    describe: async () => {
+      throw new Error("settings service unavailable");
+    },
+    configure: () => () => undefined,
+    mutate: async () => {
+      throw new Error("not used");
+    },
+  };
+  const host = fakeHost({ settings: failing });
+  // 配置本身是开的：只有「读文档失败」这一条能把它压成关闭。
+  commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, autoContinue: true } as never));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision, "读不到设置 → fail-closed").toBeUndefined();
 }, 10_000);
