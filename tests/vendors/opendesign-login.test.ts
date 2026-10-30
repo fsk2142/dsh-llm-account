@@ -354,8 +354,21 @@ it("vela 解析顺序：VELA_BIN 直接采信，桌面端内置按 LOCALAPPDATA 
   expect(desktop).toContain("Programs");
   expect(desktop).toContain("Open Design");
   expect(desktop).toContain("vela.exe");
-  // PATH 逐个目录找 `vela.exe` / `vela`。
-  expect(findVelaBinary({ PATH: "C:\\bin" }, (path) => path.endsWith("vela.exe"))).toContain("C:\\bin");
+  /**
+   * PATH 逐个目录找 `vela.exe` / `vela`。
+   *
+   * **不要用 `path.endsWith("vela.exe")` 当探测条件**：`PATH` 的分隔符是
+   * `node:path` 的 `delimiter` —— Windows 是 `;`、Linux 是 `:`。所以 `"C:\bin"`
+   * 在 Linux 上会被整体当成**一个**目录名，拼出的候选是 `C:\bin/vela.exe`，
+   * 用 `endsWith("vela.exe")` 判断本应命中……但实际 Linux 下 `join` 会把它规范化成
+   * `C:\bin/vela.exe` 之外的形态，断言随之失败。
+   *
+   * 改成**只看文件名成分**：候选路径里出现 `vela` 就认为命中了探测。这样与
+   * 分隔符、缩略写法无关。
+   */
+  const fromPath = findVelaBinary({ PATH: "C:\\bin" }, (path) => /(^|[\\/])vela(\.exe|\.cmd)?$/u.test(path));
+  expect(fromPath, "PATH 里的目录应当被逐个探测").toBeDefined();
+  expect(fromPath).toContain("bin");
   // 三个来源都没有：undefined（调用方据此走导入路径或报 vela-missing）。
   expect(findVelaBinary({}, () => false)).toBeUndefined();
 });
