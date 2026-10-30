@@ -29,12 +29,45 @@ import { tmpdir } from "node:os";
 /** 会被认作「对话痕迹」的模式。 */
 const TRACE_PATTERN = /用户|原话|报障/u;
 
-/** 读一个命令的 stdout（失败返回空串）。 */
+/**
+ * 读一个命令的 stdout，**失败即中止**（2026-10-30 修 N05）。
+ *
+ * 原来的 `run()` 把所有子进程异常吞成空串，于是：
+ *
+ * ```
+ * git log --all ...      ← 在非 Git 目录 / Git 状态异常时失败
+ *   ↓ run() 返回 ""
+ *   ↓ .split("\n").filter(Boolean) → []（空提交集）
+ *   ↓ 主流程打印「含对话痕迹：0」「无需清理」
+ * ```
+ *
+ * 也就是**把扫描失败映射成了安全结论**。对历史清理这种工具，那是最坏的一种错：
+ * 用户会以为自己查过了、干净了。
+ *
+ * 现在核心步骤（扫描、计数、建 bundle、取 tree、判断是否已清理）一律走这个严格版本。
+ * 只有明确「不存在是正常结果」的探测才用 {@link runOptional}。
+ * @param {string[]} args - 命令与参数。
+ * @param {object} [options] - 透传给 `execFileSync`。
+ * @returns stdout（已 trim）。
+ */
 function run(args, options = {}) {
+  return execFileSync(args[0], args.slice(1), { encoding: "utf8", ...options }).trim();
+}
+
+/**
+ * 读一个命令的 stdout，**失败返回 `undefined`**（不是空串 —— 那会与「真的没有输出」
+ * 混淆）。
+ *
+ * 只用于探测性命令：例如「这个 ref 存在吗」这种失败就是正常答案的场景。
+ * @param {string[]} args - 命令与参数。
+ * @param {object} [options] - 透传给 `execFileSync`。
+ * @returns stdout；失败时 `undefined`。
+ */
+function runOptional(args, options = {}) {
   try {
     return execFileSync(args[0], args.slice(1), { encoding: "utf8", ...options }).trim();
   } catch {
-    return "";
+    return undefined;
   }
 }
 

@@ -1171,23 +1171,25 @@ it("**新字段显式 false 压过残留旧字段**（R04）：决策必须是�
    * 用 `TRANSPORT`：这个码**可重试**，所以如果 `enabled` 算错成 true，会返回
    * `{ kind: "retry" }` 而被抓住。原来的测试用 `QUOTA`，那个码永不重试，实现怎么错
    * 都通过（假阳性）。
-   */
-  /**
-   * **传原始对象而不是 `Config()` 的结果**（这是本测试的关键）。
    *
-   * 宿主加载器给 `apply` 的是 profile 里的原始值，那时才能区分「用户写了
-   * `autoContinue: false`」与「根本没写这个键」。传 `Config(...)` 的话
-   * `default(false)` 会把键填上，看起来就像用户显式关掉了 —— 那种输入下没法判断
-   * 意图，我们的实现会退回旧字段（见 `rawAutoContinue` 里对 `isParsedConfig` 的处理）。
+   * **必须给 `settings`**：判定「用户有没有显式写 autoContinue」看的是持久文档
+   * （`describe(ns).value`），没有设置端口就只能退回解析值。
    */
+  const settings = fakeSettings([
+    {
+      ns: "llm-commandcode",
+      value: { ...COMMAND_CODE_SHAPE, autoContinue: false, autoContinueOnError: true },
+      revision: 1,
+    },
+  ]);
   const merged = {
     ...COMMAND_CODE_SHAPE,
     autoContinue: false,
     autoContinueOnError: true,
   } as Record<string, unknown>;
-  const host = fakeHost();
+  const host = fakeHost({ settings: settings.service });
   commandcode.apply(host.ctx, merged);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 20));
 
   const { decision } = await host.fireWaterfall("agent/request-error", {
     turn: 1,
@@ -1225,4 +1227,55 @@ it("全缺 → 关闭（默认值）", async () => {
     failure: { code: "TRANSPORT" },
   });
   expect(decision).toBeUndefined();
+}, 10_000);
+
+it("**已解析配置 + 新 false + 旧 true → 仍然关闭**（N01，生产路径）", async () => {
+  /**
+   * 这才是**宿主真实走的那条路**：加载器先按 `Config` 解析、再把解析结果交给
+   * `apply`（见 `commandcode/index.ts` 头部注释）。上一轮的 R04 修复只看原始对象，
+   * 于是解析后的路径上旧字段又赢回来 —— 用户点了关闭还是关不掉。
+   *
+   * 现在判定改为读**持久文档**（`settings.describe(ns).value`），它未经本模块 schema
+   * 加工，能区分「写了 false」与「根本没写」。
+   */
+  const settings = fakeSettings([
+    {
+      ns: "llm-commandcode",
+      value: { ...COMMAND_CODE_SHAPE, autoContinue: false, autoContinueOnError: true },
+      revision: 1,
+    },
+  ]);
+  const host = fakeHost({ settings: settings.service });
+  const parsed = commandcode.Config({
+    ...COMMAND_CODE_SHAPE,
+    autoContinue: false,
+    autoContinueOnError: true,
+  } as never);
+  commandcode.apply(host.ctx, parsed);
+  // `describe` 是异步的：等它把持久文档读进来。
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision, "显式 false 必须压过残留旧字段").toBeUndefined();
+}, 10_000);
+
+it("已解析配置 + 旧 true + 新字段缺失 → 兼容开启", async () => {
+  // 旧 profile 升级上来：文档里没有 autoContinue，只有旧字段。
+  const settings = fakeSettings([
+    { ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE, autoContinueOnError: true }, revision: 1 },
+  ]);
+  const host = fakeHost({ settings: settings.service });
+  const legacyShape = { ...COMMAND_CODE_SHAPE, autoContinueOnError: true } as Record<string, unknown>;
+  delete legacyShape["autoContinue"];
+  commandcode.apply(host.ctx, commandcode.Config(legacyShape as never));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision, "旧字段 true → 兼容开启").toEqual({ kind: "retry" });
 }, 10_000);

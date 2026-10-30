@@ -241,26 +241,12 @@ export interface CommandCodeBundle {
 export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   const parsed = parseConfig(config);
   const document = (): Record<string, unknown> => unwrapVolatileConfig(parsed);
+  const warn = (message: string): void => {
+    ctx.logger.warn(message);
+  };
+  const settingsPort = createSettingsPort(ctx, COMMAND_CODE_SETTINGS_NS, SETTINGS_ROWS);
   /**
-   * **原始配置里**是否显式写了 `autoContinue` —— 在 `parseConfig` 之前算好。
-   *
-   * schema 里 `autoContinue` 带 `default(false)`，所以**解析之后**它恒为布尔值：
-   * 「用户填了 false」与「用户根本没填」完全分不出来。只有拿到 `apply` 的第一手
-   * `config` 看它自己有没有这个键，才能区分。
-   *
-   * `apply` 的 `config` 有两种来源：
-   * - 宿主加载器给的是**原始对象**（profile 里的值）→ 能判断键在不在；
-   * - 程序化构造 / 已解析（`isParsedConfig` 为真）→ 里面一定有 `autoContinue`
-   *   （default 填的），此时**不把它当成用户的显式选择**，否则旧字段永远失效。
-   * @returns 是否显式设置；`undefined` 表示无从判断。
-   */
-  const rawAutoContinue = ((): boolean | undefined => {
-    if (!isRecord(config)) return undefined;
-    if (isParsedConfig(config)) return undefined;
-    return Object.hasOwn(config, "autoContinue") ? config["autoContinue"] === true : undefined;
-  })();
-  /**
-   * 自动重试开关的**有效值**（2026-10-30 修 R04）。
+   * 自动重试开关的**有效值**（2026-10-30 两度修：R04 → N01）。
    *
    * ## 为什么不能简单写 `a || b || c`
    *
@@ -269,24 +255,54 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
    * **用户在新界面明确关掉之后**（`autoContinue: false`），残留的
    * `autoContinueOnError: true` 会把它重新打开 —— 表现为「关不掉」。
    *
-   * ## 优先级
+   * ## 第一次修（R04）为什么没修好
    *
-   * 1. 原始配置**显式**写了 `autoContinue`（`true` 或 `false`）→ 以它为准；
-   * 2. 否则退回旧字段（任一为 `true` 即开启）；
-   * 3. 都没有 → 取 schema 默认值（关）。
+   * 当时想用 `apply` 收到的 `config` 判断「用户有没有写过 autoContinue」。但宿主
+   * **先把这一行的 config 按 `Config` 解析、再交给 apply**（见本文件头部注释），
+   * 所以 `isParsedConfig(config)` 恒为真 —— 那条分支于是放弃判断、退回旧字段，
+   * 生产路径上等于没修。
+   *
+   * ## 正解：不看解析结果，看**持久文档**
+   *
+   * `ctx.settings.describe(ns).value` 是用户 profile 里的**原始文档**（未经本模块
+   * schema 加工），只有它能区分「写了 false」与「根本没写」。所以：
+   *
+   * 1. 文档里**显式**有 `autoContinue` → 以它为准（这就是「关得掉」）；
+   * 2. 文档里没有、但有旧字段为 `true` → 视为开启（旧用户不丢功能）；
+   * 3. 都没有 → 用解析后的值（schema 默认 `false`）。
+   *
+   * 读文档是异步的：`describe` 走设置端口。这里缓存最近一次结果，由第一次调用触发
+   * 一次读取；读到之前先用解析后的值（等价于旧行为，不会误开）。
+   */
+  let rawDocument: Record<string, unknown> | undefined;
+  /**
+   * 读一次持久文档（异步，失败时保持 `undefined` = 退回解析值）。
+   */
+  const refreshRawDocument = (): void => {
+    void settingsPort
+      .describe(COMMAND_CODE_SETTINGS_NS)
+      .then((snapshot) => {
+        rawDocument = snapshot.value;
+      })
+      .catch(() => {
+        // 读不到文档不该影响重试判定：退回解析后的值即可，不要抛。
+      });
+  };
+  refreshRawDocument();
+  /**
+   * 自动重试开关的**有效值**。
+   * @returns 是否开启。
    */
   const autoContinueEnabled = (): boolean => {
-    if (rawAutoContinue !== undefined) return rawAutoContinue;
+    const explicit = rawDocument === undefined ? undefined : Object.hasOwn(rawDocument, "autoContinue");
+    if (explicit === true && rawDocument !== undefined) return rawDocument["autoContinue"] === true;
     const current = document();
     if (current["autoContinueOnError"] === true || current["autoContinueOnTruncate"] === true) return true;
-    // 没有显式设置、也没有旧字段 → 用解析后的值（即 schema 默认 false）。
     return current["autoContinue"] === true;
   };
-  const warn = (message: string): void => {
-    ctx.logger.warn(message);
-  };
 
-  const settings = createSettingsPort(ctx, COMMAND_CODE_SETTINGS_NS, SETTINGS_ROWS);
+  // 复用上面为「读原始文档」建的那个端口，不重复构造（避免两次 provider 注册）。
+  const settings = settingsPort;
   const credentials = createCredentialsPort(ctx);
   const intents = intentLogFor(
     COMMAND_CODE_SETTINGS_NS,

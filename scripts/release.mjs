@@ -74,9 +74,21 @@ async function createRelease({ owner, repo, tag, title, body }) {
     "x-github-api-version": "2022-11-28",
     "content-type": "application/json; charset=utf-8",
   };
-  // 先查：已存在就直接成功（幂等），不靠 422 猜。
+  /**
+   * 先查：已存在就直接成功（幂等），不靠 422 猜。
+   *
+   * **只有 404 才代表「不存在」**（2026-10-30 修 N08.2）。原来把任何非 2xx 都当成
+   * 「还没建」，于是 403 / 429 / 5xx（token 权限不足、限流、GitHub 故障）都会继续
+   * 去 POST —— 既遮蔽了真实原因，也可能在状态未知时重复创建。
+   */
   const existing = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}`, { headers });
   if (existing.ok) return "exists";
+  if (existing.status !== 404) {
+    const text = await existing.text();
+    throw new Error(
+      `查询 Release 失败（HTTP ${existing.status}）：${text.slice(0, 200)}。这是「状态未知」而不是「不存在」，所以没有创建。`,
+    );
+  }
   const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`, {
     method: "POST",
     headers,
@@ -132,21 +144,58 @@ function releaseBody({ tag, base, wholeHistory, end, note }) {
  * 所以：清单里的路径**必须存在**；可选文件（如将来的 CHANGELOG）由
  * {@link existingPaths} 过滤，缺了不阻断发版。
  */
-const STAGED_PATHS = ["package.json", "lib", "src", "tests", "docs", "scripts", "README.md", "cordis.patch.yml", ".gitignore"];
+const STAGED_PATHS = [
+  "package.json",
+  "lib",
+  "src",
+  "tests",
+  "docs",
+  "scripts",
+  "README.md",
+  "LICENSE",
+  "icon.svg",
+  "cordis.patch.yml",
+  ".gitignore",
+  "tsdown.config.ts",
+  "pnpm-lock.yaml",
+];
 
 /**
- * 从清单里挑出**真实存在**的路径。
+ * 从清单里挑出**发版该处理的路径**。
  *
- * 缺失的可选项被静默跳过（发版不该因为少一个文档就失败）；一个都不剩才是真异常。
+ * ## 为什么不能只看 `existsSync`（2026-10-30 修 N03）
+ *
+ * 一个**已被 Git 跟踪、但在工作树里被删掉**的路径，`existsSync` 是 `false`，
+ * 于是被过滤掉 —— 它的**删除就不会进提交**。若删除的目的正是移除敏感文件，
+ * 那文件会继续留在已发布的 tag 里。
+ *
+ * 所以判定要分三类：
+ *
+ * 1. 文件存在 → 要（可能是新增或修改）；
+ * 2. 不存在、但**被 Git 跟踪** → 也要（这是删除，必须暂存）；
+ * 3. 不存在、也从未被跟踪 → 跳过（可选文档缺失，不该阻断发版）。
+ *
+ * 一个都不剩才是真异常（多半是工作目录不对）。
  * @param {readonly string[]} candidates - 候选路径。
- * @returns 存在的那些。
+ * @returns 该交给 `git add` 的路径。
  */
 function existingPaths(candidates) {
-  const present = candidates.filter((path) => existsSync(path));
-  if (present.length === 0) {
-    throw new Error(`发版中止：清单里没有任何一个路径存在（${candidates.join(", ")}）。先确认工作目录对不对。`);
+  // 一次问清哪些路径有跟踪记录（`ls-files` 对已删除但仍在 index 的路径也会列出）。
+  const tracked = new Set(
+    parseNulList(
+      run(["git", "ls-files", "-z", "--cached", "--", ...candidates], { stdio: ["ignore", "pipe", "ignore"] }),
+    ),
+  );
+  const useful = candidates.filter((path) => {
+    if (existsSync(path)) return true;
+    // 不存在：只要它在 Git 里还有记录，就可能是「删除」，必须一起 add。
+    // 目录形式的清单项要按前缀匹配（`git ls-files` 给的是具体文件）。
+    return [...tracked].some((file) => file === path || file.startsWith(`${path}/`));
+  });
+  if (useful.length === 0) {
+    throw new Error(`发版中止：清单里没有任何一个路径存在或被跟踪（${candidates.join(", ")}）。先确认工作目录对不对。`);
   }
-  return present;
+  return useful;
 }
 
 /**
@@ -293,7 +342,8 @@ async function main() {
    * `--release-only <tag>`：只补建 Release，不碰提交/tag/推送。
    *
    * 用于「推送成功、建 Release 失败」之后（v1.5.0 就是这种状态）。
-   * 起点取 `v<package.json 版本>`，不存在就退回全历史。
+   * 起点由 `previousTagOf(targetTag)` 从**目标 tag 自己的历史**倒推（不是 `package.json` 的版本）；
+ * 找不到前一个 tag（首个发布）就以该 tag 为终点读它之前的全部历史。
    */
   const releaseOnlyIndex = argv.indexOf("--release-only");
   const releaseOnlyTag = releaseOnlyIndex >= 0 ? (argv[releaseOnlyIndex + 1] ?? "") : undefined;
@@ -346,13 +396,37 @@ async function main() {
   console.log(`当前 ${next.current} → 下一个 ${next.next}（${next.level}）`);
   if (dryRun) return;
 
-  // 2. 写版本号并重建产物（版本号是构建期注入的）。
+  // 2. **先做预检，再动任何文件**（2026-10-30 修 N06）。
+  //
+  // 原来顺序是「写版本号 → 构建 → 跑测试 → 才检查 index」，于是预暂存问题或构建
+  // 失败会留下**半完成的工作树**（package.json 已改、lib/ 已重建、却没提交）。
+  //
+  // 把不依赖构建的检查全部提前：有问题就在写任何东西之前停下，工作树保持原样。
+  guardWorkingTree();
+  /**
+   * 预检 tag 冲突：同名 tag 已存在说明这个版本发过了 —— 或者上一轮发到一半。
+   * 两种情况都不该继续（`git tag` 会直接报错，但那时版本号已经写进去了）。
+   */
+  const tag = `v${next.next}`;
+  if (refExists(`refs/tags/${tag}`)) {
+    throw new Error(
+      [
+        `发版中止：tag ${tag} 已经存在。`,
+        ``,
+        `如果上一次发版的提交与推送已完成、只是 Release 没建，用：`,
+        `  node scripts/release.mjs --release-only ${tag}`,
+        `如果这次确实要重发，先确认并删除该 tag。`,
+      ].join("\n"),
+    );
+  }
+
+  // 3. 写版本号并重建产物（版本号是构建期注入的）。
   run(["node", "scripts/next-version.mjs", "--write"]);
   console.log("已写回 package.json");
   run(["pnpm", "build"], { stdio: "inherit" });
   console.log("产物已重建");
 
-  // 3. 全量验证：任何一步失败都不该发出去。
+  // 4. 全量验证：任何一步失败都不该发出去。
   //
   // 提交标题也在这里查：GitHub 文件树悬停显示的是「该路径最后一次提交的标题」，
   // 所以标题本身就是给读者看的第一句话（规范见 docs/RELEASING.md 第五节）。
@@ -360,13 +434,24 @@ async function main() {
   run(["npx", "tsc", "--noEmit"], { stdio: "inherit" });
   run(["npx", "vitest", "run"], { stdio: "inherit" });
 
-  // 4. 提交 + 打 tag + 推送。
-  const tag = `v${next.next}`;
-  guardWorkingTree();
+  // 5. 暂存 + 提交 + 打 tag + 推送。
+  //
+  // `tag` 与 `guardWorkingTree()` 已在步骤 2 的预检里做过 —— 那里能在**动任何文件
+  // 之前**就发现 index 脏或 tag 冲突。
   stageForRelease(existingPaths(STAGED_PATHS));
   run(["git", "commit", "-m", `chore(release): ${tag}`]);
   run(["git", "tag", tag]);
-  run(["git", "push", "origin", "main", "--tags"]);
+  /**
+   * **只推这一个 tag**（2026-10-30 修 N02）。
+   *
+   * `git push --tags` 会把本地**所有**未推送的 `refs/tags/*` 一起发上去 —— 包括
+   * 为测试、备份或未公开分支建的标签。若某个标签指向不该公开的提交，那条历史就
+   * 跟着出去了。发布只该推它自己刚建的那个。
+   *
+   * `--atomic`：main 与 tag 要么一起成功、要么一起失败，减少「tag 推上去了但
+   * main 没推」这类半完成状态（远端支持时生效）。
+   */
+  run(["git", "push", "--atomic", "origin", "main", `refs/tags/${tag}`]);
   console.log(`已推送 ${tag}`);
 
   // 5. 建 Release（市场靠它显示更新说明）。
