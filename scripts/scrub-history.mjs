@@ -23,7 +23,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 /** 会被认作「对话痕迹」的模式。 */
@@ -154,7 +154,11 @@ function main() {
   console.log(`\n创建离线备份（不在任何 ref 上，filter-branch 改写不到）：${backupBundle}`);
   run(["git", "bundle", "create", backupBundle, "--all"]);
   // 校验：能从这个 bundle 独立克隆出完整历史。
-  const verifyDir = join(tmpdir(), `dsh-scrub-verify-${stamp}`);
+  //
+  // **校验用的克隆必须删掉**（2026-10-30 修 F05）：它是一个包含**改写前全部历史**
+  // （含敏感内容）的完整副本。离线 bundle 是有意保留的回滚资产；验证克隆只是
+  // 一次性检查，留着等于在临时目录里多存一份敏感数据。
+  const verifyDir = mkdtempSync(join(tmpdir(), "dsh-scrub-verify-"));
   try {
     run(["git", "clone", "--quiet", "--mirror", backupBundle, verifyDir]);
     const before = run(["git", "rev-list", "--all", "--count"]);
@@ -169,6 +173,9 @@ function main() {
     console.error(`  已生成的 bundle 保留在：${backupBundle}`);
     process.exitCode = 1;
     return;
+  } finally {
+    // 无论校验成功与否都清掉这份临时副本。
+    rmSync(verifyDir, { recursive: true, force: true });
   }
 
   // 关键：filter-branch 在临时目录执行，脚本必须用绝对路径。

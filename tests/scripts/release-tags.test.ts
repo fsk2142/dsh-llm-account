@@ -1,24 +1,33 @@
 /**
- * 发版脚本（`scripts/release.mjs`）里两个**纯 Git 行为**的回归测试。
+ * 发版脚本的**纯 Git 逻辑**回归测试。
  *
- * 这两个函数没有可注入的依赖（直接调 `git`），所以测试用**真实临时仓库**跑，
- * 不碰用户的工作树与远端。
+ * ## 为什么这个文件必须 import 生产模块
  *
- * 钉住的是第四轮复审报出的两个缺陷：
+ * 上一版把 `statusPaths` / `previousTagOf` 的解析逻辑**复制**进测试文件，然后
+ * 测那个副本。结果：把 `release.mjs` 里的 `-z` 删掉、把 `--match` 删掉，测试
+ * 照样 6/6 全绿 —— 一条都防不住回归（第五轮复审 F03，已实测确认）。
  *
- * 1. **A02**：`git status --porcelain` 会给含空格的路径**加引号**，按行
- *    `slice(3)` 得到的字符串末尾是引号 —— `SECRET_FILE` 要求以 `.pem` 结尾，于是
- *    **漏检**被强制跟踪的凭据文件。正解是 `-z` + NUL 分隔（不加引号、不转义）。
- * 2. **A03**：`git describe --tags` 认**所有**标签，两个版本之间若有开发用临时
- *    tag，`--release-only` 会从那个 tag 起算，**漏掉中间的提交**。正解是
- *    `--match 'v[0-9]*'` 收窄 + 正则二次校验。
+ * 现在逻辑住在 `scripts/release-git.mjs`（可 import），测试直接调用**同一份实现**。
+ * 被测代码一改，这里就会红。
+ *
+ * 钉住三个历史缺陷：
+ * - **A02**：`git status --porcelain` 会给含空格的路径加引号 → 必须用 `-z`；
+ * - **F02**：重命名记录的**源路径**要一起审计（只看目标会漏掉敏感来源）；
+ * - **F01/A03**：`git describe --tags` 会被非发布标签干扰，且「只取最近一个再过滤」
+ *   会在最近候选不合规时错误地返回「没有前一个版本」。
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+
+// **直接 import 生产实现** —— 这是本文件存在的意义。
+import { previousTagOf, statusEntries, statusPaths } from "../../scripts/release-git.mjs";
+
+/** 与 `release.mjs` 的机密文件规则一致（仅用于断言，不复制被测逻辑）。 */
+const SECRET_FILE = /(^|\/)(\.env[^/]*|auth\.json|credentials[^/]*|.*\.pem|.*\.key|.*cookies.*\.(sqlite|db))$/i;
 
 /** 建过的临时目录，用例结束统一删。 */
 const created: string[] = [];
@@ -28,7 +37,7 @@ afterEach(() => {
 });
 
 /**
- * 建一个临时 git 仓库并返回它的路径。
+ * 建一个临时 git 仓库。
  * @returns 仓库绝对路径。
  */
 function tempRepo(): string {
@@ -45,154 +54,134 @@ function tempRepo(): string {
 }
 
 /**
- * 在仓库里跑 git 并返回 stdout（去掉末尾换行）。
+ * 在仓库里跑 git。
  * @param cwd - 仓库路径。
  * @param args - 参数。
- * @returns stdout。
+ * @returns stdout（已 trim）。
  */
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-describe("A02：机密文件名扫描必须能识别含空格的路径", () => {
-  /** 与 `release.mjs` 里的 `SECRET_FILE` 同一规则。 */
-  const SECRET_FILE = /(^|\/)(\.env[^/]*|auth\.json|credentials[^/]*|.*\.pem|.*\.key|.*cookies.*\.(sqlite|db))$/i;
+/**
+ * 追加一个提交并打 tag。
+ * @param cwd - 仓库路径。
+ * @param message - 提交信息。
+ * @param tag - 标签（可选）。
+ */
+function commitAs(cwd: string, message: string, tag?: string): void {
+  writeFileSync(join(cwd, "sample.txt"), message);
+  git(cwd, "add", "sample.txt");
+  git(cwd, "commit", "-q", "-m", message);
+  if (tag !== undefined) git(cwd, "tag", tag);
+}
 
-  it("**旧解析（按行 slice(3)）会漏掉**被强制跟踪的 `*.pem`", () => {
+describe("statusPaths：路径解析（A02 / F02）", () => {
+  it("含空格的受控 `.pem` 能被识别（**-z 的必要性**）", () => {
     const repo = tempRepo();
     mkdirSync(join(repo, "src"));
     writeFileSync(join(repo, ".gitignore"), "*.pem\n");
     writeFileSync(join(repo, "src", "private key.pem"), "FAKE-MARKER-ONLY");
     git(repo, "add", ".gitignore");
-    // `-f`：绕过 .gitignore 强制跟踪（模拟「曾经提交过的凭据文件」）。
     git(repo, "add", "-f", "src/private key.pem");
     git(repo, "commit", "-q", "-m", "initial");
     writeFileSync(join(repo, "src", "private key.pem"), "CHANGED-FAKE-MARKER");
 
+    // 生产实现（-z，不加引号）应当原样取出路径。
+    const paths = statusPaths(repo);
+    expect(paths).toContain("src/private key.pem");
+    expect(
+      paths.filter((path) => SECRET_FILE.test(path)),
+      "含空格的 .pem 必须被扫到",
+    ).toEqual(["src/private key.pem"]);
+
+    // 对照：按行 + `slice(3).trim()` 的旧解析会留下末尾引号 → 漏检。
     const porcelain = git(repo, "status", "--porcelain", "--untracked-files=all");
-    // 这一行长这样：` M "src/private key.pem"`（带引号）。
-    const parsed = porcelain
+    const naive = porcelain
       .split("\n")
       .filter((line) => line !== "")
       .map((line) => line.slice(3).trim());
-    // 真实代码就是这样 `slice(3).trim()`：trim 吃掉**开头**的引号与空格，但**末尾**
-    // 那个引号留着 —— 于是 `SECRET_FILE` 的 `$` 锚点对不上 `.pem`。
-    expect(parsed, "末尾带着引号，正则 $ 锚点因此失配").toEqual(['src/private key.pem"']);
     expect(
-      parsed.filter((path) => SECRET_FILE.test(path)),
-      "旧解析漏检 —— 这就是 A02",
+      naive.filter((path) => SECRET_FILE.test(path)),
+      "旧解析漏检（这就是当初的 A02）",
     ).toEqual([]);
   });
 
-  it("**新解析（-z + NUL）能正确识别**", () => {
+  it("**重命名的源路径也要被审计**（F02）", () => {
     const repo = tempRepo();
     mkdirSync(join(repo, "src"));
-    writeFileSync(join(repo, ".gitignore"), "*.pem\n");
-    writeFileSync(join(repo, "src", "private key.pem"), "FAKE-MARKER-ONLY");
-    git(repo, "add", ".gitignore");
-    git(repo, "add", "-f", "src/private key.pem");
+    writeFileSync(join(repo, "src", "private.pem"), "FAKE-MARKER");
+    git(repo, "add", "src/private.pem");
     git(repo, "commit", "-q", "-m", "initial");
-    writeFileSync(join(repo, "src", "private key.pem"), "CHANGED-FAKE-MARKER");
+    git(repo, "mv", "src/private.pem", "src/public.txt");
 
-    // 与 `statusPaths()` 的解析一致：NUL 分隔，每条记录前两位是状态。
-    const raw = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-      cwd: repo,
-      encoding: "utf8",
-    });
-    const parts = raw.split("\u0000");
-    const paths: string[] = [];
-    for (let index = 0; index < parts.length; index += 1) {
-      const record = parts[index];
-      if (record === undefined || record.length < 4) continue;
-      const status = record.slice(0, 2);
-      paths.push(record.slice(3));
-      if (status.includes("R") || status.includes("C")) index += 1;
-    }
+    const entries = statusEntries(repo);
+    const renamed = entries.find((entry) => entry.path === "src/public.txt");
+    expect(renamed?.from, "记录里带着源路径").toBe("src/private.pem");
 
-    expect(paths, "不加引号").toEqual(["src/private key.pem"]);
+    const paths = statusPaths(repo);
+    expect(paths, "源与目标两端都在").toContain("src/public.txt");
+    expect(paths, "源路径必须保留（只看目标会漏掉敏感来源）").toContain("src/private.pem");
     expect(
       paths.filter((path) => SECRET_FILE.test(path)),
-      "新解析能拦住",
-    ).toEqual(["src/private key.pem"]);
+      "改名成 public.txt 也逃不掉",
+    ).toEqual(["src/private.pem"]);
   });
 
-  it("重命名记录也被正确消费（不会多出一条假路径）", () => {
+  it("普通文件不会误报", () => {
     const repo = tempRepo();
-    writeFileSync(join(repo, "a.txt"), "x");
-    git(repo, "add", "a.txt");
-    git(repo, "commit", "-q", "-m", "initial");
-    git(repo, "mv", "a.txt", "b.txt");
-
-    const raw = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-      cwd: repo,
-      encoding: "utf8",
-    });
-    const parts = raw.split("\u0000");
-    const paths: string[] = [];
-    let sawRename = false;
-    for (let index = 0; index < parts.length; index += 1) {
-      const record = parts[index];
-      if (record === undefined || record.length < 4) continue;
-      const status = record.slice(0, 2);
-      paths.push(record.slice(3));
-      if (status.includes("R") || status.includes("C")) {
-        sawRename = true;
-        index += 1;
-      }
-    }
-    // 重命名时只有一条「新路径」，原路径被跳过（否则会把它当成待提交文件）。
-    expect(sawRename).toBe(true);
-    expect(paths).toEqual(["b.txt"]);
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "notes.txt"), "hello");
+    const paths = statusPaths(repo);
+    expect(paths).toContain("src/notes.txt");
+    expect(paths.filter((path) => SECRET_FILE.test(path))).toEqual([]);
   });
 });
 
-describe("A03：前一个发布 tag 必须只认版本号形态", () => {
-  /**
-   * 造出「两个版本之间夹一个开发 tag」的历史。
-   * @returns 仓库路径。
-   */
-  function repoWithScratchTag(): string {
+describe("previousTagOf：基线选择（F01 / A03）", () => {
+  it("跳过非发布形态的 tag（A03）", () => {
     const repo = tempRepo();
-    const step = (message: string, tag: string): void => {
-      writeFileSync(join(repo, "sample.txt"), message);
-      git(repo, "add", "sample.txt");
-      git(repo, "commit", "-q", "-m", message);
-      git(repo, "tag", tag);
-    };
-    step("feat: base", "v1.0.0");
-    step("feat: important change", "scratch-tag");
-    step("fix: last change", "v1.1.0");
-    return repo;
-  }
+    commitAs(repo, "feat: base", "v1.0.0");
+    commitAs(repo, "feat: important change", "scratch-tag");
+    commitAs(repo, "fix: last change", "v1.1.0");
 
-  it("**`git describe --tags` 会被临时 tag 干扰**（原缺陷）", () => {
-    const repo = repoWithScratchTag();
-    const picked = git(repo, "describe", "--tags", "--abbrev=0", "v1.1.0^");
-    expect(picked, "选中了开发用 tag").toBe("scratch-tag");
-
-    const subjects = git(repo, "log", "--format=%s", `scratch-tag..v1.1.0`).split("\n").filter(Boolean);
-    expect(subjects, "重要提交从范围里消失").toEqual(["fix: last change"]);
+    expect(previousTagOf(repo, "v1.1.0")).toBe("v1.0.0");
+    const subjects = git(repo, "log", "--format=%s", "v1.0.0..v1.1.0").split("\n").filter(Boolean);
+    expect(subjects, "两条提交都在范围内").toEqual(["fix: last change", "feat: important change"]);
   });
 
-  it("**`--match 'v[0-9]*'` 能跳过临时 tag**（修复后）", () => {
-    const repo = repoWithScratchTag();
-    const pivked = git(repo, "describe", "--tags", "--match", "v[0-9]*", "--abbrev=0", "v1.1.0^");
-    expect(pivked, "正确选中上一个版本 tag").toBe("v1.0.0");
+  it("**最近候选不合规时继续往前找**（F01-A）", () => {
+    const repo = tempRepo();
+    commitAs(repo, "feat: baseline", "v1.0.0");
+    commitAs(repo, "feat: important-change", "v9-staging");
+    commitAs(repo, "fix: final-change", "v1.1.0");
 
-    const subjects = git(repo, "log", "--format=%s", `v1.0.0..v1.1.0`).split("\n").filter(Boolean);
-    expect(subjects, "两条提交都在").toEqual(["fix: last change", "feat: important change"]);
+    // 旧实现只 describe 一次 → 拿到 v9-staging → 正则拒绝 → 返回 undefined（漏掉 v1.0.0）。
+    expect(previousTagOf(repo, "v1.1.0"), "必须回退到 v1.0.0").toBe("v1.0.0");
   });
 
-  it("版本 tag 的形态校验", () => {
-    /** 与 `previousTagOf` 里的 `RELEASE_TAG` 同一条正则。 */
-    const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
-    for (const tag of ["v1.0.0", "v1.5.3", "v2.0.0-rc.1"]) {
-      expect(RELEASE_TAG.test(tag), tag).toBe(true);
-    }
-    // 注意 `v1.0.0-backup` **会**匹配（后缀允许字母）—— 那是有意的：它长得像预发布版，
-    // 宁可多算一次范围也不要漏掉提交。真正的反例是「明显不是版本号」的那些。
-    for (const tag of ["scratch-tag", "backup-before-scrub-2026", "v1", "release-notes"]) {
-      expect(RELEASE_TAG.test(tag), tag).toBe(false);
-    }
+  it("人工备份标签不被当成发布基线（F01-B）", () => {
+    const repo = tempRepo();
+    commitAs(repo, "feat: baseline", "v1.0.0");
+    commitAs(repo, "feat: important-change", "v1.1.0-backup");
+    commitAs(repo, "fix: final-change", "v1.2.0");
+
+    // `v1.1.0-backup` 不是正式发布（后缀以字母开头）→ 基线应是 v1.0.0。
+    expect(previousTagOf(repo, "v1.2.0")).toBe("v1.0.0");
+  });
+
+  it("首个发布没有前一个 tag", () => {
+    const repo = tempRepo();
+    commitAs(repo, "feat: first", "v1.0.0");
+    expect(previousTagOf(repo, "v1.0.0")).toBeUndefined();
+  });
+
+  it("同一提交上有多个 tag 时选版本号形态的那个", () => {
+    const repo = tempRepo();
+    commitAs(repo, "feat: base", "v1.0.0");
+    commitAs(repo, "feat: next", "v1.1.0");
+    git(repo, "tag", "release-candidate", "v1.1.0");
+    commitAs(repo, "fix: after", "v1.2.0");
+    expect(previousTagOf(repo, "v1.2.0")).toBe("v1.1.0");
   });
 });

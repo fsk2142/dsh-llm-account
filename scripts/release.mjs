@@ -26,23 +26,35 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
+/**
+ * 纯 Git 逻辑来自 {@link module:scripts/release-git} —— 那个模块**能被测试直接
+ * import**，本文件因为顶层会跑 `main()` 而不行。
+ *
+ * 上一轮的教训（第五轮复审 F03）：回归测试把逻辑**复制**进了测试文件，于是把生产
+ * 代码改坏（删 `-z`、删 `--match`）测试照样全绿 —— 一条都防不住回归。现在两边共用
+ * 同一份实现，测试直接调用下面这些函数。
+ */
+import {
+  existingPaths as existingPathsIn,
+  parseNulList as parseNulListIn,
+  previousTagOf as previousTagOfIn,
+  refExists as refExistsIn,
+  statusEntries as statusEntriesIn,
+  statusPaths as statusPathsIn,
+} from "./release-git.mjs";
+
 /** 读一个命令的 stdout。 */
 function run(args, options = {}) {
   return execFileSync(args[0], args.slice(1), { encoding: "utf8", ...options }).trim();
 }
 
 /**
- * 判断一个 git ref 是否存在。
+ * 判断一个 git ref 是否存在（当前目录）。
  * @param {string} ref - 如 `refs/tags/v1.5.0`。
  * @returns 是否存在。
  */
 function refExists(ref) {
-  try {
-    execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  return refExistsIn(process.cwd(), ref);
 }
 
 /** 读 package.json 的 name 与 repository。 */
@@ -180,22 +192,7 @@ const STAGED_PATHS = [
  * @returns 该交给 `git add` 的路径。
  */
 function existingPaths(candidates) {
-  // 一次问清哪些路径有跟踪记录（`ls-files` 对已删除但仍在 index 的路径也会列出）。
-  const tracked = new Set(
-    parseNulList(
-      run(["git", "ls-files", "-z", "--cached", "--", ...candidates], { stdio: ["ignore", "pipe", "ignore"] }),
-    ),
-  );
-  const useful = candidates.filter((path) => {
-    if (existsSync(path)) return true;
-    // 不存在：只要它在 Git 里还有记录，就可能是「删除」，必须一起 add。
-    // 目录形式的清单项要按前缀匹配（`git ls-files` 给的是具体文件）。
-    return [...tracked].some((file) => file === path || file.startsWith(`${path}/`));
-  });
-  if (useful.length === 0) {
-    throw new Error(`发版中止：清单里没有任何一个路径存在或被跟踪（${candidates.join(", ")}）。先确认工作目录对不对。`);
-  }
-  return useful;
+  return existingPathsIn(process.cwd(), candidates);
 }
 
 /**
@@ -207,7 +204,7 @@ function existingPaths(candidates) {
  * @returns 暂存路径列表。
  */
 function parseNulList(raw) {
-  return raw.split("\u0000").filter((item) => item !== "");
+  return parseNulListIn(raw);
 }
 
 /**
@@ -277,21 +274,7 @@ function guardWorkingTree() {
  * @returns 变更路径列表。
  */
 function statusPaths() {
-  const raw = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  const parts = raw.split("\u0000");
-  const paths = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const record = parts[index];
-    if (record === undefined || record.length < 4) continue;
-    const status = record.slice(0, 2);
-    paths.push(record.slice(3));
-    // 重命名（R）与复制（C）后面还跟着一条「原路径」记录，跳过它。
-    if (status.includes("R") || status.includes("C")) index += 1;
-  }
-  return paths;
+  return statusPathsIn(process.cwd());
 }
 
 /**
@@ -362,19 +345,7 @@ function stageForRelease(paths) {
  * @returns 前一个发布 tag；没有则 `undefined`。
  */
 function previousTagOf(tag) {
-  /** 正式发布标签的形态：`v1.2.3`（可带预发布后缀）。 */
-  const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
-  try {
-    const found = execFileSync("git", ["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0", `${tag}^`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    // `--match` 是 glob，可能仍命中 `v1.0.0-rc1-backup` 这类；这里按正式形态再筛一次。
-    return RELEASE_TAG.test(found) ? found : undefined;
-  } catch {
-    // `describe` 失败 = 父提交上没有任何可达的版本 tag（首个发布，或 tag 在根提交上）。
-    return undefined;
-  }
+  return previousTagOfIn(process.cwd(), tag);
 }
 
 /**
