@@ -334,10 +334,26 @@ it("授权提示解析：下一行是网址、Code 行是验证码，认不出�
 it("vela 解析顺序：VELA_BIN 直接采信，桌面端内置按 LOCALAPPDATA 展开，PATH 逐个目录找", () => {
   // VELA_BIN 非空时直接采信（用户显式指定的路径就是权威）。
   expect(findVelaBinary({ VELA_BIN: "D:\\custom\\vela.exe" }, () => false)).toBe("D:\\custom\\vela.exe");
-  // 桌面端内置：按 `%LOCALAPPDATA%\Programs\Open Design\resources\open-design\bin\vela.exe` 展开。
-  expect(
-    findVelaBinary({ LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local", PATH: "" }, (path) => path.includes("Open Design")),
-  ).toContain("AppData\\Local\\Programs\\Open Design");
+  /**
+   * 桌面端内置：按 `%LOCALAPPDATA%\Programs\Open Design\resources\open-design\bin\vela.exe`
+   * 展开。
+   *
+   * **断言要跟平台走**：实现用的是 `node:path` 的 `join`，它在 Linux 上产出 `/`、
+   * 在 Windows 上产出 `\`。原来这里硬断言 `AppData\\Local\\Programs\\Open Design`，
+   * 于是 Linux CI 上必然失败（`Received: ...AppData\Local/Programs/Open Design...`）
+   * —— 这不是生产 BUG（vela 只在 Windows 上跑），而是测试写成了平台绑定的。
+   *
+   * 现在只看**不随平台变化的成分**：起点 `LOCALAPPDATA` 的值、以及那段目录名。
+   */
+  const desktop = findVelaBinary(
+    { LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local", PATH: "" },
+    (path) => path.includes("Open Design"),
+  );
+  expect(desktop, "应当找到桌面端内置的 vela").toBeDefined();
+  expect(desktop).toContain("C:\\Users\\test\\AppData\\Local");
+  expect(desktop).toContain("Programs");
+  expect(desktop).toContain("Open Design");
+  expect(desktop).toContain("vela.exe");
   // PATH 逐个目录找 `vela.exe` / `vela`。
   expect(findVelaBinary({ PATH: "C:\\bin" }, (path) => path.endsWith("vela.exe"))).toContain("C:\\bin");
   // 三个来源都没有：undefined（调用方据此走导入路径或报 vela-missing）。
