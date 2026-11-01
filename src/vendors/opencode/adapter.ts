@@ -678,6 +678,24 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @returns 请求凭据；没有可用密钥或刷新失败时为 `undefined`。
    */
   async #resolveAuth(ref: string): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
+    /**
+     * **在首次异步读取之前**抓代际（2026-11-01 修 S01 第三版）。
+     *
+     * 报告指出的缺口：上一版把 `epochOf(ref)` 放在 `await resolveStored()` **之后**。
+     * 于是「旧快照」与「新代际」可能被错误配对：
+     *
+     * ```
+     * T0  resolveStored 开始（此刻槽里是旧 blob）
+     * T1  用户换 key → 代际 +1
+     * T2  resolveStored 返回旧 blob
+     * T3  epochOf() 读到**新**代际 → 与旧 blob 配对
+     * T4  刷新返回 → 校验通过（代际没再变）→ 把旧 blob 写回去
+     *     ↑ 用户的新 key 被覆盖
+     * ```
+     *
+     * 放在最前面之后，T0 那一刻的代际与 T0 那一刻读到的 blob 严格对应。
+     */
+    const epochAtStart = this.#credentialGuard.epochOf(ref);
     const stored = await this.#deps.resolveStored?.(ref);
     const environment = this.#deps.resolveEnvironment?.(ref);
     const raw = pickApiKey({
@@ -686,13 +704,6 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     }).key;
     if (raw === undefined) return undefined;
     if (!raw.startsWith(OAUTH_PREFIX)) return { key: raw };
-    /**
-     * **刷新开始前记下代际**（2026-11-01 修 S01 第二版）。
-     *
-     * 写回时会把它交给 `#credentialGuard`：若期间用户换过 key / 重登 / 删过账号，
-     * 代际已推进，这次迟到的刷新就不会写回。
-     */
-    const epochAtStart = this.#credentialGuard.epochOf(ref);
     /**
      * OAuth 刷新按 ref 去重（2026-10-22 修 LOW-1）：同一账号上并发请求共享一次刷新。
      *

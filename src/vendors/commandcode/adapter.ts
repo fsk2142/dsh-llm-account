@@ -604,7 +604,18 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       decodeStream(protocol, response.body),
       // 流式阶段用**剩余**预算，不重置整请求 deadline。
       deadline.streamBudget(config.streamIdleTimeoutMs),
-      { signal: options.signal },
+      {
+        signal: options.signal,
+        /**
+         * **超时/取消时连底层网络一起停**（2026-11-01 修 R03 第三版）。
+         *
+         * 报告实测：正文停住后 `reader.cancel` 仍是 0、body 仍开着 —— `runStream`
+         * 的 `closeQuietly` 依赖迭代器响应 `return()`，而卡在 `read()` 上的
+         * Web Stream reader 不会响应。接上共享 controller 后，abort 让 read 立刻
+         * reject，socket 随之释放。
+         */
+        abortNetwork: deadline.networkAbort(),
+      },
     );
   }
 

@@ -30,7 +30,26 @@
  */
 
 /**
- * 造一个按 key 串行化、带代际的代写守卫。
+ * 造一个按 key 串行化、带代际的凭据写守卫。
+ *
+ * ## 两种写，语义不同（2026-11-01 修 S01 第三版）
+ *
+ * 上一版只有 `run(key, expected, write)` —— 它做「代际校验后写」。但那个语义只适合
+ * **后台刷新**：刷新是「顺带把新 token 存起来」，用户已经改过就不该存。
+ *
+ * **用户的写不能这样**：用户点「换 key / 重新登录」是他明确的意图，任何时候都必须
+ * 落地。上一版让 `replaceKey` 只 `bump()`、直接把 `port.replaceKey()` 调出去，
+ * 结果它**不在队列里** —— 与在途的刷新写回仍然可以交错。
+ *
+ * 所以拆成两个入口：
+ *
+ * | 入口 | 代际校验 | 用途 |
+ * | --- | --- | --- |
+ * | `run` | ✅ 校验，不符就放弃 | 后台刷新写回 |
+ * | `runUserWrite` | ❌ 不校验（必写） | 用户换 key / 重登录 / 删除 |
+ *
+ * 两者共享**同一条队列**，所以用户写一定会排在在途刷新写回之后或之前，不会交错。
+ * `runUserWrite` 在入队时 `bump` —— 让**更早发起**的刷新写回在校验时失败。
  *
  * @returns 守卫实例。
  */
@@ -48,13 +67,20 @@ export function createCredentialGuard(): {
    */
   epochOf(key: string): number;
   /**
-   * 排队执行一次写操作；执行前校验代际。
+   * 排队执行一次**后台**写；执行前校验代际，不符则放弃。
    * @param key - 账号 ref。
    * @param expected - 调用方发起写时看到的代号。
    * @param write - 实际写操作。
    * @returns 是否真的写了（代际不符时返回 `false`）。
    */
   run(key: string, expected: number, write: () => Promise<void>): Promise<boolean>;
+  /**
+   * 排队执行一次**用户**写：**无条件执行**，并在入队时推进代际。
+   * @param key - 账号 ref。
+   * @param write - 实际写操作。
+   * @returns 写操作的结果。
+   */
+  runUserWrite<T>(key: string, write: () => Promise<T>): Promise<T>;
 } {
   /** 每个 key 的当前代际。 */
   const epochs = new Map<string, number>();
@@ -90,6 +116,25 @@ export function createCredentialGuard(): {
         })
         .finally(() => {
           // 队尾已经推进过就不再回退（避免把后来的写也拆掉）。
+          if (tails.get(key) === started) tails.delete(key);
+        });
+      tails.set(key, started);
+      return started;
+    },
+
+    runUserWrite(key, write) {
+      /**
+       * **入队就推进代际**：让所有「在这一点之前发起」的后台刷新写回在校验时失败。
+       *
+       * 必须在校验之前 bump —— 若等队列轮到再 bump，一个已经通过校验、
+       * 正在执行的后台写仍可能与用户写交错。
+       */
+      epochs.set(key, (epochs.get(key) ?? 0) + 1);
+      const previous = tails.get(key) ?? Promise.resolve();
+      const started = previous
+        .catch(() => {})
+        .then(() => write())
+        .finally(() => {
           if (tails.get(key) === started) tails.delete(key);
         });
       tails.set(key, started);

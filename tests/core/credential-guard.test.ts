@@ -131,3 +131,108 @@ describe("createCredentialGuard", () => {
     expect(wrote).toBe(true);
   });
 });
+
+describe("runUserWrite：用户的写必须无条件落地（S01 第三版）", () => {
+  it("**用户写无条件执行**，即使代际已变", async () => {
+    const guard = createCredentialGuard();
+    const written: string[] = [];
+    guard.bump("acc");
+    guard.bump("acc");
+    await guard.runUserWrite("acc", async () => {
+      written.push("user-key");
+    });
+    expect(written, "用户点换 key 必须落地，不能因代际变化被取消").toEqual(["user-key"]);
+  });
+
+  it("**用户写会让更早发起的刷新写回放弃**（核心场景）", async () => {
+    /**
+     * 报告的真实时序：
+     *   T0  刷新开始，记下代际 E
+     *   T1  用户换 key（runUserWrite）
+     *   T2  刷新返回，用 E 校验 → 必须失败
+     */
+    const guard = createCredentialGuard();
+    const written: string[] = [];
+    const epochOfRefresh = guard.epochOf("acc");
+    // 用户换 key（在刷新写回之前）。
+    await guard.runUserWrite("acc", async () => {
+      written.push("user-key");
+    });
+    // 刷新现在想写回旧 blob。
+    const wrote = await guard.run("acc", epochOfRefresh, async () => {
+      written.push("stale-refresh");
+    });
+    expect(wrote, "刷新写回必须放弃").toBe(false);
+    expect(written, "**只有用户的新 key 落地**").toEqual(["user-key"]);
+  });
+
+  it("**用户写入队即推进代际 → 在途的刷新写回被取消**（不会交错）", async () => {
+    /**
+     * ## 为什么期望是 `["user"]` 而不是 `["refresh", "user"]`
+     *
+     * 第一版我写成了「刷新先完成，用户写再落地」—— **测试失败说明实现是对的、
+     * 我的期望错了**。
+     *
+     * `runUserWrite` 在**入队那一刻**就推进代际（而不是等轮到它执行）。所以已经在
+     * 队列里等着的刷新写回，轮到它时校验失败 → **不会写**。
+     *
+     * 这正是想要的语义：用户的意图一旦表达，所有「更早发起」的后台写都该作废 ——
+     * 而不是让旧刷新先落盘、用户再覆盖一次（那中间有窗口，进程崩溃就会留下旧值）。
+     */
+    const guard = createCredentialGuard();
+    const order: string[] = [];
+    const epoch = guard.epochOf("acc");
+    // 刷新写回先入队，故意慢。
+    const refresh = guard.run("acc", epoch, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      order.push("refresh");
+    });
+    // 用户写在它之后入队：入队即 bump，刷新校验会失败。
+    const userWrite = guard.runUserWrite("acc", async () => {
+      order.push("user");
+    });
+    const [refreshWrote] = await Promise.all([refresh, userWrite]);
+    expect(refreshWrote, "刷新写回必须放弃（代际已推进）").toBe(false);
+    expect(order, "**只有用户写落地**").toEqual(["user"]);
+  });
+
+  it("刷新**已经通过校验并在执行中**时，用户写仍排在它之后（不交错）", async () => {
+    /**
+     * 另一条边界：刷新已经开始执行（校验通过、正在 await 写），此时用户入队。
+     * 队列保证用户写等它完成 —— 不会两个 `set` 交错。
+     */
+    const guard = createCredentialGuard();
+    const order: string[] = [];
+    const epoch = guard.epochOf("acc");
+    /** 让刷新的写「已经进入函数体」但还没完成。 */
+    let releaseRefresh = () => {};
+    const refresh = guard.run("acc", epoch, async () => {
+      await new Promise<void>((resolve) => {
+        releaseRefresh = resolve;
+      });
+      order.push("refresh-done");
+    });
+    // 等刷新真的进入函数体（校验已通过）。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const userWrite = guard.runUserWrite("acc", async () => {
+      order.push("user");
+    });
+    releaseRefresh();
+    await Promise.all([refresh, userWrite]);
+    expect(order, "刷新先落盘，用户写随后（严格串行）").toEqual(["refresh-done", "user"]);
+  });
+
+  it("用户写失败时队列仍能继续", async () => {
+    const guard = createCredentialGuard();
+    await expect(
+      guard.runUserWrite("acc", async () => {
+        throw new Error("write failed");
+      }),
+    ).rejects.toThrow(/write failed/u);
+    const written: string[] = [];
+    await guard.runUserWrite("acc", async () => {
+      written.push("after");
+    });
+    expect(written).toEqual(["after"]);
+  });
+});

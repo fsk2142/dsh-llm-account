@@ -117,6 +117,18 @@ export interface AccountCardProps {
   /** 覆盖某个账号的模型；同一模型可属于多个账号。 */
   onSetAccountModels?: (ref: string, models: readonly string[]) => void;
   /**
+   * **取某个账号此刻最新的模型选择**（同步，从容器的最新状态读）。
+   *
+   * 为什么需要（2026-11-01 修 C04）：勾选回调若用渲染时的 `modelRules` 快照，
+   * 用户连点两个模型时第二次会基于旧集合，把第一次的选择抹掉。容器用这个回调
+   * 现取「此刻」的选择，绕过闭包过期。
+   *
+   * 缺省时退回渲染快照（旧行为），便于不传它的调用方继续工作。
+   * @param ref - 账号 ref。
+   * @returns 该账号当前被勾选的模型 id。
+   */
+  currentAccountModels?: (ref: string) => readonly string[] | undefined;
+  /**
    * 查一个模型在**当前套餐**下能用多少额度。
    *
    * 返回 `undefined` 表示官方没给这个组合的数据（套餐认不出 / 模型不在表里）——
@@ -584,7 +596,21 @@ function accountModelsSection(props: AccountCardProps, account: AccountUsageStat
               "data-account-model": `${account.ref}:${id}`,
               checked: selected.has(id),
               onChange: (event: { target?: { checked?: boolean } }) => {
-                const next = new Set(selected);
+                /**
+                 * **不能只用闭包里的 `selected`**（2026-11-01 修 C04）。
+                 *
+                 * 报告复现：连勾 m1 和 m2，实际发的是 `[m1]` 然后 `[m2]` —— 第二次
+                 * 缺 m1。
+                 *
+                 * 原因：`selected` 是**渲染时**的 props 快照。用户快速连点两下时，
+                 * 第二次点击的回调仍闭包着「只有 m1 之前」的那份集合，于是它算出
+                 * 「只勾 m2」并把 m1 抹掉。
+                 *
+                 * 修法：读**回调时刻**的最新选择 —— `props.currentAccountModels` 由容器
+                 * 从最新的 `modelRules` 现取（同步），不依赖渲染快照。
+                 */
+                const base = props.currentAccountModels?.(account.ref) ?? selected;
+                const next = new Set(base);
                 if (event.target?.checked === true) next.add(id);
                 else next.delete(id);
                 props.onSetAccountModels?.(account.ref, [...next]);

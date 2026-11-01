@@ -309,21 +309,36 @@ const guardedAccounts = (port: AccountPort): AccountPort => ({
   ...(port.move === undefined ? {} : { move: (ref: string, toIndex: number) => port.move?.(ref, toIndex) as Promise<void> }),
   ...(port.setOrder === undefined ? {} : { setOrder: (order: readonly string[]) => port.setOrder?.(order) as Promise<void> }),
   ...(port.setAutoSwitch === undefined ? {} : { setAutoSwitch: (value: boolean) => port.setAutoSwitch?.(value) as Promise<void> }),
-  /** 新增账号：落地后推进代际（新账号没有在途刷新，但语义上属于「用户改动了账号集合」）。 */
+  /**
+   * 新增账号：写操作**排队**，落地后推进代际。
+   *
+   * 报告指出的缺口：上一版只 `bump()`，用户的写**不在队列里** —— 与在途刷新
+   * 仍然可以交错。现在走 `runUserWrite`（必写 + 入队时推进代际）。
+   */
   async add(input) {
-    const added = await port.add(input);
+    /** 新账号的 ref 由端口分配，落地前不知道；先把写排进队列，落地后再 bump 它的 ref。 */
+    const added = await credentialGuard.runUserWrite("__pending_add__", () => port.add(input));
     credentialGuard.bump(added.ref);
     return added;
   },
-  /** 换 key：**先**推进代际，再写 —— 让在途刷新立刻失效。 */
+  /**
+   * 换 key：**用户写，必须无条件落地**，并且排在队列里（2026-11-01 修 S01 第三版）。
+   *
+   * 上一版是 `bump()` 之后直接 `port.replaceKey()` —— 它不在队列里，所以与在途的
+   * 刷新写回仍然可以交错：刷新已经进入 `persistStored` 时用户换 key，两者谁后落盘
+   * 取决于时序，用户的新 key 可能被覆盖。
+   *
+   * 现在走 `runUserWrite`：入队即推进代际（更早发起的刷新写回会放弃），
+   * 且与刷新写回**共享同一条队列**（不会交错）。
+   */
   async replaceKey(ref, key) {
-    credentialGuard.bump(ref);
-    await port.replaceKey(ref, key);
+    await credentialGuard.runUserWrite(ref, () => port.replaceKey(ref, key));
   },
-  /** 删除账号：先推进代际，让在途刷新不会把它的凭据写回来。 */
+  /**
+   * 删除账号：用户写，排队 + 推进代际 —— 在途刷新不会把它写回来。
+   */
   async remove(ref) {
-    credentialGuard.bump(ref);
-    await port.remove(ref);
+    await credentialGuard.runUserWrite(ref, () => port.remove(ref));
   },
 });
 const guarded = guardedAccounts(accounts);
@@ -374,7 +389,22 @@ const guarded = guardedAccounts(accounts);
       const views = await accounts.list();
       const existing = views.find((view) => view.ref === ref) ?? views.find((view) => view.label === userName);
       if (existing !== undefined) {
-        await credentials.set(existing.ref, key);
+        /**
+         * **登录也是用户写**（2026-11-01 修 S01 第三版）。
+         *
+         * 原来这里直接 `credentials.set(...)` —— 不推进代际、不进队列。于是：
+         *
+         * ```
+         * T0  旧 OAuth 刷新开始（记下旧代际）
+         * T1  用户重新登录 → 这里直接写新 blob
+         * T2  刷新返回 → 校验代际（没变）→ **把旧 blob 写回去**
+         * ```
+         *
+         * 报告用真实 `apply` 装配复现了这个场景：登录成功后 org 又被旧刷新覆盖回去。
+         *
+         * 现在走 `runUserWrite`：入队即推进代际，且与刷新写回共享同一条队列。
+         */
+        await credentialGuard.runUserWrite(existing.ref, () => credentials.set(existing.ref, key));
         return;
       }
       await accounts.add({ label: userName, key });

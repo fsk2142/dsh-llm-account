@@ -615,7 +615,10 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
           decodeStream(retry.body),
           // 流式阶段用**剩余**预算，不重置整请求 deadline。
           deadline.streamBudget(config.streamIdleTimeoutMs),
-          { signal: options.signal },
+          {
+            signal: options.signal,
+            abortNetwork: deadline.networkAbort(),
+          },
         );
         return;
       }

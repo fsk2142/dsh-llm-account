@@ -57,6 +57,30 @@ export interface RunStreamOptions {
   signal?: AbortSignal;
   /** 时钟注入点（epoch 毫秒），只用于整请求 deadline 的边界判定；缺省 `Date.now`。 */
   now?: () => number;
+  /**
+   * **底层网络的取消入口**（2026-11-01 修 R03 第三版）。
+   *
+   * `signal` 是「调用方要不要这次回答」，而这个是「这一次网络读要不要继续」。
+   * 两者分开是因为 `runStream` 结束后 `signal` 仍然有效（同一个用户请求里可能还有
+   * 后续处理），但网络读必须能被超时单独终止。
+   *
+   * 超时（整请求 deadline / 空闲看门狗）与调用方取消**都会**调用它 ——
+   * 于是「正文停住」时底层 `reader` 也会被取消，而不是只停止上层的等待。
+   */
+  abortNetwork?: () => void;
+  /**
+   * **由外部提供的网络信号**（`RequestDeadline` 用它把自己的 controller 接进来）。
+   *
+   * 与 `abortNetwork` 二选一：这个是把一个**跨阶段存活**的信号传给底层，
+   * 那个是给没有共享 controller 的调用方一个回调钩子。
+   */
+  networkSignal?: AbortSignal;
+  /**
+   * 超时时除了打断等待，还要**取消共享网络**（`RequestDeadline` 用它把
+   * 自己的 controller abort 掉，让后续阶段也看到取消）。
+   * @param reason - 取消原因。
+   */
+  onTimeout?: (reason: unknown) => void;
 }
 
 /** 打断一次等待的原因；正常的「拿到 chunk」不属于这里。 */
@@ -126,6 +150,23 @@ export async function* runStream<T>(
 ): AsyncIterable<T> {
   const now = opts.now ?? Date.now;
   const signal = opts.signal;
+  /**
+   * **打断时同时取消底层网络**（2026-11-01 修 R03 第三版）。
+   *
+   * 报告的复现：正文停住 → 空闲/整请求超时 → 上层报超时，但 `reader.cancel` 仍是 0、
+   * 底层 body 还开着。原因是 `closeQuietly(iterator)` 依赖「迭代器能被 return 掉」，
+   * 而一个真正卡在 `read()` 上的 Web Stream reader 不会响应。
+   *
+   * 现在打断路径上主动调 `abortNetwork()` —— 那是 `fetch` 的 controller，
+   * abort 会让 reader 的 read 立刻 reject，socket 随之释放。
+   */
+  const stopNetwork = (): void => {
+    try {
+      opts.abortNetwork?.();
+    } catch {
+      // 取消是尽力而为：失败不该改写已经确定的错误。
+    }
+  };
 
   // 消费前已中止：既不索取原始流（不发出请求），也不上膛定时器。
   if (signal?.aborted === true) throw interruptionError("abort", budget, signal);
@@ -168,7 +209,14 @@ export async function* runStream<T>(
     clearTimeout(idleTimer);
     clearTimeout(deadlineTimer);
     signal?.removeEventListener("abort", onAbort);
-    if (!exhausted) closeQuietly(iterator);
+    /**
+     * 没有正常消费完（超时/取消/下游提前结束）→ **两层都停**：
+     * 先试着礼貌关闭迭代器，再直接 abort 底层网络。
+     */
+    if (!exhausted) {
+      closeQuietly(iterator);
+      stopNetwork();
+    }
   }
 }
 
@@ -196,6 +244,18 @@ export class RequestDeadline {
   private readonly deadlineAt: number;
 
   /**
+   * **整条请求共享的网络取消入口**（2026-11-01 修 R03 第三版）。
+   *
+   * 它必须跨阶段存活：`fetch` 拿到响应头之后，`withRequestDeadline` 的调用结束、
+   * 它自己的 timer 被清掉 —— 若只靠那里，后面的「读错误正文」与「流式读 chunk」
+   * 就没有任何 controller 可 abort 了（报告实测 `reader.cancel = 0`、body 仍开着）。
+   *
+   * 这个 controller 活到 `abort()` 被调用为止；流式阶段用
+   * {@link networkAbort} 把它接进 `runStream`。
+   */
+  private readonly networkController = new AbortController();
+
+  /**
    * @param budgetMs - 整请求预算（毫秒）。
    * @param now - 时钟注入点；缺省 `Date.now`。
    */
@@ -216,7 +276,24 @@ export class RequestDeadline {
   }
 
   /**
-   * 用**共享 deadline 的剩余预算**包住一次异步操作。
+   * 取消整条请求的网络（任何阶段都可调用，重复调用无害）。
+   * @param reason - 取消原因（会作为 abort reason 传给底层）。
+   */
+  abort(reason?: unknown): void {
+    if (this.networkController.signal.aborted) return;
+    this.networkController.abort(reason);
+  }
+
+  /**
+   * 交给 `runStream` 的「取消底层网络」入口。
+   * @returns 一个无参函数，调用即 abort。
+   */
+  networkAbort(): () => void {
+    return () => this.abort(new LlmError("the request was cancelled", ABORTED));
+  }
+
+  /**
+   * 用**共享 deadline 的剩余预算**包住一次异步操作。超时/取消都会 abort 共享网络。
    * @param operation - 要执行的操作（收到可透传给 `fetch` 的 signal）。
    * @param streamIdleTimeoutMs - 流空闲预算（只透传，本方法不用）。
    * @param opts - 调用方取消信号与时钟注入点。
@@ -227,7 +304,20 @@ export class RequestDeadline {
     streamIdleTimeoutMs: number,
     opts: RunStreamOptions = {},
   ): Promise<T> {
-    return withRequestDeadline(operation, { requestTimeoutMs: this.remainingMs(), streamIdleTimeoutMs }, opts);
+    return withRequestDeadline(
+      operation,
+      { requestTimeoutMs: this.remainingMs(), streamIdleTimeoutMs },
+      {
+        ...opts,
+        /**
+         * **把共享 controller 接进来**：这个阶段超时时 abort 的是
+         * `this.networkController`，而不是一个用完就丢的临时 controller ——
+         * 后面的流式阶段才能继续用它（见 `networkAbort`）。
+         */
+        networkSignal: this.networkController.signal,
+        onTimeout: (reason) => this.abort(reason),
+      },
+    );
   }
 
   /**
@@ -314,16 +404,30 @@ export async function withRequestDeadline<T>(
    * - 正常完成 → `finally` 里不 abort（那会把已完成的响应也标脏）。
    *
    * `AbortSignal.any` 需要 Node ≥20.3；本包 engines 要求 `>=22.19.0`，可用。
+   *
+   * ## 第三版补充：可以接一个**外部**的共享信号
+   *
+   * `opts.networkSignal` 有值时（`RequestDeadline.run` 会传），它与上面的临时
+   * controller **合并** —— 于是超时既打断本次等待，也 abort 那个跨阶段存活的
+   * controller，后续流式阶段才会看到取消。
    */
   const timeoutController = new AbortController();
-  /** 底层看到的信号：调用方取消 **或** 本函数超时，任一发生就 abort。 */
-  const signal =
-    callerSignal === undefined
-      ? timeoutController.signal
-      : AbortSignal.any([callerSignal, timeoutController.signal]);
+  /** 参与合并的所有信号：调用方、本次超时、（可选）外部共享。 */
+  const parts: AbortSignal[] = [];
+  if (callerSignal !== undefined) parts.push(callerSignal);
+  parts.push(timeoutController.signal);
+  if (opts.networkSignal !== undefined) parts.push(opts.networkSignal);
+  /** 底层看到的信号：其中任一发生就 abort。 */
+  const signal = parts.length === 1 ? (parts[0] as AbortSignal) : AbortSignal.any(parts);
   const timer = setTimeout(() => {
-    // 先 abort（让底层立刻停止），再打断等待。
-    timeoutController.abort(new LlmError(`the request did not finish within ${budget.requestTimeoutMs}ms`, LLM_REQUEST_TIMEOUT));
+    const reason = new LlmError(`the request did not finish within ${budget.requestTimeoutMs}ms`, LLM_REQUEST_TIMEOUT);
+    // 先 abort（让底层立刻停止），再通知外部共享 controller，最后打断等待。
+    timeoutController.abort(reason);
+    try {
+      opts.onTimeout?.(reason);
+    } catch {
+      // 取消是尽力而为。
+    }
     interrupt({ kind: "request" });
   }, armDelay(budget.requestTimeoutMs));
   /**

@@ -1124,6 +1124,17 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const latestDrafts = useRef<Record<string, Record<string, unknown>>>({});
 
     /**
+     * 每个账号**最新的模型选择**（同步镜像，2026-11-01 修 C04）。
+     *
+     * 为什么需要：`setAccountModels` 是异步远程写，且落地后还要等 `statuses` 重读
+     * 才反映到 `modelRules`。用户在这两个窗口里连点第二个模型时，若勾选回调读渲染
+     * 快照，就会基于旧集合算出「只有第二个」，把第一个抹掉。
+     *
+     * 键是账号 ref —— 它在三家之间唯一（各厂商自己生成），不带 vendor 前缀也不会串。
+     */
+    const latestAccountModels = useRef(new Map<string, readonly string[]>());
+
+    /**
      * 把**某一家**的全部草稿写入设置文档（卡片底部的保存按钮）。
      *
      * 串行队列 + 每次现取修订号（见 {@link writeQueue}）：
@@ -1205,12 +1216,19 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const saveOneField = (ns: string, key: string, value: unknown): Promise<void> => {
       // 先同步进草稿镜像：界面立刻反映，且排队期间若有别的写入合并读取，看到的是新值。
       const baseline = latestSnapshots.current[ns]?.value;
-      const next = draftsAfterChange(latestDrafts.current[ns], baseline, key, value);
+      /**
+       * **有保存在途时不能因「等于旧 baseline」丢掉草稿**（2026-11-01 修 C02）。
+       *
+       * 在途期间 `baseline` 是上一次确认的旧值，而服务端即将变成那次保存的目标。
+       * 用户此刻拨到「旧 baseline 值」是**新的意图**，不是「改回原值」。
+       */
+      const hasPendingSave = savingRowInFlight.current.has(ns) || saveRowPending.current.has(ns);
+      const next = draftsAfterChange(latestDrafts.current[ns], baseline, key, value, hasPendingSave);
       const drafts = { ...latestDrafts.current };
       if (next === undefined) delete drafts[ns];
       else drafts[ns] = next;
       latestDrafts.current = drafts;
-      setState((current) => setField(current, ns, key, value));
+      setState((current) => setField(current, ns, key, value, hasPendingSave));
       return saveRow(ns);
     };
 
@@ -1960,8 +1978,25 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         void usage?.moveAccount(vendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
       },
       onSetAccountModels: (vendor: string, ref: string, models: readonly string[]) => {
+        /**
+         * **先同步记下这次的选择**（2026-11-01 修 C04）。
+         *
+         * `setAccountModels` 是异步远程写，落地后还要等 `statuses` 重读才反映到
+         * `modelRules`。用户在这个窗口里连点第二个模型时，若回调读的是渲染快照，
+         * 就会基于「只有第一个」的旧集合算出「只有第二个」，把第一个抹掉。
+         *
+         * `latestAccountModels` 是同步镜像：回调立刻读它，绕过两个窗口
+         * （远程往返 + 重读状态）。
+         */
+        latestAccountModels.current.set(ref, models);
         void usage?.setAccountModels?.(vendor, ref, models).then(() => setAccountRevision((current) => current + 1));
       },
+      /**
+       * 回调时刻的**最新**模型选择（不经渲染快照）。
+       * @param ref - 账号 ref。
+       * @returns 该账号当前被勾选的模型 id；没有记录时 `undefined`（调用方退回渲染快照）。
+       */
+      currentAccountModels: (ref: string) => latestAccountModels.current.get(ref),
       onToggleExpand: (vendor: string, ref: string) => setState((current) => toggleExpanded(current, ref, vendor)),
       onLoginBegin: (vendor: string) => beginLogin(vendor),
       // 等待面板的「取消登录」：宿主停流程、界面立刻回到未开始。
@@ -2261,12 +2296,14 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         // 入参取自**镜像**而不是闭包 `state`：同一拍里连拨两个开关时，第二次事件的闭包还停在
         // 第一次之前，用它算会把第一处改动丢掉（实测：只写进了最后那一个）。
         const baseline = latestSnapshots.current[ns]?.value;
-        const next = draftsAfterChange(latestDrafts.current[ns], baseline, key, value);
+        /** 同 `saveOneField`：有保存在途时不因「等于旧 baseline」丢草稿（2026-11-01 修 C02）。 */
+        const hasPendingSave = savingRowInFlight.current.has(ns) || saveRowPending.current.has(ns);
+        const next = draftsAfterChange(latestDrafts.current[ns], baseline, key, value, hasPendingSave);
         const drafts = { ...latestDrafts.current };
         if (next === undefined) delete drafts[ns];
         else drafts[ns] = next;
         latestDrafts.current = drafts;
-        setState((current) => setField(current, ns, key, value));
+        setState((current) => setField(current, ns, key, value, hasPendingSave));
         const kind = specOf(state, ns, key)?.kind;
         if (kind === undefined || !savesImmediately(kind)) return;
         // 开关/下拉：写这一家的**全部**草稿（若用户先改了输入框再拨开关，那一份输入也跟着落盘 ——
@@ -2292,16 +2329,32 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
               setSecretSaving(true);
               setSecretError(undefined);
               try {
+                /**
+                 * **`existing` 只用一次（决定新引用名），不要用它算最终列表**
+                 * （2026-11-01 修 C06）。
+                 *
+                 * 报告的复现：添加 key2 的过程中删掉 key1 并已落盘，添加完成又变回
+                 * `[key1, key2]` —— 已移除的引用重新参与选择。
+                 *
+                 * 原因是 `setCredential` 是 `await`，期间用户可以删 key。原来的
+                 * `[...existing, ref]` 用的是 await **之前**的快照，把删掉的加回来了。
+                 */
                 const existing = currentKeyRefsOf();
                 const ref = nextKeyRef(existing);
                 const result = await callRemote(() => usage.setCredential!(ref, secret));
                 const unwrapped = unwrapRemote(await result);
                 if (!unwrapped.ok) return unwrapped.error;
                 setSecretDraft("");
-                // 引用名列表是**设置文档**里的一份数据，必须落盘 —— 只写草稿的话，刷新页面就没了，
-                // 而密钥其实已经在凭据库里（用户会看到「列表空了但还能用」）。
-                // 这里走 `saveOneField`：它不依赖输入类字段的「卡片保存按钮」那条路。
-                await saveOneField(FEATURE_TAB_NS, "searchApiKeyRefs", [...existing, ref]);
+                /**
+                 * 引用名列表是**设置文档**里的一份数据，必须落盘 —— 只写草稿的话，刷新页面就没了，
+                 * 而密钥其实已经在凭据库里（用户会看到「列表空了但还能用」）。
+                 * 这里走 `saveOneField`：它不依赖输入类字段的「卡片保存按钮」那条路。
+                 *
+                 * **await 之后重新读一次列表**：期间用户的删除/添加必须保留。
+                 */
+                const latest = currentKeyRefsOf();
+                const merged = latest.includes(ref) ? latest : [...latest, ref];
+                await saveOneField(FEATURE_TAB_NS, "searchApiKeyRefs", merged);
                 setState((current) => ({ ...current, credentialRevision: current.credentialRevision + 1 }));
                 // **加完立刻验一次**（需求：「添加了 key 后就发起一次小请求验证一下
                 // 是否可用，不可用的话就进行提示」）。这样「存进去了但用不了」当场可见，

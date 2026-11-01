@@ -368,10 +368,27 @@ export function selectTab(state: PageState, ns: string): PageState {
  *
  * 单独暴露的理由：容器在事件回调里立刻要一份「最新的草稿」去落盘，而此刻 React 还没重渲染
  * （`state` 闭包是旧的）。用同一个函数算，渲染与落盘就不会各算一套规则。
+ *
+ * ## 为什么需要 `hasPendingSave`（2026-11-01 修 C02）
+ *
+ * 「与 baseline 相同就删草稿」只有在 **baseline 是服务端已确认值** 时才成立。
+ * 有保存在途时 baseline 是**上一次确认的旧值**，而服务端即将变成那次保存的目标 ——
+ * 此时把「等于旧 baseline」当成「改回原值」会把用户的真实意图抹掉：
+ *
+ * ```
+ * 初始（已确认）：on = true
+ * 1. 用户拨到 false        → 草稿 {on:false}，发起保存
+ * 2. 保存在途，用户拨到 true → 等于旧 baseline → **草稿被删**
+ * 3. 保存完成，服务端 = false
+ *    → 界面显示 true（用户刚拨的），持久化 false → 刷新后变回去
+ * ```
+ *
+ * 所以有在途保存时**不删草稿**。代价是可能多保存一次（幂等），换来的是不丢用户意图。
  * @param draft - `ns` 现有的草稿（**调用方给最新那份**，不要传旧闭包里的）。
  * @param baseline - 该 `ns` 已存储的值（判断「改回原值」的依据）。
  * @param key - 字段名。
  * @param value - 新值。
+ * @param hasPendingSave - 该 `ns` 是否有保存在途（`true` 时**不因等于 baseline 而删草稿**）。
  * @returns 新草稿；与基线一致时返回 `undefined`（这条草稿应当消失）。
  */
 export function draftsAfterChange(
@@ -379,15 +396,32 @@ export function draftsAfterChange(
   baseline: Readonly<Record<string, unknown>> | undefined,
   key: string,
   value: unknown,
+  hasPendingSave = false,
 ): Record<string, unknown> | undefined {
   const next: Record<string, unknown> = { ...(draft ?? {}) };
-  if (Object.is(baseline?.[key], value)) delete next[key];
+  if (!hasPendingSave && Object.is(baseline?.[key], value)) delete next[key];
   else next[key] = value;
   return Object.keys(next).length === 0 ? undefined : next;
 }
 
-export function setField(state: PageState, ns: string, key: string, value: unknown): PageState {
-  const draft = draftsAfterChange(state.drafts[ns], state.snapshots[ns]?.value, key, value);
+/**
+ * 改一个字段（纯函数）。
+ * @param state - 当前状态。
+ * @param ns - 该厂商的设置命名空间。
+ * @param key - 字段名。
+ * @param value - 新值。
+ * @param hasPendingSave - 是否有保存在途（`true` 时不因等于旧 baseline 删草稿，见
+ *   {@link draftsAfterChange} 的说明）。
+ * @returns 新状态。
+ */
+export function setField(
+  state: PageState,
+  ns: string,
+  key: string,
+  value: unknown,
+  hasPendingSave = false,
+): PageState {
+  const draft = draftsAfterChange(state.drafts[ns], state.snapshots[ns]?.value, key, value, hasPendingSave);
   const drafts = { ...state.drafts };
   if (draft === undefined) delete drafts[ns];
   else drafts[ns] = draft;
