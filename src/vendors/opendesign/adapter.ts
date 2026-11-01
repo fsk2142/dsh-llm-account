@@ -42,7 +42,7 @@ import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
-import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
+import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream, withRequestDeadline } from "../../core/transport";
 import { parseCatalog } from "./catalog";
 import { allowedEffortsIn, effortsFor, nearestAllowedEffort } from "./efforts";
 import { classifyOpenDesignFailure, openDesignLlmError } from "./failures";
@@ -438,7 +438,15 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
     /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
-    let swappedOnce = false;
+  /**
+   * 本次请求是否**已经换过模型**。
+   *
+   * 从 `options` 里读初值（2026-11-01 修 R01）：跨网关委托时
+   * `delegateStream` 会把 options 透传给目标家的 adapter，如果每家都用自己实例
+   * 上的 `false` 重新开始，就会出现 **A→B→A** 的无限往返 —— 每家都觉得自己
+   * "还没换过"。把标记放进 options，整条委托链共享同一个值。
+   */
+  let swappedOnce = (options as { swappedOnce?: boolean }).swappedOnce === true;
 
     for (;;) {
       const aborted = options.signal?.aborted === true;
@@ -460,7 +468,12 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
             if (swapped.provider !== options.provider) {
-              const delegated = delegateStream(swapped, options as unknown as Record<string, unknown>);
+              const delegated = delegateStream(swapped, {
+                ...options,
+                // **把「已换过模型」传给下一家**（2026-11-01 修 R01）。
+                // 不传的话每家 adapter 都从 false 开始，A→B→A 可以无限往返。
+                swappedOnce: true,
+              } as unknown as Record<string, unknown>);
               if (delegated !== undefined) {
                 yield* delegated as AsyncIterable<StreamChunk>;
                 return;
@@ -569,16 +582,33 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
   /** 一次尝试：核对档位 → 构造请求体 → 发出 → 解码并套上时间预算。 */
   async *#attempt(config: ResolvedConfig, options: GenerateOptions, key: string): AsyncGenerator<StreamChunk> {
     const effort = await this.#declaredEffort(config, options);
-    const response = await this.#post(config, options, key, effort);
+    /**
+     * **`fetch` 与读错误正文都纳入整请求预算**（2026-11-01 修 R02）。
+     *
+     * 原来只有下面的 `runStream` 受 `requestTimeoutMs` 管 —— 而它在流**已经开始
+     * 产出之后**才生效。网关接受连接但永不返回响应头时（半开连接、上游挂起），
+     * 用户配的超时完全不起作用。
+     */
+    const budget = { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs };
+    const deadlineOf = <T>(operation: () => Promise<T>): Promise<T> =>
+      withRequestDeadline(operation, budget, {
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+    let response = await deadlineOf(() => this.#post(config, options, key, effort));
     if (!response.ok) {
-      const body = await readErrorBody(response);
+      const body = await deadlineOf(() => readErrorBody(response));
       // 兜底：网关不认这个档位（400 + 点名 reasoning_effort）时按它念出的白名单**降一档**重发；
       // 白名单读不出来（或没有更弱的选项）才去掉字段。声明档位靠的是实测表 / 模型族推断，
       // 推断错的代价不该是整次请求失败 —— 最多退一档，回答照常拿到。
       if (response.status === 400 && effort !== undefined && mentionsEffortField(body)) {
         const fallback = nearestAllowedEffort(effort, allowedEffortsIn(body));
-        const retry = await this.#post(config, options, key, fallback === effort ? undefined : fallback);
-        if (!retry.ok) throw new OpenDesignStreamFailure(retry.status, await readErrorBody(retry));
+        const retry = await deadlineOf(() =>
+          this.#post(config, options, key, fallback === effort ? undefined : fallback),
+        );
+        if (!retry.ok) {
+          const retryBody = await deadlineOf(() => readErrorBody(retry));
+          throw new OpenDesignStreamFailure(retry.status, retryBody);
+        }
         yield* runStream(
           decodeStream(retry.body),
           { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs },

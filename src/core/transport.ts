@@ -171,3 +171,66 @@ export async function* runStream<T>(
     if (!exhausted) closeQuietly(iterator);
   }
 }
+
+/**
+ * 用**整请求 deadline** 包住一次可能长时间挂起的异步操作（`fetch`、读错误正文）。
+ *
+ * ## 为什么需要（2026-11-01 修 R02）
+ *
+ * `runStream` 的 deadline 只覆盖**已经开始产出 chunk 之后**。而一次真实请求里：
+ *
+ * ```
+ * const response = await this.#post(...);              // fetch 等响应头，没有超时
+ * if (!response.ok) await readErrorBody(response);     // 读错误正文，没有超时
+ * yield* runStream(decodeStream(response.body), ...);  // 超时只包住这里
+ * ```
+ *
+ * 网关接受连接但**永不返回响应头**时（典型的半开连接、被上游挂起），用户配的
+ * `requestTimeoutMs` 完全不起作用 —— 请求会一直挂着，直到宿主自己放弃。
+ *
+ * ## 语义
+ *
+ * - 超时抛 `LLM_REQUEST_TIMEOUT` —— 与 `runStream` 的整请求超时**同一个码**，
+ *   宿主与界面看到的是同一类失败；
+ * - **不取消底层操作**：这条路径上 `fetch` 不接受我们的 signal，超时只停止等待。
+ *   与 `quotaWithTimeout` 同一取舍；底层 promise 挂了 `.catch` 兜住，不会变成
+ *   unhandled rejection；
+ * - `signal` 中止仍然优先（用户按停止立即生效）。
+ * @param operation - 要执行的异步操作（会收到可透传给 `fetch` 的 signal）。
+ * @param budget - 时间预算（只用 `requestTimeoutMs`）。
+ * @param opts - 调用方取消信号与时钟注入点。
+ * @returns 操作结果。
+ */
+export async function withRequestDeadline<T>(
+  operation: (signal?: AbortSignal) => Promise<T>,
+  budget: StreamBudget,
+  opts: RunStreamOptions = {},
+): Promise<T> {
+  const signal = opts.signal;
+  if (signal?.aborted === true) {
+    throw signal.reason === undefined
+      ? new LlmError("the caller aborted the request", ABORTED)
+      : new LlmError("the caller aborted the request", ABORTED, { cause: signal.reason });
+  }
+  let interrupt: (reason: Interruption) => void = () => {};
+  const interrupted = new Promise<Interruption>((resolve) => {
+    interrupt = resolve;
+  });
+  const onAbort = (): void => interrupt({ kind: "abort" });
+  signal?.addEventListener("abort", onAbort);
+  const timer = setTimeout(() => interrupt({ kind: "request" }), armDelay(budget.requestTimeoutMs));
+  /**
+   * 底层操作；超时后它仍会跑完，所以必须挂 `catch` 兜住 —— 否则会变成
+   * unhandled rejection（Node 会打印警告，测试里还可能被判失败）。
+   */
+  const running = operation(signal).then((value): { kind: "ok"; value: T } => ({ kind: "ok", value }));
+  try {
+    const outcome = await Promise.race([running, interrupted]);
+    if (outcome.kind === "ok") return outcome.value;
+    throw interruptionError(outcome.kind, budget, signal);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+    void running.catch(() => {});
+  }
+}

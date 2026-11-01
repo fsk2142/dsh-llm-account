@@ -32,7 +32,7 @@ import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
-import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
+import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream, withRequestDeadline } from "../../core/transport";
 import { parseCatalog } from "./catalog";
 import { knownEfforts } from "./efforts";
 import { classifyCommandCodeFailure, commandCodeLlmError } from "./failures";
@@ -395,7 +395,15 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
     /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
-    let swappedOnce = false;
+  /**
+   * 本次请求是否**已经换过模型**。
+   *
+   * 从 `options` 里读初值（2026-11-01 修 R01）：跨网关委托时
+   * `delegateStream` 会把 options 透传给目标家的 adapter，如果每家都用自己实例
+   * 上的 `false` 重新开始，就会出现 **A→B→A** 的无限往返 —— 每家都觉得自己
+   * "还没换过"。把标记放进 options，整条委托链共享同一个值。
+   */
+  let swappedOnce = (options as { swappedOnce?: boolean }).swappedOnce === true;
 
     for (;;) {
       const aborted = options.signal?.aborted === true;
@@ -414,7 +422,12 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
             if (swapped.provider !== options.provider) {
-              const delegated = delegateStream(swapped, options as unknown as Record<string, unknown>);
+              const delegated = delegateStream(swapped, {
+                ...options,
+                // **把「已换过模型」传给下一家**（2026-11-01 修 R01）。
+                // 不传的话每家 adapter 都从 false 开始，A→B→A 可以无限往返。
+                swappedOnce: true,
+              } as unknown as Record<string, unknown>);
               if (delegated !== undefined) {
                 yield* delegated as AsyncIterable<StreamChunk>;
                 return;
@@ -548,14 +561,44 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       model: options.model,
       ...(config.protocol === undefined ? {} : { forced: config.protocol }),
     });
-    let response = await this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), options.signal);
+    /**
+     * **`fetch` 与读错误正文都纳入整请求预算**（2026-11-01 修 R02）。
+     *
+     * 原来只有下面的 `runStream` 受 `requestTimeoutMs` 管 —— 而它在流**已经开始
+     * 产出之后**才生效。网关接受连接但永不返回响应头时（半开连接、上游挂起），
+     * 用户配的超时完全不起作用，请求会一直挂着。
+     *
+     * 现在整段「发请求 + 判定响应 + 读错误正文」都包在同一个 deadline 里，超时抛
+     * `LLM_REQUEST_TIMEOUT` —— 与 `runStream` 的整请求超时**同一个码**。
+     */
+    const budget = { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs };
+    let response = await withRequestDeadline(
+      (signal) => this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
+      budget,
+      { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+    );
     if (!response.ok) {
-      const body = await readErrorBody(response);
+      const body = await withRequestDeadline(
+        () => readErrorBody(response),
+        budget,
+        { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+      );
       if (protocol !== "cli" && isUpgradeRequired(response.status, body)) {
         // 回退顺序（旧插件第 7512-7519 行）：同一个账号、同一次尝试改用 CLI 传输重发。
         protocol = "cli";
-        response = await this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), options.signal);
-        if (!response.ok) throw new CommandCodeStreamFailure(response.status, await readErrorBody(response));
+        response = await withRequestDeadline(
+          (signal) => this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
+          budget,
+          { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+        );
+        if (!response.ok) {
+          const retryBody = await withRequestDeadline(
+            () => readErrorBody(response),
+            budget,
+            { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+          );
+          throw new CommandCodeStreamFailure(response.status, retryBody);
+        }
       } else {
         throw new CommandCodeStreamFailure(response.status, body);
       }

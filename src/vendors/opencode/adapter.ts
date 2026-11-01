@@ -389,7 +389,15 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
     /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
-    let swappedOnce = false;
+  /**
+   * 本次请求是否**已经换过模型**。
+   *
+   * 从 `options` 里读初值（2026-11-01 修 R01）：跨网关委托时
+   * `delegateStream` 会把 options 透传给目标家的 adapter，如果每家都用自己实例
+   * 上的 `false` 重新开始，就会出现 **A→B→A** 的无限往返 —— 每家都觉得自己
+   * "还没换过"。把标记放进 options，整条委托链共享同一个值。
+   */
+  let swappedOnce = (options as { swappedOnce?: boolean }).swappedOnce === true;
     /** 本轮第一个被选中的账号；`undefined` 表示还没选过（见下面的晋升判定）。 */
     let firstPick: string | undefined;
 
@@ -412,7 +420,12 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
             if (swapped.provider !== options.provider) {
-              const delegated = delegateStream(swapped, options as unknown as Record<string, unknown>);
+              const delegated = delegateStream(swapped, {
+                ...options,
+                // **把「已换过模型」传给下一家**（2026-11-01 修 R01）。
+                // 不传的话每家 adapter 都从 false 开始，A→B→A 可以无限往返。
+                swappedOnce: true,
+              } as unknown as Record<string, unknown>);
               if (delegated !== undefined) {
                 yield* delegated as AsyncIterable<StreamChunk>;
                 return;
@@ -661,10 +674,31 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
      */
     const resolved = await this.#refreshShared(ref, raw);
     if (resolved === undefined) return undefined;
-    // 只回写“从凭据槽读出来的那一份”：环境变量里的 blob 没有可写回的持久位置。
+    /**
+     * 只回写「从凭据槽读出来的那一份」：环境变量里的 blob 没有可写回的持久位置。
+     *
+     * ## 写回前**重新读一次**凭据槽（2026-11-01 修 S01）
+     *
+     * 原来的判断是 `stored === raw` —— 拿的都是**刷新开始前**的快照。于是：
+     *
+     * ```
+     * T0  读到旧 OAuth blob（raw），发现要刷新，发起请求
+     * T1  用户换 key / 重新登录 → 凭据槽写入新值
+     * T2  刷新返回 → stored === raw 仍成立（都是 T0 的）→ 把旧 blob 写回去
+     * ```
+     *
+     * **用户刚存的新 key 被迟到的旧刷新覆盖**，而且因为 `#singleFlight` 去重，
+     * 整个过程没有任何报错。
+     *
+     * 现在写回前再读一次：只有「凭据槽里还是我开始时那一份」才写。
+     */
     if (resolved.updated !== undefined && stored === raw) {
       try {
-        await this.#deps.persistStored?.(ref, resolved.updated);
+        const current = await this.#deps.resolveStored?.(ref);
+        if (current === raw) {
+          await this.#deps.persistStored?.(ref, resolved.updated);
+        }
+        // 否则：期间用户改过凭据 —— 丢弃这次刷新结果，只把新 token 用在本次请求里。
       } catch {
         // 回写失败不影响本次请求：新 token 已经在内存里，下一次会再刷新一次。
       }

@@ -479,39 +479,50 @@ async function main() {
     );
   }
 
+  /**
+   * **构建前**检查源码是否干净（2026-11-01 修 C01，第二次尝试）。
+   *
+   * ## 为什么检查点必须在构建之前
+   *
+   * 上一版在构建**之后**跑 `git status -- lib`，只要有任何差异就中止。
+   * 但版本号是构建期注入的（`tsdown.config.ts` 的 `define`），所以每次正常发版：
+   *
+   * ```
+   * 写新版本号 → 构建 → lib/*.js 内容变 → chunk 文件名里的内容 hash 也变
+   *   → git status 显示 M + D + ?? → 中止
+   * ```
+   *
+   * 实测 1.6.0 → 1.6.1 会改 **12 个 lib 文件**（4 个改、4 个删、4 个新增）。
+   * 也就是说「构建后比对」这个思路本身就是错的：正常发版必然有差异。
+   *
+   * ## 正确的判据
+   *
+   * 「忘了提交产物」的真实征兆是**构建之前**就有源码改动没提交 —— 那种情况下
+   * 构建出来的产物属于一个不存在的提交。所以在写版本号**之前**检查：
+   * 工作树里不该有未提交的源码改动。
+   *
+   * 产物本身是否正确，由随后的 `tsc` / `vitest` 与提交后的 `git status -- lib`
+   * （在 stageForRelease 里）来保证。
+   */
+  const dirtySources = run(["git", "status", "--porcelain", "--", "src", "tests", "scripts", "docs"])
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+  if (dirtySources.length > 0) {
+    throw new Error(
+      [
+        `发版中止：有未提交的源码改动 ——`,
+        ...dirtySources.map((line) => `  ${line}`),
+        ``,
+        `先提交（或还原）这些改动再发版，否则构建出的产物属于一个不存在的提交。`,
+      ].join("\n"),
+    );
+  }
+
   // 3. 写版本号并重建产物（版本号是构建期注入的）。
   run(["node", "scripts/next-version.mjs", "--write"]);
   console.log("已写回 package.json");
   run(["pnpm", "build"], { stdio: "inherit" });
   console.log("产物已重建");
-
-  /**
-   * **产物一致性检查放在这里，而不是 CI**（2026-10-30）。
-   *
-   * `lib/` 是必须提交的发布产物，用户安装后跑的就是它 —— 源码改了却没提交产物，
-   * 装出来还是旧行为。
-   *
-   * 但这个比对**只能在同平台做**：tsdown 的 chunk 文件名含内容 hash，而 hash 与平台
-   * 相关，Linux CI 上重建会产出不同的 `<name>-<hash>.js`，`git status` 必然显示
-   * 「删旧 chunk + 加新 chunk」。把这条放在 Linux CI 里只会永远红。
-   *
-   * 发版脚本在本机跑（与产出 `lib/` 的平台一致），此刻 `lib/` 刚被重建，**任何**
-   * 未提交差异都说明有问题 —— 除了 `package.json` 的版本号（上一步刚写）。
-   */
-  const libDiff = run(["git", "status", "--porcelain", "--", "lib"])
-    .split("\n")
-    .filter((line) => line.trim() !== "");
-  if (libDiff.length > 0) {
-    throw new Error(
-      [
-        `发版中止：重建后的 lib/ 与仓库里的产物不一致 ——`,
-        ...libDiff.map((line) => `  ${line}`),
-        ``,
-        `这说明上一次改了源码却忘了提交产物。请检查后重新发版。`,
-      ].join("\n"),
-    );
-  }
-  console.log("产物与源码一致");
 
   // 4. 全量验证：任何一步失败都不该发出去。
   //
