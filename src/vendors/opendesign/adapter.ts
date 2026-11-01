@@ -594,9 +594,9 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
      */
     const deadline = new RequestDeadline(config.requestTimeoutMs);
     const signalOpts = { ...(options.signal === undefined ? {} : { signal: options.signal }) };
-    const deadlineOf = <T,>(operation: () => Promise<T>): Promise<T> =>
+    const deadlineOf = <T,>(operation: (signal?: AbortSignal) => Promise<T>): Promise<T> =>
       deadline.run(operation, config.streamIdleTimeoutMs, signalOpts);
-    let response = await deadlineOf(() => this.#post(config, options, key, effort));
+    let response = await deadlineOf((signal) => this.#post(config, options, key, effort, signal));
     if (!response.ok) {
       const body = await deadlineOf(() => readErrorBody(response));
       // 兜底：网关不认这个档位（400 + 点名 reasoning_effort）时按它念出的白名单**降一档**重发；
@@ -604,8 +604,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       // 推断错的代价不该是整次请求失败 —— 最多退一档，回答照常拿到。
       if (response.status === 400 && effort !== undefined && mentionsEffortField(body)) {
         const fallback = nearestAllowedEffort(effort, allowedEffortsIn(body));
-        const retry = await deadlineOf(() =>
-          this.#post(config, options, key, fallback === effort ? undefined : fallback),
+        const retry = await deadlineOf((signal) =>
+          this.#post(config, options, key, fallback === effort ? undefined : fallback, signal),
         );
         if (!retry.ok) {
           const retryBody = await deadlineOf(() => readErrorBody(retry));
@@ -636,11 +636,24 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param effort - 要带的档位；`undefined` 表示不带这个字段。
    * @returns 原始响应（调用方判状态、读正文）。
    */
+  /**
+   * 发一次生成请求。
+   * @param config - 已解析的配置。
+   * @param options - 宿主的请求。
+   * @param key - 密钥。
+   * @param effort - 档位。
+   * @param signal - **实际传给 `fetch` 的信号**（2026-11-01 修 R03）。
+   *
+   *   这里必须**收参数**而不是直接用 `options.signal`：`withRequestDeadline`
+   *   会传入「调用方取消 **或** 超时」合并后的信号。用 `options.signal` 的话超时
+   *   永远无法 abort 底层请求 —— 界面报超时、socket 继续挂着。
+   */
   async #post(
     config: ResolvedConfig,
     options: GenerateOptions,
     key: string,
     effort: string | undefined,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const cap = config.defaultMaxTokens;
     const facts: BodyFacts = {
@@ -654,7 +667,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       body: JSON.stringify(buildRequestBody(options, facts, await this.#imagesOf(options))),
     });
     const init: RequestInit = { method: "POST", headers: wire.headers, body: wire.body };
-    if (options.signal !== undefined) init.signal = options.signal;
+    const effective = signal ?? options.signal;
+    if (effective !== undefined) init.signal = effective;
     return this.#deps.fetchImpl(wire.url, init);
   }
 

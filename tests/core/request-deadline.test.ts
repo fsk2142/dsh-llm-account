@@ -78,7 +78,7 @@ describe("withRequestDeadline（fetch 阶段的整请求超时）", () => {
     await expect(started).rejects.toMatchObject({ code: "ABORTED" });
   });
 
-  it("操作能拿到 signal（可透传给 fetch）", async () => {
+  it("操作能拿到 signal，且**调用方取消会传导**（合并信号）", async () => {
     const controller = new AbortController();
     const seen: (AbortSignal | undefined)[] = [];
     await withRequestDeadline(
@@ -89,7 +89,65 @@ describe("withRequestDeadline（fetch 阶段的整请求超时）", () => {
       BUDGET,
       { signal: controller.signal },
     );
-    expect(seen[0], "实现必须把 signal 交给操作").toBe(controller.signal);
+    /**
+     * **不再断言 `seen[0] === controller.signal`**（2026-11-01 修 R03）。
+     *
+     * 现在传给底层的是 `AbortSignal.any([调用方, 超时自己的 controller])` ——
+     * 一个**合并**信号，不是调用方原对象。断言对象相等会锁死实现细节；重要的是
+     * 「取消能传导」，那由下面几条单独验证。
+     */
+    expect(seen[0], "必须把 signal 交给操作").toBeDefined();
+    expect(seen[0]?.aborted, "此刻不该是已中止的").toBe(false);
+  });
+
+  it("**超时会 abort 底层 signal**（R03 修的就是这个）", async () => {
+    /**
+     * 上一版超时只是「我不等了」：`operation` 收到的 signal 是**调用方**的，
+     * 从没被 abort，于是 `fetch` 继续跑到自然结束。
+     */
+    let observed: AbortSignal | undefined;
+    let abortedDuringRun = false;
+    const hanging = new Promise<never>(() => {});
+    const started = withRequestDeadline(async (signal) => {
+      observed = signal;
+      signal?.addEventListener("abort", () => {
+        abortedDuringRun = true;
+      });
+      return hanging;
+    }, BUDGET);
+    await expect(started).rejects.toMatchObject({ code: LLM_REQUEST_TIMEOUT });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(observed, "操作应当收到 signal").toBeDefined();
+    expect(observed?.aborted, "**超时后底层 signal 必须已中止**").toBe(true);
+    expect(abortedDuringRun, "abort 事件必须真的派发到监听器").toBe(true);
+  });
+
+  it("调用方取消会传导到合并信号", async () => {
+    const controller = new AbortController();
+    let observed: AbortSignal | undefined;
+    const hanging = new Promise<never>(() => {});
+    const started = withRequestDeadline(
+      async (signal) => {
+        observed = signal;
+        return hanging;
+      },
+      { requestTimeoutMs: 10_000, streamIdleTimeoutMs: 10_000 },
+      { signal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 20);
+    await expect(started).rejects.toMatchObject({ code: "ABORTED" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(observed?.aborted, "调用方取消必须传导").toBe(true);
+  });
+
+  it("正常完成时**不** abort 底层信号（别把成功的响应标脏）", async () => {
+    let observed: AbortSignal | undefined;
+    await withRequestDeadline(async (signal) => {
+      observed = signal;
+      return "ok";
+    }, BUDGET);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(observed?.aborted, "成功路径不该 abort").toBe(false);
   });
 });
 
@@ -134,5 +192,60 @@ describe("RequestDeadline（共享预算，R02 第二版）", () => {
     };
     await expect(phase(60)).resolves.toBe("ok");
     await expect(phase(60), "第二段 60ms 已超出剩余预算").rejects.toThrow(/would exceed budget/u);
+  });
+});
+
+describe("超时真正取消底层请求（R03 的端到端语义）", () => {
+  it("**假 fetch 在超时后收到 abort**，socket 不会继续挂着", async () => {
+    /**
+     * 模拟真实 fetch：它内部监听 signal，abort 时 reject。
+     *
+     * 若实现不 abort（R03 的旧行为），这个 promise 会一直 pending，
+     * 测试靠 `observedAbort` 断言它会失败。
+     */
+    let observedAbort = false;
+    let pendingTimer: ReturnType<typeof setTimeout> | undefined;
+    const fakeFetch = (signal?: AbortSignal): Promise<Response> =>
+      new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          observedAbort = true;
+          reject(new Error("aborted"));
+        });
+        // 永不 resolve：模拟网关挂起。
+        pendingTimer = setTimeout(() => {}, 60_000);
+      });
+    try {
+      await expect(
+        withRequestDeadline((signal) => fakeFetch(signal), {
+          requestTimeoutMs: 30,
+          streamIdleTimeoutMs: 5_000,
+        }),
+      ).rejects.toMatchObject({ code: LLM_REQUEST_TIMEOUT });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(observedAbort, "**底层必须真的收到 abort**（否则 socket 继续挂着）").toBe(true);
+    } finally {
+      if (pendingTimer !== undefined) clearTimeout(pendingTimer);
+    }
+  });
+
+  it("调用方取消也会让假 fetch 收到 abort", async () => {
+    const controller = new AbortController();
+    let observedAbort = false;
+    const fakeFetch = (signal?: AbortSignal): Promise<Response> =>
+      new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          observedAbort = true;
+          reject(new Error("aborted"));
+        });
+      });
+    const started = withRequestDeadline(
+      (signal) => fakeFetch(signal),
+      { requestTimeoutMs: 10_000, streamIdleTimeoutMs: 10_000 },
+      { signal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 20);
+    await expect(started).rejects.toMatchObject({ code: "ABORTED" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(observedAbort, "取消也要传导到底层").toBe(true);
   });
 });
