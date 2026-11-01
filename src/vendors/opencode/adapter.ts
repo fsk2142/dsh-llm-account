@@ -33,6 +33,7 @@ import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
 import { createSingleFlight } from "../../core/single-flight";
+import { createCredentialGuard, type CredentialGuard } from "../../core/credential-guard";
 import { OAUTH_PREFIX, resolveOAuthCredential } from "./oauth";
 import type { OpencodeCatalog, OpencodeCatalogRecord } from "./catalog";
 import { classifyGatewayFailure, gatewayLlmError } from "./failures";
@@ -157,6 +158,8 @@ export interface OpencodeAdapterDeps {
   resolveStored?: (ref: string) => Promise<string | undefined>;
   /** `environment` 来源：启动环境读取（宿主 `launchEnvironmentOf(ctx).get(name)` 的注入点）。 */
   resolveEnvironment?: (name: string) => string | undefined;
+  /** 凭据写入守卫（装配层注入，用于跨方法的代际协调）。 */
+  credentialGuard?: CredentialGuard;
   /** 刷新后的 OAuth blob 回写凭据槽（只在原值是 blob、且确实刷新过时调用）。 */
   persistStored?: (ref: string, value: string) => Promise<void>;
   /** Console 基地址（设备码/刷新端点）；缺省 `https://opencode.ai`。 */
@@ -240,11 +243,28 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #singleFlight = createSingleFlight();
 
   /**
+   * 凭据写入守卫（2026-11-01 修 S01 第二版）。
+   *
+   * 见 `core/credential-guard` 的模块注释：宿主 `CredentialPort` 没有 CAS，插件侧
+   * 无法做到跨进程原子写。这里能保证的是「本插件内对同一 ref 的写入串行化并校验
+   * 代际」—— 用户换 key / 重新登录时推进代际，于是**在那之前发起**的刷新不会写回。
+   *
+   * **由装配层注入**：用户操作（replaceKey / 重登 / 删除）走的是 accounts 端口，
+   * 只有装配层同时看得到「端口」与「本 adapter」，所以代际推进必须在那里做。
+   * 不注入时自建一个（单测直接构造 adapter 也能用）。
+   *
+   * 边界必须说清楚：插件外部（宿主凭据页、别的插件）的写入不经过这个队列。
+   */
+  readonly #credentialGuard: CredentialGuard;
+
+
+  /**
    * @param deps - 配置读取、轮换引擎、端口与各 I/O 注入点。
    */
   constructor(deps: OpencodeAdapterDeps) {
     super();
     this.#deps = deps;
+    this.#credentialGuard = deps.credentialGuard ?? createCredentialGuard();
   }
 
   /** @returns 路由的展示元数据（name 用产品名，id 必须是路由 id）。 */
@@ -667,6 +687,13 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     if (raw === undefined) return undefined;
     if (!raw.startsWith(OAUTH_PREFIX)) return { key: raw };
     /**
+     * **刷新开始前记下代际**（2026-11-01 修 S01 第二版）。
+     *
+     * 写回时会把它交给 `#credentialGuard`：若期间用户换过 key / 重登 / 删过账号，
+     * 代际已推进，这次迟到的刷新就不会写回。
+     */
+    const epochAtStart = this.#credentialGuard.epochOf(ref);
+    /**
      * OAuth 刷新按 ref 去重（2026-10-22 修 LOW-1）：同一账号上并发请求共享一次刷新。
      *
      * 只有「需要刷新」时才走这段 —— `resolveOAuthCredential` 内部会先判断 token 是否
@@ -690,15 +717,34 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
      * **用户刚存的新 key 被迟到的旧刷新覆盖**，而且因为 `#singleFlight` 去重，
      * 整个过程没有任何报错。
      *
-     * 现在写回前再读一次：只有「凭据槽里还是我开始时那一份」才写。
+     * ## 第二版：光「再读一次」不够（2026-11-01 复审第 2 轮）
+     *
+     * 上一版加了「写回前再读一次」，但读取与写入之间仍然有窗口：
+     *
+     * ```
+     * T1  刷新返回，二次读取 → 还是 raw
+     * T2  **暂停**（事件循环让出）
+     * T3  用户换 key，完整提交
+     * T4  继续 T1 的写 → 覆盖
+     * ```
+     *
+     * 宿主 `CredentialPort` 只有 `resolve/set/unset/describe`，**没有 CAS 或版本条件
+     * 更新**，所以插件侧做不到真正的原子写。现在的做法：
+     *
+     * 1. 刷新**开始前**记下代际（`epochAtStart`）；
+     * 2. 写回时把写操作交给 `#credentialGuard` **排队**并校验代际 —— 用户操作
+     *    （换 key / 重登 / 删除）会推进代际，于是排队期间用户改过就放弃写回。
+     *
+     * **边界**：这只保证本插件内的顺序一致。宿主凭据页或别的插件的写入不经过这个
+     * 队列 —— 不能对外宣称「整个宿主的原子性」。
      */
     if (resolved.updated !== undefined && stored === raw) {
+      const updated = resolved.updated;
       try {
-        const current = await this.#deps.resolveStored?.(ref);
-        if (current === raw) {
-          await this.#deps.persistStored?.(ref, resolved.updated);
-        }
-        // 否则：期间用户改过凭据 —— 丢弃这次刷新结果，只把新 token 用在本次请求里。
+        await this.#credentialGuard.run(ref, epochAtStart, async () => {
+          await this.#deps.persistStored?.(ref, updated);
+        });
+        // 代际不符时 `run` 返回 false 且不写 —— 用户的新 key 保持不动。
       } catch {
         // 回写失败不影响本次请求：新 token 已经在内存里，下一次会再刷新一次。
       }

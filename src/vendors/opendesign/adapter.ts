@@ -42,7 +42,7 @@ import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
-import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream, withRequestDeadline } from "../../core/transport";
+import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
 import { parseCatalog } from "./catalog";
 import { allowedEffortsIn, effortsFor, nearestAllowedEffort } from "./efforts";
 import { classifyOpenDesignFailure, openDesignLlmError } from "./failures";
@@ -583,17 +583,19 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
   async *#attempt(config: ResolvedConfig, options: GenerateOptions, key: string): AsyncGenerator<StreamChunk> {
     const effort = await this.#declaredEffort(config, options);
     /**
-     * **`fetch` 与读错误正文都纳入整请求预算**（2026-11-01 修 R02）。
+     * **一个 deadline，所有阶段共用剩余时间**（2026-11-01 修 R02 第二版）。
      *
      * 原来只有下面的 `runStream` 受 `requestTimeoutMs` 管 —— 而它在流**已经开始
      * 产出之后**才生效。网关接受连接但永不返回响应头时（半开连接、上游挂起），
      * 用户配的超时完全不起作用。
+     *
+     * 上一版给每段各套一次预算，导致每段都从当下重算 —— 「头 60ms + 正文 60ms」
+     * 在 90ms 预算下整体跑 120ms。现在共用 `RequestDeadline` 的剩余时间。
      */
-    const budget = { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs };
-    const deadlineOf = <T>(operation: () => Promise<T>): Promise<T> =>
-      withRequestDeadline(operation, budget, {
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
+    const deadline = new RequestDeadline(config.requestTimeoutMs);
+    const signalOpts = { ...(options.signal === undefined ? {} : { signal: options.signal }) };
+    const deadlineOf = <T,>(operation: () => Promise<T>): Promise<T> =>
+      deadline.run(operation, config.streamIdleTimeoutMs, signalOpts);
     let response = await deadlineOf(() => this.#post(config, options, key, effort));
     if (!response.ok) {
       const body = await deadlineOf(() => readErrorBody(response));
@@ -611,7 +613,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         }
         yield* runStream(
           decodeStream(retry.body),
-          { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs },
+          // 流式阶段用**剩余**预算，不重置整请求 deadline。
+          deadline.streamBudget(config.streamIdleTimeoutMs),
           { signal: options.signal },
         );
         return;
@@ -620,7 +623,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     }
     yield* runStream(
       decodeStream(response.body),
-      { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs },
+      deadline.streamBudget(config.streamIdleTimeoutMs),
       { signal: options.signal },
     );
   }

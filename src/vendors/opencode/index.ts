@@ -71,6 +71,7 @@ import {
 } from "../assembly";
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
 import { createOpencodeAdapter } from "./adapter";
+import { createCredentialGuard } from "../../core/credential-guard";
 import type { OpencodeAdapterDeps, OpencodeConfig, OpencodeModelLimits } from "./adapter";
 import {
   OPENCODE_DEFAULT_REF,
@@ -270,6 +271,62 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     createSettingsIntentStore(settings, OPENCODE_SETTINGS_NS, INTENTS_FIELD, warn),
   );
   const accounts = createOpencodeAccounts({ settings, credentials, intents });
+
+/**
+ * 凭据写入守卫（2026-11-01 修 S01 第二版）。
+ *
+ * `adapter` 刷新 OAuth 时用它排队写回并校验代际；**用户操作**在这里推进代际，
+ * 于是「在用户操作之前发起」的迟到刷新不会写回。
+ *
+ * 为什么必须放在装配层：用户的凭据操作走 `accounts` 端口，刷新在 adapter 里 ——
+ * 只有这一层同时看得到两边。
+ *
+ * **边界**：只保证本插件内的顺序一致。宿主凭据页或别的插件的写入不经过这里，
+ * 所以不是「整个宿主的原子性」。
+ */
+const credentialGuard = createCredentialGuard();
+/**
+ * 把账号端口的用户意图变更通知给守卫（推进代际）。
+ *
+ * 只包装**会让已发起的刷新失效**的操作：`add` / `replaceKey` / `remove`。
+ * `rename` / `select` / `move` 等不影响凭据内容，不必推进（推进只会让在途刷新
+ * 白跑一次，没有正确性收益）。
+ * @param port - 原始账号端口。
+ * @returns 包装后的端口（行为不变）。
+ */
+const guardedAccounts = (port: AccountPort): AccountPort => ({
+  /**
+   * **必须逐个委托，不能 `{ ...port }`**（2026-11-01 修）。
+   *
+   * `port` 是 `OpencodeAccounts` 的**类实例** —— `list` / `rename` / `select` 等
+   * 都在**原型**上，对象展开只复制实例自身属性，于是展开后 `list` 变成 `undefined`。
+   * 装配测试立刻抓到：`deps.accounts.list is not a function`。
+   */
+  list: () => port.list(),
+  rename: (ref, label) => port.rename(ref, label),
+  select: (ref) => port.select(ref),
+  ...(port.restoreDefaultLabel === undefined ? {} : { restoreDefaultLabel: (ref: string) => port.restoreDefaultLabel?.(ref) as Promise<void> }),
+  ...(port.move === undefined ? {} : { move: (ref: string, toIndex: number) => port.move?.(ref, toIndex) as Promise<void> }),
+  ...(port.setOrder === undefined ? {} : { setOrder: (order: readonly string[]) => port.setOrder?.(order) as Promise<void> }),
+  ...(port.setAutoSwitch === undefined ? {} : { setAutoSwitch: (value: boolean) => port.setAutoSwitch?.(value) as Promise<void> }),
+  /** 新增账号：落地后推进代际（新账号没有在途刷新，但语义上属于「用户改动了账号集合」）。 */
+  async add(input) {
+    const added = await port.add(input);
+    credentialGuard.bump(added.ref);
+    return added;
+  },
+  /** 换 key：**先**推进代际，再写 —— 让在途刷新立刻失效。 */
+  async replaceKey(ref, key) {
+    credentialGuard.bump(ref);
+    await port.replaceKey(ref, key);
+  },
+  /** 删除账号：先推进代际，让在途刷新不会把它的凭据写回来。 */
+  async remove(ref) {
+    credentialGuard.bump(ref);
+    await port.remove(ref);
+  },
+});
+const guarded = guardedAccounts(accounts);
   const rotation = createRotationAccess(() => accountStateOf(document()));
 
   /**
@@ -302,7 +359,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
   };
 
   const switching = new SwitchingController({
-    accounts,
+    accounts: guarded,
     quota,
     rotation,
     document,
@@ -374,7 +431,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
       return rotation.current();
     },
     quota,
-    accounts,
+    accounts: guarded,
     fetchImpl: fetch,
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
@@ -400,7 +457,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
         ? (document()["autoContinueMaxAttempts"] as number)
         : undefined,
   };
-  const adapter = createOpencodeAdapter(deps);
+const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
   // 登记本家的目录读口：别的行换模型时要在这里找「同名模型」（见 model-catalog-registry）。
   registerCatalogSource({
     provider: "dsh-opencode-go",
@@ -488,7 +545,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
     vendor: PROVIDER_ID,
     credentials,
     rotation,
-    accounts,
+    accounts: guarded,
     quota,
     pinnedRef: () => pinnedRefOf(document()),
     quotaRef: () => selectedRefOf(document()),

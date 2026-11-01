@@ -29,7 +29,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { LLM_REQUEST_TIMEOUT, withRequestDeadline } from "../../src/core/transport";
+import { LLM_REQUEST_TIMEOUT, RequestDeadline, withRequestDeadline } from "../../src/core/transport";
 
 /** 一个很快的预算，让测试不用真的等。 */
 const BUDGET = { requestTimeoutMs: 20, streamIdleTimeoutMs: 5_000 };
@@ -90,5 +90,49 @@ describe("withRequestDeadline（fetch 阶段的整请求超时）", () => {
       { signal: controller.signal },
     );
     expect(seen[0], "实现必须把 signal 交给操作").toBe(controller.signal);
+  });
+});
+
+describe("RequestDeadline（共享预算，R02 第二版）", () => {
+  it("**剩余时间递减**：第二段拿到的不是新的完整预算", async () => {
+    const deadline = new RequestDeadline(90);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const first = deadline.remainingMs();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const second = deadline.remainingMs();
+    expect(first, "60ms 后应剩约 30ms").toBeLessThanOrEqual(35);
+    expect(second, "再过 60ms 应几乎耗尽（不是又拿 90）").toBeLessThanOrEqual(5);
+  });
+
+  it("已过期时返回正数（0 会让下游退化成「不限制」）", async () => {
+    const deadline = new RequestDeadline(1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(deadline.remainingMs(), "必须 ≥1，不能是 0 或负数").toBeGreaterThanOrEqual(1);
+  });
+
+  it("streamBudget 用的也是剩余时间", async () => {
+    const deadline = new RequestDeadline(90);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const budget = deadline.streamBudget(5_000);
+    expect(budget.requestTimeoutMs, "流式阶段不该重置整请求预算").toBeLessThanOrEqual(35);
+    expect(budget.streamIdleTimeoutMs, "空闲看门狗保持原值").toBe(5_000);
+  });
+
+  it("**两段各 60ms 在 90ms 预算下不能都成功**（R02 的原始复现）", async () => {
+    /**
+     * 复审用这个夹具证明原来的实现有问题：头等待 60ms、正文再等 60ms，
+     * 每段都小于 90ms 的预算，但整请求 120ms > 90ms。
+     *
+     * 现在第二段拿到的是**剩余**预算，所以它必须超时。
+     */
+    const deadline = new RequestDeadline(90);
+    const phase = async (ms: number): Promise<string> => {
+      const remaining = deadline.remainingMs();
+      if (ms > remaining) throw new Error(`would exceed budget: ${ms} > ${remaining}`);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return "ok";
+    };
+    await expect(phase(60)).resolves.toBe("ok");
+    await expect(phase(60), "第二段 60ms 已超出剩余预算").rejects.toThrow(/would exceed budget/u);
   });
 });

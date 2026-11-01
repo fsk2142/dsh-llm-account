@@ -32,7 +32,7 @@ import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
-import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream, withRequestDeadline } from "../../core/transport";
+import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
 import { parseCatalog } from "./catalog";
 import { knownEfforts } from "./efforts";
 import { classifyCommandCodeFailure, commandCodeLlmError } from "./failures";
@@ -562,41 +562,38 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
       ...(config.protocol === undefined ? {} : { forced: config.protocol }),
     });
     /**
-     * **`fetch` 与读错误正文都纳入整请求预算**（2026-11-01 修 R02）。
+     * **一个 deadline，所有阶段共用剩余时间**（2026-11-01 修 R02 第二版）。
      *
      * 原来只有下面的 `runStream` 受 `requestTimeoutMs` 管 —— 而它在流**已经开始
      * 产出之后**才生效。网关接受连接但永不返回响应头时（半开连接、上游挂起），
-     * 用户配的超时完全不起作用，请求会一直挂着。
+     * 用户配的超时完全不起作用。
      *
-     * 现在整段「发请求 + 判定响应 + 读错误正文」都包在同一个 deadline 里，超时抛
-     * `LLM_REQUEST_TIMEOUT` —— 与 `runStream` 的整请求超时**同一个码**。
+     * ## 为什么用 `RequestDeadline` 而不是每段各传一次预算
+     *
+     * 上一版给每段都套 `withRequestDeadline(budget)`，但每个都从**当下**重新算完整
+     * 预算。于是「等响应头 60ms + 读错误正文 60ms」在 90ms 预算下**整体跑了 120ms**
+     * —— 每段单独看都没超时。复审用整请求 90ms、每段 60ms 的夹具确认了这一点。
+     *
+     * 现在 `RequestDeadline` 在进入这次尝试时建立一次，后面每段只取剩余毫秒。
+     * 流式阶段（`runStream`）同样用剩余预算，不再重置。
      */
-    const budget = { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs };
-    let response = await withRequestDeadline(
-      (signal) => this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
-      budget,
-      { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+    const deadline = new RequestDeadline(config.requestTimeoutMs);
+    const signalOpts = { ...(options.signal === undefined ? {} : { signal: options.signal }) };
+    const deadlineOf = <T,>(operation: (signal?: AbortSignal) => Promise<T>): Promise<T> =>
+      deadline.run(operation, config.streamIdleTimeoutMs, signalOpts);
+    let response = await deadlineOf((signal) =>
+      this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
     );
     if (!response.ok) {
-      const body = await withRequestDeadline(
-        () => readErrorBody(response),
-        budget,
-        { ...(options.signal === undefined ? {} : { signal: options.signal }) },
-      );
+      const body = await deadlineOf(() => readErrorBody(response));
       if (protocol !== "cli" && isUpgradeRequired(response.status, body)) {
         // 回退顺序（旧插件第 7512-7519 行）：同一个账号、同一次尝试改用 CLI 传输重发。
         protocol = "cli";
-        response = await withRequestDeadline(
-          (signal) => this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
-          budget,
-          { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+        response = await deadlineOf((signal) =>
+          this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
         );
         if (!response.ok) {
-          const retryBody = await withRequestDeadline(
-            () => readErrorBody(response),
-            budget,
-            { ...(options.signal === undefined ? {} : { signal: options.signal }) },
-          );
+          const retryBody = await deadlineOf(() => readErrorBody(response));
           throw new CommandCodeStreamFailure(response.status, retryBody);
         }
       } else {
@@ -605,7 +602,8 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
     }
     yield* runStream(
       decodeStream(protocol, response.body),
-      { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs },
+      // 流式阶段用**剩余**预算，不重置整请求 deadline。
+      deadline.streamBudget(config.streamIdleTimeoutMs),
       { signal: options.signal },
     );
   }
