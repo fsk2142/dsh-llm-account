@@ -627,7 +627,17 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     yield* runStream(
       decodeStream(response.body),
       deadline.streamBudget(config.streamIdleTimeoutMs),
-      { signal: options.signal },
+      {
+        signal: options.signal,
+        /**
+         * **普通 200 分支也要接 `abortNetwork`**（2026-11-01 修第四处）。
+         *
+         * 上一版只在「档位回退」那个分支接了，主力路径（正常 200）漏掉 ——
+         * 报告实测：OD 成功正文停住至 idle/total 超时后，外层正确返回错误，
+         * 但 signal 未 abort、reader 未取消、body 仍开着。
+         */
+        abortNetwork: deadline.networkAbort(),
+      },
     );
   }
 

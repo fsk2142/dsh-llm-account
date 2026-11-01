@@ -41,6 +41,7 @@ import {
   selectTab,
   setActionField,
   setField,
+  setPendingSave,
   sidebarAccountKeysOf,
   sidebarSelectionConfigured as selectionConfiguredIn,
   sidebarCurrentTarget,
@@ -1163,6 +1164,14 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       }
       savingRowInFlight.current.add(ns);
       setSavingNs(ns);
+      /**
+       * **标记「有保存在途」**（2026-11-01 修 C02 第二处）。
+       *
+       * 重读（`createPageState`）会按新基线清「已等于基线」的草稿；在途期间读回的
+       * 基线可能是旧值，等于草稿**不代表**草稿已提交。这个标记让重读保留草稿，
+       * 直到这次保存真的完成。
+       */
+      setState((current) => setPendingSave(current, ns, true));
       writeQueue.current = writeQueue.current
         .then(async () => {
           // 轮到我了：**现读**草稿与修订号（排队期间可能都变了）。
@@ -1172,6 +1181,11 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           const error = await saveSettings(ctx, latest.row ?? ns, fields, latest.revision);
           // 失败时记下**是哪几个字段**没存上：页面靠它把错误印在对应的卡里（只印一处）。
           setState((current) => noteSaveResult(current, ns, error, fields.map((field) => field.key)));
+          /**
+           * **先清在途标记，再重读** —— 否则那次重读仍会看到「在途」而保留已经提交的草稿。
+           * 失败也清：这一次保存结束了，重读拿到的是服务端真实值，该按它清草稿。
+           */
+          setState((current) => setPendingSave(current, ns, false));
           // 重读：失败也要（见方法注释）。重读结果经 `adopt` 同步进 `latestSnapshots`。
           adopt(await discoverVendors(ctx, entries));
         })
@@ -1993,10 +2007,11 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       },
       /**
        * 回调时刻的**最新**模型选择（不经渲染快照）。
+       * @param _vendor - 厂商 id（`ref` 已全局唯一，这里只为对齐面板签名）。
        * @param ref - 账号 ref。
        * @returns 该账号当前被勾选的模型 id；没有记录时 `undefined`（调用方退回渲染快照）。
        */
-      currentAccountModels: (ref: string) => latestAccountModels.current.get(ref),
+      currentAccountModels: (_vendor: string, ref: string) => latestAccountModels.current.get(ref),
       onToggleExpand: (vendor: string, ref: string) => setState((current) => toggleExpanded(current, ref, vendor)),
       onLoginBegin: (vendor: string) => beginLogin(vendor),
       // 等待面板的「取消登录」：宿主停流程、界面立刻回到未开始。

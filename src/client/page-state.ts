@@ -90,6 +90,16 @@ export interface PageState {
   readonly snapshots: Readonly<Record<string, VendorSnapshot>>;
   /** 凭据变更计数：每次推送 +1，「已配置」徽标据此刷新。 */
   readonly credentialRevision: number;
+  /**
+   * 哪些命名空间**有保存正在进行**（2026-11-01 修 C02 第二处）。
+   *
+   * 重读（`createPageState`）会拿新的 baseline 去清「已经等于基线」的草稿。但在途
+   * 保存期间，读回的基线可能是**旧值**，等于草稿并不代表草稿已被提交 ——
+   * 这时必须保留草稿，否则用户的最后意图会消失（报告给了具体复现序列）。
+   *
+   * 键是 `ns`，值是 `true`（只关心「有没有在途」）。
+   */
+  readonly pendingSaves: Readonly<Record<string, true>>;
   /** 正在进行的账户操作（`⋯` 菜单/添加账户/换密钥）；没有就是 `undefined`。 */
   readonly action: AccountAction | undefined;
   /** 该操作属于哪家厂商；合并账户面板用它把动作路由回正确的远程面。 */
@@ -193,7 +203,30 @@ export function createPageState(
   }
 
   const drafts: Record<string, Record<string, unknown>> = {};
+  /**
+   * 重读时**不能**直接把「某次读数等于草稿」当成「这条草稿已提交」
+   * （2026-11-01 修 C02 第二处）。
+   *
+   * 报告指出的窗口：保存**在途**时收到一次后台凭据变化 → 触发重读 → 读回的
+   * `baseline` 恰好等于用户的草稿值 → 这里把草稿删掉 → 在途那次保存完成、
+   * 服务端落到的却是**旧值** → 用户的最后意图消失。
+   *
+   * 复现序列（报告给的具体步骤）：
+   *
+   * ```
+   * false → true（挂起首写）→ false → 触发 credentials/reference-updated
+   *   → 重读旧的 false → 放行 true → 最终持久化仍 true
+   * ```
+   *
+   * 修法：`previous.pendingSaves` 里标记过的 `ns` 保留草稿，不按 baseline 清。
+   */
+  const pendingNs = previous?.pendingSaves ?? {};
   for (const [ns, draft] of Object.entries(previous?.drafts ?? {})) {
+    if (pendingNs[ns] === true) {
+      // 有保存在途：保留整份草稿。等那次保存完成、再重读一次时才允许按新基线清。
+      if (Object.keys(draft).length > 0) drafts[ns] = { ...draft };
+      continue;
+    }
     const baseline = snapshotMap[ns]?.value ?? {};
     const kept: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(draft)) {
@@ -227,6 +260,8 @@ export function createPageState(
     drafts,
     snapshots: snapshotMap,
     credentialRevision: previous?.credentialRevision ?? 0,
+    // 在途保存的标记跨重读保留：它决定「草稿能不能按新基线清掉」。
+    pendingSaves: previous?.pendingSaves ?? {},
     // 账户操作的草稿跨快照刷新保留（重读设置不该把用户输入到一半的名字/密钥丢掉）。
     action: previous?.action,
     actionVendor: previous?.actionVendor,
@@ -436,6 +471,25 @@ export function setField(
  */
 export function isDirty(state: PageState, ns: string): boolean {
   return Object.keys(state.drafts[ns] ?? {}).length > 0;
+}
+
+/**
+ * 标记 / 取消「这个命名空间有保存在途」（2026-11-01 修 C02 第二处）。
+ *
+ * 重读时靠这个标记决定「草稿能不能按新基线清掉」—— 在途期间读回的基线可能是旧值，
+ * 等于草稿并不代表草稿已提交。
+ * @param state - 当前状态。
+ * @param ns - 设置命名空间。
+ * @param pending - `true` 标记在途；`false` 清除。
+ * @returns 新状态（无变化时返回原对象）。
+ */
+export function setPendingSave(state: PageState, ns: string, pending: boolean): PageState {
+  const current = state.pendingSaves[ns] === true;
+  if (current === pending) return state;
+  const pendingSaves: Record<string, true> = { ...state.pendingSaves };
+  if (pending) pendingSaves[ns] = true;
+  else delete pendingSaves[ns];
+  return { ...state, pendingSaves };
 }
 
 /**

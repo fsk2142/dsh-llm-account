@@ -136,6 +136,31 @@ export function createCredentialGuard(): {
         .then(() => write())
         .finally(() => {
           if (tails.get(key) === started) tails.delete(key);
+          /**
+           * **完成后再推进一次代际**（2026-11-01 修第四处 S01 缺口）。
+           *
+           * ## 报告给出的具体时序
+           *
+           * 只在入队时 bump 有一个漏洞：用户写**还没提交**时启动的新请求会借到
+           * 那个「新」代际，而它读到的仍是槽里的**旧 OAuth**：
+           *
+           * ```
+           * T0  用户点换 key → runUserWrite 入队，代际 E+1（用户 set 还在队列里没执行）
+           * T1  新请求开始 → epochOf() 读到 E+1，resolveStored 读到**旧 OAuth**
+           * T2  用户 set 提交完成（槽里现在是新 key）
+           * T3  T1 的刷新写回：校验 E+1 === E+1 → **通过** → 把旧 OAuth 写回去
+           *     ↑ 用户的新 key 被覆盖
+           * ```
+           *
+           * 报告实测提交顺序为 `key → oauth`，`userKeySurvives = false`。
+           *
+           * 完成时再 bump 一次，把 T1 那种「在用户写进行中取得的代际」也作废 ——
+           * 它们在 T3 校验时看到 E+2，放弃写回。
+           *
+           * 代价：用户写完之后，一次本来可以成功的刷新会白跑一次（重新刷新）。
+           * 那是正确的取舍：**宁可多刷一次，不能让旧值盖掉用户刚存的东西**。
+           */
+          epochs.set(key, (epochs.get(key) ?? 0) + 1);
         });
       tails.set(key, started);
       return started;

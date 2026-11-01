@@ -94,6 +94,17 @@ export interface AccountsPanelProps {
   /** 覆盖某个账号可用的模型。 */
   onSetAccountModels?: (vendor: string, ref: string, models: readonly string[]) => void;
   /**
+   * 取某个账号**此刻最新的**模型选择（同步，从容器的最新镜像读）。
+   *
+   * 为什么需要（2026-11-01 修 C04 接线）：`AccountCard` 的勾选回调若用渲染快照，
+   * 用户连点两个模型时第二次会基于旧集合，把第一次抹掉。`seams` 已经实现了这个
+   * 回调并传给本面板 —— 但**面板必须转发下去**，否则控件收不到、等于没做。
+   * @param vendor - 厂商 id。
+   * @param ref - 账号 ref。
+   * @returns 该账号当前被勾选的模型 id；没有记录时 `undefined`。
+   */
+  currentAccountModels?: (vendor: string, ref: string) => readonly string[] | undefined;
+  /**
    * 某个账号的用量统计（渲染在它自己的额度条下方）。
    *
    * 返回 `undefined` 表示这一行不画 —— 还没读到数据时不该占一块空白。
@@ -486,6 +497,16 @@ function accountPropsFor(props: AccountsPanelProps, group: AccountsPanelVendor):
     ...(props.onSetAccountModels === undefined
       ? {}
       : { onSetAccountModels: (ref: string, models: readonly string[]) => props.onSetAccountModels?.(vendor, ref, models) }),
+    /**
+     * **转发「此刻最新的选择」给控件**（2026-11-01 修 C04 接线）。
+     *
+     * 上一版 `seams` 实现了这个回调并传进本面板，但这里没有转发 —— 控件的
+     * `props.currentAccountModels` 一直是 `undefined`，勾选回调退回渲染快照，
+     * 连点两个模型仍然只发 `[m1]`、`[m2]`。
+     */
+    ...(props.currentAccountModels === undefined
+      ? {}
+      : { currentAccountModels: (ref: string) => props.currentAccountModels?.(vendor, ref) }),
     // 该账号自身的用量（容器给）；缺省就不渲染，与其它可选块同一条纪律。
     ...(props.usageOf === undefined ? {} : { usageOf: (ref: string) => props.usageOf?.(vendor, ref) }),
     // 每个模型在当前套餐下的额度：查不到就不渲染。
