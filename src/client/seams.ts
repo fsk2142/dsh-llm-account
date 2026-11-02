@@ -1136,6 +1136,34 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const latestAccountModels = useRef(new Map<string, readonly string[]>());
 
     /**
+     * **按账号**串行化模型写入（2026-11-02 修 C04 最终持久化）。
+     *
+     * ## 为什么光有镜像不够
+     *
+     * 上一版加了 `latestAccountModels` 镜像，**发送内容**正确了：
+     *
+     * ```
+     * 第一次：[m1]
+     * 第二次：[m1,m2]
+     * ```
+     *
+     * 但两次都是 `void usage.setAccountModels(...)` —— **并发 RPC**。远程可以按任意
+     * 顺序完成；报告用允许的异步顺序让第二次先落盘、第一次后落盘，最终持久化变成
+     * `[m1]`。镜像只保证「我看到的最新」，不保证「服务端最后留下的是哪个」。
+     *
+     * ## 队列语义
+     *
+     * - 键是账号 ref（三家之间唯一），不同账号互不排队；
+     * - 同一账号的写**串行**：后一个意图等前一个完成再提交；
+     * - **失败不能卡死队尾**：每个任务都挂 `.catch()`，失败只影响那一次。
+     *
+     * 为什么不做「只保留最新集合」的合并：那会让中间那次写入完全跳过，而服务端
+     * 是按整表替换 —— 跳过中间态没问题，但实现上「串行 + 每次取最新」更简单，
+     * 也不会因为合并逻辑写错而丢字段。
+     */
+    const modelWriteQueues = useRef(new Map<string, Promise<void>>());
+
+    /**
      * 把**某一家**的全部草稿写入设置文档（卡片底部的保存按钮）。
      *
      * 串行队列 + 每次现取修订号（见 {@link writeQueue}）：
@@ -2003,7 +2031,26 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
          * （远程往返 + 重读状态）。
          */
         latestAccountModels.current.set(ref, models);
-        void usage?.setAccountModels?.(vendor, ref, models).then(() => setAccountRevision((current) => current + 1));
+        /**
+         * **串行提交**（2026-11-02 修 C04 最终持久化）。
+         *
+         * 原来这里直接 `void usage.setAccountModels(...)` —— 连点两次就是两个并发
+         * RPC，远程可以反向完成，最终持久化只剩 `[m1]`（报告实测）。
+         *
+         * 现在同一账号的写排队：后一个意图等前一个完成再提交。
+         */
+        const previous = modelWriteQueues.current.get(ref) ?? Promise.resolve();
+        const started = previous
+          // 前一次失败不该卡住这一次 —— 队列只保证顺序，不传错误。
+          .catch(() => {})
+          .then(async () => {
+            await usage?.setAccountModels?.(vendor, ref, models);
+            setAccountRevision((current) => current + 1);
+          })
+          .finally(() => {
+            if (modelWriteQueues.current.get(ref) === started) modelWriteQueues.current.delete(ref);
+          });
+        modelWriteQueues.current.set(ref, started);
       },
       /**
        * 回调时刻的**最新**模型选择（不经渲染快照）。

@@ -1269,3 +1269,87 @@ it("重新打开侧边栏时首帧就显示上次那家（不再先闪 commandco
   expect(firstFrame).not.toContain("CC");
   second.unmount();
 });
+
+describe("C04 模型选择的最终持久化（定版终验唯一阻塞项）", () => {
+  /**
+   * ## 报告指出的残留
+   *
+   * 1.6.5 的**发送内容**已经正确（`[m1]` 然后 `[m1,m2]`），但两次都是
+   * `void usage.setAccountModels(...)` —— **并发 RPC**。远程可以按任意顺序完成：
+   *
+   * ```
+   * 第一次：[m1]     ← 晚完成
+   * 第二次：[m1,m2]  ← 先完成
+   * 最终持久化：[m1]  ← 用户的第二次选择被覆盖
+   * ```
+   *
+   * 修法是按 `(vendor, ref)` 串行提交。这条测试验证**最终持久化的值**，
+   * 而不只是回调参数 —— 报告特别强调过不能只断言镜像和第二个请求参数。
+   */
+  it("**串行提交**：连续勾选两个模型，最终持久化是 [m1, m2]", async () => {
+    const mini = await runtime();
+    const host = fakeHost(mini, { accounts: { commandcode: [{ ref: "ACC", label: "User", configured: true }] } });
+    /** 真实持久化变量：每次 setAccountModels 真正落地时才更新。 */
+    let storedModels: string[] = [];
+    /** 每个在途写的「放行」函数。 */
+    const finish: Array<() => void> = [];
+    const setter = vi.fn((_vendor: string, _ref: string, models: readonly string[]) =>
+      new Promise<void>((resolve) => {
+        finish.push(() => {
+          storedModels = [...models];
+          resolve();
+        });
+      }),
+    );
+    /** 把远程面的 `setAccountModels` 换成可控的；`status` 回报真实持久化值。 */
+    const inject = host.ctx.inject as (names: unknown, callback: (scoped: unknown) => unknown) => unknown;
+    host.ctx.inject = (names: unknown, callback: (scoped: unknown) => unknown) =>
+      inject(names, (scoped: unknown) => {
+        const ns = (scoped as { remote?: Record<string, Record<string, unknown>> }).remote?.["llm-account"];
+        if (ns !== undefined) {
+          ns.setAccountModels = setter;
+          const original = ns.status as (vendor: string) => Promise<Record<string, unknown>>;
+          ns.status = (vendor: string) =>
+            original(vendor).then((status) => ({
+              ...status,
+              modelRules: [{ account: "ACC", models: [...storedModels] }],
+            }));
+        }
+        return callback(scoped);
+      });
+    await freshSeams();
+    vi.stubGlobal("fetch", async () => ({ ok: false, status: 404 }));
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    /** 勾 m1，再勾 m2。 */
+    fireSim(findSim(page.tree(), "data-account-model", "ACC:m1"), "onChange", { target: { checked: true } });
+    await settleSim(mini);
+    fireSim(findSim(page.tree(), "data-account-model", "ACC:m2"), "onChange", { target: { checked: true } });
+    await settleSim(mini);
+    /**
+     * 兼容两种实现（报告给的判据）：
+     * - 并发实现：会有两个在途，按**反向**放行验证覆盖；
+     * - 串行实现：只有一个在途，先放行第一写，等第二写出现再放行。
+     */
+    if (finish.length === 2) {
+      // 反向：第二次先完成，第一次后完成。
+      finish[1]?.();
+      await settleSim(mini);
+      finish[0]?.();
+      await settleSim(mini);
+    } else {
+      expect(finish.length, "串行实现应当只有一个在途写").toBe(1);
+      finish[0]?.();
+      // 等第二写出现。
+      for (let index = 0; index < 8; index += 1) await settleSim(mini);
+      expect(finish.length, "第一写完成后第二写才提交").toBe(2);
+      finish[1]?.();
+      for (let index = 0; index < 8; index += 1) await settleSim(mini);
+    }
+    /**
+     * **断言最终持久化**（不是回调参数、也不是镜像）：
+     * 用户最后想要的是 `[m1, m2]`。
+     */
+    expect(storedModels, "最终持久化必须是用户最后一次选择").toEqual(["m1", "m2"]);
+  }, 20_000);
+});
