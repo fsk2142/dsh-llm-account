@@ -69,4 +69,42 @@ export interface OpencodeBundle {
  * @returns 装配产物（宿主忽略；装配测试与 1b 使用）。
  */
 export declare function apply(ctx: Context, config?: unknown): OpencodeBundle;
+/**
+ * 轮换顺序 = 顶层当前账号 + `accounts` 条目（按文档顺序，去重保留第一次出现）。
+ *
+ * 顶层 `apiKeyEnv` **必须**进顺序：旧插件的 `accountsOf` 在顶层引用不在账号表里时，会把它
+ * 当成 `legacy:<ref>` 补在**列表首位**；本函数是同一顺序的显式写法，账号端口的 `list()` 也会
+ * 合成同一行。少了它，只配了顶层密钥的存量用户会让 `RotationEngine.pick` 返回 `undefined`，
+ * 适配器直接报 MISSING_CREDENTIAL。
+ *
+ * ## 但**不能**凭空合成一个"幽灵账号"（2026-11-02 真机报障）
+ *
+ * 原来的写法是 `[defaultRefOf(document), ...accountRefsOf(document)]`。而
+ * `defaultRefOf` 在顶层 `apiKeyEnv` **缺失**时会回退到内置默认名
+ * {@link OPENCODE_DEFAULT_REF}（`OPENCODE_API_KEY`）。于是出现：
+ *
+ * ```
+ * 账号表里有 Default（凭据真实存在）
+ * 顶层 apiKeyEnv 缺失（或没写上）
+ *   → 顺序 = [OPENCODE_API_KEY, DSH_OPENCODE_GO_ACCOUNT_DEFAULT_xxx]
+ *   → pick() 先拿到 OPENCODE_API_KEY
+ *   → 那个 ref 在凭据库里根本不存在
+ *   → 适配器抛 “no API key for OpenCode Go account "OPENCODE_API_KEY"”
+ * ```
+ *
+ * 真机现象就是：界面上账号显示「已配置」，但一发请求就报默认 ref 没密钥。
+ *
+ * 现在的规则：
+ *
+ * 1. 顶层 `apiKeyEnv` **是显式合法引用名** → 它排第一（保持旧行为，存量用户不变）；
+ * 2. 顶层缺失/为空/非法，但账号表非空 → **只用账号表**，不合成默认槽；
+ * 3. 两者都空 → 才退回默认槽（真正的"什么都没配"，报错信息才有意义）。
+ */
+/**
+ * 轮换顺序（导出供测试直接验证，避免测试复刻一份逻辑）。
+ *
+ * @param document - 现读的设置文档。
+ * @returns 按优先级排列的账号 ref。
+ */
+export declare function orderOf(document: Record<string, unknown>): string[];
 //#endregion
