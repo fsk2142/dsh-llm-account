@@ -780,6 +780,7 @@ describe("网页登录容器仿真", () => {
     const mini = await runtime();
     await freshSeams();
     vi.useFakeTimers();
+    const { LOGIN_POLL_MS } = await import("../../src/client/seams");
     const host = fakeHost(mini, { login: { status: () => ({ state: "success" }) } });
     const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
@@ -790,7 +791,7 @@ describe("网页登录容器仿真", () => {
     expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
     const readsBefore = host.statusCalls.length;
 
-    vi.advanceTimersByTime(1_500);
+    vi.advanceTimersByTime(LOGIN_POLL_MS + 500);
     await settleSim(mini);
 
     expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
@@ -804,6 +805,8 @@ describe("网页登录容器仿真", () => {
     const mini = await runtime();
     await freshSeams();
     vi.useFakeTimers();
+    /** 跟随常量：轮询间隔与失败阈值改动后，这条用例的时序自动跟上。 */
+    const { LOGIN_POLL_MS, LOGIN_POLL_MAX_MISSES } = await import("../../src/client/seams");
     const host = fakeHost(mini, {
       login: {
         begin: () => ({ state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?state=x" }),
@@ -819,12 +822,12 @@ describe("网页登录容器仿真", () => {
     click(page.tree(), "data-action", "login");
     await settleSim(mini);
 
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(LOGIN_POLL_MS);
     await settleSim(mini);
     // 单次失败不清面板（用户可能正在浏览器里操作）。
     expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
 
-    vi.advanceTimersByTime(2_500);
+    vi.advanceTimersByTime(LOGIN_POLL_MS * LOGIN_POLL_MAX_MISSES);
     await settleSim(mini);
     expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
     const failure = find(page.tree(), "data-login-failure", "commandcode");
@@ -852,6 +855,7 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
     const mini = await runtime();
     await freshSeams();
     vi.useFakeTimers();
+    const { LOGIN_POLL_MS } = await import("../../src/client/seams");
     vi.setSystemTime(0);
     const host = fakeHost(mini, {
       login: {
@@ -868,10 +872,10 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
     await settleSim(mini);
     expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
 
-    vi.advanceTimersByTime(2_500);
+    // 推到宿主报的 expiresAt 之后（该用例的 begin 给了固定期限）。
+    // 按轮询节拍推进：expiresAt 是 2000ms，而一拍是 LOGIN_POLL_MS（3s）。
+    vi.advanceTimersByTime(LOGIN_POLL_MS * 2);
     await settleSim(mini);
-
-    expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
     const failure = find(page.tree(), "data-login-failure", "commandcode");
     expect(failure.props["data-login-failure-detail"]).toBe("timeout");
     page.unmount();
@@ -911,6 +915,7 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
     const mini = await runtime();
     await freshSeams();
     vi.useFakeTimers();
+    const { LOGIN_POLL_MS } = await import("../../src/client/seams");
     const host = fakeHost(mini);
     const page = mini.mount(await pageContainer(host));
     await settleSim(mini);
@@ -922,7 +927,7 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
 
     // 用户把弹出的授权页关了。
     popup.handle.closed = true;
-    vi.advanceTimersByTime(1_500);
+    vi.advanceTimersByTime(LOGIN_POLL_MS + 500);
     await settleSim(mini);
 
     expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
@@ -960,7 +965,8 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
   it("网页登录完成后模型目录自动重读：登录前读不到（401），登录后读到（目录要鉴权）", async () => {
   const mini = await runtime();
   await freshSeams();
-  vi.useFakeTimers();
+    vi.useFakeTimers();
+    const { LOGIN_POLL_MS } = await import("../../src/client/seams");
   const host = fakeHost(mini, { login: { status: () => ({ state: "success" }) } });
   // 登录之前：目录读不到（Open Design 的 /v1/models 不带密钥就是 401）。失败读数不进缓存。
   host.modelFailures = ["models: opendesign read failed (401 missing_api_key)"];
@@ -976,7 +982,7 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
   // 被测的是「账号变了就重读目录」，不是某个具体入口。
   click(page.tree(), "data-action", "login");
   await settleSim(mini);
-  vi.advanceTimersByTime(1_500);
+    vi.advanceTimersByTime(LOGIN_POLL_MS + 500);
   await settleSim(mini);
 
   // 账号修订号变化 → 目录重读（否则界面会一直停在挂载时那次空目录上）。

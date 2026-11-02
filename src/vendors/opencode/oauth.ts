@@ -143,6 +143,38 @@ function authBaseOf(deps: OAuthHttpDeps, credential?: OAuthCredential): string {
   return base.replace(/\/+$/, "");
 }
 
+/**
+ * 把服务端给的验证地址补成**可直接打开**的绝对 URL。
+ *
+ * ## 为什么需要（2026-11-02 真机报障）
+ *
+ * 真机实测 opencode 的 `device/code` 返回：
+ *
+ * ```json
+ * {
+ *   "verification_uri": "/console/device",
+ *   "verification_uri_complete": "/console/device?user_code=RVFK-SRHG&client_id=opencode-cli"
+ * }
+ * ```
+ *
+ * 两个都是**相对路径**。界面用 `isHttpUrl(authUrl)` 判定能不能给 `href`，相对路径
+ * 判为 `false` → 链接不可点，用户只看到一串没有域名的文字。
+ *
+ * ## 规则
+ *
+ * - 已经是 `http://` / `https://` → 原样返回（服务端将来给绝对地址也照常工作）；
+ * - 以 `/` 开头 → 接到 `authBase` 后面；
+ * - 其它（理论上不会出现）→ 也接到 `authBase/` 后面，而不是丢弃。
+ * @param authBase - Console 基地址（已去掉结尾斜杠）。
+ * @param uri - 服务端给的验证地址（可能是相对路径）。
+ * @returns 绝对 URL。
+ */
+function absoluteVerificationUri(authBase: string, uri: string): string {
+  if (/^https?:\/\//iu.test(uri)) return uri;
+  const suffix = uri.startsWith("/") ? uri : `/${uri}`;
+  return `${authBase}${suffix}`;
+}
+
 /** 申请设备码。 */
 export async function beginDeviceFlow(deps: OAuthHttpDeps): Promise<DeviceCode> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/auth/device/code`, {
@@ -154,10 +186,33 @@ export async function beginDeviceFlow(deps: OAuthHttpDeps): Promise<DeviceCode> 
   if (!response.ok || !isRecord(payload)) throw new Error(`device code request failed (HTTP ${response.status})`);
   const deviceCode = stringOf(payload, "device_code");
   const userCode = stringOf(payload, "user_code");
-  const verificationUri = stringOf(payload, "verification_uri") ?? stringOf(payload, "verification_uri_complete");
-  if (deviceCode === undefined || userCode === undefined || verificationUri === undefined) {
+  /**
+   * **取 `verification_uri_complete`，并把相对路径补成绝对 URL**
+   * （2026-11-02 修真机报障「网页链接无法打开」）。
+   *
+   * ## 真机实测的服务端响应
+   *
+   * ```json
+   * {
+   *   "verification_uri": "/console/device",
+   *   "verification_uri_complete": "/console/device?user_code=RVFK-SRHG&client_id=opencode-cli"
+   * }
+   * ```
+   *
+   * 两个都是**相对路径**，没有域名。上一版：
+   *
+   * 1. **优先取 `verification_uri`** —— 它不含 `user_code`，用户还得手输验证码；
+   * 2. **原样透传** —— 界面 `isHttpUrl("/console/device")` 为 `false`，于是**不给
+   *    `href`**，链接根本点不动，只显示一串没有域名的路径。
+   *
+   * 现在的顺序：`verification_uri_complete`（带验证码，最省事）→ `verification_uri`
+   * （兜底，用户手输）→ 相对当前 `authBase` 解析成绝对地址。
+   */
+  const rawUri = stringOf(payload, "verification_uri_complete") ?? stringOf(payload, "verification_uri");
+  if (deviceCode === undefined || userCode === undefined || rawUri === undefined) {
     throw new Error("device code response is missing device_code/user_code/verification_uri");
   }
+  const verificationUri = absoluteVerificationUri(authBaseOf(deps), rawUri);
   const intervalSeconds = typeof payload.interval === "number" && payload.interval > 0 ? payload.interval : 5;
   const expiresIn = typeof payload.expires_in === "number" && payload.expires_in > 0 ? payload.expires_in : 600;
   const now = deps.now?.() ?? Date.now();
