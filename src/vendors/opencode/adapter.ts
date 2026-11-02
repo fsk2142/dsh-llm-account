@@ -33,6 +33,7 @@ import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
 import { createSingleFlight } from "../../core/single-flight";
+import { opencodeSessionHeaders } from "./session";
 import { createCredentialGuard, type CredentialGuard } from "../../core/credential-guard";
 import { OAUTH_PREFIX, resolveOAuthCredential } from "./oauth";
 import type { OpencodeCatalog, OpencodeCatalogRecord } from "./catalog";
@@ -644,7 +645,14 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         model,
         context: toPiContext(options),
         apiKey: auth.key,
-        ...(auth.headers === undefined ? {} : { headers: auth.headers }),
+        /**
+         * **必须带 `x-opencode-session`**（2026-11-02 真机报障）。
+         *
+         * 网关对缺这个头的推理请求直接回 400 `MissingSessionID`，请求到不了模型。
+         * 值与 `auth.headers`（网页登录的 `x-opencode-org-id`）合并后一起交给
+         * pi-ai，由它在最后一步覆盖 —— 两者键不冲突。
+         */
+        headers: { ...(auth.headers ?? {}), ...opencodeSessionHeaders(options.sessionId) },
         fetchImpl: gateway.fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(options.temperature === undefined ? {} : { temperature: options.temperature }),

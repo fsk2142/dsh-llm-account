@@ -26,6 +26,7 @@ import {
   ToolCallId,
   attributionHeaders,
 } from "@deepseek-ai/dsh-llm";
+import { opencodeSessionHeaders } from "./session";
 import type { ContentBlock, GenerateOptions, StreamChunk, TokenUsage, ToolSchema } from "@deepseek-ai/dsh-llm";
 import type {
   AssistantMessageEvent,
@@ -157,7 +158,13 @@ export function trimBase(baseUrl: string): string {
 export function catalogRequest(baseUrl: string): { url: string; headers: Record<string, string> } {
   return {
     url: `${trimBase(baseUrl)}${MODELS_PATH}`,
-    headers: { accept: "application/json", "accept-encoding": "identity", ...attributionHeaders() },
+    headers: {
+      accept: "application/json",
+      "accept-encoding": "identity",
+      // 同一网关：缺会话头会被 400（2026-11-02）。
+      ...opencodeSessionHeaders(),
+      ...attributionHeaders(),
+    },
   };
 }
 

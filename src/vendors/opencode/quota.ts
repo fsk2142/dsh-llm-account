@@ -29,6 +29,7 @@
  * @module dsh-llm-account/src/vendors/opencode/quota
  */
 import { LlmError, attributionHeaders } from "@deepseek-ai/dsh-llm";
+import { opencodeSessionHeaders } from "./session";
 
 import type { QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
@@ -291,7 +292,13 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
       let response: Response;
       try {
         response = await deps.fetchImpl(`${base}${USAGE_PATH}`, {
-          headers: { accept: "application/json", Authorization: `Bearer ${key}`, ...attributionHeaders() },
+          headers: {
+          accept: "application/json",
+          Authorization: `Bearer ${key}`,
+          // 网关对缺会话头的请求直接 400 MissingSessionID（2026-11-02）。
+          ...opencodeSessionHeaders(),
+          ...attributionHeaders(),
+        },
           signal: AbortSignal.timeout(timeoutMs),
           redirect: "error",
         });
