@@ -225,12 +225,40 @@ export async function beginDeviceFlow(deps: OAuthHttpDeps): Promise<DeviceCode> 
   };
 }
 
+/**
+ * 设备码流程的 `grant_type`（OAuth 2.0 Device Authorization Grant 标准值）。
+ *
+ * ## 为什么必须带（2026-11-02 真机报障的**根因**）
+ *
+ * 真机实测 `POST /console/auth/device/token`：
+ *
+ * | 请求体 | 服务端返回 |
+ * | --- | --- |
+ * | `{client_id, device_code}` | **HTTP 400 + 空 body**（无法解析） |
+ * | `{client_id, device_code, grant_type}` | `{"_tag":"DeviceTokenError","error":"authorization_pending"}` |
+ *
+ * 缺 `grant_type` 时服务端把它当成**畸形请求**，返回空 body。于是：
+ *
+ * 1. `readJson` 拿到 `undefined`；
+ * 2. `error` 字段取不到 → 落到 `status: "error"`；
+ * 3. 登录立刻结算成 `reason: "unavailable"` —— 界面上就是
+ *    **「登录服务暂时不可用」**，而且发生在**第一次轮询**（用户还没授权完）。
+ *
+ * 这就是「登录后账户没添加」的直接原因：流程在第一拍就死了，永远到不了
+ * `fetchOAuthOrg` 与 `storeKey`。
+ */
+export const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+
 /** 用设备码换一次 token（可能返回 pending/slow_down）。 */
 export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode): Promise<PollResult> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/auth/device/token`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ client_id: OAUTH_CLIENT_ID, device_code: device.deviceCode }),
+    body: JSON.stringify({
+      client_id: OAUTH_CLIENT_ID,
+      device_code: device.deviceCode,
+      grant_type: DEVICE_CODE_GRANT_TYPE,
+    }),
   });
   const payload = await readJson(response);
   if (!response.ok) {
@@ -239,12 +267,35 @@ export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode): 
     if (error === "slow_down") return { status: "slow_down" };
     if (error === "access_denied") return { status: "denied" };
     if (error === "expired_token") return { status: "expired" };
+    /**
+     * **空 body 的 400 当作 pending**（兜底）。
+     *
+     * 上一版在缺 `grant_type` 时就是空 body 的 400，而它被当成 `error` —— 于是
+     * 每一次轮询都直接失败。现在带了 `grant_type`，正常情况下会拿到结构化的
+     * `error`；但服务端若再出现「空 body 但其实是 pending」的情形，按 pending
+     * 处理比按 error 处理更安全：最坏结果是一直等到 `expiresAt` 超时，
+     * 而不是在用户还有机会授权时就把流程打死。
+     */
+    if (payload === undefined && response.status === 400) return { status: "pending" };
     return { status: "error", message: `device token request failed (HTTP ${response.status})` };
   }
   if (!isRecord(payload)) return { status: "error", message: "device token response is not an object" };
-  const access = stringOf(payload, "access_token");
-  const refresh = stringOf(payload, "refresh_token");
-  const expiresIn = typeof payload.expires_in === "number" && payload.expires_in > 0 ? payload.expires_in : undefined;
+  /**
+   * 成功载荷可能被包一层（该 Console 用 `_tag` 风格的编码）。
+   *
+   * 错误响应是 `{"_tag":"DeviceTokenError","error":…}` —— 说明服务端会给每个对象
+   * 打上 `_tag`。成功的 token 也可能包在 `value` / `data` 里，所以两个都试，
+   * 拿不到再用顶层。
+   */
+  const body =
+    isRecord(payload.value) && stringOf(payload.value, "access_token") !== undefined
+      ? payload.value
+      : isRecord(payload.data) && stringOf(payload.data, "access_token") !== undefined
+        ? payload.data
+        : payload;
+  const access = stringOf(body, "access_token");
+  const refresh = stringOf(body, "refresh_token");
+  const expiresIn = typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : undefined;
   if (access === undefined || refresh === undefined || expiresIn === undefined) {
     return { status: "error", message: "device token response is missing access_token/refresh_token/expires_in" };
   }
@@ -280,13 +331,20 @@ export async function fetchOAuthOrg(deps: OAuthHttpDeps, access: string): Promis
   });
   if (!response.ok) return undefined;
   const payload = await readJson(response);
+  /**
+   * 列表可能在顶层、`orgs`、`data`，或包在 `value` 里
+   * （该 Console 用 `_tag` 风格的编码 —— 错误响应就是 `{"_tag":"Unauthorized"}`，
+   * 成功也可能包一层 value）。
+   */
   const items = Array.isArray(payload)
     ? payload
     : isRecord(payload) && Array.isArray(payload.orgs)
       ? payload.orgs
       : isRecord(payload) && Array.isArray(payload.data)
         ? payload.data
-        : [];
+        : isRecord(payload) && Array.isArray(payload.value)
+          ? payload.value
+          : [];
   for (const item of items) {
     if (!isRecord(item)) continue;
     const id = stringOf(item, "id");
