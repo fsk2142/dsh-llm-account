@@ -730,16 +730,21 @@ function modelRulesOf(document: Record<string, unknown>): ModelRule[] {
 
 function accountStateOf(document: Record<string, unknown>): AccountState {
   const slot = opencodeAccountSlot(document);
+  const derived = orderOf(document);
   return {
-    order: document.autoSwitch === false ? [slot.ref] : orderOf(document),
+    /**
+     * `autoSwitch: false` = 只试当前账号。
+     *
+     * **不能写 `[slot.ref]`**（2026-11-02 真机报障）：顶层 `apiKeyEnv` 缺失时
+     * `slot.ref` 回退到内置默认名 `OPENCODE_API_KEY`，而那个凭据槽可能根本不存在 ——
+     * 于是「只试当前账号」实际去试了一个幽灵账号，直接报 no API key。
+     *
+     * 改用派生顺序的首项：没有显式指定时它就是账号表里的第一个**真实**账号。
+     */
+    order: document.autoSwitch === false ? derived.slice(0, 1) : derived,
     rules: modelRulesOf(document),
     pinned: slot.pinned,
   };
-}
-
-/** 顶层当前账号的 ref：`apiKeyEnv` 是合法引用名时就是它，否则是内置默认名。 */
-function defaultRefOf(document: Record<string, unknown>): string {
-  return opencodeAccountSlot(document).ref;
 }
 
 /** `accounts[].apiKeyEnv` 里合法的凭据引用名（合法名才可能是凭据槽；其余条目本期不支持）。 */
@@ -762,11 +767,66 @@ function accountRefsOf(document: Record<string, unknown>): string[] {
  * 当成 `legacy:<ref>` 补在**列表首位**；本函数是同一顺序的显式写法，账号端口的 `list()` 也会
  * 合成同一行。少了它，只配了顶层密钥的存量用户会让 `RotationEngine.pick` 返回 `undefined`，
  * 适配器直接报 MISSING_CREDENTIAL。
+ *
+ * ## 但**不能**凭空合成一个"幽灵账号"（2026-11-02 真机报障）
+ *
+ * 原来的写法是 `[defaultRefOf(document), ...accountRefsOf(document)]`。而
+ * `defaultRefOf` 在顶层 `apiKeyEnv` **缺失**时会回退到内置默认名
+ * {@link OPENCODE_DEFAULT_REF}（`OPENCODE_API_KEY`）。于是出现：
+ *
+ * ```
+ * 账号表里有 Default（凭据真实存在）
+ * 顶层 apiKeyEnv 缺失（或没写上）
+ *   → 顺序 = [OPENCODE_API_KEY, DSH_OPENCODE_GO_ACCOUNT_DEFAULT_xxx]
+ *   → pick() 先拿到 OPENCODE_API_KEY
+ *   → 那个 ref 在凭据库里根本不存在
+ *   → 适配器抛 “no API key for OpenCode Go account "OPENCODE_API_KEY"”
+ * ```
+ *
+ * 真机现象就是：界面上账号显示「已配置」，但一发请求就报默认 ref 没密钥。
+ *
+ * 现在的规则：
+ *
+ * 1. 顶层 `apiKeyEnv` **是显式合法引用名** → 它排第一（保持旧行为，存量用户不变）；
+ * 2. 顶层缺失/为空/非法，但账号表非空 → **只用账号表**，不合成默认槽；
+ * 3. 两者都空 → 才退回默认槽（真正的"什么都没配"，报错信息才有意义）。
  */
-function orderOf(document: Record<string, unknown>): string[] {
+/**
+ * 轮换顺序（导出供测试直接验证，避免测试复刻一份逻辑）。
+ *
+ * @param document - 现读的设置文档。
+ * @returns 按优先级排列的账号 ref。
+ */
+export function orderOf(document: Record<string, unknown>): string[] {
   const derived: string[] = [];
   const seen = new Set<string>();
-  for (const ref of [defaultRefOf(document), ...accountRefsOf(document)]) {
+  /**
+   * **真正显式指定**的当前账号。
+   *
+   * 这里有两层要区分：
+   *
+   * 1. `slot.pinned === null` —— 顶层字段缺失/空串/非法名（`opencodeAccountSlot`
+   *    已归一）；
+   * 2. `slot.pinned === OPENCODE_DEFAULT_REF` —— **schema 的默认值被写进了文档**！
+   *
+   * 第 2 条正是真机踩到的形态：`apiKeyEnv` 在 `Config` 里有
+   * `.default(OPENCODE_DEFAULT_REF)`，于是文档里可能显式带着
+   * `"OPENCODE_API_KEY"` 这个**幽灵 ref** —— 它不是用户填的，凭据库里也没有。
+   * 若把它当成「用户指定的当前账号」，顺序首位就永远是它，真实账号根本轮不到。
+   *
+   * 所以：等于内置默认名时，按「没指定」处理。
+   */
+  const pinnedRaw = opencodeAccountSlot(document).pinned;
+  const pinned = pinnedRaw === OPENCODE_DEFAULT_REF ? null : pinnedRaw;
+  const accounts = accountRefsOf(document);
+  const candidates =
+    pinned !== null
+      ? [pinned, ...accounts]
+      : // 没有显式指定：账号表非空就只用它（别合成不存在的默认账号）；全空才用默认槽。
+        accounts.length > 0
+        ? accounts
+        : [OPENCODE_DEFAULT_REF];
+  for (const ref of candidates) {
     if (seen.has(ref)) continue;
     seen.add(ref);
     derived.push(ref);
