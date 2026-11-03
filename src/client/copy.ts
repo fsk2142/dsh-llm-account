@@ -210,6 +210,8 @@ export type CopyKey =
   | "usage.periodRange"
   | "usage.periodFrom"
   | "usage.inputShort"
+  | "usage.cacheHitShort"
+  | "usage.uncachedShort"
   | "usage.outputShort"
   | "usage.periodFromVendor"
   | "usage.periodEstimated"
@@ -586,6 +588,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.input": "未命中输入",
     "usage.output": "输出",
     "usage.inputShort": "入",
+    "usage.cacheHitShort": "缓存命中",
+    "usage.uncachedShort": "未命中",
     "usage.outputShort": "出",
     "usage.cacheRead": "缓存命中",
     "usage.cacheWrite": "缓存写入",
@@ -933,6 +937,8 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "usage.input": "Uncached input",
     "usage.output": "Output",
     "usage.inputShort": "in",
+    "usage.cacheHitShort": "cache hit",
+    "usage.uncachedShort": "uncached",
     "usage.outputShort": "out",
     "usage.cacheRead": "Cache read",
     "usage.cacheWrite": "Cache write",

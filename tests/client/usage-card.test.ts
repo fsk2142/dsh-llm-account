@@ -151,8 +151,13 @@ it("大数字用 K/M/B 收窄（一行要塞四个数）", () => {
   });
   expect(textsOf(metric(tree, "requests")).join(" ")).toContain("4.6K");
   expect(textsOf(metric(tree, "tokens")).join(" ")).toContain("2.1B");
-  // 入/出分项也在小字里按同一套单位给。
-  expect(textsOf(metric(tree, "tokens")).join(" ")).toContain("2B 入 / 100M 出");
+  /**
+   * 小字改成**三段**：缓存命中 / 未命中 / 输出（2026-11-03 用户要求）。
+   *
+   * 主数字含缓存命中，而缓存命中常占 99%；只写「入 / 出」时「入」看起来只有
+   * 总量的零头，会被误读成主数字错了。三段并列后主数字 = 三段之和。
+   */
+  expect(textsOf(metric(tree, "tokens")).join(" ")).toContain("0 缓存命中 / 2B 未命中 / 100M 出");
 });
 
 it("花费优先用厂商记账金额，官方价折算以小字跟随", () => {

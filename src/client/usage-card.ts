@@ -319,9 +319,29 @@ export function AccountUsageBlock(props: {
       attribute: "tokens",
       label: t("usage.tokens"),
       value: compact(tokens),
+      /**
+       * 小字按**三段**拆开：缓存命中 / 未命中 / 输出（2026-11-03 用户要求）。
+       *
+       * 原来只写「{未命中} 入 / {输出} 出」。这个面板的总 token **含缓存命中**，
+       * 而缓存命中通常占 99%，于是「入」看起来只有总量的零头 —— 用户会以为
+       * 主数字错了（真机对账：总量 450.1M，而「入」只有 4.23M）。
+       *
+       * 三段并列后，主数字 = 三段之和，一眼能对上：
+       *
+       * ```
+       * 450.1M                    ← 总 token
+       * 445.3M 缓存命中 / 4.23M 未命中 / 556K 输出
+       * ```
+       */
       ...(input === undefined && output === undefined
         ? {}
-        : { hint: `${compact(input)} ${t("usage.inputShort")} / ${compact(output)} ${t("usage.outputShort")}` }),
+        : {
+            hint: [
+              `${compact(cacheRead ?? 0)} ${t("usage.cacheHitShort")}`,
+              `${compact(input)} ${t("usage.uncachedShort")}`,
+              `${compact(output)} ${t("usage.outputShort")}`,
+            ].join(" / "),
+          }),
     }),
   );
 
