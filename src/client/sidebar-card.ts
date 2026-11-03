@@ -25,7 +25,7 @@ import { failureText } from "./failure-text";
 import { UsageIcon } from "./icons";
 import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaResetDateText, quotaWindowLabel } from "./quota";
 import type { AccountUsageStatus, QuotaWindow, VendorUsageStatus } from "./usage-contract";
-import { QuotaRing } from "./quota-ring";
+import { QuotaBox } from "./quota-box";
 
 /** 卡片属性。 */
 export interface SidebarCardProps {
@@ -298,7 +298,7 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
    * - 读不到写「暂无额度数据」，绝不猜成 0%；
    * - 其余显示剩余百分比（与展开面板同一口径：侧边栏拿不到模型/套餐，算不出金额）。
    */
-  const valueText = unlimited ? "∞" : remaining === undefined ? "—" : `${remaining}%`;
+  const valueText = unlimited ? t("quota.unlimited") : remaining === undefined ? "—" : `${remaining}%`;
   const ariaLabel = unlimited
     ? t("quota.unlimited")
     : remaining === undefined
@@ -313,18 +313,13 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
       "data-sidebar-window-level": level,
       className: CSS_CLASS.sidebarWindow,
     },
-    // **左标签 + 右圆环**并排（省掉单独一行表头），重置时间在下一行跨两列居中。
-    // DOM 顺序仍是「档位名 → 圆环 → 重置时间」，具体落在哪一行由 CSS 网格决定。
+    // **档位名在上、矩形在下**（2026-11-03 版式）。标签与矩形都居中，
+    // 所以「5 小时 / 每周」自然对齐到各自矩形的中线。
     createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
-    QuotaRing({ remaining, level, text: valueText, ariaLabel, trackKey: window.key }),
+    QuotaBox({ level, valueText, resetText: reset, resetAt: String(window.resetAt ?? "unknown"), ariaLabel, trackKey: window.key }),
     createElement(
       "small",
-      { "data-sidebar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.sidebarWindowReset },
-      reset,
-    ),
-    createElement(
-      "small",
-      // 可见的剩余值：环内已显示，这里保留完整文案给读屏与「数值不靠图形」的核对习惯。
+      // 完整文案给读屏（图形化的数值不总被读出）。
       { "data-sidebar-value": window.key, className: CSS_CLASS.sidebarWindowValue },
       ariaLabel,
     ),

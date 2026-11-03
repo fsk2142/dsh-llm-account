@@ -655,38 +655,31 @@ export const PAGE_CSS = `
  * 侧边栏窄，纵向堆两行会把卡片撑高，所以横向各占一列。 */
 .dsl-sidebar-rings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 8px;
   align-items: start; width: 100%; min-width: 0; }
-/* 每格两行：**左标签 + 右圆环**并排，重置时间落在圆环正下方。
- *
- * 关键：圆环与重置时间放在**同一列（第 2 列）**，各自 justify-self: center。
- * 该列宽度取两者 max-content 的较大者，于是两者的**中心落在同一条竖线上** ——
- * 这就是「重置时间的中心与圆环中心对齐」的实现方式（2026-11-03 需求）。
- * 若把重置时间跨两列居中，它的中心会落在「标签 + 圆环」整体中间，与环心错开。 */
-.dsl-sidebar-window { display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto;
-  align-items: center; justify-content: center; gap: 2px 6px; min-width: 0; }
-/* 圆环：SVG 负责弧，环心是透明挖空，不依赖卡片背景色。 */
-.dsl-sidebar-ring { grid-column: 2; grid-row: 1; justify-self: center; position: relative;
-  display: grid; place-items: center;
-  width: 36px; height: 36px; color: var(--dsw-alias-state-success-primary); }
-/* 弧的过渡：额度刷新时平滑变化，不跳动。 */
-.dsl-sidebar-ring-arc { transition: stroke-dashoffset 240ms ease; }
-/* 环内百分比：绝对居中盖在 SVG 上，等宽数字避免抖动。 */
-.dsl-sidebar-ring-value { position: absolute; inset: 0; display: grid; place-items: center;
-  font-size: 10px; line-height: 1; font-weight: 500; color: var(--dsw-alias-label-primary);
-  font-variant-numeric: tabular-nums; }
-/* 档位色：剩余少 = 警告/错误，读不到 = 中性灰，不限 = 中性。 */
-.dsl-sidebar-ring[data-sidebar-ring-level="warn"] { color: var(--dsw-alias-state-warning-primary); }
-.dsl-sidebar-ring[data-sidebar-ring-level="error"] { color: var(--dsw-alias-state-error-primary); }
-.dsl-sidebar-ring[data-sidebar-ring-level="missing"],
-.dsl-sidebar-ring[data-sidebar-ring-level="unlimited"] { color: var(--dsw-alias-label-tertiary); }
-/* 档位名：在圆环**左边**，与环垂直居中对齐。 */
-.dsl-sidebar-window-label { grid-column: 1; grid-row: 1; font-size: 11px; line-height: 15px;
+/* 每格纵向排列：**档位名居中在上 → 圆角矩形在下**（2026-11-03 版式）。
+ * 标签与矩形都在同一列居中，所以「5 小时 / 每周」自动对齐到各自矩形的中线。 */
+.dsl-sidebar-window { display: flex; flex-direction: column; align-items: center; gap: 3px;
+  min-width: 0; text-align: center; }
+/* 档位名：矩形上方，居中。 */
+.dsl-sidebar-window-label { font-size: 11px; line-height: 15px;
   color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
-/* 重置时间：与圆环**同一列**、各自居中 —— 两者的中心因此落在同一条竖线上
- * （2026-11-03 需求「重置时间的中心最好和圆环中心对齐」）。
- * 列宽取 max-content 的较大者（重置时间约 60px > 环 36px），环在列内居中。 */
-.dsl-sidebar-window-reset { grid-column: 2; grid-row: 2; justify-self: center;
-  font-size: 10px; line-height: 14px;
+/* 圆角矩形：内部两行 —— 剩余额度 / 下次重置时间。 */
+.dsl-sidebar-box { display: flex; flex-direction: column; align-items: center; gap: 1px;
+  min-width: 66px; padding: 4px 8px; border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-state-success-primary); }
+/* 剩余额度：矩形里最醒目的那一行。 */
+.dsl-sidebar-box-value { font-size: 14px; line-height: 18px; font-weight: 600;
+  color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+/* 下次重置时间：次级信息，一行不换行。 */
+.dsl-sidebar-box-reset { font-size: 9px; line-height: 12px;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
+/* 档位色：只染边框与数值，不改底色（深色主题下底色会脏）。 */
+.dsl-sidebar-box[data-sidebar-box-level="ok"] { border-color: var(--dsw-alias-state-success-primary); }
+.dsl-sidebar-box[data-sidebar-box-level="warn"] { border-color: var(--dsw-alias-state-warning-primary); }
+.dsl-sidebar-box[data-sidebar-box-level="error"] { border-color: var(--dsw-alias-state-error-primary); }
+.dsl-sidebar-box[data-sidebar-box-level="missing"],
+.dsl-sidebar-box[data-sidebar-box-level="unlimited"] {
+  border-color: var(--dsw-alias-border-l1); color: var(--dsw-alias-label-tertiary); }
 /* 剩余值的独立文本：环内已经显示，这里只服务读屏，视觉上隐藏。 */
 .dsl-sidebar-window-value { position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip-path: inset(50%); text-wrap: nowrap; }
@@ -904,14 +897,13 @@ export const CSS_CLASS = {
   sidebar: "dsl-sidebar",
   sidebarButton: "dsl-sidebar-button",
   sidebarRings: "dsl-sidebar-rings",
-  sidebarRing: "dsl-sidebar-ring",
-  sidebarRingArc: "dsl-sidebar-ring-arc",
-  sidebarRingValue: "dsl-sidebar-ring-value",
+  sidebarBox: "dsl-sidebar-box",
+  sidebarBoxValue: "dsl-sidebar-box-value",
+  sidebarBoxReset: "dsl-sidebar-box-reset",
   sidebarRowPrimary: "dsl-sidebar-row-primary",
   sidebarRowSecondary: "dsl-sidebar-row-secondary",
   sidebarWindow: "dsl-sidebar-window",
   sidebarWindowLabel: "dsl-sidebar-window-label",
-  sidebarWindowReset: "dsl-sidebar-window-reset",
   sidebarWindowValue: "dsl-sidebar-window-value",
   sidebarShell: "dsl-sidebar-shell",
   sidebarCompact: "dsl-sidebar-compact",

@@ -150,33 +150,30 @@ it("注册失败仍然不影响注入（样式与插槽是两件独立的事）"
 });
 
 /**
- * 侧边栏圆环与重置时间必须**共用一个中心**（2026-11-03 需求）。
+ * 侧边栏额度卡：**档位名与矩形同列居中**，矩形内含两行（2026-11-03 版式）。
  *
- * > 重置时间的中心最好和圆环中心对齐
+ * > 如果改成两个圆角矩形，圆角矩形上方是额度信息，内部是剩余额度信息和下次重置时间
+ * > 对，但是 5 小时还有每周要和圆角矩形的中心对齐
  *
- * 机制：两者放在同一网格列（第 2 列），各自 `justify-self: center`；列宽取
- * max-content 的较大者，因此环心与时间中心在同一条竖线上。
- *
- * 若把重置时间改回 `grid-column: 1 / -1`（跨两列），它的中心会落到「标签 + 圆环」
- * 整体中间，与环心明显错开 —— 这个测试就是防这一手的。
+ * 机制：每格是纵向 flex（flex-direction: column + align-items: center），
+ * 标签与矩形因此共用同一条竖中线 —— 这是「对齐到矩形中心」的实现方式。
+ * 若改成 flex-start 之类，标签会偏到左边，这个测试就会红。
  */
-it("侧边栏：重置时间与圆环同列且都居中（中心对齐）", () => {
-  /** 取出某个选择器的声明块（到下一个 `}` 为止）。 */
+it("侧边栏额度卡：档位名与矩形同列居中，矩形内两行", () => {
+  /** 取出某个选择器的声明块（到下一个右花括号为止）。 */
   const blockOf = (selector: string): string => {
     const start = PAGE_CSS.indexOf(`${selector} {`);
     expect(start, `样式表里找不到 ${selector}`).toBeGreaterThanOrEqual(0);
     const end = PAGE_CSS.indexOf("}", start);
     return PAGE_CSS.slice(start, end);
   };
-  const ring = blockOf(".dsl-sidebar-ring");
-  const reset = blockOf(".dsl-sidebar-window-reset");
-  // 同一列：都必须是第 2 列（不是 `1 / -1`）。
-  expect(ring, "圆环应在第 2 列").toContain("grid-column: 2;");
-  expect(reset, "重置时间应在第 2 列").toContain("grid-column: 2;");
-  expect(reset, "不能跨列居中（会与环心错开）").not.toContain("1 / -1");
-  // 同一列内都居中，中心才会重合。
-  expect(ring, "圆环要居中").toContain("justify-self: center");
-  expect(reset, "重置时间要居中").toContain("justify-self: center");
-  // 重置时间必须在圆环**下一行**，否则会并排而不是落在环下。
-  expect(reset, "重置时间在第二行").toContain("grid-row: 2;");
+  const cell = blockOf(".dsl-sidebar-window");
+  // 纵向排列 + 交叉轴居中：标签与矩形的中心落在同一条竖线上。
+  expect(cell, "每格应纵向排列").toContain("flex-direction: column");
+  expect(cell, "标签与矩形要居中对齐").toContain("align-items: center");
+  // 矩形本身也把两行居中（否则数字与时间会各偏一边）。
+  const box = blockOf(".dsl-sidebar-box");
+  expect(box, "矩形纵向排列两行").toContain("flex-direction: column");
+  expect(box, "矩形内两行居中").toContain("align-items: center");
+  expect(box, "矩形要有圆角").toContain("border-radius");
 });
