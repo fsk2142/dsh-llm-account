@@ -177,3 +177,39 @@ it("侧边栏额度卡：档位名与矩形同列居中，矩形内两行", () =
   expect(box, "矩形内两行居中").toContain("align-items: center");
   expect(box, "矩形要有圆角").toContain("border-radius");
 });
+
+/**
+ * 额度卡两条硬性约束（2026-11-03 需求）。
+ *
+ * > 额度那个百分比太大了，字体要和重置时间一样
+ * > 圆角矩形太细了
+ *
+ * 1. 百分比与重置时间**字号必须相同**；
+ * 2. CSS 里的盒子尺寸必须与 `quota-box.ts` 的 `BOX_WIDTH`/`BOX_HEIGHT` 一致 ——
+ *    否则 SVG 的 viewBox 与容器不同比例，描边会被拉伸变形。
+ */
+it("额度卡：百分比与重置时间同字号，盒子尺寸与组件常量一致", async () => {
+  const blockOf = (selector: string): string => {
+    const start = PAGE_CSS.indexOf(`${selector} {`);
+    expect(start, `样式表里找不到 ${selector}`).toBeGreaterThanOrEqual(0);
+    const end = PAGE_CSS.indexOf("}", start);
+    return PAGE_CSS.slice(start, end);
+  };
+  const fontSizeOf = (selector: string): string => {
+    const match = /font-size:\s*([0-9.]+px)/u.exec(blockOf(selector));
+    expect(match, `${selector} 没有声明 font-size`).not.toBeNull();
+    return match![1]!;
+  };
+  expect(fontSizeOf(".dsl-sidebar-box-value"), "百分比与重置时间要同字号").toBe(
+    fontSizeOf(".dsl-sidebar-box-reset"),
+  );
+
+  // 尺寸一致性：组件内的 viewBox 依赖这两个数。
+  const box = blockOf(".dsl-sidebar-box");
+  const width = /width:\s*([0-9.]+)px/u.exec(box)?.[1];
+  const height = /height:\s*([0-9.]+)px/u.exec(box)?.[1];
+  expect(width, "CSS 必须给盒子固定宽度").toBeDefined();
+  expect(height, "CSS 必须给盒子固定高度").toBeDefined();
+  expect(String(width), "与 BOX_WIDTH 一致").toBe("76");
+  expect(String(height), "与 BOX_HEIGHT 一致").toBe("44");
+});

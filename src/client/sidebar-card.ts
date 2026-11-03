@@ -316,7 +316,7 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
     // **档位名在上、矩形在下**（2026-11-03 版式）。标签与矩形都居中，
     // 所以「5 小时 / 每周」自然对齐到各自矩形的中线。
     createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
-    QuotaBox({ level, valueText, resetText: reset, resetAt: String(window.resetAt ?? "unknown"), ariaLabel, trackKey: window.key }),
+    QuotaBox({ remaining, level, valueText, resetText: reset, resetAt: String(window.resetAt ?? "unknown"), ariaLabel, trackKey: window.key }),
     createElement(
       "small",
       // 完整文案给读屏（图形化的数值不总被读出）。

@@ -663,23 +663,25 @@ export const PAGE_CSS = `
 .dsl-sidebar-window-label { font-size: 11px; line-height: 15px;
   color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
 /* 圆角矩形：内部两行 —— 剩余额度 / 下次重置时间。 */
-.dsl-sidebar-box { display: flex; flex-direction: column; align-items: center; gap: 1px;
-  min-width: 66px; padding: 4px 8px; border-radius: 8px;
-  border: 1px solid var(--dsw-alias-border-l1);
+/* 圆角矩形：固定尺寸（与 quota-box.ts 的 BOX_WIDTH/BOX_HEIGHT 一致），
+ * 尺寸固定是为了让 SVG 的 viewBox 与容器 1:1 —— 否则描边会被拉伸变形。 */
+.dsl-sidebar-box { position: relative; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 0;
+  width: 76px; height: 44px; border-radius: 9px;
   color: var(--dsw-alias-state-success-primary); }
-/* 剩余额度：矩形里最醒目的那一行。 */
-.dsl-sidebar-box-value { font-size: 14px; line-height: 18px; font-weight: 600;
+/* 边框层：绝对定位铺满盒子，文字盖在上面。 */
+.dsl-sidebar-box-frame { position: absolute; inset: 0; pointer-events: none; }
+/* 剩余额度：字号与重置时间一致（需求：百分比字体不要比时间大）。 */
+.dsl-sidebar-box-value { font-size: 9px; line-height: 12px; font-weight: 600;
   color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
 /* 下次重置时间：次级信息，一行不换行。 */
 .dsl-sidebar-box-reset { font-size: 9px; line-height: 12px;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
-/* 档位色：只染边框与数值，不改底色（深色主题下底色会脏）。 */
-.dsl-sidebar-box[data-sidebar-box-level="ok"] { border-color: var(--dsw-alias-state-success-primary); }
-.dsl-sidebar-box[data-sidebar-box-level="warn"] { border-color: var(--dsw-alias-state-warning-primary); }
-.dsl-sidebar-box[data-sidebar-box-level="error"] { border-color: var(--dsw-alias-state-error-primary); }
+/* 档位色：只染描边与数值，不改底色（深色主题下底色会脏）。 */
+.dsl-sidebar-box[data-sidebar-box-level="warn"] { color: var(--dsw-alias-state-warning-primary); }
+.dsl-sidebar-box[data-sidebar-box-level="error"] { color: var(--dsw-alias-state-error-primary); }
 .dsl-sidebar-box[data-sidebar-box-level="missing"],
-.dsl-sidebar-box[data-sidebar-box-level="unlimited"] {
-  border-color: var(--dsw-alias-border-l1); color: var(--dsw-alias-label-tertiary); }
+.dsl-sidebar-box[data-sidebar-box-level="unlimited"] { color: var(--dsw-alias-label-tertiary); }
 /* 剩余值的独立文本：环内已经显示，这里只服务读屏，视觉上隐藏。 */
 .dsl-sidebar-window-value { position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip-path: inset(50%); text-wrap: nowrap; }
@@ -898,6 +900,7 @@ export const CSS_CLASS = {
   sidebarButton: "dsl-sidebar-button",
   sidebarRings: "dsl-sidebar-rings",
   sidebarBox: "dsl-sidebar-box",
+  sidebarBoxFrame: "dsl-sidebar-box-frame",
   sidebarBoxValue: "dsl-sidebar-box-value",
   sidebarBoxReset: "dsl-sidebar-box-reset",
   sidebarRowPrimary: "dsl-sidebar-row-primary",

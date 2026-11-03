@@ -163,3 +163,53 @@ describe("额度圆角矩形卡片", () => {
     expect(text, "不能写 100%").not.toContain("100%");
   });
 });
+
+/** 取矩形里那条「剩余比例」描边（带 strokeDashoffset 的 rect）。 */
+function progressOf(box: StubElement | undefined): StubElement | undefined {
+  return elementsOf(box).find(
+    (element) => element.type === "rect" && element.props["strokeDashoffset"] !== undefined,
+  );
+}
+
+/**
+ * 边框**按剩余比例逐渐消失**（2026-11-03 需求）。
+ *
+ * > 圆角矩形太细了，能不能做成按照百分比逐渐消失，和圆环那种效果差不多
+ *
+ * 与圆环同源：周长 P 作 stroke-dasharray，dashoffset = P × (1 − 剩余/100)，
+ * 所以描出的那段边框正好等于剩余比例。这里盯**几何**，不只盯文本 ——
+ * 字符串断言抓不到「框永远画满」这类回退。
+ */
+describe("矩形边框按剩余比例逐渐消失", () => {
+  it("剩余 100% → dashoffset 为 0（整圈都在）", () => {
+    const tree = cardWith([{ key: "5h", percent: 0, resetAt: RESET_AT }]);
+    const progress = progressOf(boxOf(tree, "5h"));
+    expect(progress, "必须有按比例绘制的边框").toBeDefined();
+    expect(Number(progress!.props["strokeDashoffset"])).toBeCloseTo(0, 4);
+  });
+
+  it("剩余 50% → dashoffset 是周长的一半", () => {
+    const tree = cardWith([{ key: "5h", percent: 50, resetAt: RESET_AT }]);
+    const progress = progressOf(boxOf(tree, "5h"))!;
+    const perimeter = Number(progress.props["strokeDasharray"]);
+    expect(perimeter).toBeGreaterThan(0);
+    expect(Number(progress.props["strokeDashoffset"])).toBeCloseTo(perimeter / 2, 4);
+  });
+
+  it("剩余 0% → dashoffset 等于周长（一点都不画）", () => {
+    const tree = cardWith([{ key: "5h", percent: 100, resetAt: RESET_AT }]);
+    const progress = progressOf(boxOf(tree, "5h"))!;
+    const perimeter = Number(progress.props["strokeDasharray"]);
+    expect(Number(progress.props["strokeDashoffset"])).toBeCloseTo(perimeter, 4);
+  });
+
+  it("**读不到时不画进度边框**（缺失不等于 0%）", () => {
+    const tree = cardWith([{ key: "5h" }]);
+    expect(progressOf(boxOf(tree, "5h")), "没有百分比时不能描边").toBeUndefined();
+  });
+
+  it("「不限」时不画进度边框（没有比例可言）", () => {
+    const tree = cardWith([{ key: "5h", unlimited: true }]);
+    expect(progressOf(boxOf(tree, "5h"))).toBeUndefined();
+  });
+});
