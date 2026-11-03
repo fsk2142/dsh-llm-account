@@ -136,15 +136,16 @@ describe("Open Design：官方逐模型额度", () => {
 });
 
 describe("OpenCode：官方逐模型额度", () => {
-  // 数据来自公开页 https://opencode.ai/go 的 Monthly usage 列（2026-10-21 抓取）。
+  // 数据来自公开页 https://opencode.ai/go 的 Monthly usage 列（2026-11-03 更新：
+  // DeepSeek V4.1 Flash 的月度上限从 $80 上调到 $100）。
   // 这家只有 Go（$10/月）与 Go Plus（$40/月）两档。
-  it("Go 下 Kimi K3 是 $15，DeepSeek V4.1 Flash 是 $80", () => {
+  it("Go 下 Kimi K3 是 $15，DeepSeek V4.1 Flash 是 $100", () => {
     expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "Kimi K3")).toEqual({ kind: "usd", amount: 15 });
-    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 80 });
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 100 });
   });
 
-  it("Go Plus 的数字更大（同一模型是 $160）", () => {
-    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go Plus", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 160 });
+  it("Go Plus 的数字更大（同一模型是 $200）", () => {
+    expect(modelQuotaOf(OPENCODE_MODEL_QUOTA, "Go Plus", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 200 });
   });
 
   it("官方标 Free 的模型（`∞`）给 free", () => {

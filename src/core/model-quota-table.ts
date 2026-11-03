@@ -567,7 +567,7 @@ const OPENCODE_RAW: Readonly<Record<string, readonly [string, string]>> = {
   "Qwen3.7 Plus": ["$60", "$180"],
   "GLM-5.3-Flash": ["$60", "$180"],
   "MiMo-V2.6-Flash": ["$60", "$120"],
-  "DeepSeek V4.1 Flash": ["$80", "$160"],
+  "DeepSeek V4.1 Flash": ["$100", "$200"],
   "Muse Spark 1.3 Contributor": ["$60", "$120"],
   "LongCat 2.5 Preview": ["Free", "Free"],
   "MiniMax M3.1 Flash": ["Free", "Free"],
