@@ -651,40 +651,29 @@ export const PAGE_CSS = `
  * 现在容器定义一次三列，每行用 display: contents 把子元素直接交给外层网格。 */
 .dsl-sidebar-row-primary,
 .dsl-sidebar-row-secondary { display: contents; }
-/* 两档额度：并排两个圆环，环内是剩余百分比，环下是档位名与重置时间。
- * 侧边栏窄，纵向堆两行会把卡片撑高，所以横向各占一列。 */
-.dsl-sidebar-rings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 8px;
-  align-items: start; width: 100%; min-width: 0; }
-/* 每格纵向排列：**档位名居中在上 → 圆角矩形在下**（2026-11-03 版式）。
- * 标签与矩形都在同一列居中，所以「5 小时 / 每周」自动对齐到各自矩形的中线。 */
-.dsl-sidebar-window { display: flex; flex-direction: column; align-items: center; gap: 3px;
-  min-width: 0; text-align: center; }
-/* 档位名：矩形上方，居中。 */
-.dsl-sidebar-window-label { font-size: 11px; line-height: 15px;
-  color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
-/* 圆角矩形：内部两行 —— 剩余额度 / 下次重置时间。 */
-/* 圆角矩形：固定尺寸（与 quota-box.ts 的 BOX_WIDTH/BOX_HEIGHT 一致），
- * 尺寸固定是为了让 SVG 的 viewBox 与容器 1:1 —— 否则描边会被拉伸变形。 */
-.dsl-sidebar-box { position: relative; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 0;
-  width: 76px; height: 44px; border-radius: 9px;
-  color: var(--dsw-alias-state-success-primary); }
-/* 边框层：绝对定位铺满盒子，文字盖在上面。 */
-.dsl-sidebar-box-frame { position: absolute; inset: 0; pointer-events: none; }
-/* 剩余额度：字号与重置时间一致（需求：百分比字体不要比时间大）。 */
-.dsl-sidebar-box-value { font-size: 9px; line-height: 12px; font-weight: 600;
-  color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
-/* 下次重置时间：次级信息，一行不换行。 */
-.dsl-sidebar-box-reset { font-size: 9px; line-height: 12px;
+.dsl-sidebar-windows { display: grid; grid-template-columns: max-content minmax(30px, 1fr) max-content max-content;
+  align-items: center; gap: 6px 8px; width: 100%; min-width: 0; }
+/* 表头：「用量周期 / 重置时间」。字号更小、颜色更淡，读作标题而不是数据。
+ * 中间两格是空的（对应进度条与百分比列），这样四列与下面的数据行严格对齐。 */
+.dsl-sidebar-windows-head { display: contents; }
+.dsl-sidebar-windows-head > .dsl-sidebar-window-label,
+.dsl-sidebar-windows-head > .dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
+  font-weight: 500; color: var(--dsw-alias-label-tertiary); }
+.dsl-sidebar-window { display: contents; }
+.dsl-sidebar-window-head { display: contents; }
+.dsl-sidebar-window-label { font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary);
+  text-wrap: nowrap; }
+/* 重置时间：两行都有。等宽数字 + 固定不换行，两行的右边界因此对齐。 */
+.dsl-sidebar-window-reset { font-size: 10px; line-height: 14px; justify-self: end;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
-/* 档位色：只染描边与数值，不改底色（深色主题下底色会脏）。 */
-.dsl-sidebar-box[data-sidebar-box-level="warn"] { color: var(--dsw-alias-state-warning-primary); }
-.dsl-sidebar-box[data-sidebar-box-level="error"] { color: var(--dsw-alias-state-error-primary); }
-.dsl-sidebar-box[data-sidebar-box-level="missing"],
-.dsl-sidebar-box[data-sidebar-box-level="unlimited"] { color: var(--dsw-alias-label-tertiary); }
-/* 剩余值的独立文本：环内已经显示，这里只服务读屏，视觉上隐藏。 */
-.dsl-sidebar-window-value { position: absolute; width: 1px; height: 1px; overflow: hidden;
-  clip-path: inset(50%); text-wrap: nowrap; }
+/* 百分比数值不再单独一行：条已经表达了比例（见 sidebarMeter 的说明）。 */
+/* 剩余百分比：条给比例，这列给确切数字，等宽右对齐便于两行比较。 */
+.dsl-sidebar-window-value { font-size: 10px; line-height: 14px; justify-self: end;
+  color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
+.dsl-sidebar-window[data-sidebar-window-level="error"] .dsl-sidebar-window-track {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, var(--dsw-alias-border-l1)); }
+.dsl-sidebar-window-track { display: block; overflow: hidden; height: 6px; border-radius: 999px;
+  background: var(--dsw-alias-border-l1); min-width: 0; width: 100%; }
 .dsl-sidebar-foot { display: flex; flex-direction: row; gap: 8px; }
 .dsl-sidebar-foot > button { flex: 1 1 auto; }
 .dsl-sidebar .dsl-empty { padding: 10px; font-size: 12px; line-height: 18px; }
@@ -898,16 +887,16 @@ export const CSS_CLASS = {
   save: "dsl-save",
   sidebar: "dsl-sidebar",
   sidebarButton: "dsl-sidebar-button",
-  sidebarRings: "dsl-sidebar-rings",
-  sidebarBox: "dsl-sidebar-box",
-  sidebarBoxFrame: "dsl-sidebar-box-frame",
-  sidebarBoxValue: "dsl-sidebar-box-value",
-  sidebarBoxReset: "dsl-sidebar-box-reset",
+  sidebarWindows: "dsl-sidebar-windows",
+  sidebarWindowsHead: "dsl-sidebar-windows-head",
   sidebarRowPrimary: "dsl-sidebar-row-primary",
   sidebarRowSecondary: "dsl-sidebar-row-secondary",
   sidebarWindow: "dsl-sidebar-window",
+  sidebarWindowHead: "dsl-sidebar-window-head",
   sidebarWindowLabel: "dsl-sidebar-window-label",
+  sidebarWindowReset: "dsl-sidebar-window-reset",
   sidebarWindowValue: "dsl-sidebar-window-value",
+  sidebarWindowTrack: "dsl-sidebar-window-track",
   sidebarShell: "dsl-sidebar-shell",
   sidebarCompact: "dsl-sidebar-compact",
   sidebarHead: "dsl-sidebar-head",

@@ -25,7 +25,6 @@ import { failureText } from "./failure-text";
 import { UsageIcon } from "./icons";
 import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaResetDateText, quotaWindowLabel } from "./quota";
 import type { AccountUsageStatus, QuotaWindow, VendorUsageStatus } from "./usage-contract";
-import { QuotaBox } from "./quota-box";
 
 /** 卡片属性。 */
 export interface SidebarCardProps {
@@ -247,18 +246,22 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
    */
   const rows = shown;
   if (rows.length === 0) return [];
-  /**
-   * **两档并排画成圆环**（2026-11-03 需求）。
-   *
-   * > 如果做成两个圆环，内部显示剩余的百分比怎么样，圆环下边是下次的重置时间
-   *
-   * 版式：环内是剩余百分比，环下依次是档位名与重置时间。两档横向各占一列 ——
-   * 侧边栏窄，纵向堆两行会把卡片撑得很高。
-   */
+  // **外层网格**：三列定义在容器上，两行共享同一套列宽 —— 这是两条进度条对齐的前提
+  // （每行各写一套网格时，标签宽度不同会让后两列错开）。
   return [
     createElement(
       "div",
-      { key: "windows", "data-sidebar-windows": "true", className: CSS_CLASS.sidebarRings },
+      { key: "windows", "data-sidebar-windows": "true", className: CSS_CLASS.sidebarWindows },
+      // 表头：把「中间那列是条、右边那列是重置时间」讲清楚，也让两行的对齐有参照物
+      //。
+      createElement(
+        "div",
+        { key: "head", "data-sidebar-head": "true", className: CSS_CLASS.sidebarWindowsHead },
+        createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, t("sidebar.usagePeriod")),
+        createElement("span", null, ""),
+        createElement("span", null, ""),
+        createElement("span", { className: CSS_CLASS.sidebarWindowReset }, t("sidebar.resetTime")),
+      ),
       ...rows.map((window, index) =>
         createElement(
           "div",
@@ -274,13 +277,15 @@ function quotaRows(props: SidebarCardProps, row: AccountUsageStatus | undefined)
   ];
 }
 /**
- * 一档窗口的圆环读数：**环（内嵌剩余%）→ 档位名 → 重置时间**。
+ * 一档窗口的一行读数：**标签 — 进度条 — 重置时间**（横向三样，需求 定稿）。
  *
- * 缺失数据时的表现：不描弧、环内写「读不到」、重置时间写「未知」，
- * 都不猜成 0%（「读不到」与「用光了」是两回事）。
+ * 条的长度是两个读数的比值：左侧填色 = **剩余**比例（与 QuotaBar 同一口径），
+ * 所以「条越长越安全」。百分比数字不再单列一行 —— 条本身已经表达了比例，重置时间更重要。
+ *
+ * 缺失数据时的表现：条不填色、重置时间写「未知」，都不猜成 0。
  * @param t - 取词。
  * @param window - 该档窗口。
- * @returns 一格元素。
+ * @returns 一行元素。
  */
 function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactElement {
   const meter = quotaMeter(window);
@@ -292,18 +297,15 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
   // 日期格式（`10-19 20:00`）而不是「今天/明天」：两行上下并排时相对说法对不齐，
   // 也不好比较。
   const reset = quotaResetDateText(window.resetAt, Date.now(), window.resetEstimated === true) ?? t("quota.resetUnknown");
-  /**
-   * 环内的文本与读屏文案，三种情形分开说、**不互相冒充**：
-   * - 「不限」是端点给的事实；
-   * - 读不到写「暂无额度数据」，绝不猜成 0%；
-   * - 其余显示剩余百分比（与展开面板同一口径：侧边栏拿不到模型/套餐，算不出金额）。
-   */
-  const valueText = unlimited ? t("quota.unlimited") : remaining === undefined ? "—" : `${remaining}%`;
-  const ariaLabel = unlimited
-    ? t("quota.unlimited")
-    : remaining === undefined
-      ? t("account.quotaMissing")
-      : t("quota.remaining").replace("{percent}", String(remaining));
+  const bar =
+    meter === undefined || unlimited
+      ? null
+      : createElement("span", {
+          "data-quota-bar-fill": window.key,
+          "data-level": level,
+          className: CSS_CLASS.quotaBarFill,
+          style: { width: `${remaining}%` },
+        });
   return createElement(
     "div",
     {
@@ -313,15 +315,27 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
       "data-sidebar-window-level": level,
       className: CSS_CLASS.sidebarWindow,
     },
-    // **档位名在上、矩形在下**（2026-11-03 版式）。标签与矩形都居中，
-    // 所以「5 小时 / 每周」自然对齐到各自矩形的中线。
     createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
-    QuotaBox({ remaining, level, valueText, resetText: reset, resetAt: String(window.resetAt ?? "unknown"), ariaLabel, trackKey: window.key }),
+    createElement(
+      "span",
+      // aria-label 给读屏：条是纯视觉的，把「还剩多少」说出来。
+      {
+        "data-sidebar-track": window.key,
+        "aria-label": unlimited ? t("quota.unlimited") : remaining === undefined ? t("account.quotaMissing") : `${remaining}%`,
+        className: CSS_CLASS.sidebarWindowTrack,
+      },
+      bar,
+    ),
     createElement(
       "small",
-      // 完整文案给读屏（图形化的数值不总被读出）。
+      // 剩余百分比：条表达比例，这列给出确切数字（不用点开面板就能核对）。
       { "data-sidebar-value": window.key, className: CSS_CLASS.sidebarWindowValue },
-      ariaLabel,
+      unlimited ? t("quota.unlimited") : remaining === undefined ? t("account.quotaMissing") : `${remaining}%`,
+    ),
+    createElement(
+      "small",
+      { "data-sidebar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.sidebarWindowReset },
+      reset,
     ),
   );
 }

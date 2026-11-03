@@ -397,11 +397,12 @@ it("两条进度条共享同一套列宽（对齐：grid 定义在外层容器�
   expect(rowsInContainer.map((element) => element.props["data-sidebar-row"])).toEqual(["primary", "secondary"]);
 });
 
-it("额度区改成两个圆环：环内百分比 + 环下档位名与重置时间（不再有表头）", () => {
-  // 2026-11-03 需求变更：
-  //   「如果做成两个圆环，内部显示剩余的百分比怎么样，圆环下边是下次的重置时间」
-  // 条形方案依赖表头（「用量周期 / 重置时间」）与共享列宽来对齐；圆环是**自解释**的
-  // —— 每格自己有档位名与重置时间，表头反而多余，所以这里断言它已经撤掉。
+it("额度区有表头「用量周期 / 重置时间」，且与数据行同网格", () => {
+  // 2026-11-03 用户明确要求回到条形版式：
+  //   用量周期                重置时间
+  //   5 小时  [===条===] 96%  10-19
+  // 表头是**列对齐的参照物**：表头与数据行都在同一个 grid 容器里，
+  // 各自 display: contents 参与同一套列宽，否则两行会错开。
   const tree = renderCard(
     statusOf({
       effective: { ref: "a", at: 1 },
@@ -420,27 +421,25 @@ it("额度区改成两个圆环：环内百分比 + 环下档位名与重置时�
       ],
     }),
   );
-  expect(
-    elementsOf(tree).find((element) => element.props["data-sidebar-head"] === "true"),
-    "圆环布局不再需要表头",
-  ).toBeUndefined();
-  // 容器还在：两档仍然在**同一个**容器里并排。
-  const container = elementsOf(tree).find((element) => element.props["data-sidebar-windows"] === "true");
-  expect(container).toBeDefined();
+  const head = elementsOf(tree).find((element) => element.props["data-sidebar-head"] === "true");
+  expect(head, "必须有表头").toBeDefined();
+  const texts = textsOf(head!).join(" ");
+  expect(texts).toContain("用量周期");
+  expect(texts).toContain("重置时间");
+  // 表头与数据行同容器（共享列宽的前提）。
+  const container = elementsOf(tree).find((element) => element.props["data-sidebar-windows"] === "true")!;
+  expect(elementsOf(container).some((element) => element.props["data-sidebar-head"] === "true")).toBe(true);
+  // 每行都有：条 + 百分比 + 重置时间。
   const windowKeys = elementsOf(tree)
     .filter((element) => element.props["data-sidebar-window"] !== undefined)
     .map((element) => element.props["data-sidebar-window"]);
   expect(windowKeys).toEqual(["5h", "weekly"]);
-  // 每格的**自上而下**顺序：档位名 → 圆环 → 重置时间（2026-11-03 版式）。
   for (const key of windowKeys) {
     const cell = elementsOf(tree).find((element) => element.props["data-sidebar-window"] === key)!;
-    const kinds = elementsOf(cell)
-      .map((element) => {
-        if (element.props["data-sidebar-track"] !== undefined) return "ring";
-        if (element.props["data-sidebar-reset"] !== undefined) return "reset";
-        return String(element.props.className ?? "").includes("dsl-sidebar-window-label") ? "label" : undefined;
-      })
-      .filter((kind) => kind !== undefined);
-    expect(kinds, `${String(key)} 的排列顺序`).toEqual(["label", "ring", "reset"]);
+    const has = (prop: string): boolean =>
+      elementsOf(cell).some((element) => element.props[prop] !== undefined);
+    expect(has("data-sidebar-track"), `${String(key)} 要有条`).toBe(true);
+    expect(has("data-sidebar-value"), `${String(key)} 要有百分比`).toBe(true);
+    expect(has("data-sidebar-reset"), `${String(key)} 要有重置时间`).toBe(true);
   }
 });

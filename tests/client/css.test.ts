@@ -150,66 +150,35 @@ it("注册失败仍然不影响注入（样式与插槽是两件独立的事）"
 });
 
 /**
- * 侧边栏额度卡：**档位名与矩形同列居中**，矩形内含两行（2026-11-03 版式）。
- *
- * > 如果改成两个圆角矩形，圆角矩形上方是额度信息，内部是剩余额度信息和下次重置时间
- * > 对，但是 5 小时还有每周要和圆角矩形的中心对齐
- *
- * 机制：每格是纵向 flex（flex-direction: column + align-items: center），
- * 标签与矩形因此共用同一条竖中线 —— 这是「对齐到矩形中心」的实现方式。
- * 若改成 flex-start 之类，标签会偏到左边，这个测试就会红。
- */
-it("侧边栏额度卡：档位名与矩形同列居中，矩形内两行", () => {
-  /** 取出某个选择器的声明块（到下一个右花括号为止）。 */
-  const blockOf = (selector: string): string => {
-    const start = PAGE_CSS.indexOf(`${selector} {`);
-    expect(start, `样式表里找不到 ${selector}`).toBeGreaterThanOrEqual(0);
-    const end = PAGE_CSS.indexOf("}", start);
-    return PAGE_CSS.slice(start, end);
-  };
-  const cell = blockOf(".dsl-sidebar-window");
-  // 纵向排列 + 交叉轴居中：标签与矩形的中心落在同一条竖线上。
-  expect(cell, "每格应纵向排列").toContain("flex-direction: column");
-  expect(cell, "标签与矩形要居中对齐").toContain("align-items: center");
-  // 矩形本身也把两行居中（否则数字与时间会各偏一边）。
-  const box = blockOf(".dsl-sidebar-box");
-  expect(box, "矩形纵向排列两行").toContain("flex-direction: column");
-  expect(box, "矩形内两行居中").toContain("align-items: center");
-  expect(box, "矩形要有圆角").toContain("border-radius");
-});
-
 /**
- * 额度卡两条硬性约束（2026-11-03 需求）。
+ * 侧边栏额度行是**四列条形**版式（2026-11-03 需求）。
  *
- * > 额度那个百分比太大了，字体要和重置时间一样
- * > 圆角矩形太细了
+ * > 用量周期                重置时间
+ * > 5 小时  [===条===] 96%  10-19
  *
- * 1. 百分比与重置时间**字号必须相同**；
- * 2. CSS 里的盒子尺寸必须与 `quota-box.ts` 的 `BOX_WIDTH`/`BOX_HEIGHT` 一致 ——
- *    否则 SVG 的 viewBox 与容器不同比例，描边会被拉伸变形。
+ * 四列 = 档位名 | 进度条 | 百分比 | 重置时间。表头与数据行在**同一个 grid 容器**里，
+ * 列宽共享，否则两行会错开。
  */
-it("额度卡：百分比与重置时间同字号，盒子尺寸与组件常量一致", async () => {
+it("侧边栏额度行：四列网格 + 表头与数据行同容器", () => {
   const blockOf = (selector: string): string => {
     const start = PAGE_CSS.indexOf(`${selector} {`);
     expect(start, `样式表里找不到 ${selector}`).toBeGreaterThanOrEqual(0);
     const end = PAGE_CSS.indexOf("}", start);
     return PAGE_CSS.slice(start, end);
   };
-  const fontSizeOf = (selector: string): string => {
-    const match = /font-size:\s*([0-9.]+px)/u.exec(blockOf(selector));
-    expect(match, `${selector} 没有声明 font-size`).not.toBeNull();
-    return match![1]!;
-  };
-  expect(fontSizeOf(".dsl-sidebar-box-value"), "百分比与重置时间要同字号").toBe(
-    fontSizeOf(".dsl-sidebar-box-reset"),
-  );
-
-  // 尺寸一致性：组件内的 viewBox 依赖这两个数。
-  const box = blockOf(".dsl-sidebar-box");
-  const width = /width:\s*([0-9.]+)px/u.exec(box)?.[1];
-  const height = /height:\s*([0-9.]+)px/u.exec(box)?.[1];
-  expect(width, "CSS 必须给盒子固定宽度").toBeDefined();
-  expect(height, "CSS 必须给盒子固定高度").toBeDefined();
-  expect(String(width), "与 BOX_WIDTH 一致").toBe("76");
-  expect(String(height), "与 BOX_HEIGHT 一致").toBe("44");
+  const grid = blockOf(".dsl-sidebar-windows");
+  // 四列：档位名 / 条 / 百分比 / 重置时间
+  const columns = /grid-template-columns:\s*([^;]+);/u.exec(grid)?.[1] ?? "";
+  // `minmax(30px, 1fr)` 内部有空格，按顶层逗号分隔才准。
+  // minmax(30px, 1fr) 内部有逗号，直接数轨道关键字更稳。
+  const trackCount =
+    (columns.match(/max-content/gu)?.length ?? 0) + (columns.match(/minmax\(/gu)?.length ?? 0);
+  expect(trackCount, "必须是四列").toBe(4);
+  // 表头与数据行都用 display: contents 参与同一个网格。
+  expect(blockOf(".dsl-sidebar-windows-head"), "表头并入网格").toContain("display: contents");
+  expect(blockOf(".dsl-sidebar-window"), "数据行并入网格").toContain("display: contents");
+  // 百分比列必须可见（曾经是 display: none）。
+  const value = blockOf(".dsl-sidebar-window-value");
+  expect(value, "百分比列不能隐藏").not.toContain("display: none");
+  expect(value, "百分比列右对齐").toContain("justify-self: end");
 });
