@@ -251,30 +251,6 @@ export function quotaResetDateText(
   return estimated ? `约 ${text}` : text;
 }
 
-/** `HH:MM` 形状：拆列时只认这个，别的（`下午` 之类）算「没给时刻」。 */
-const TIME_OF_DAY_PATTERN = /^\d{1,2}:\d{2}$/u;
-
-/**
- * 把 {@link quotaResetDateText} 的一整串拆成「日期 / 时间」两列。
- *
- * 界面把重置时间放到圆环右边、分成两列（2026-11-03 需求），需要把 `10-19 20:00`
- * 切成两段。按**最后一个空格**切：日期段自己可能含空格（`约 10-19`、`2026-11-14`），
- * 而时间永远不含；并且只有当尾巴长得像 `HH:MM` 时才认作时间 ——
- * 否则（`未知`、`10-19 下午`）整串留在日期列，**不凭空造一个时间**。
- * @param text - 已格式化的重置文案。
- * @returns 日期列与（可选的）时间列。
- */
-export function splitResetText(text: string): { date: string; time?: string } {
-  const trimmed = text.trim();
-  if (trimmed === "") return { date: "", time: undefined };
-  const cut = trimmed.lastIndexOf(" ");
-  if (cut < 0) return { date: trimmed, time: undefined };
-  const tail = trimmed.slice(cut + 1);
-  if (!TIME_OF_DAY_PATTERN.test(tail)) return { date: trimmed, time: undefined };
-  const head = trimmed.slice(0, cut).trim();
-  return { date: head, time: tail };
-}
-
 /**
  * 套餐行的文案：`套餐 GOAT · 每月 $70.00 · 本期至 2026-11-14`。
  *
