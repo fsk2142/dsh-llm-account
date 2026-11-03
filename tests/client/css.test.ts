@@ -148,3 +148,35 @@ it("注册失败仍然不影响注入（样式与插槽是两件独立的事）"
     spy.mockRestore();
   }
 });
+
+/**
+ * 侧边栏圆环与重置时间必须**共用一个中心**（2026-11-03 需求）。
+ *
+ * > 重置时间的中心最好和圆环中心对齐
+ *
+ * 机制：两者放在同一网格列（第 2 列），各自 `justify-self: center`；列宽取
+ * max-content 的较大者，因此环心与时间中心在同一条竖线上。
+ *
+ * 若把重置时间改回 `grid-column: 1 / -1`（跨两列），它的中心会落到「标签 + 圆环」
+ * 整体中间，与环心明显错开 —— 这个测试就是防这一手的。
+ */
+it("侧边栏：重置时间与圆环同列且都居中（中心对齐）", () => {
+  /** 取出某个选择器的声明块（到下一个 `}` 为止）。 */
+  const blockOf = (selector: string): string => {
+    const start = PAGE_CSS.indexOf(`${selector} {`);
+    expect(start, `样式表里找不到 ${selector}`).toBeGreaterThanOrEqual(0);
+    const end = PAGE_CSS.indexOf("}", start);
+    return PAGE_CSS.slice(start, end);
+  };
+  const ring = blockOf(".dsl-sidebar-ring");
+  const reset = blockOf(".dsl-sidebar-window-reset");
+  // 同一列：都必须是第 2 列（不是 `1 / -1`）。
+  expect(ring, "圆环应在第 2 列").toContain("grid-column: 2;");
+  expect(reset, "重置时间应在第 2 列").toContain("grid-column: 2;");
+  expect(reset, "不能跨列居中（会与环心错开）").not.toContain("1 / -1");
+  // 同一列内都居中，中心才会重合。
+  expect(ring, "圆环要居中").toContain("justify-self: center");
+  expect(reset, "重置时间要居中").toContain("justify-self: center");
+  // 重置时间必须在圆环**下一行**，否则会并排而不是落在环下。
+  expect(reset, "重置时间在第二行").toContain("grid-row: 2;");
+});
