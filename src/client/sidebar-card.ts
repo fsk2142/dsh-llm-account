@@ -23,7 +23,7 @@ import { createElement, type ReactElement, type ReactNode } from "react";
 import { CSS_CLASS, cls } from "./css";
 import { failureText } from "./failure-text";
 import { UsageIcon } from "./icons";
-import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaResetDateText, quotaWindowLabel } from "./quota";
+import { fallbackQuotaWindows, quotaMeter, quotaReading, quotaResetDateText, quotaWindowLabel, splitResetText } from "./quota";
 import type { AccountUsageStatus, QuotaWindow, VendorUsageStatus } from "./usage-contract";
 import { QuotaRing } from "./quota-ring";
 
@@ -289,9 +289,15 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
   const unlimited = window.unlimited === true;
   const reading = quotaReading(window);
   const level = unlimited ? "unlimited" : remaining === undefined ? "missing" : remaining > 0 ? "ok" : "error";
-  // 日期格式（`10-19 20:00`）而不是「今天/明天」：两行上下并排时相对说法对不齐，
+  // 日期格式（`10-19 20:00`）而不是「今天/明天」：两格并排时相对说法对不齐，
   // 也不好比较。
   const reset = quotaResetDateText(window.resetAt, Date.now(), window.resetEstimated === true) ?? t("quota.resetUnknown");
+  /**
+   * 重置时间拆成**日期 / 时间两列**（2026-11-03 需求）。
+   *
+   * > 重置时间放到右边吧，分两列，一列日期，一列时间
+   */
+  const resetParts = splitResetText(reset);
   /**
    * 环内的文本与读屏文案，三种情形分开说、**不互相冒充**：
    * - 「不限」是端点给的事实；
@@ -313,14 +319,24 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
       "data-sidebar-window-level": level,
       className: CSS_CLASS.sidebarWindow,
     },
-    // **左标签 + 右圆环**并排（省掉单独一行表头），重置时间在下一行跨两列居中。
-    // DOM 顺序仍是「档位名 → 圆环 → 重置时间」，具体落在哪一行由 CSS 网格决定。
+    // 版式：**竖排档位名 → 圆环 → 重置时间的日期列 → 时间列**（一行四格）。
+    // DOM 顺序保持「标签 → 圆环 → 重置」，具体落格由 CSS 网格决定。
     createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
     QuotaRing({ remaining, level, text: valueText, ariaLabel, trackKey: window.key }),
     createElement(
       "small",
       { "data-sidebar-reset": window.resetAt ?? "unknown", className: CSS_CLASS.sidebarWindowReset },
-      reset,
+      // 日期与时间各占一列：日期列左对齐、时间列右对齐，两格之间能对齐比较。
+      createElement("span", { "data-sidebar-reset-date": "true", className: CSS_CLASS.sidebarResetDate }, resetParts.date),
+      ...(resetParts.time === undefined
+        ? []
+        : [
+            createElement(
+              "span",
+              { key: "time", "data-sidebar-reset-time": "true", className: CSS_CLASS.sidebarResetTime },
+              resetParts.time,
+            ),
+          ]),
     ),
     createElement(
       "small",

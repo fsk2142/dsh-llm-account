@@ -183,3 +183,28 @@ describe("圆环的几何：弧长必须反映剩余比例", () => {
     expect(circle, "没有百分比时不能描弧").toBeUndefined();
   });
 });
+
+describe("重置时间拆成日期 / 时间两列（2026-11-03 版式）", () => {
+  it("重置时间渲染成**两个**子元素：日期列与时间列", () => {
+    const at = Date.UTC(2026, 10, 19, 12, 0); // 2026-11-19 20:00（本地时区）
+    const tree = cardWith([{ key: "5h", percent: 4, resetAt: at }]);
+    const cell = elementsOf(tree).find((element) => element.props["data-sidebar-window"] !== undefined)!;
+    const reset = elementsOf(cell).find((element) => element.props["data-sidebar-reset"] !== undefined)!;
+    const date = elementsOf(reset).find((element) => element.props["data-sidebar-reset-date"] === "true");
+    const time = elementsOf(reset).find((element) => element.props["data-sidebar-reset-time"] === "true");
+    expect(date, "必须有日期列").toBeDefined();
+    expect(time, "必须有时间列").toBeDefined();
+    expect(textsOf(date).join("")).toMatch(/^\d{2}-\d{2}$|^\d{4}-\d{2}-\d{2}$/u);
+    expect(textsOf(time).join("")).toMatch(/^\d{1,2}:\d{2}$/u);
+  });
+
+  it("**没有时刻时只有日期列**，不凭空造一个时间列", () => {
+    const tree = cardWith([{ key: "5h", percent: 4 }]);
+    const cell = elementsOf(tree).find((element) => element.props["data-sidebar-window"] !== undefined)!;
+    const reset = elementsOf(cell).find((element) => element.props["data-sidebar-reset"] !== undefined)!;
+    expect(
+      elementsOf(reset).find((element) => element.props["data-sidebar-reset-time"] === "true"),
+      "读不到重置时间时不该有时间列",
+    ).toBeUndefined();
+  });
+});
