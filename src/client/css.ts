@@ -651,27 +651,34 @@ export const PAGE_CSS = `
  * 现在容器定义一次三列，每行用 display: contents 把子元素直接交给外层网格。 */
 .dsl-sidebar-row-primary,
 .dsl-sidebar-row-secondary { display: contents; }
-.dsl-sidebar-windows { display: grid; grid-template-columns: max-content minmax(40px, 1fr) max-content;
-  align-items: center; gap: 6px 8px; width: 100%; min-width: 0; }
-/* 表头：「用量周期 / 重置时间」。字号更小、颜色更淡，读作标题而不是数据。
- * 中间那格是空的（对应进度条列），这样三列与下面的数据行严格对齐。 */
-.dsl-sidebar-windows-head { display: contents; }
-.dsl-sidebar-windows-head > .dsl-sidebar-window-label,
-.dsl-sidebar-windows-head > .dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
-  font-weight: 500; color: var(--dsw-alias-label-tertiary); }
-.dsl-sidebar-window { display: contents; }
-.dsl-sidebar-window-head { display: contents; }
-.dsl-sidebar-window-label { font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary);
-  text-wrap: nowrap; }
-/* 重置时间：两行都有。等宽数字 + 固定不换行，两行的右边界因此对齐。 */
-.dsl-sidebar-window-reset { font-size: 10px; line-height: 14px; justify-self: end;
+/* 两档额度：并排两个圆环，环内是剩余百分比，环下是档位名与重置时间。
+ * 侧边栏窄，纵向堆两行会把卡片撑高，所以横向各占一列。 */
+.dsl-sidebar-rings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 8px;
+  align-items: start; width: 100%; min-width: 0; }
+.dsl-sidebar-window { display: flex; flex-direction: column; align-items: center; gap: 4px;
+  min-width: 0; text-align: center; }
+/* 圆环：SVG 负责弧，环心是透明挖空，不依赖卡片背景色。 */
+.dsl-sidebar-ring { position: relative; display: grid; place-items: center;
+  width: 40px; height: 40px; color: var(--dsw-alias-state-success-primary); }
+/* 弧的过渡：额度刷新时平滑变化，不跳动。 */
+.dsl-sidebar-ring-arc { transition: stroke-dashoffset 240ms ease; }
+/* 环内百分比：绝对居中盖在 SVG 上，等宽数字避免抖动。 */
+.dsl-sidebar-ring-value { position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 11px; line-height: 1; font-weight: 500; color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums; }
+/* 档位色：剩余少 = 警告/错误，读不到 = 中性灰，不限 = 中性。 */
+.dsl-sidebar-ring[data-sidebar-ring-level="warn"] { color: var(--dsw-alias-state-warning-primary); }
+.dsl-sidebar-ring[data-sidebar-ring-level="error"] { color: var(--dsw-alias-state-error-primary); }
+.dsl-sidebar-ring[data-sidebar-ring-level="missing"],
+.dsl-sidebar-ring[data-sidebar-ring-level="unlimited"] { color: var(--dsw-alias-label-tertiary); }
+/* 档位名与重置时间：都居中、不换行。 */
+.dsl-sidebar-window-label { font-size: 11px; line-height: 15px;
+  color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
+.dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
-/* 百分比数值不再单独一行：条已经表达了比例（见 sidebarMeter 的说明）。 */
-.dsl-sidebar-window-value { display: none; }
-.dsl-sidebar-window[data-sidebar-window-level="error"] .dsl-sidebar-window-track {
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, var(--dsw-alias-border-l1)); }
-.dsl-sidebar-window-track { display: block; overflow: hidden; height: 6px; border-radius: 999px;
-  background: var(--dsw-alias-border-l1); min-width: 0; width: 100%; }
+/* 剩余值的独立文本：环内已经显示，这里只服务读屏，视觉上隐藏。 */
+.dsl-sidebar-window-value { position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); text-wrap: nowrap; }
 .dsl-sidebar-foot { display: flex; flex-direction: row; gap: 8px; }
 .dsl-sidebar-foot > button { flex: 1 1 auto; }
 .dsl-sidebar .dsl-empty { padding: 10px; font-size: 12px; line-height: 18px; }
@@ -885,16 +892,16 @@ export const CSS_CLASS = {
   save: "dsl-save",
   sidebar: "dsl-sidebar",
   sidebarButton: "dsl-sidebar-button",
-  sidebarWindows: "dsl-sidebar-windows",
-  sidebarWindowsHead: "dsl-sidebar-windows-head",
+  sidebarRings: "dsl-sidebar-rings",
+  sidebarRing: "dsl-sidebar-ring",
+  sidebarRingArc: "dsl-sidebar-ring-arc",
+  sidebarRingValue: "dsl-sidebar-ring-value",
   sidebarRowPrimary: "dsl-sidebar-row-primary",
   sidebarRowSecondary: "dsl-sidebar-row-secondary",
   sidebarWindow: "dsl-sidebar-window",
-  sidebarWindowHead: "dsl-sidebar-window-head",
   sidebarWindowLabel: "dsl-sidebar-window-label",
   sidebarWindowReset: "dsl-sidebar-window-reset",
   sidebarWindowValue: "dsl-sidebar-window-value",
-  sidebarWindowTrack: "dsl-sidebar-window-track",
   sidebarShell: "dsl-sidebar-shell",
   sidebarCompact: "dsl-sidebar-compact",
   sidebarHead: "dsl-sidebar-head",
