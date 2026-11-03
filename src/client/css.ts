@@ -653,28 +653,31 @@ export const PAGE_CSS = `
 .dsl-sidebar-row-secondary { display: contents; }
 /* 两档额度：并排两个圆环，环内是剩余百分比，环下是档位名与重置时间。
  * 侧边栏窄，纵向堆两行会把卡片撑高，所以横向各占一列。 */
-.dsl-sidebar-rings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 8px;
+.dsl-sidebar-rings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 8px;
   align-items: start; width: 100%; min-width: 0; }
-.dsl-sidebar-window { display: flex; flex-direction: column; align-items: center; gap: 4px;
-  min-width: 0; text-align: center; }
+/* 每格两行：**左标签 + 右圆环**并排（省掉单独一行表头），重置时间落在第二行跨两列。
+ * 用 grid 而不是 flex：重置时间要跨两列居中，flex 得再包一层。 */
+.dsl-sidebar-window { display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto;
+  align-items: center; justify-content: center; gap: 2px 6px; min-width: 0; }
 /* 圆环：SVG 负责弧，环心是透明挖空，不依赖卡片背景色。 */
-.dsl-sidebar-ring { position: relative; display: grid; place-items: center;
-  width: 40px; height: 40px; color: var(--dsw-alias-state-success-primary); }
+.dsl-sidebar-ring { grid-column: 2; grid-row: 1; position: relative; display: grid; place-items: center;
+  width: 36px; height: 36px; color: var(--dsw-alias-state-success-primary); }
 /* 弧的过渡：额度刷新时平滑变化，不跳动。 */
 .dsl-sidebar-ring-arc { transition: stroke-dashoffset 240ms ease; }
 /* 环内百分比：绝对居中盖在 SVG 上，等宽数字避免抖动。 */
 .dsl-sidebar-ring-value { position: absolute; inset: 0; display: grid; place-items: center;
-  font-size: 11px; line-height: 1; font-weight: 500; color: var(--dsw-alias-label-primary);
+  font-size: 10px; line-height: 1; font-weight: 500; color: var(--dsw-alias-label-primary);
   font-variant-numeric: tabular-nums; }
 /* 档位色：剩余少 = 警告/错误，读不到 = 中性灰，不限 = 中性。 */
 .dsl-sidebar-ring[data-sidebar-ring-level="warn"] { color: var(--dsw-alias-state-warning-primary); }
 .dsl-sidebar-ring[data-sidebar-ring-level="error"] { color: var(--dsw-alias-state-error-primary); }
 .dsl-sidebar-ring[data-sidebar-ring-level="missing"],
 .dsl-sidebar-ring[data-sidebar-ring-level="unlimited"] { color: var(--dsw-alias-label-tertiary); }
-/* 档位名与重置时间：都居中、不换行。 */
-.dsl-sidebar-window-label { font-size: 11px; line-height: 15px;
+/* 档位名：在圆环**左边**，与环垂直居中对齐。 */
+.dsl-sidebar-window-label { grid-column: 1; grid-row: 1; font-size: 11px; line-height: 15px;
   color: var(--dsw-alias-label-secondary); text-wrap: nowrap; }
-.dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
+/* 重置时间：跨两列居中，落在圆环下方。 */
+.dsl-sidebar-window-reset { grid-column: 1 / -1; grid-row: 2; font-size: 10px; line-height: 14px;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; text-wrap: nowrap; }
 /* 剩余值的独立文本：环内已经显示，这里只服务读屏，视觉上隐藏。 */
 .dsl-sidebar-window-value { position: absolute; width: 1px; height: 1px; overflow: hidden;

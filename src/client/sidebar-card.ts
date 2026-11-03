@@ -313,7 +313,8 @@ function sidebarMeter(t: (key: string) => string, window: QuotaWindow): ReactEle
       "data-sidebar-window-level": level,
       className: CSS_CLASS.sidebarWindow,
     },
-    // **自上而下**：档位名（额度表头）→ 圆环（内含剩余额度）→ 下次重置时间。
+    // **左标签 + 右圆环**并排（省掉单独一行表头），重置时间在下一行跨两列居中。
+    // DOM 顺序仍是「档位名 → 圆环 → 重置时间」，具体落在哪一行由 CSS 网格决定。
     createElement("span", { className: CSS_CLASS.sidebarWindowLabel }, quotaWindowLabel(t, window.key)),
     QuotaRing({ remaining, level, text: valueText, ariaLabel, trackKey: window.key }),
     createElement(
