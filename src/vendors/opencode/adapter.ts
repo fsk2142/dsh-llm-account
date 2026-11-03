@@ -628,6 +628,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const cap = Math.min(config.defaultMaxTokens, DEFAULT_GENERATE_MAX_TOKENS);
     const requested = options.maxTokens === undefined ? cap : Math.min(options.maxTokens, cap);
     const maxTokens = modelLimit === undefined ? requested : Math.min(requested, modelLimit);
+    /** 宿主声明的档位（`low`/`high`/`max`），既进 thinkingLevelMap 也决定可选项。 */
+    const efforts = record?.efforts ?? entry?.efforts ?? [];
     const model = buildPiModel(
       {
         id: options.model,
@@ -636,6 +638,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         ...(contextWindow === undefined ? {} : { contextWindow }),
         ...(modelLimit === undefined ? {} : { maxTokens: modelLimit }),
         reasoning: record?.reasoning === true,
+        // 宿主声明的档位：落成 pi-ai 的 thinkingLevelMap，否则 max/xhigh 会被钳成 high。
+        ...(efforts.length === 0 ? {} : { efforts }),
         inputModalities: entry?.inputModalities ?? ["text"],
       },
       config.apiBase,

@@ -307,25 +307,29 @@ it("stream：system 提示折进 messages[0]，maxTokens 按配置封顶", async
   ]);
 });
 
-it("stream：档位只在目录为这个模型声明过时才发（未声明的值一律不发）", async () => {
+it("stream：用户选的档位**原样发送**，不因为目录没声明就静默丢掉", async () => {
+  // 2026-11-03 用户要求：
+  //   「确定每个档位都是正常可用的，别给我整错档位了，max 就是 max……」
+  //
+  // 旧行为是「目录声明过才发」：目录没声明（元数据抓取失败、或厂商根本不公布档位）时
+  // 直接不发 —— 用户选了 high，请求里却没有档位字段，等于悄悄换成了厂商默认档。
+  // 静默改档和显式降档是两回事：前者用户无从发现，后者至少是网关明确拒绝后的自适应。
+  //
+  // 现在一律原样发送；真被网关拒绝时，下面那条「400 → 按白名单降一档重发」的兜底仍然生效。
   const fetchImpl = scriptedFetch([
-    // 第一次尝试前先核对目录（声明了 low/high，没有 off）。
-    () => catalogResponse([{ id: "od-1", efforts: ["low", "high"] }]),
     () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
-    // 第二轮：宿主要 `off`，目录没声明 → 不发这个字段。
-    () => catalogResponse([{ id: "od-1", efforts: ["low", "high"] }]),
     () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
   ]);
   const deps = adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) });
 
   await runStream({ ...request(), reasoningEffort: ReasoningEffortId("high") }, deps);
-  expect(field(fetchImpl.calls[1]!.body, "reasoning_effort")).toBe("high");
+  expect(field(fetchImpl.calls[0]!.body, "reasoning_effort")).toBe("high");
 
   await runStream({ ...request(), reasoningEffort: ReasoningEffortId("off") }, deps);
-  expect(field(fetchImpl.calls[3]!.body, "reasoning_effort")).toBeUndefined();
-  // 目录请求与生成请求的 URL 分明：核档位打 /models，发回答打 /chat/completions。
-  expect(fetchImpl.calls[0]!.url).toContain("/models");
-  expect(fetchImpl.calls[1]!.url).toContain("/chat/completions");
+  expect(
+    field(fetchImpl.calls[1]!.body, "reasoning_effort"),
+    "目录没声明 off 也要原样发，不能静默换成默认档",
+  ).toBe("off");
 });
 
 it("stream：没有可用密钥 → MISSING_CREDENTIAL，且一条请求都不发", async () => {
@@ -453,9 +457,9 @@ it("resolveModel：目录不声明档位时按模型族兜底（宿主的思考�
 
 it("stream：网关拒绝档位但念出白名单时，按白名单降一档重发（不是直接丢掉档位）", async () => {
   const fetchImpl = scriptedFetch([
-    // ① 核档位：目录声明到 max（我们以为它有 max）。
-    () => catalogResponse([{ id: "glm-5.3-flash", efforts: ["low", "high", "max"] }]),
-    // ② 网关实际只认到 high，且把白名单念出来（真实口吻，2026-10-18 实测）。
+    // ① 带 max 的请求被网关拒，且把白名单念出来（真实口吻，2026-10-18 实测）。
+    //    注意：不再先查目录 —— 用户选的档位一律原样发（2026-11-03），
+    //    所以这里第一发就是带 max 的生成请求。
     () =>
       new Response(
         JSON.stringify({
@@ -465,7 +469,7 @@ it("stream：网关拒绝档位但念出白名单时，按白名单降一档重�
         }),
         { status: 400 },
       ),
-    // ③ 降一档（high）重发 → 成功。
+    // ② 降一档（high）重发 → 成功。
     () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
   ]);
   const { chunks, calls } = await runStream(
@@ -473,20 +477,22 @@ it("stream：网关拒绝档位但念出白名单时，按白名单降一档重�
     adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }),
   );
 
-  expect(calls).toHaveLength(3);
-  expect(field(calls[1]!.body, "reasoning_effort")).toBe("max");
+  expect(calls).toHaveLength(2);
+  // 第一发就是用户选的 max（不再先查目录做白名单过滤）。
+  expect(field(calls[0]!.body, "reasoning_effort")).toBe("max");
   // 用户的选择只退到白名单里最强的那档，而不是整段消失。
-  expect(field(calls[2]!.body, "reasoning_effort")).toBe("high");
+  expect(field(calls[1]!.body, "reasoning_effort")).toBe("high");
   expect(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "ok")).toBe(true);
 });
 
 it("stream：网关不认 reasoning_effort（400）且没念白名单时去掉字段重发一次，回答照常拿到", async () => {
   const fetchImpl = scriptedFetch([
-    // ① 核档位（目录声明了 high）。
-    () => catalogResponse([{ id: "claude-sonnet-4-5", efforts: ["low", "high"] }]),
-    // ② 带档位的请求被网关拒绝，且正文点名了这个字段。
-    () => new Response(JSON.stringify({ error: { message: "reasoning_effort is not supported for this model" } }), { status: 400 }),
-    // ③ 去掉字段重发 → 成功。
+    // ① 带档位的请求被网关拒绝，且正文点名了这个字段。
+    //    不再先查目录：用户选的档位一律原样发（2026-11-03）。
+    () => new Response(JSON.stringify({ error: { message: "reasoning_effort is not supported for this model" } }), {
+      status: 400,
+    }),
+    // ② 去掉字段重发 → 成功。
     () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
   ]);
   const { chunks, calls } = await runStream(
@@ -494,9 +500,9 @@ it("stream：网关不认 reasoning_effort（400）且没念白名单时去掉�
     adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }),
   );
 
-  expect(calls).toHaveLength(3);
-  expect(field(calls[1]!.body, "reasoning_effort")).toBe("high");
-  expect(field(calls[2]!.body, "reasoning_effort")).toBeUndefined();
+  expect(calls).toHaveLength(2);
+  expect(field(calls[0]!.body, "reasoning_effort")).toBe("high");
+  expect(field(calls[1]!.body, "reasoning_effort")).toBeUndefined();
   expect(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "ok")).toBe(true);
 });
 

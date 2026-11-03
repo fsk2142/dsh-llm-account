@@ -36,6 +36,7 @@ import type {
   Model as PiModel,
   ProviderStreams,
   Tool as PiTool,
+  ThinkingLevel,
 } from "opencode-go-pi-ai";
 import { createProvider, isContextOverflow, normalizeContext } from "opencode-go-pi-ai";
 import * as anthropicMessages from "opencode-go-pi-ai/api/anthropic-messages";
@@ -311,6 +312,7 @@ export class OpencodeStreamFailure extends Error {
 }
 
 /** 装一条模型所需的目录事实（目录与元数据合并后的结果）。 */
+
 export interface OpencodeModelFacts {
   /** 模型 id。 */
   id: string;
@@ -326,6 +328,13 @@ export interface OpencodeModelFacts {
   reasoning: boolean;
   /** 接受的输入模态。 */
   inputModalities: readonly ("text" | "image")[];
+  /**
+   * 宿主可见的档位（`low` / `high` / `max` …）。
+   *
+   * 它会落成 pi-ai `Model.thinkingLevelMap` 的键：**`max` / `xhigh` 只有在这里出现才算可用**，
+   * 否则 `clampThinkingLevel` 会把它降级成 `high`（2026-11-03 实测：选 `max` 实际发的是 `high`）。
+   */
+  efforts?: readonly string[];
 }
 
 /**
@@ -346,6 +355,21 @@ export function buildPiModel(facts: OpencodeModelFacts, baseUrl: string): PiMode
     // （旧插件 `modelBaseURL` 第 6161-6164 行）。
     baseUrl: facts.api === "anthropic-messages" ? base.replace(/\/v1$/, "") : base,
     reasoning: facts.reasoning,
+    /**
+     * **档位映射：只映射厂商真正公布的那些档位**（同名，`max` → `max`）。
+     *
+     * 为什么必须有：pi-ai 的 `getSupportedThinkingLevels` 把 `max` / `xhigh` 当作
+     * 「只有显式出现在这里才算支持」，不在表里 `clampThinkingLevel` 就把它降级成邻近档位
+     * —— 实测界面选 `max`、实际发出去的是 `high`（2026-11-03 报障）。
+     *
+     * 为什么不写全：给模型塞它没有的档位等于谎报能力。deepseek-v4.1-flash 的网关只公布
+     * `low` / `high` / `max`，那就只映射这三个；`minimal` / `medium` / `xhigh` 一概不写。
+     * 用户选的档位若不在表里，SDK 会按它的规则就近取一个 —— 但那种「档位本来就不存在」，
+     * 与「存在却被改写」是两回事，后者才是这次的 bug。
+     */
+    ...(facts.efforts === undefined
+      ? {}
+      : { thinkingLevelMap: Object.fromEntries(facts.efforts.map((level) => [level, level])) }),
     input: [...facts.inputModalities],
     // pi-ai 的 `Model` 要求两个容量字段是数字：目录没公布时用网关量级的兜底值，
     // 只影响 SDK 的溢出判定与钳制，不改目录展示（展示里缺字段就是不写）。
@@ -685,6 +709,13 @@ export interface OpencodeStreamInput {
   fetchImpl: typeof fetch;
   /** 调用方信号。 */
   signal?: AbortSignal;
+  /**
+   * 用户选的思考强度（`low` / `high` / `max` …），来自宿主的 `options.reasoningEffort`。
+   *
+   * **必须透传给 SDK**：档位是宿主按我们声明的 `reasoning.efforts` 让用户选的，
+   * 只声明不发送等于「选了也没用」—— 请求一直是网关默认强度（2026-11-03 报障）。
+   */
+  reasoningEffort?: ThinkingLevel;
   /** 采样温度。 */
   temperature?: number;
   /** 输出上限。 */
@@ -729,6 +760,9 @@ export function streamOpencode(input: OpencodeStreamInput): AsyncIterable<Stream
     headers: { ...attributionHeaders(), ...(input.headers ?? {}) },
     maxRetries: SDK_MAX_RETRIES,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    // **注意参数名**：pi-ai 的 `streamSimple` 收的是 `reasoning`（内部再经
+    // `clampThinkingLevel` 钳制后落成 `reasoningEffort`）；传 `reasoningEffort` 会被忽略。
+    ...(input.reasoningEffort === undefined ? {} : { reasoning: input.reasoningEffort }),
     ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
     ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
   });

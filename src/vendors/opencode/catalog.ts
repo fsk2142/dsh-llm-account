@@ -95,10 +95,20 @@ export function parseModels(payload: unknown): CatalogParseResult {
     }
     const contextWindow = positiveNumber(raw.context_length ?? raw.contextWindow);
     const maxTokens = positiveNumber(raw.max_output_tokens ?? raw.maxTokens);
+    /**
+     * 网关自己公布的档位：`capabilities.reasoning.effort`。
+     *
+     * 2026-11-03 报障 `does not support reasoning effort "max"` 的根因就在这一行之前：
+     * 档位**只**从 models.dev 元数据（`reasoning_options`）来，而那次抓取会失败/漏字段，
+     * 于是 `efforts` 变成空数组，宿主认为该模型没有档位 —— 用户选着 `max` 的请求被拒。
+     * 而 `/models` 是**目录本身的必需请求**，它公布的档位永远拿得到，比 models.dev 可靠。
+     */
+    const gatewayEfforts = effortsOfCapabilities(raw.capabilities);
     entries.push({
       id,
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
+      ...(gatewayEfforts === undefined ? {} : { efforts: gatewayEfforts }),
       inputModalities: inputModalitiesOf(raw),
     });
   }
@@ -199,6 +209,31 @@ function effortsOf(value: unknown): readonly string[] {
   return efforts;
 }
 
+/**
+ * 网关 `/models` 的 `capabilities.reasoning.effort` → 档位数组。
+ *
+ * 2026-11-03 报障 `does not support reasoning effort "max"` 的修复点：
+ * 之前档位**只**来自 models.dev 元数据（`reasoning_options`），那次抓取失败或漏字段时
+ * 就是空数组，宿主据此判定「这个模型没有档位」，把用户选的 `max` 请求直接拒掉。
+ * 而 `/models` 是目录本身的必需请求，公布的档位永远拿得到。
+ *
+ * 与 {@link effortsOf} 的区别：那边是 models.dev 的 `{type:"effort",values:[…]}` 形状，
+ * 这边是网关直接给的字符串数组。
+ * @param capabilities - `/models` 条目的 `capabilities`。
+ * @returns 档位数组；没有可用档位时 `undefined`（不产出 `[]`，让「未声明」与「空」可区分）。
+ */
+function effortsOfCapabilities(capabilities: unknown): readonly string[] | undefined {
+  if (!isRecord(capabilities)) return undefined;
+  const reasoning = capabilities.reasoning;
+  if (!isRecord(reasoning)) return undefined;
+  if (!Array.isArray(reasoning.effort)) return undefined;
+  const efforts: string[] = [];
+  for (const level of reasoning.effort) {
+    if (typeof level === "string" && level !== "") efforts.push(level);
+  }
+  return efforts.length === 0 ? undefined : efforts;
+}
+
 /** 目录里一条模型：宿主可见的条目 + 请求时需要的协议事实。 */
 export interface OpencodeCatalogRecord {
   /** 宿主形状的目录条目。 */
@@ -295,18 +330,22 @@ export function createOpencodeCatalog(input: {
       const meta = metadataById.get(entry.id);
       const contextWindow = meta?.contextWindow ?? entry.contextWindow;
       const maxTokens = meta?.maxTokens ?? entry.maxTokens;
+    // 档位来源优先级：网关 `/models` 的 capabilities → models.dev 的 reasoning_options。
+    const efforts = entry.efforts ?? meta?.efforts;
       return {
         entry: {
           id: entry.id,
           name: names[index] ?? entry.name,
           ...(contextWindow === undefined ? {} : { contextWindow }),
           ...(maxTokens === undefined ? {} : { maxTokens }),
-          ...(meta?.efforts === undefined ? {} : { efforts: meta.efforts }),
+      // **网关公布的档位优先**：`/models` 是目录本身的必需请求，永远拿得到；
+      // models.dev 元数据可能抓取失败。反过来会让用户选的 `max` 被宿主拒掉（2026-11-03 报障）。
+      ...(efforts === undefined ? {} : { efforts }),
           inputModalities: meta?.inputModalities ?? entry.inputModalities,
         },
         api: meta?.api ?? DEFAULT_API,
         reasoning: meta?.reasoning === true,
-        efforts: meta?.efforts ?? [],
+    efforts: efforts ?? [],
         ...(meta?.company === undefined ? {} : { company: meta.company }),
         ...(meta?.free === true ? { free: true } : {}),
       };

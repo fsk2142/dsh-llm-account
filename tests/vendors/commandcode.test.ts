@@ -403,7 +403,13 @@ it("**声明 systemPromptUpdate / toolUpdate**（与官方适配器同一组能�
   expect(resolved.toolUpdate).toBe("addition-only");
 });
 
-it("请求路径按静态表收口：表内档位照发，表外的（含未声明的 off）一律不发字段", async () => {
+it("请求路径**原样发送用户选的档位**（不再按静态表收口）", async () => {
+  // 2026-11-03 用户要求：
+  //   「确定每个档位都是正常可用的，别给我整错档位了，max 就是 max……」
+  //
+  // 旧行为是「静态表里没有的值一律不发」：用户选了 off（或表外模型）时，请求里没有档位
+  // 字段，实际用厂商默认档，而界面仍显示所选值 —— 静默改档，用户无从发现。
+  // 静态表现在只用来**声明**宿主的可选档位，不再充当发送闸门。
   const { fetchImpl, bodies } = bodyCapturingFetch();
   const adapter = createCommandCodeAdapter({
     config: () => ({ apiBase: "https://api.example.test" }),
@@ -414,24 +420,17 @@ it("请求路径按静态表收口：表内档位照发，表外的（含未声�
     resolveStored: async () => "key-a",
   });
 
-  // 表内档位（openai 传输）：照发。
+  // 表内档位：照发。
   await collect(adapter.stream({ ...request("gpt-5.5"), reasoningEffort: ReasoningEffortId("high") }));
-  const declared = bodies.at(-1);
-  expect(declared).toBeDefined();
-  expect(declared).toMatchObject({ model: "gpt-5.5", reasoning_effort: "high" });
+  expect(bodies.at(-1)).toMatchObject({ model: "gpt-5.5", reasoning_effort: "high" });
 
-  // 表外值：`off` 不在 gpt-5.5 的档位里 —— 不发字段，而不是发出去被厂商拒。
+  // 表外档位 `off`：也照发 —— 用户选了就发，不能悄悄换成默认档。
   await collect(adapter.stream({ ...request("gpt-5.5"), reasoningEffort: ReasoningEffortId("off") }));
-  const offBody = bodies.at(-1);
-  expect(offBody).toBeDefined();
-  expect(offBody).toMatchObject({ model: "gpt-5.5" });
-  expect("reasoning_effort" in offBody!).toBe(false);
+  expect(bodies.at(-1)).toMatchObject({ model: "gpt-5.5", reasoning_effort: "off" });
 
-  // 表外模型：同样不发（声明与请求路径同一条纪律）。
-  await collect(adapter.stream({ ...request("not-in-the-table"), reasoningEffort: ReasoningEffortId("high") }));
-  const unknownBody = bodies.at(-1);
-  expect(unknownBody).toBeDefined();
-  expect("reasoning_effort" in unknownBody!).toBe(false);
+  // 表外模型：同样照发（声明与请求路径同一条纪律：不静默丢）。
+  await collect(adapter.stream({ ...request("not-in-the-table"), reasoningEffort: ReasoningEffortId("max") }));
+  expect(bodies.at(-1)).toMatchObject({ model: "not-in-the-table", reasoning_effort: "max" });
 });
 
 it("Messages 传输在有可选档位时打开自适应思考（旧插件第 6624 行：该端点只认 adaptive）", () => {

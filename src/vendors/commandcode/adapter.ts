@@ -539,14 +539,19 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   /** 一次尝试：选协议 → 发请求 → （必要时）回退 CLI 传输 → 解码并套上时间预算。 */
   async *#attempt(config: ResolvedConfig, options: GenerateOptions, key: string): AsyncGenerator<StreamChunk> {
     const cap = Math.min(config.defaultMaxTokens, DEFAULT_GENERATE_MAX_TOKENS);
-    // 档位在**这里**按静态表再收一次口（旧插件第 7416-7419 行同一套）：`resolveModel` 声明的
-    // 集合是宿主做前置校验用的，但光靠它不够 —— 宿主的「关闭思考」会送来 `off`，而表里只有
-    // 部分模型认 `off`；不在表里的值一律**不发字段**（发出去会被厂商拒）。
+    /**
+     * 档位**原样发送**，不再按静态表收口（2026-11-03 用户要求）。
+     *
+     * 旧写法只发「静态表里有的值」，表外一律不发 —— 于是用户选了 `off`（或某个表里
+     * 没有的档位）时，请求里没有档位字段，实际用的是厂商默认档，而界面仍显示所选值。
+     * 这是**静默改档**，用户无从发现；而「发出去被厂商拒」至少是一个可见的失败。
+     *
+     * 静态表 `knownEfforts` 仍然有用，但只用来**声明**宿主的可选档位（`resolveModel`），
+     * 不再充当发送闸门。
+     */
+    const declared = options.reasoningEffort;
+    // 静态表仍用于「这个模型有没有可选档位」的协议选择（与「发不发用户选的值」无关）。
     const supported = knownEfforts(options.model) ?? [];
-    const declared =
-      options.reasoningEffort !== undefined && supported.includes(options.reasoningEffort)
-        ? options.reasoningEffort
-        : undefined;
     const facts: BodyFacts = {
       maxTokens: options.maxTokens === undefined ? cap : Math.min(options.maxTokens, cap),
       systemText: systemTextOf(options),
