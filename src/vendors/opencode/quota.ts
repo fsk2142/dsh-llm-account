@@ -31,7 +31,7 @@
 import { LlmError, attributionHeaders } from "@deepseek-ai/dsh-llm";
 import { opencodeSessionHeaders } from "./session";
 
-import type { QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
+import type { QuotaPlan, QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
 import { DEFAULT_BASE_URL, isRecord, trimBase } from "./protocol";
 
@@ -220,7 +220,63 @@ export function toQuotaSnapshot(payload: unknown): QuotaSnapshot {
     if (window === undefined) failures.push(key);
     else windows.push(window);
   }
-  return { windows, failures };
+  const plan = planOf(windows);
+  return { windows, failures, ...(plan === undefined ? {} : { plan }) };
+}
+
+/**
+ * 把 `monthly` 窗口的重置时刻落成**订阅周期**（2026-11-03 报障）。
+ *
+ * ## 为什么需要
+ *
+ * 用量面板按「本周期」统计时，`usage-remote.ts` 优先用厂商公布的账期
+ * （`quota.plan.periodEnd` / `periodStart`）；厂商没公布就退回**最细的一档窗口**
+ * —— 对 opencode 就是 5 小时窗口。于是三家口径不一致：
+ *
+ * - **Open Design**：`subscriptionCurrentPeriodEnd` → 整月；
+ * - **Command Code**：订阅字段 → 整月；
+ * - **OpenCode**：`/usage` 只回三个百分比窗口，**从不公布账期** → 掉成 5 小时。
+ *
+ * 结果同一块面板里，opencode 显示「最近 5 小时用了 111.6M」，另外两家显示整月 ——
+ * 用户一眼就看出不对。
+ *
+ * ## 依据
+ *
+ * opencode 的三个窗口是「5 小时 / 每周 / 每月」，而**每月那个就是订阅周期**：
+ * 官方文档把 usage limit 定义成「每月的美元额度」，`monthly` 的 `resetsAt`
+ * 正是本期结束时刻。所以把它当账期是厂商自己的语义，不是我们推测。
+ *
+ * 厂商不公布起点，按 `periodEnd` 往前推一个日历月（与 `Command Code` 缺
+ * `periodStart` 时的处理一致）。
+ * @param windows - 已解析出的窗口。
+ * @returns 套餐账期；没有 `monthly` 窗口或它没带重置时刻时返回 `undefined`。
+ */
+function planOf(windows: readonly QuotaWindow[]): QuotaPlan | undefined {
+  const monthly = windows.find((window) => window.key === "monthly");
+  const resetAt = monthly?.resetAt;
+  // 缺 monthly 或它没给重置时刻：**不编账期**（宁可退回窗口，也不造一个假周期）。
+  if (resetAt === undefined) return undefined;
+  return { id: "go", periodEnd: resetAt, periodStart: monthBefore(resetAt) };
+}
+
+/**
+ * 把一个时刻往前推一个日历月（同一天，月份减一）。
+ *
+ * 用日历月而不是固定 30 天：`monthly` 的 `resetsAt` 是「本期结束」，本期起点就是
+ * 上个月的同一天（opencode 的月度额度按自然月滚动）。跨月天数不齐时（如 3/31 → 2 月）
+ * 夹到目标月的最后一天，避免溢出到再下一个月。
+ * @param at - 结束时刻（epoch 毫秒）。
+ * @returns 起点时刻（epoch 毫秒）。
+ */
+function monthBefore(at: number): number {
+  const date = new Date(at);
+  const day = date.getUTCDate();
+  const shifted = new Date(at);
+  shifted.setUTCDate(1);
+  shifted.setUTCMonth(shifted.getUTCMonth() - 1);
+  const lastDay = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, 0)).getUTCDate();
+  shifted.setUTCDate(Math.min(day, lastDay));
+  return shifted.getTime();
 }
 
 /**

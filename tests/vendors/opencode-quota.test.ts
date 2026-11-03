@@ -282,8 +282,16 @@ it("三个窗口齐全时按 rolling/weekly/monthly 顺序输出，缺失的窗�
     Date.parse("2026-10-14T00:00:00Z"),
     Date.parse("2026-11-01T00:00:00Z"),
   ]);
-  // 窗口之外没有别的字段被编造（`plan` 只有厂商公布时才在）。
-  expect("plan" in snap).toBe(false);
+  // 窗口之外没有别的字段被编造。
+  //
+  // 2026-11-03 起 `plan` 不是「厂商公布才有」了：opencode 的 `/usage` 从不公布账期，
+  // 而 `monthly` 窗口的 `resetsAt` **就是**订阅周期结束时刻（官方把 usage limit 定义成
+  // 每月额度）。不落成 `plan` 的话，用量面板会退回最细的 5 小时窗口 —— 同一块面板里
+  // Open Design / Command Code 统计整月、opencode 统计 5 小时，口径不一致。
+  // 详见 `tests/vendors/opencode-quota-period.test.ts`。
+  expect(snap.plan?.periodEnd, "planEnd 来自 monthly 窗口的重置时刻").toBe(
+    Date.parse("2026-11-01T00:00:00Z"),
+  );
   expect(snap.failures).toEqual([]);
 
   // 只有 weekly：其余两个不补 0、不补当前时间。
