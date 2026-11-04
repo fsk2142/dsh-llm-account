@@ -479,7 +479,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       // 本轮第一个被选中的账号 = 这次的「首选」；后面成功的都是备用账号（晋升判定用）。
       if (firstPick === undefined) firstPick = ref;
 
-      const auth = await this.#resolveAuth(ref);
+        const auth = await this.#resolveAuth(ref, options.signal);
       if (auth === undefined) {
         // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
         // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
@@ -716,7 +716,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param ref - 账号 ref。
    * @returns 请求凭据；没有可用密钥或刷新失败时为 `undefined`。
    */
-  async #resolveAuth(ref: string): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
+  async #resolveAuth(ref: string, signal?: AbortSignal): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
     /**
      * **在首次异步读取之前**抓代际（2026-11-01 修 S01 第三版）。
      *
@@ -749,7 +749,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
      * 只有「需要刷新」时才走这段 —— `resolveOAuthCredential` 内部会先判断 token 是否
      * 即将过期，不新鲜时立即返回，那种情况（绝大多数）不该被去重表串行化。
      */
-    const resolved = await this.#refreshShared(ref, raw);
+    // 调用者的 signal：只让「等刷新」这个动作可取消，共享工作本身不受影响（审查 U03）。
+    const resolved = await this.#refreshShared(ref, raw, signal);
     if (resolved === undefined) return undefined;
     /**
      * 只回写「从凭据槽读出来的那一份」：环境变量里的 blob 没有可写回的持久位置。
@@ -813,19 +814,45 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * ref 是稳定身份。不同账号拿到同一个 blob 的情况不存在（凭据槽按 ref 隔离）。
    * @param ref - 账号 ref（凭据槽名）。
    * @param raw - 从凭据槽读到的原始值（可能带 `oauth:` 前缀）。
-   * @returns 解析结果；不需要刷新或解析失败时为 `undefined`。
+   * @param signal - 本次调用者的取消信号（**只作用于「等」这个动作**，见下）。
+   * @returns 解析结果；不需要刷新、解析失败或被取消时为 `undefined`。
    */
   async #refreshShared(
     ref: string,
     raw: string,
+    signal?: AbortSignal,
   ): Promise<{ key: string; headers?: Record<string, string>; updated?: string } | undefined> {
-    return this.#singleFlight(ref, () =>
+    /**
+     * **共享刷新与调用者取消的分工**（2026-11-04 外部审查 U03）。
+     *
+     * 审查的验收要求是这两条**同时**成立：
+     *
+     * > 永不返回的刷新可被调用者停止/总期限结束；共享刷新中一方取消不破坏另一方。
+     *
+     * 所以信号**不能**原样塞进共享的 `fetch`：那样 A 会话一停，正在等同一份刷新的
+     * B 会话也会被连带中止。正确做法是：
+     *
+     * - 共享工作（`singleFlight` 里的那次 fetch）**不绑定任何单个调用者的 signal**；
+     * - 每个调用者各自 `race` 自己的 signal —— 停了就立刻拿到 `undefined`，
+     *   而共享工作继续为其他等待方跑完（结果仍会回写凭据槽）。
+     *
+     * 代价：被取消的调用者拿不到新 token（它本来也不需要了），但其他人不受影响。
+     */
+    const pending = this.#singleFlight(ref, () =>
       resolveOAuthCredential(raw, {
         fetchImpl: this.#deps.fetchImpl,
         ...(this.#deps.authBase === undefined ? {} : { authBase: this.#deps.authBase }),
         ...(this.#deps.now === undefined ? {} : { now: this.#deps.now }),
       }),
     );
+    if (signal === undefined) return pending;
+    if (signal.aborted) return undefined;
+    return Promise.race([
+      pending,
+      new Promise<undefined>((resolve) => {
+        signal.addEventListener("abort", () => resolve(undefined), { once: true });
+      }),
+    ]);
   }
 
   /** 拿（或建）该基地址的目录缓存。 */

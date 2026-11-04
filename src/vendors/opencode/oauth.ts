@@ -304,9 +304,21 @@ export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode): 
 }
 
 /** 刷新一次 token；失败抛出（调用方按「不可用」处理）。 */
-export async function refreshOAuthCredential(deps: OAuthHttpDeps, credential: OAuthCredential): Promise<OAuthCredential> {
+export async function refreshOAuthCredential(
+  deps: OAuthHttpDeps,
+  credential: OAuthCredential,
+  signal?: AbortSignal,
+): Promise<OAuthCredential> {
   const response = await deps.fetchImpl(`${authBaseOf(deps, credential)}/console/auth/device/token`, {
     method: "POST",
+    /**
+     * **必须把 signal 传下去**（2026-11-04 外部审查 U03）。
+     *
+     * 原来这里一个 signal 都不传：刷新请求一旦挂起，调用者的停止与总期限**都不起作用** ——
+     * 请求既不完成也不抛错，宿主等不到终态，于是「停止」像没反应，
+     * 自动重试也永远等不到机会（它要等前一次失败落定）。
+     */
+    ...(signal === undefined ? {} : { signal }),
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({
       grant_type: "refresh_token",
@@ -359,6 +371,7 @@ export async function fetchOAuthOrg(deps: OAuthHttpDeps, access: string): Promis
 export async function resolveOAuthCredential(
   raw: string,
   deps: OAuthHttpDeps,
+  options?: { signal?: AbortSignal },
 ): Promise<{ key: string; headers: Record<string, string>; updated?: string } | undefined> {
   const credential = parseOAuthCredential(raw);
   if (credential === undefined) return undefined;
@@ -367,7 +380,8 @@ export async function resolveOAuthCredential(
   }
   if (credential.refresh === "") return undefined;
   try {
-    const refreshed = await refreshOAuthCredential(deps, credential);
+    // 把调用者的 signal 传下去：停止时刷新必须立刻结束（审查 U03）。
+    const refreshed = await refreshOAuthCredential(deps, credential, options?.signal);
     return {
       key: refreshed.access,
       headers: { "x-opencode-org-id": refreshed.orgId },
