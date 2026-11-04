@@ -26,7 +26,6 @@ import { assignUniqueNames } from "../../core/model-names";
 import {
   DEFAULT_API,
   DEFAULT_CATALOG_TTL_MS,
-  METADATA_FETCH_TIMEOUT_MS,
   METADATA_MAX_BYTES,
   MODELS_FETCH_TIMEOUT_MS,
   MODELS_MAX_BYTES,
@@ -36,6 +35,15 @@ import {
   isRecord,
   metadataRequest,
 } from "./protocol";
+
+/**
+ * 元数据（models.dev）的默认预算：**4 秒**。
+ *
+ * 实测该端点 2.8s 起步、偶发 18s 失败、最坏 197s；而它只提供建议性事实
+ * （上下文/输出/模态/协议），档位已由网关 `/models` 提供。等它就会「切模型反应好半天」
+ * （2026-11-04 报障），所以给它一个明显短于网关请求的预算，超时直接用清单事实。
+ */
+const METADATA_BUDGET_MS = 4_000;
 import type { OpencodeApi } from "./protocol";
 
 /** models.dev 里这条网关的 provider 键（旧插件 `record(body)["opencode-go"]` 第 6169 行）。 */
@@ -280,9 +288,24 @@ export function createOpencodeCatalog(input: {
   fetchImpl: typeof fetch;
   ttlMs?: number;
   now?: () => number;
+  /**
+   * 元数据的**独立预算**（毫秒）；缺省 {@link METADATA_BUDGET_MS}。
+   *
+   * 元数据只提供能力事实（上下文、输出、模态、协议），**档位已由网关 `/models` 提供**，
+   * 所以它慢不该拖住切模型（2026-11-04 报障「切模型反应好半天」）。
+   */
+  metadataBudgetMs?: number;
 }): OpencodeCatalog {
   const now = input.now ?? Date.now;
   const ttlMs = input.ttlMs !== undefined && Number.isFinite(input.ttlMs) && input.ttlMs >= 0 ? input.ttlMs : DEFAULT_CATALOG_TTL_MS;
+  /**
+   * 元数据预算默认取得比网关请求短得多：实测 `models.dev` 一次 2.8s、一次 18.5s 失败、
+   * 一次 **197s**。它是建议性的，等它不如用清单事实先把模型列表给出去。
+   */
+  const metadataBudgetMs =
+    input.metadataBudgetMs !== undefined && Number.isFinite(input.metadataBudgetMs) && input.metadataBudgetMs > 0
+      ? input.metadataBudgetMs
+      : METADATA_BUDGET_MS;
   let cached: OpencodeCatalogRecord[] | undefined;
   let expiresAt = 0;
   let inFlight: Promise<OpencodeCatalogRecord[]> | undefined;
@@ -310,7 +333,7 @@ export function createOpencodeCatalog(input: {
   const metadata = async (signal: AbortSignal | undefined): Promise<Map<string, ModelMetadata>> => {
     try {
       const { url, headers } = metadataRequest();
-      const response = await input.fetchImpl(url, { headers, signal: requestSignal(signal, METADATA_FETCH_TIMEOUT_MS) });
+      const response = await input.fetchImpl(url, { headers, signal: requestSignal(signal, metadataBudgetMs) });
       if (!response.ok) return new Map();
       return parseModelMetadata(await readJsonBounded(response, METADATA_MAX_BYTES));
     } catch {
@@ -320,8 +343,19 @@ export function createOpencodeCatalog(input: {
   };
 
   const load = async (signal: AbortSignal | undefined): Promise<OpencodeCatalogRecord[]> => {
-    const entries = await listing(signal);
-    const metadataById = await metadata(signal);
+    /**
+     * **两个请求并行发**（2026-11-04 修「切模型反应好半天」）。
+     *
+     * 原来是 `await listing(); await metadata();` —— 串行。元数据（`models.dev`，5.7 MB）
+     * 实测 2.8s / 18.5s 失败 / **197s**，而它只是建议性的，却把整条路径堵在最慢那个上。
+     *
+     * 现在：
+     * - 并行发出，总耗时 ≈ max(清单, 元数据) 而不是两者之和；
+     * - 元数据有自己的短预算（{@link METADATA_BUDGET_MS}），超时就用清单事实继续 ——
+     *   档位、上下文、模态在清单里都有兜底值（`entry.efforts` 等）；
+     * - 清单失败仍然整次失败：没有清单就没有目录，不能编。
+     */
+    const [entries, metadataById] = await Promise.all([listing(signal), metadata(signal)]);
     // 展示名在**合并之后**统一派生：清单层派生的名字会被 models.dev 的 `name` 覆盖，
     // 而元数据的名字写法与另两家不同（`DeepSeek V4.1 Flash` vs `DeepSeek-V4.1-Flash`）。
     // 元数据只提供能力事实（上下文、输出、档位、模态、协议），名字一律走统一规则。
