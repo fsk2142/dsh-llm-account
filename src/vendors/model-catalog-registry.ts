@@ -38,6 +38,18 @@ export interface CatalogSource {
    * 缺省表示这家不支持被跨厂商委托（那就只能同家换）。
    */
   stream?: (options: unknown) => AsyncIterable<unknown>;
+  /**
+   * 这家**当前是否可用**（2026-11-04 外部审查 U08）。
+   *
+   * `enabled: false` 只撤下宿主路由，注册表里的 `stream` 仍在 —— 于是「换模型」
+   * 路径照样能把请求转给一家用户明确关掉的厂商。登记这个查询后：
+   *
+   * 1. {@link modelCandidates} 不再把禁用厂商的模型列进候选；
+   * 2. {@link delegateStream} 执行前**再复核一次** —— 缓存里的旧候选也拦得住。
+   *
+   * 缺省视为「可用」：与 `enabled` 的缺省语义一致（只有显式 `false` 才撤下）。
+   */
+  available?: () => boolean;
 }
 
 /** 一个候选：provider + model。 */
@@ -89,7 +101,11 @@ export async function modelCandidates(now: number = Date.now()): Promise<ModelCa
   if (cached !== undefined && now - cached.at < CACHE_TTL_MS) return cached.value;
   const listed = await Promise.all(
     [...sources.values()].map(async (source) => {
-      try {
+    try {
+      // **禁用的厂商不进候选**（2026-11-04 外部审查 U08）：
+      // `enabled: false` 只撤下宿主路由，注册表仍在；不收在这里，
+      // 换模型就会切到一家用户明确关掉的厂商。
+      if (source.available !== undefined && !source.available()) return [];
         const rows = await source.models();
         return rows
           .filter((row) => typeof row.id === "string" && row.id.trim() !== "")
@@ -187,6 +203,14 @@ export function delegateStream(
 ): AsyncIterable<unknown> | undefined {
   const source = sources.get(target.provider);
   if (source === undefined || source.stream === undefined) return undefined;
+  /**
+   * **执行前复核一次可用性**（2026-11-04 外部审查 U08）。
+   *
+   * 光在 {@link modelCandidates} 里过滤还不够：候选清单有 60 秒缓存，
+   * 用户在这段时间里关掉厂商，缓存里的旧候选仍然会把请求转过去。
+   * 这一行保证「禁用之后立刻不会再被调用」。
+   */
+  if (source.available !== undefined && !source.available()) return undefined;
   if (isOfficialProvider(target.provider)) return undefined;
   return source.stream({ ...options, provider: target.provider, model: target.model });
 }

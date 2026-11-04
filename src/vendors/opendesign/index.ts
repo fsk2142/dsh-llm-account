@@ -576,6 +576,13 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     // 跨厂商换模型的执行入口：别家要换到这家时，由**这家的 adapter** 自己发请求
     // （宿主的路由是固定的，adapter 不能以别家身份发）。
     stream: (options) => adapter.stream(options as Parameters<typeof adapter.stream>[0]),
+  /**
+   * **现读**这个厂商是否启用（2026-11-04 外部审查 U08）。
+   *
+   * 必须每次现读，不能写成创建时的布尔快照 —— 否则用户后来禁用也拦不住。
+   * 缺省（含非布尔值）读作启用，与 `enabled` 字段的既有语义一致。
+   */
+  available: () => document().enabled !== false,
   });
 
   // 登记本家的**网关访问**（搜索的网关路用）。与上面的目录读口同一形状：provider 只在
@@ -1015,4 +1022,3 @@ function waitForExit(child: ReturnType<typeof spawn>): Promise<number | null> {
     child.on("error", () => resolve(null));
   });
 }
-

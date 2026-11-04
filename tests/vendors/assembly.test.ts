@@ -494,10 +494,10 @@ it("凭据变更后清除该账号的失效标记", () => {
 it("账号库状态变化重建引擎时，生效账号与切换记录一起搬迁（Task 2 的观测状态必须活过重建）", () => {
   // 入口现读的文档是**插件配置**（真实宿主里它是 volatile 引用，设置改写后会被换成新值）。
   // 假宿主没有那条链路，所以这里直接把顶层 `apiKeyEnv` 做成 volatile 引用，模拟「用户换了当前账号」。
-  let active = "OPENCODE_API_KEY";
+  let active = "WORK_A";
   const config = opencode.Config({
     ...OPENCODE_SHAPE,
-    accounts: [{ id: "work", name: "work", apiKeyEnv: "OPENCODE_API_KEY_2" }],
+    accounts: [{ id: "WORK_A", name: "work", apiKeyEnv: "WORK_A" }, { id: "WORK_B", name: "work2", apiKeyEnv: "WORK_B" }],
   }) as Record<string, unknown>;
   config.apiKeyEnv = volatileRef(() => active);
 
@@ -506,19 +506,19 @@ it("账号库状态变化重建引擎时，生效账号与切换记录一起搬�
 
   // 造出「生效账号 + 一条切换记录」：选中当前账号 → 按额度拒绝 → 换到另一个账号。
   const before = bundle.rotation.current();
-  expect(before.pick({ model: "m1", tried: new Set() })).toBe("OPENCODE_API_KEY");
-  before.markRejected("OPENCODE_API_KEY", { kind: "quota", message: "exhausted" });
-  expect(before.pick({ model: "m1", tried: new Set(["OPENCODE_API_KEY"]) })).toBe("OPENCODE_API_KEY_2");
-  expect(before.effectiveAccount()?.ref).toBe("OPENCODE_API_KEY_2");
+  expect(before.pick({ model: "m1", tried: new Set() })).toBe("WORK_A");
+  before.markRejected("WORK_A", { kind: "quota", message: "exhausted" });
+  expect(before.pick({ model: "m1", tried: new Set(["WORK_A"]) })).toBe("WORK_B");
+  expect(before.effectiveAccount()?.ref).toBe("WORK_B");
   expect(before.switchNotices()).toHaveLength(1);
 
   // 账号库状态变了（这里体现为顶层当前账号改写）→ 装配层重建引擎。
-  active = "OPENCODE_API_KEY_2";
+  active = "WORK_B";
   const after = bundle.rotation.current();
   expect(after).not.toBe(before); // 前提：确实换了一台引擎，否则这条测试什么都没证明
 
   // 既有行为不许回归：拒绝记录照旧搬迁。
-  expect(after.rejections().has("OPENCODE_API_KEY")).toBe(true);
+  expect(after.rejections().has("WORK_A")).toBe(true);
   // 新增行为：不搬观测状态的话，用户一改设置卡片就会显示「没有生效账号」。
   expect(after.effectiveAccount()).toEqual(before.effectiveAccount());
   expect(after.switchNotices()).toEqual(before.switchNotices());

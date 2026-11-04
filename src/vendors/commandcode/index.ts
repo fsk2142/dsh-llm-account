@@ -493,6 +493,14 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     // 跨厂商换模型的执行入口：别家要换到这家时，由**这家的 adapter** 自己发请求
     // （宿主的路由是固定的，adapter 不能以别家身份发）。
     stream: (options) => adapter.stream(options as Parameters<typeof adapter.stream>[0]),
+  /**
+   * **现读**这个厂商是否启用（2026-11-04 外部审查 U08）。
+   *
+   * `enabled: false` 只撤下宿主路由，注册表里的 `stream` 仍在 —— 不拦的话
+   * 「换模型」路径照样会把请求转给一家用户明确关掉的厂商。
+   * 必须每次现读，不能是创建时的快照。
+   */
+  available: () => document().enabled !== false,
   });
 
   const login = createCommandCodeLogin({
@@ -598,6 +606,40 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   // **两个监听器总是注册**，每次事件现读设置：开关关着就交棒（不重试），与「不注册」
   // 等价。这样运行时改开关/次数/间隔能立即生效 —— 快照做不到（`volatile-update`
   // 不会重跑 apply）。
+  /**
+   * 宿主事件的**弱类型视图**。
+   *
+   * `agent/pre-step` 与 `session/event` 在宿主的 `Events` 声明里没有（或形状不同），
+   * 直接 `ctx.on(...)` 过不了类型检查 —— 与 `applyAutoContinue` 自己用的
+   * `AutoContinueHost` 形状一致：只要求 `on(event: string, listener)`。
+   */
+  const events = ctx as unknown as {
+    on(event: string, listener: (...args: unknown[]) => unknown): unknown;
+  };
+  /** 最近一次见到的 agent（`turn-stopping` 的 payload 不带 agent，只能缓存）。 */
+  let activeAgent: unknown;
+  /** 最近一次的结束原因（`assistant/message` 的 `finish.kind`）。 */
+  let lastFinishKind: string | undefined;
+  events.on("agent/pre-step", (payload: unknown) => {
+    const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+    if (record.agent !== undefined) activeAgent = record.agent;
+  });
+  /**
+   * 记下 `assistant/message` 的 `finish.kind`。
+   *
+   * 宿主真实形状（从 `app.asar` 类型声明核实）：
+   *   FinishReasonMap = { stop | tool-calls | max-tokens | aborted | error }
+   * 所以「被输出上限截断」是 max-tokens，不是 length。
+   */
+  events.on("session/event", (_session: unknown, event: unknown) => {
+    if (typeof event !== "object" || event === null) return;
+    const record = event as Record<string, unknown>;
+    if (record.type !== "assistant/message") return;
+    const data = typeof record.data === "object" && record.data !== null ? (record.data as Record<string, unknown>) : {};
+    const finish = typeof data.finish === "object" && data.finish !== null ? (data.finish as Record<string, unknown>) : {};
+    lastFinishKind = typeof finish.kind === "string" ? finish.kind : undefined;
+  });
+
   applyAutoContinue(
     ctx as unknown as { on(event: string, listener: (...args: unknown[]) => unknown): unknown },
     // 传**读取函数**而不是快照：`loader/volatile-update` 不会重跑 apply，
@@ -621,6 +663,29 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
           ? (document()["autoContinueIntervalMs"] as number)
           : 2000,
     }),
+    //
+    // **第三个实参：截断续写所需的宿主探针**（2026-11-04 外部审查 U14）。
+    //
+    // 不传它时 `applyAutoContinue` 的截断续写分支根本不注册 —— 总开关打开也没用。
+    // 接口形状照抄宿主真实 API（从 `app.asar` 核实）：
+    //   type InboxTarget = "next-turn" | "next-step";
+    //   inbox.append(target, message): void;   // nextStep 是只读数组，不是带 append 的对象
+    {
+      /**
+       * **拿不到 agent 时用空实现兜底，不抛错。**
+       *
+       * 这个 getter 只在该监听器里用，而监听器是 async 且被宿主 `dispatch.serial` 调用 ——
+       * 抛出去会让宿主的 turn 收尾失败（一次续写机会换一次收尾异常，不值得）。
+       * 拿不到就静默跳过：inbox 保持为空，宿主按原逻辑结束本轮。
+       */
+      get inbox() {
+        const agent = activeAgent as
+          | { inbox: { append(target: "next-step", message: unknown): unknown } }
+          | undefined;
+        return agent?.inbox ?? { append: () => undefined };
+      },
+      lastFinishReason: () => lastFinishKind,
+    },
   );
 
   // 统一搜索：网关订阅额度优先，没有则用 API key。

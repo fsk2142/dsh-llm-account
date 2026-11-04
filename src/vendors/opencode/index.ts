@@ -1,4 +1,10 @@
 /**
+  const pinned = opencodeAccountSlot(document).pinned;
+  // 默认名只在「账号表里没有它」时才算幽灵（与 orderOf 同一判据，审查 U01）。
+  return pinned === OPENCODE_DEFAULT_REF && !accountRefsOf(document).includes(OPENCODE_DEFAULT_REF)
+    ? null
+    : pinned;
+/**
  * OpenCode Go 入口：一行装配（设计 §5.1）。
  *
  * **两个名字不同**：profile 行 id 固定为 `opencode-go`（用户现有 patch 的按 id 覆盖必须继续
@@ -523,6 +529,8 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
     // 跨厂商换模型的执行入口：别家要换到这家时，由**这家的 adapter** 自己发请求
     // （宿主的路由是固定的，adapter 不能以别家身份发）。
     stream: (options) => adapter.stream(options as Parameters<typeof adapter.stream>[0]),
+  /** 现读该厂商是否启用（审查 U08）：禁用后不得再被跨网关委托。 */
+  available: () => document().enabled !== false,
   });
 
   /**
@@ -826,7 +834,11 @@ export function orderOf(document: Record<string, unknown>): string[] {
    * 所以：等于内置默认名时，按「没指定」处理。
    */
   const pinnedRaw = opencodeAccountSlot(document).pinned;
-  const pinned = pinnedRaw === OPENCODE_DEFAULT_REF ? null : pinnedRaw;
+  const pinned =
+    pinnedRaw === OPENCODE_DEFAULT_REF && !accountRefsOf(document).includes(OPENCODE_DEFAULT_REF)
+      ? null
+      : pinnedRaw;
+  // 默认名只在「账号表里没有它」时才算幽灵（与 pinnedRefOf 同一判据，审查 U01）。
   const accounts = accountRefsOf(document);
   const candidates =
     pinned !== null
@@ -869,7 +881,7 @@ function pinnedRefOf(document: Record<string, unknown>): string | null {
    * `OPENCODE_API_KEY` 的账号（历史数据或手动命名），那种固定必须照常生效。
    * 判据因此是「默认名 **且** 账号表查无此账号」，不是只看名字。
    */
-  if (pinned === OPENCODE_DEFAULT_REF && accountRefsOf(document).length === 0) {
+  if (pinned === OPENCODE_DEFAULT_REF && !accountRefsOf(document).includes(OPENCODE_DEFAULT_REF)) {
     return null;
   }
   return pinned;

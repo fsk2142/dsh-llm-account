@@ -36,13 +36,32 @@ export interface AutoContinueHost {
 
 /** 可选的宿主探针：用于「截断」这条路径，缺省时行为保守（不续写）。 */
 export interface AutoContinueProbe {
-  /** 往当前轮次的 `inbox.nextStep` 追加一条消息，让本轮不结束。 */
-  inbox: { append(message: unknown): unknown };
   /**
-   * 最近一次的结束原因（`"length"` 表示被输出上限截断）。
+   * 宿主的 **inbox**：往当前步骤追加一条用户消息，让本轮不结束。
+   *
+   * 签名**照抄宿主真实 API**（2026-11-04 从 `app.asar` 的类型声明核实，不是猜的）：
+   *
+   * ```ts
+   * type InboxTarget = 'next-turn' | 'next-step';
+   * interface Inbox {
+   *   readonly nextStep: readonly UserMessage[];
+   *   append(target: InboxTarget, message: UserMessage): void;
+   * }
+   * ```
+   *
+   * 注意两点，都是原来写错的地方：
+   *
+   * 1. `nextStep` 是**只读数组**，不是「带 `append` 方法的对象」—— 写
+   *    `inbox.nextStep.append(msg)` 会在运行时直接抛 `TypeError`；
+   * 2. `append` 的第一个参数是 **target 字面量**。原来只传一个 message，
+   *    运行时会把 message 当成 target，消息根本进不了 inbox。
+   */
+  inbox: { append(target: "next-step", message: unknown): unknown };
+  /**
+   * 最近一次的结束原因（宿主 `finish.kind`：`"max-tokens"` 表示被输出上限截断）。
    *
    * 为什么由调用方提供而不是本模块去读：结束原因在 `assistant/message` 的
-   * `finish.reason` 里，而订阅会话事件属于装配层的事。缺省返回 `undefined`，
+   * `finish` 里，而订阅会话事件属于装配层的事。缺省返回 `undefined`，
    * 于是「截断续写」这条路径**默认不触发** —— 宁可什么都不做，也不要误续写。
    */
   lastFinishReason?: () => string | undefined;
@@ -197,7 +216,8 @@ export function applyAutoContinue(
       if (!shouldContinueOnTruncate(current, reason, attemptsOf(turn))) return undefined;
       bump(turn);
       // 推一条消息 → 宿主随后检查 `inbox.nextStep.length` 时不再为 0，本轮继续。
-      probe.inbox.append({ role: "user", content: CONTINUE_PROMPT });
+    // 必须带 target（宿主 Inbox.append(target, message)）：只传消息的话，运行时会把消息当成 target，本轮照样结束。
+    probe.inbox.append("next-step", { role: "user", content: CONTINUE_PROMPT });
       return undefined;
     });
     if (typeof off === "function") disposers.push(off as () => void);
