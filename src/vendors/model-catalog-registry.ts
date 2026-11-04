@@ -187,6 +187,24 @@ export function noteCatalogModels(
   cached = { at: now, value: kept };
 }
 
+/**
+ * **丢弃候选缓存，让下一次换模型重新读目录**（2026-11-04 外部审查 U11）。
+ *
+ * ## 为什么要这个（与 `resetCatalogSources` 不同）
+ *
+ * 候选缓存有 60 秒 TTL。用户在这段窗口里做了任何「让某个模型不再可用」的操作 ——
+ * 取消勾选、删掉最后一个账号、撤销凭据 —— 缓存里**仍然有那个模型**：
+ * 自动切换把它选为目标，而目标家已经没法服务，用户看到的是「切换没反应」。
+ *
+ * `resetCatalogSources()` 会连**登记表**一起清空，那是测试隔离用的；生产里改设置
+ * 只该作废缓存，不该把三条 provider 的 `stream` 入口也一起摘掉。
+ *
+ * 调用点：三家的 `loader/volatile-update`（用户改设置时触发）。
+ */
+export function invalidateCatalogCandidates(): void {
+  cached = undefined;
+}
+
 /** 复位（测试隔离；生产不会调用）。 */
 export function resetCatalogSources(): void {
   sources.clear();

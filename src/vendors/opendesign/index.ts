@@ -74,7 +74,7 @@ import { DEFAULT_BASE_URL, IDENTITY_ENCODING_HEADER } from "./protocol";
 import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort } from "../usage-store";
-import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
+import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { registerGatewayAccess } from "../gateway-access";
 import { SwitchingController } from "../switching";
 import { createSearchSlotSync } from "../search-release";
@@ -638,6 +638,9 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   });
 
   ctx.on("loader/volatile-update", () => {
+  // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+  // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+  invalidateCatalogCandidates();
     applyRoute();
     void syncSearchSlot();
   });

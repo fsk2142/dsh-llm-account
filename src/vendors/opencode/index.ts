@@ -90,7 +90,7 @@ import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort } from "../usage-store";
-import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
+import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
 import { createSearchSlotSync } from "../search-release";
 import { createOpencodeLogin } from "./login";
@@ -565,6 +565,9 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
   });
 
   ctx.on("loader/volatile-update", () => {
+  // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+  // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+  invalidateCatalogCandidates();
     applyRoute();
     void syncSearchSlot();
   });

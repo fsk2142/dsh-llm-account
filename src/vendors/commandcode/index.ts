@@ -71,7 +71,7 @@ import { probeSearchKey } from "../search-api";
 import { normalizeSearchKeyRefs } from "../../core/switching/search-keys";
 import { readImageBytes } from "../../core/image-projection";
 import { createUsagePort } from "../usage-store";
-import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
+import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
 
 /** 插件名（fiber 名与日志前缀；行 id 由 patch 层给定，两者同名）。 */
@@ -570,6 +570,9 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   });
 
   ctx.on("loader/volatile-update", () => {
+  // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+  // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+  invalidateCatalogCandidates();
     applyRoute();
     /**
      * 设置变了 → 重读持久文档（2026-10-30 修 A01）。
