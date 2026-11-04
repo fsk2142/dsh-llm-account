@@ -404,3 +404,21 @@ it("missing current session hands failures downstream and skips continuation", a
   await ctx.fire("agent/turn-stopping", { turn: 2 });
   expect(appended).toHaveLength(0);
 });
+
+it("turning auto-continue off during retry delay does not schedule another request", async () => {
+  const ctx = fakeCtx();
+  let enabled = true;
+  applyAutoContinue(ctx, () => ({ enabled, maxAttempts: 3, intervalMs: 20 }));
+  const pending = ctx.fire("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } }, async () => "downstream");
+  enabled = false;
+  expect(await pending).toBe("downstream");
+});
+
+it("lowering retry limits during the delay applies before retry is dispatched", async () => {
+  const ctx = fakeCtx();
+  let maxAttempts = 3;
+  applyAutoContinue(ctx, () => ({ enabled: true, maxAttempts, intervalMs: 20 }));
+  const pending = ctx.fire("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } }, async () => "downstream");
+  maxAttempts = 0;
+  expect(await pending).toBe("downstream");
+});

@@ -24,7 +24,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Context } from "@deepseek-ai/cordis";
-import type { AdapterRegistrationHandle, LlmAdapter } from "@deepseek-ai/dsh-llm";
+import { lastAssistantStreamChunk } from "@deepseek-ai/dsh-llm";
+import type { AdapterRegistrationHandle, AssistantStreamRecord, LlmAdapter } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 
 import type { AccountPort, AccountState, AccountView, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
@@ -651,9 +652,12 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     const record = event as Record<string, unknown>;
     if (record.type !== "assistant/message") return;
     const data = typeof record.data === "object" && record.data !== null ? (record.data as Record<string, unknown>) : {};
-    const finish = typeof data.finish === "object" && data.finish !== null ? (data.finish as Record<string, unknown>) : {};
+    // The Host persists the terminal reason inside compact stream records.
+    const finish = Array.isArray(data.stream)
+      ? lastAssistantStreamChunk(data.stream as readonly AssistantStreamRecord[], "finish")?.reason
+      : undefined;
     if (!isRecord(session) || typeof session.id !== "string" || session.id.length === 0) return;
-    if (typeof data.turn !== "number" || !Number.isSafeInteger(data.turn) || typeof finish.kind !== "string") return;
+    if (typeof data.turn !== "number" || !Number.isSafeInteger(data.turn) || typeof finish?.kind !== "string") return;
     finishesBySession.set(session.id, { turn: data.turn, kind: finish.kind });
     if (finishesBySession.size > 128) {
       const oldest = finishesBySession.keys().next().value;
@@ -792,7 +796,7 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     setSwitchSettings: (input) => writeSwitchSettings(settings, COMMAND_CODE_SETTINGS_NS, input),
     modelRules: () => rulesOf(document()),
     setAccountModels: (ref, models) =>
-      writeModelRules(settings, COMMAND_CODE_SETTINGS_NS, assignModelsToAccount(rulesOf(document()), ref, models)),
+      writeModelRules(settings, COMMAND_CODE_SETTINGS_NS, (current) => assignModelsToAccount(rulesOf(current), ref, models)),
   });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。

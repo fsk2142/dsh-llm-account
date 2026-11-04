@@ -67,6 +67,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
   readonly #sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   #status: LoginStatus = { state: "idle" };
   #abort: AbortController | undefined;
+  #starting: Promise<LoginStatus> | undefined;
 
   /**
    * @param deps - 传输、凭据落库与等待注入点。
@@ -84,6 +85,17 @@ class OpencodeLoginFlow implements OpencodeLogin {
   /** 开始（或接续）一次尝试。 */
   async begin(): Promise<LoginStatus> {
     if (this.#status.state === "waiting") return { ...this.#status };
+    if (this.#starting !== undefined) return { ...(await this.#starting) };
+    const starting = this.#startAttempt();
+    this.#starting = starting;
+    try {
+      return { ...(await starting) };
+    } finally {
+      if (this.#starting === starting) this.#starting = undefined;
+    }
+  }
+
+  async #startAttempt(): Promise<LoginStatus> {
     // 上一次尝试的轮询必须停掉，否则它会继续往这个实例的状态面里写。
     this.#abort?.abort();
     const abort = new AbortController();
@@ -94,6 +106,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
     try {
       device = await beginDeviceFlow(this.#deps);
     } catch (error: unknown) {
+      if (this.#abort !== abort || abort.signal.aborted) return { state: "failed", reason: "cancelled" };
       // 端点回了 HTTP 4xx/5xx（服务端拒绝、路由变了）**不是**网络错误：两种原因对用户
       // 的含义完全不同（该等/该查网络 vs 该找厂商），界面上必须分开说。
       const message = error instanceof Error ? error.message : String(error);
@@ -101,6 +114,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
       this.#status = { state: "failed", reason: httpRejected ? "unavailable" : "network" };
       return { ...this.#status };
     }
+    if (this.#abort !== abort) return { state: "failed", reason: "cancelled" };
     if (abort.signal.aborted) {
       this.#status = { state: "failed", reason: "cancelled" };
       return { ...this.#status };
@@ -141,6 +155,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
     // 已经因取消/超时/失败落定的，保持原样（不把 `timeout` 改写成 `cancelled`）。
     if (this.#status.state === "failed") return;
     this.#status = { state: "failed", reason: "cancelled" };
+    this.#starting = undefined;
     this.#abort?.abort();
   }
 
@@ -153,7 +168,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
     const now = this.#deps.now ?? (() => Date.now());
     while (!signal.aborted) {
       if (now() >= device.expiresAt) {
-        this.#settle({ state: "failed", reason: "timeout" });
+        this.#settle({ state: "failed", reason: "timeout" }, signal);
         return;
       }
       try {
@@ -166,7 +181,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
       try {
         result = await pollDeviceToken(this.#deps, device);
       } catch {
-        this.#settle({ state: "failed", reason: "network" });
+        this.#settle({ state: "failed", reason: "network" }, signal);
         return;
       }
       if (signal.aborted) return;
@@ -176,15 +191,15 @@ class OpencodeLoginFlow implements OpencodeLogin {
         continue;
       }
       if (result.status === "denied") {
-        this.#settle({ state: "failed", reason: "denied" });
+        this.#settle({ state: "failed", reason: "denied" }, signal);
         return;
       }
       if (result.status === "expired") {
-        this.#settle({ state: "failed", reason: "timeout" });
+        this.#settle({ state: "failed", reason: "timeout" }, signal);
         return;
       }
       if (result.status === "error") {
-        this.#settle({ state: "failed", reason: "unavailable" });
+        this.#settle({ state: "failed", reason: "unavailable" }, signal);
         return;
       }
 
@@ -196,7 +211,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
       }
       if (signal.aborted) return;
       if (org === undefined) {
-        this.#settle({ state: "failed", reason: "unavailable" });
+        this.#settle({ state: "failed", reason: "unavailable" }, signal);
         return;
       }
       const name = org.name ?? org.id;
@@ -213,11 +228,11 @@ class OpencodeLoginFlow implements OpencodeLogin {
       try {
         await this.#deps.storeKey(accountRef(OPENCODE_LOGIN_VENDOR, name), blob, name);
       } catch {
-        this.#settle({ state: "failed", reason: "unavailable" });
+        this.#settle({ state: "failed", reason: "unavailable" }, signal);
         return;
       }
       if (signal.aborted) return;
-      this.#settle({ state: "success" });
+      this.#settle({ state: "success" }, signal);
       return;
     }
   }
@@ -226,8 +241,8 @@ class OpencodeLoginFlow implements OpencodeLogin {
    * 把等待中的尝试结算成终态；不是等待中就什么都不做（迟到的轮询结果不能覆盖取消）。
    * @param status - 终态。
    */
-  #settle(status: LoginStatus): void {
-    if (this.#status.state !== "waiting") return;
+  #settle(status: LoginStatus, signal: AbortSignal): void {
+    if (signal.aborted || this.#abort?.signal !== signal || this.#status.state !== "waiting") return;
     this.#status = status;
   }
 }

@@ -200,3 +200,53 @@ it("switchNow：手动顺序下强制切到下一个可用账号（原因 manual
   expect(deferred.selects).toEqual(["b"]);
   expect(deferred.controller.snapshot().pending).toBeUndefined();
 });
+
+it("关闭自动切换会取消已排队的回合末切换", async () => {
+  let clock = 1_000;
+  const document: Record<string, unknown> = { autoSwitch: true, switchStrategy: "order", switchAtTurnEnd: true };
+  const { controller, engine, selects } = harness({ document, now: () => clock });
+  await controller.beforeRequest({ sessionId: "s1" });
+  engine.markRejected("a", { kind: "quota", message: "exhausted" });
+  await controller.beforeRequest({ sessionId: "s1" });
+  expect(controller.snapshot().pending?.target).toBe("b");
+  document.autoSwitch = false;
+  clock = 2_000;
+  controller.noteSessionEvent("s1", { type: "turn/end" });
+  await controller.beforeRequest({ sessionId: "s1" });
+  expect(selects).toEqual([]);
+  expect(controller.snapshot().pending).toBeUndefined();
+  // 手动按钮仍应有效。
+  await controller.switchNow();
+  expect(selects).toEqual(["b"]);
+});
+
+it("读取额度期间关闭自动切换，读取完成后不会应用旧决定", async () => {
+  const document: Record<string, unknown> = { autoSwitch: true, switchStrategy: "best-quota", switchAtTurnEnd: false };
+  let release!: (value: QuotaSnapshot) => void;
+  let reading!: () => void;
+  const started = new Promise<void>((resolve) => { reading = resolve; });
+  const deferred = new Promise<QuotaSnapshot>((resolve) => { release = resolve; });
+  const selects: string[] = [];
+  const engine = new RotationEngine({ order: ["a", "b"], pinned: "a", rules: [] });
+  const controller = new SwitchingController({
+    document: () => document,
+    pinnedRef: () => "a",
+    accounts: {
+      list: async () => ["a", "b"].map((ref) => ({ ref, label: ref, configured: true, active: ref === "a" })),
+      select: async (ref) => { selects.push(ref!); },
+    },
+    rotation: { current: () => engine, clearCredentialRejection: () => {} },
+    quota: { snapshot: async (ref) => {
+      if (ref === "a") { reading(); return deferred; }
+      return quota(10);
+    } },
+    now: () => 1_000,
+  });
+  const pending = controller.beforeRequest({ sessionId: "s1" });
+  await started;
+  document.autoSwitch = false;
+  release(quota(90));
+  await pending;
+  expect(selects).toEqual([]);
+  expect(controller.snapshot().pending).toBeUndefined();
+});

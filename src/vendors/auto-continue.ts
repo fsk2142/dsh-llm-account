@@ -244,8 +244,8 @@ export function applyAutoContinue(
        * 一整段间隔，还可能返回一个与当前信号矛盾的 `retry`。
        */
       await delay(current.intervalMs, signal);
-      if (signal?.aborted === true) {
-        // 用户在我们等待期间取消了：不重试，交棒给下游（它会看到同一个已取消的信号）。
+      // A setting may change while the timer is pending; recheck before dispatch.
+      if (signal?.aborted === true || !shouldRetryFailure(settings(), code, attempts)) {
         return await handOff();
       }
       return { kind: "retry" };

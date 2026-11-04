@@ -450,21 +450,23 @@ export async function writeSwitchSettings(settings: SettingsPort, ns: string, in
  * @param ns - 目标命名空间。
  * @param rules - 完整规则数组（同一模型可属于多个账号）。
  */
-export async function writeModelRules(settings: SettingsPort, ns: string, rules: readonly ModelRule[]): Promise<void> {
+export async function writeModelRules(settings: SettingsPort, ns: string, rules: readonly ModelRule[] | ((current: Record<string, unknown>) => readonly ModelRule[])): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
     const snapshot = await settings.describe(ns);
+    // Reapply the account intent to the fresh revision after conflicts.
+    const nextRules = typeof rules === "function" ? rules(snapshot.value) : rules;
     try {
       await settings.mutate(
         ns,
         [
-          { op: "set", path: ["modelAccountRules"], value: rules.map((rule) => ({ ...rule, models: [...rule.models] })) },
+          { op: "set", path: ["modelAccountRules"], value: nextRules.map((rule) => ({ ...rule, models: [...rule.models] })) },
           // 模型可见性由账户分配决定：分配了才出现在模型选择器里。
-          { op: "set", path: ["visibleModels"], value: [...new Set(rules.flatMap((rule) => rule.models))] },
+          { op: "set", path: ["visibleModels"], value: [...new Set(nextRules.flatMap((rule) => rule.models))] },
           {
             op: "set",
             path: ["modelVisibility"],
             value: Object.fromEntries(
-              [...new Set(rules.flatMap((rule) => rule.models))].map((model) => [model, true]),
+              [...new Set(nextRules.flatMap((rule) => rule.models))].map((model) => [model, true]),
             ),
           },
         ],

@@ -690,7 +690,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     setSwitchSettings: (input) => writeSwitchSettings(settings, OPENDESIGN_SETTINGS_NS, input),
     modelRules: () => modelRulesOf(document()),
     setAccountModels: (ref, models) =>
-      writeModelRules(settings, OPENDESIGN_SETTINGS_NS, assignModelsToAccount(modelRulesOf(document()), ref, models)),
+      writeModelRules(settings, OPENDESIGN_SETTINGS_NS, (current) => assignModelsToAccount(modelRulesOf(current), ref, models)),
   });
 
   // 关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（与另两行同一处置）。

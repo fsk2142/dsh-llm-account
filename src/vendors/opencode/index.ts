@@ -617,7 +617,7 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
     setSwitchSettings: (input) => writeSwitchSettings(settings, OPENCODE_SETTINGS_NS, input),
     modelRules: () => modelRulesOf(document()),
     setAccountModels: (ref, models) =>
-      writeModelRules(settings, OPENCODE_SETTINGS_NS, assignModelsToAccount(modelRulesOf(document()), ref, models)),
+      writeModelRules(settings, OPENCODE_SETTINGS_NS, (current) => assignModelsToAccount(modelRulesOf(current), ref, models)),
     // 实验性设备码网页登录。
     login,
   });

@@ -90,3 +90,54 @@ it("cancel works during a retry starting from a failed login", async () => {
   expect(await retry).toMatchObject({ state: "failed", reason: "cancelled" });
   expect(storeKey).not.toHaveBeenCalled();
 });
+import { LlmError } from "@deepseek-ai/dsh-llm";
+
+it("a new request after replacing a key cannot join the old credential flight", async () => {
+  let finish!: (response: Response) => void;
+  const f = fixture((async () => await new Promise<Response>(resolve => { finish = resolve; })) as typeof fetch);
+  const old = f.adapter.resolveAccountAuth("ACCOUNT_A");
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  await f.setStored("new-user-key");
+  const next = f.adapter.resolveAccountAuth("ACCOUNT_A");
+  finish(json({ access_token: "old-account-access", refresh_token: "old-account-refresh", expires_in: 3600 }));
+  expect((await next)?.key).toBe("new-user-key");
+  await old;
+  expect(f.stored()).toBe("new-user-key");
+});
+
+it("temporary auth failure tries B and preserves B's context error for the host", async () => {
+  const reads: string[] = [];
+  const context = new LlmError("B reached", "CONTEXT_WINDOW_EXCEEDED");
+  const adapter = createOpencodeAdapter({
+    config: () => ({}), rotation: new RotationEngine({ order: ["A", "B"], pinned: "A", rules: [] }),
+    accounts: { list: async () => [] } as never, quota: { snapshot: async () => ({ windows: [], failures: [] }) },
+    resolveStored: async (ref) => { reads.push(ref); if (ref === "B") throw context; return expired(); },
+    fetchImpl: (async () => json({}, 500)) as typeof fetch, maxTried: () => 3,
+  });
+  await expect(adapter.stream({ provider: "dsh-opencode-go", model: "m", messages: [] })[Symbol.asyncIterator]().next()).rejects.toBe(context);
+  expect(reads).toEqual(["A", "B"]);
+});
+
+it("concurrent device-code begins share startup instead of canceling the newest attempt", async () => {
+  let finish!: (response: Response) => void;
+  const fetchImpl = vi.fn(async () => await new Promise<Response>(resolve => { finish = resolve; }));
+  const login = createOpencodeLogin({ fetchImpl: fetchImpl as typeof fetch, storeKey: vi.fn(), sleep: async () => new Promise(() => {}) });
+  const first = login.begin(), second = login.begin();
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
+  finish(json({ device_code: "device", user_code: "ABCD", verification_uri: "https://example.test/activate" }));
+  expect(await first).toEqual(await second);
+  expect((await login.status()).state).toBe("waiting");
+  await login.cancel();
+});
+
+it("a canceled startup cannot overwrite a later attempt when its device response arrives", async () => {
+  const pending: ((response: Response) => void)[] = [];
+  const login = createOpencodeLogin({ fetchImpl: (async () => await new Promise<Response>(resolve => pending.push(resolve))) as typeof fetch, storeKey: vi.fn(), sleep: async () => new Promise(() => {}) });
+  const old = login.begin(); await login.cancel(); const fresh = login.begin();
+  pending[1]!(json({ device_code: "new", user_code: "NEW", verification_uri: "https://example.test/new" }));
+  expect((await fresh).state).toBe("waiting");
+  pending[0]!(json({ device_code: "old", user_code: "OLD", verification_uri: "https://example.test/old" }));
+  await old;
+  expect(await login.status()).toMatchObject({ state: "waiting", userCode: "NEW" });
+  await login.cancel();
+});

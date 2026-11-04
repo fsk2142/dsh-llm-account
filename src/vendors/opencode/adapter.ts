@@ -455,7 +455,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         // （会发额外请求）。先抛确定性的失败，别为一次注定失败的请求去打网络。
         if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
           const swapped = await this.#fallbackModel(options, lastFailure.rejection.kind);
-          if (swapped !== undefined && swapped.model !== options.model) {
+          if (swapped !== undefined && (swapped.provider !== options.provider || swapped.model !== options.model)) {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
             if (swapped.provider !== options.provider) {
@@ -487,7 +487,22 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       // 本轮第一个被选中的账号 = 这次的「首选」；后面成功的都是备用账号（晋升判定用）。
       if (firstPick === undefined) firstPick = ref;
 
-        const auth = await this.resolveAccountAuth(ref, options.signal);
+      let auth: { key: string; headers?: Record<string, string> } | undefined;
+      try {
+        auth = await this.resolveAccountAuth(ref, options.signal);
+      } catch (error) {
+        if (options.signal?.aborted) throw this.#abortError(options.signal);
+        // Only temporary authentication failures may advance to a different account.
+        if (!(error instanceof LlmError) || !["SERVER", "TRANSPORT", "RATE_LIMIT", LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT].includes(error.code)) throw error;
+        const rejection: Rejection = {
+          kind: error.code === "RATE_LIMIT" ? "rate-limit" : error.code === "SERVER" ? "server" : "network",
+          message: error.message,
+        };
+        this.#deps.rotation.markRejected(ref, rejection);
+        lastFailure = { rejection, thrown: error };
+        if (tried.size >= this.#maxTried()) throw error;
+        continue;
+      }
       if (auth === undefined) {
         // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
         // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
@@ -724,7 +739,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param ref - 账号 ref。
    * @returns 请求凭据；没有可用密钥或刷新失败时为 `undefined`。
    */
-  async #resolveAuth(ref: string): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
+  async #resolveAuth(ref: string, epochAtStart: number): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
     /**
      * **在首次异步读取之前**抓代际（2026-11-01 修 S01 第三版）。
      *
@@ -742,8 +757,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
      *
      * 放在最前面之后，T0 那一刻的代际与 T0 那一刻读到的 blob 严格对应。
      */
-    const epochAtStart = this.#credentialGuard.epochOf(ref);
     const stored = await this.#deps.resolveStored?.(ref);
+    if (this.#credentialGuard.epochOf(ref) !== epochAtStart) return this.resolveAccountAuth(ref);
     const environment = this.#deps.resolveEnvironment?.(ref);
     const raw = pickApiKey({
       ...(stored === undefined ? {} : { stored }),
@@ -819,7 +834,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   async resolveAccountAuth(ref: string, signal?: AbortSignal): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
     if (signal?.aborted) throw this.#abortError(signal);
     const timeoutMs = resolveConfig(this.#deps.config()).requestTimeoutMs;
-    const pending = this.#singleFlight(ref, () => this.#resolveAuth(ref));
+    const epoch = this.#credentialGuard.epochOf(ref);
+    const pending = this.#singleFlight(`${ref}:${epoch}`, () => this.#resolveAuth(ref, epoch));
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
     try {

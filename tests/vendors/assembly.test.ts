@@ -18,6 +18,7 @@
  * （计划 Review Focus 前的说明）。
  */
 import { Context } from "@deepseek-ai/cordis";
+import { AssistantStreamAccumulator } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -1476,6 +1477,14 @@ it("legacy continuation repair leaves user messages and other producers untouche
   for (let index = 0; index < originals.length; index += 1) expect(messages[index]).toBe(originals[index]);
 });
 
+// Exact durable envelope used by the installed Host: assistant/message.data
+// carries compact stream records, not a data.finish property.
+function settledAssistantStream(kind: "stop" | "max-tokens") {
+  const accumulator = new AssistantStreamAccumulator();
+  accumulator.push({ time: 1, chunk: { type: "finish", reason: { kind } } });
+  return accumulator.snapshot();
+}
+
 it("continuation uses only the current session's finish from the current turn", async () => {
   const callsA: unknown[] = [], callsB: unknown[] = [];
   const agentA = { session: { id: "A" }, inbox: { append: (_target: unknown, message: unknown) => callsA.push(message) } };
@@ -1484,15 +1493,15 @@ it("continuation uses only the current session's finish from the current turn", 
   const settings = fakeSettings([{ ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE, autoContinue: true, autoContinueMaxAttempts: 5 }, revision: 1 }]);
   const host = fakeHost({ agents: { currentInitiator: () => current }, settings: settings.service });
   commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, autoContinue: true, autoContinueMaxAttempts: 5 }));
-  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "max-tokens" } } });
-  host.emit("session/event", agentB.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "stop" } } });
+  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 1, stream: settledAssistantStream("max-tokens") } });
+  host.emit("session/event", agentB.session, { type: "assistant/message", data: { turn: 1, stream: settledAssistantStream("stop") } });
   await host.fireWaterfall("agent/turn-stopping", { turn: 1 });
   expect(callsA).toHaveLength(1);
   current = agentB;
   await host.fireWaterfall("agent/turn-stopping", { turn: 1 });
   expect(callsB).toHaveLength(0);
-  host.emit("session/event", agentB.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "max-tokens" } } });
-  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "stop" } } });
+  host.emit("session/event", agentB.session, { type: "assistant/message", data: { turn: 1, stream: settledAssistantStream("max-tokens") } });
+  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 1, stream: settledAssistantStream("stop") } });
   current = agentA;
   await host.fireWaterfall("agent/turn-stopping", { turn: 1 });
   expect(callsA, "another session's truncation must not continue this session").toHaveLength(1);
@@ -1504,7 +1513,7 @@ it("continuation uses only the current session's finish from the current turn", 
   expect(callsA, "an older turn's truncation cannot continue a newer turn").toHaveLength(1);
   current = undefined;
   host.emit("agent/pre-step", { agent: agentA, messages: [] });
-  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 2, finish: { kind: "max-tokens" } } });
+  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 2, stream: settledAssistantStream("max-tokens") } });
   await host.fireWaterfall("agent/turn-stopping", { turn: 2 });
   expect(callsA, "no current initiator must not use a previous agent").toHaveLength(1);
 });

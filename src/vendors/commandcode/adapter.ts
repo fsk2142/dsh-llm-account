@@ -429,7 +429,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
         // （会发额外请求）。先抛确定性的失败，别为一次注定失败的请求去打网络。
         if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
           const swapped = await this.#fallbackModel(options, lastFailure.rejection.kind);
-          if (swapped !== undefined && swapped.model !== options.model) {
+          if (swapped !== undefined && (swapped.provider !== options.provider || swapped.model !== options.model)) {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
             if (swapped.provider !== options.provider) {

@@ -131,6 +131,11 @@ export class SwitchingController {
     this.#busy = true;
     const now = this.#now();
     try {
+      // A queued automatic decision must not outlive the user's off switch.
+      if (this.#deps.document().autoSwitch === false) {
+        this.#pending = undefined;
+        return;
+      }
       if (this.#pending !== undefined) {
         if (this.#atTurnBoundary(input)) {
           const pending = this.#pending;
@@ -301,6 +306,8 @@ export class SwitchingController {
     if (settings.strategy === "best-quota" && currentSnapshot === undefined) {
       currentSnapshot = await this.#readQuota(current, now);
     }
+    // Quota reads can await user settings changes; recheck before queuing or applying.
+    if (!force && this.#deps.document().autoSwitch === false) return undefined;
     let decision: SwitchDecision | undefined;
     if (force && settings.strategy !== "best-quota" && !currentExhausted) {
       // 「立即切换」在顺序/定时模式下就是：切到当前之后的第一个可用账号。
