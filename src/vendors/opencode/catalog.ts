@@ -279,8 +279,11 @@ export interface OpencodeCatalogRecord {
 
 /** 目录来源：`list()` 交回合并后的记录（带 TTL 缓存）。 */
 export interface OpencodeCatalog {
-  /** @param signal - 调用方取消信号（`listModels`/`resolveModel` 传自己的信号）。 */
-  list(signal?: AbortSignal): Promise<OpencodeCatalogRecord[]>;
+  /**
+   * @param signal - 调用方取消信号（`listModels`/`resolveModel` 传自己的信号）。
+   * @param fresh - 绕过 TTL 缓存重读（刷新按钮，审查 U10）。
+   */
+  list(signal?: AbortSignal, fresh?: boolean): Promise<OpencodeCatalogRecord[]>;
 }
 
 /** 读一段有界的 JSON 正文（旧插件用 `fetchJsonResponse` 的字节上限做同一件事）。 */
@@ -407,9 +410,23 @@ export function createOpencodeCatalog(input: {
   };
 
   return {
-    async list(signal?: AbortSignal): Promise<OpencodeCatalogRecord[]> {
+    /**
+     * 读目录（带 TTL 缓存）。
+     *
+     * @param signal - 调用方取消信号。
+     * @param fresh - **绕过缓存**（2026-11-04 外部审查 U10）。
+     *
+     *   `CatalogModelsPort.catalogModels(fresh)` 的契约就是「刷新按钮必须真的重读」，
+     *   而这里原来只收 `signal`、无条件走 TTL —— 用户在 TTL 内点刷新，界面就是
+     *   「点了没反应」，服务端已经变了的列表永远看不到。
+     *
+     *   与 `inFlight` 的配合：`fresh` 时不复用进行中的请求，否则「刷新」会拿到
+     *   上一次那份还没落地的旧结果。
+     */
+    async list(signal?: AbortSignal, fresh = false): Promise<OpencodeCatalogRecord[]> {
       const stamp = now();
-      if (cached !== undefined && stamp < expiresAt) return cached;
+      if (!fresh && cached !== undefined && stamp < expiresAt) return cached;
+      if (fresh) inFlight = undefined;
       inFlight ??= load(signal)
         .then((records) => {
           cached = records;

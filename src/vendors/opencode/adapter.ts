@@ -345,8 +345,16 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * 全部目录条目（不受可见性过滤），供设置页勾选。
    * @returns 目录里的模型 id 与名称。
    */
-  async catalogModels(): Promise<CatalogModel[]> {
-    const records = await this.#catalog(resolveConfig(this.#deps.config()), undefined);
+  /**
+   * 全部目录条目（**不受可见性过滤**）。
+   *
+   * @param fresh - 绕过 TTL 缓存重读（2026-11-04 外部审查 U10）。
+   *
+   *   `CatalogModelsPort` 的契约写明「刷新按钮必须用它」，本方法原来直接忽略了这个参数：
+   *   TTL 内点刷新只会拿到缓存，服务端已变的列表永远看不到 —— 界面上就是「点了没反应」。
+   */
+  async catalogModels(fresh = false): Promise<CatalogModel[]> {
+    const records = await this.#catalog(resolveConfig(this.#deps.config()), undefined, fresh);
     return records.map((record) => ({
       id: record.entry.id,
       ...(record.entry.name === "" ? {} : { name: record.entry.name }),
@@ -856,7 +864,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   }
 
   /** 拿（或建）该基地址的目录缓存。 */
-  #catalog(config: ResolvedConfig, signal?: AbortSignal): Promise<OpencodeCatalogRecord[]> {
+  #catalog(config: ResolvedConfig, signal?: AbortSignal, fresh = false): Promise<OpencodeCatalogRecord[]> {
     let catalog = this.#catalogs.get(config.apiBase);
     if (catalog === undefined) {
       catalog = createOpencodeCatalog({
@@ -866,7 +874,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       });
       this.#catalogs.set(config.apiBase, catalog);
     }
-    return catalog.list(signal);
+    return catalog.list(signal, fresh);
   }
 
 

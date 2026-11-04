@@ -143,7 +143,18 @@ export function resolveProtocol(input: {
   forced?: CommandCodeProtocol;
   supportedEndpoints?: readonly string[];
 }): CommandCodeProtocol {
-  if (input.forced === "cli") return "cli";
+  /**
+   * **强制值优先，三种协议都要认**（2026-11-04 外部审查 U12）。
+   *
+   * 原来只处理 `forced === "cli"`，然后直接落到「模型要不要 messages 端点」与
+   * 「默认 openai」两个分支 —— 于是用户在设置里选了 `messages`，
+   * 非 Claude 模型仍然发 `/chat/completions`：**设置项形同虚设**。
+   *
+   * 这里把 `messages` / `openai` 一并交给强制分支，只有 `forced` 缺省时才走推断。
+   */
+  if (input.forced === "cli" || input.forced === "messages" || input.forced === "openai") {
+    return input.forced;
+  }
   if (requiresMessagesEndpoint(input.model, input.supportedEndpoints)) return "messages";
   // 未知账号默认 Chat Completions：只有 403 upgrade_required 才回退到 CLI 传输
   // （Go 套餐账单分层那条捷径需要额度数据，属 Task 10）。
