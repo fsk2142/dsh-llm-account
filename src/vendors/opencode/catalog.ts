@@ -204,16 +204,35 @@ export function parseModelMetadata(payload: unknown): Map<string, ModelMetadata>
   return result;
 }
 
-/** `reasoning_options` 里 `type: "effort"` 的取值（旧插件第 6131-6138 行）。 */
+/**
+ * `reasoning_options` 里 `type: "effort"` 的取值（旧插件第 6131-6138 行）。
+ *
+ * **两种形状都要认**（2026-11-04 实测）：
+ *
+ * - **对象**（models.dev 现在的真实形状）：
+ *   `{"type":"effort","values":["low","high","max"]}` —— 取自 live `api.json`；
+ * - **数组**（旧插件与部分历史快照）：
+ *   `[{"type":"effort","values":[…]}, …]`。
+ *
+ * 原来只认数组，于是线上元数据的档位**永远读不出来**（`effortsOf` 恒返回空数组）。
+ * 现在先按对象读，不成再按数组遍历。
+ * @param value - `reasoning_options` 原值。
+ * @returns 档位数组（可能为空）。
+ */
 function effortsOf(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return [];
-  const efforts: string[] = [];
-  for (const option of value) {
-    if (!isRecord(option) || option.type !== "effort" || !Array.isArray(option.values)) continue;
+  const collect = (option: unknown): string[] => {
+    if (!isRecord(option) || option.type !== "effort" || !Array.isArray(option.values)) return [];
+    const efforts: string[] = [];
     for (const level of option.values) {
       if (typeof level === "string" && level !== "" && level !== "none") efforts.push(level);
     }
-  }
+    return efforts;
+  };
+  // 单个对象形状（线上实际形态）。
+  if (isRecord(value)) return collect(value);
+  if (!Array.isArray(value)) return [];
+  const efforts: string[] = [];
+  for (const option of value) efforts.push(...collect(option));
   return efforts;
 }
 

@@ -38,6 +38,9 @@ import type {
   Tool as PiTool,
   ThinkingLevel,
 } from "opencode-go-pi-ai";
+
+/** 对外复用：适配器把宿主的 `options.reasoningEffort` 交给协议层时要这个类型。 */
+export type { ThinkingLevel };
 import { createProvider, isContextOverflow, normalizeContext } from "opencode-go-pi-ai";
 import * as anthropicMessages from "opencode-go-pi-ai/api/anthropic-messages";
 import * as openaiCompletions from "opencode-go-pi-ai/api/openai-completions";
@@ -370,6 +373,37 @@ export function buildPiModel(facts: OpencodeModelFacts, baseUrl: string): PiMode
     ...(facts.efforts === undefined
       ? {}
       : { thinkingLevelMap: Object.fromEntries(facts.efforts.map((level) => [level, level])) }),
+    /**
+     * **按协议把「档位」接到该协议真正读取的地方**（2026-11-04 外部审查 U06；用户要求两条线都支持）。
+     *
+     * pi-ai 的两个协议各有自己的开关，缺一个档位就发不出去：
+     *
+     * | 协议 | 请求里的落点 | 需要的开关 |
+     * | --- | --- | --- |
+     * | `anthropic-messages` | `output_config.effort` | `compat.forceAdaptiveThinking: true` |
+     * | `openai-completions` | `reasoning_effort` | `compat.supportsReasoningEffort`（默认 true）|
+     * | `openai-responses` | `reasoning.effort` | 同上 |
+     *
+     * **anthropic 那条尤其隐蔽**：不设 `forceAdaptiveThinking` 时它走
+     * budget-based 分支（`thinkingBudgetTokens`），档位被**完全忽略** ——
+     * 无论选 `low` 还是 `max`，出站正文里既没有 `reasoning_effort`
+     * 也没有 `output_config`。这正是审查 U06 的现象。
+     *
+     * openai 那条路线默认 `supportsReasoningEffort: true`，但会被
+     * `isGrok` / `isZai` / `isMoonshot` / `isTogether` 等判断关掉；显式置 true
+     * 才是「我们声明了这个模型有可选档位」的一致表达。
+     *
+     * 只在**该模型声明了档位**时才设：没有档位就没有 effort 可表达，
+     * 给不支持的模型塞字段只会被厂商拒。
+     */
+    ...(facts.efforts === undefined
+      ? {}
+      : {
+          compat: {
+            forceAdaptiveThinking: true,
+            supportsReasoningEffort: true,
+          },
+        }),
     input: [...facts.inputModalities],
     // pi-ai 的 `Model` 要求两个容量字段是数字：目录没公布时用网关量级的兜底值，
     // 只影响 SDK 的溢出判定与钳制，不改目录展示（展示里缺字段就是不写）。

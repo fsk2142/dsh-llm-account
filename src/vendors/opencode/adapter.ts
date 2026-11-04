@@ -51,6 +51,7 @@ import {
   streamOpencode,
   toPiContext,
 } from "./protocol";
+import type { ThinkingLevel } from "./protocol";
 import type { GatewayEvidence, GatewayRecorder } from "./protocol";
 
 /**
@@ -657,6 +658,16 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
          * pi-ai，由它在最后一步覆盖 —— 两者键不冲突。
          */
         headers: { ...(auth.headers ?? {}), ...opencodeSessionHeaders(options.sessionId) },
+        /**
+         * **把用户选的思考强度真正交给协议层**（2026-11-04 外部审查 U06）。
+         *
+         * 1.9.0 只在 `protocol.ts` 里做了透传，**adapter 这一层没接** —— 于是协议层
+         * 永远收不到值，三档出站全部缺失。审查的批评是对的：「不要只测底层协议函数」，
+         * 而当时的测试正是只测了协议函数。回归测试现在从 `adapter.stream` 进入。
+         */
+        ...(options.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: options.reasoningEffort as ThinkingLevel }),
         fetchImpl: gateway.fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
