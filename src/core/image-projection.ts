@@ -21,11 +21,33 @@
  *
  * @module dsh-llm-account/src/core/image-projection
  */
+import { fileHandleText, LlmError } from "@deepseek-ai/dsh-llm";
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Preserve the host's file handle contract; never invent a filesystem path or PDF text. */
+export function fileBlockText(block: Extract<ContentBlock, { type: "file" }>): string {
+  const ref: unknown = block.attachment;
+  if (!isRecord(ref) || typeof ref.attachmentId !== "string" || ref.attachmentId.trim() === "" ||
+      typeof ref.name !== "string" || ref.name.trim() === "" || typeof ref.bytes !== "number" ||
+      !Number.isSafeInteger(ref.bytes) || ref.bytes < 0) {
+    throw new LlmError("Cannot project a file block with an invalid attachment reference", "UNSUPPORTED_CONTENT");
+  }
+  return fileHandleText(block.attachment, undefined);
+}
+
+/** Reject unsupported image roles before attachment I/O instead of silently dropping data. */
+export function assertProjectableContent(messages: readonly { role?: string; content: readonly ContentBlock[] }[]): void {
+  for (const message of messages) for (const block of message.content) {
+    if (block.type === "file") fileBlockText(block);
+    if (block.type === "image" && message.role !== undefined && message.role !== "user" && message.role !== "tool") {
+      throw new LlmError(`Image blocks in ${message.role} messages are not supported by this route`, "UNSUPPORTED_CONTENT");
+    }
+  }
 }
 
 /** 宿主给的持久化图片引用（`ImageBlock.attachment`）。 */
@@ -96,8 +118,9 @@ export async function readImageBytes(
  * @returns id → 引用。
  */
 export function wantedImagesOf(
-  messages: readonly { content: readonly ContentBlock[] }[],
+  messages: readonly { role?: string; content: readonly ContentBlock[] }[],
 ): Map<string, ImageRefLike> {
+  assertProjectableContent(messages);
   const wanted = new Map<string, ImageRefLike>();
   for (const message of messages) {
     for (const block of message.content) {

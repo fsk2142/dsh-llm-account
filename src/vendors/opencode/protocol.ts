@@ -29,6 +29,8 @@ import {
 import { opencodeSessionHeaders } from "./session";
 import {
   base64Of,
+  fileBlockText,
+  assertProjectableContent,
   missingImagePlaceholder,
   type ImageRefLike,
   type RequestImageBytes,
@@ -425,19 +427,19 @@ function systemTextOf(options: GenerateOptions): string {
   if (options.system !== undefined && options.system !== "") parts.push(options.system);
   for (const message of options.messages) {
     if (message.role !== "system" && message.role !== "developer") continue;
-    const text = message.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
+    const text = textOf(message.content);
     if (text !== "") parts.push(text);
   }
   return parts.join("\n\n");
 }
 
-/** 把一段内容压成纯文本（文件/图片块属于第 3 期，这里只取文本块）。 */
+/** System/developer text includes explicit file handles; images are checked at entry. */
 function textOf(content: readonly ContentBlock[]): string {
   const parts: string[] = [];
-  for (const block of content) if (block.type === "text") parts.push(block.text);
+  for (const block of content) {
+    if (block.type === "text") parts.push(block.text);
+    else if (block.type === "file") parts.push(fileBlockText(block));
+  }
   return parts.join("");
 }
 
@@ -485,14 +487,18 @@ function toPiTool(tool: ToolSchema): PiTool {
  * @param images - 已取到字节的图片（按 attachment id）。
  * @returns pi-ai 的内容块数组。
  */
-function piUserContent(
+function piInputContent(
   content: readonly ContentBlock[],
   images: ReadonlyMap<string, RequestImageBytes> | undefined,
-): Extract<PiMessage, { role: "user" }>["content"] {
-  const blocks: Extract<PiMessage, { role: "user" }>["content"] = [];
+): Extract<PiMessage, { role: "toolResult" }>["content"] {
+  const blocks: Extract<PiMessage, { role: "toolResult" }>["content"] = [];
   for (const block of content) {
     if (block.type === "text") {
       if (block.text !== "") blocks.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type === "file") {
+      blocks.push({ type: "text", text: fileBlockText(block) });
       continue;
     }
     if (block.type !== "image") continue;
@@ -529,16 +535,18 @@ export function toPiContext(
   options: GenerateOptions,
   images?: ReadonlyMap<string, RequestImageBytes>,
 ): PiContext {
+  assertProjectableContent(options.messages);
   const messages: PiMessage[] = [];
   const toolNames = new Map<string, string>();
   for (const message of options.messages) {
     if (message.role === "system" || message.role === "developer") continue;
     if (message.role === "tool") {
+      const content = piInputContent(message.content, images);
       messages.push({
         role: "toolResult",
         toolCallId: message.toolCallId,
         toolName: toolNames.get(message.toolCallId) ?? "unknown",
-        content: [{ type: "text", text: textOf(message.content) || "(no output)" }],
+        content: content.length > 0 ? content : [{ type: "text", text: "(no output)" }],
         isError: message.isError === true,
         timestamp: 0,
       });
@@ -548,6 +556,7 @@ export function toPiContext(
       const blocks: Extract<PiMessage, { role: "assistant" }>["content"] = [];
       for (const block of message.content) {
         if (block.type === "text") blocks.push({ type: "text", text: block.text });
+        else if (block.type === "file") blocks.push({ type: "text", text: fileBlockText(block) });
         else if (block.type === "reasoning") blocks.push({ type: "thinking", thinking: block.text });
         else if (block.type === "tool-call") {
           toolNames.set(block.id, block.name);
@@ -587,7 +596,7 @@ export function toPiContext(
      *
      * 工具结果**不在这里** —— 宿主把它们放在 `role: "tool"` 的独立消息里（上面那个分支）。
      */
-    const content = piUserContent(message.content, images);
+    const content = piInputContent(message.content, images);
     if (content.length > 0) {
       messages.push({ role: "user", content, timestamp: 0 });
     }
@@ -846,6 +855,9 @@ const PROTOCOLS: Readonly<Record<OpencodeApi, ProviderStreams>> = {
  * @returns 与线上同序的 chunk 流。
  */
 export function streamOpencode(input: OpencodeStreamInput): AsyncIterable<StreamChunk> {
+  if (!input.model.input.includes("image") && input.context.messages.some((message) =>
+    (message.role === "user" || message.role === "toolResult") && Array.isArray(message.content) && message.content.some((block) => block.type === "image"),
+  )) throw new LlmError(`OpenCode model "${input.model.id}" does not accept image input`, "UNSUPPORTED_CONTENT");
   const provider = createProvider<OpencodeApi>({
     id: SDK_PROVIDER_ID,
     name: "OpenCode Go",

@@ -1,3 +1,4 @@
+import { wantedImagesOf } from "../../core/image-projection";
 /**
  * Open Design 的宿主适配器：把共享内核串成一次真实请求。
  *
@@ -701,26 +702,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     // **必须传完整的 `ImageAttachmentRef`**（2026-10-20 真机报障）：宿主的
     // `readImageRequest` 会用 `mediaType` / `bytes` / `width` / `height` 做引用校验，
     // 只给 `attachmentId` 会被拒绝，表现就是「图片未能发送」的占位。
-    const wanted = new Map<string, ImageRefLike>();
-    for (const message of options.messages) {
-      for (const block of message.content) {
-        if (block.type !== "image") continue;
-        /**
-         * **已卸载的图片不读字节**（2026-11-04 外部审查 U13）。
-         *
-         * `offloaded: true` 的含义是「这张图已从请求里卸载」—— 宿主契约要求各条路由
-         * 只发「命名图片及其只读路径」的占位文本。这里再读字节就等于把卸载又撤销了：
-         * 请求被撑回原大小，用户为长对话做的缩减全部失效。
-         *
-         * 协议层（`openAiUserContent`）看到 `offloaded` 会发占位文本，所以这里只要
-         * **不收集**这张图即可。
-         */
-        if (block.offloaded === true) continue;
-        const ref = block.attachment as ImageRefLike | undefined;
-        const id = ref?.attachmentId;
-        if (typeof id === "string" && id !== "") wanted.set(id, ref as ImageRefLike);
-      }
-    }
+    const wanted = wantedImagesOf(options.messages);
     for (const [id, ref] of wanted) {
       try {
         const resolved = await resolve(ref, options.signal);

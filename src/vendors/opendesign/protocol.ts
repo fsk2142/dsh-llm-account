@@ -28,6 +28,7 @@ import type {
   ToolSchema,
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
+import { assertProjectableContent, fileBlockText } from "../../core/image-projection";
 
 /** 推理网关默认基地址（计划 §1：`amr-link` 是运行时链路的入口）。 */
 export const DEFAULT_BASE_URL = "https://amr-link.open-design.ai/v1";
@@ -134,10 +135,13 @@ export interface BodyFacts {
   reasoningEffort?: string;
 }
 
-/** 把一段内容压成纯文本（文件块仍属后续期次；图片见 {@link openAiUserContent}）。 */
+/** Project text and durable file handles; images are handled separately. */
 function textOf(content: readonly ContentBlock[]): string {
   const parts: string[] = [];
-  for (const block of content) if (block.type === "text") parts.push(block.text);
+  for (const block of content) {
+    if (block.type === "text") parts.push(block.text);
+    else if (block.type === "file") parts.push(fileBlockText(block));
+  }
   return parts.join("");
 }
 
@@ -183,6 +187,10 @@ export function openAiUserContent(
       if (block.text !== "") parts.push({ type: "text", text: block.text });
       continue;
     }
+    if (block.type === "file") {
+      parts.push({ type: "text", text: fileBlockText(block) });
+      continue;
+    }
     if (block.type !== "image") continue;
     const id = block.attachment?.attachmentId;
     /**
@@ -226,10 +234,18 @@ function openAiMessages(
   images?: ReadonlyMap<string, RequestImageBytes>,
 ): unknown[] {
   const out: unknown[] = [];
+  // Chat Completions tool messages only accept text. Keep the complete result
+  // batch together, then add its images as a user message, as pi-ai does.
+  let toolImages: unknown[] = [];
+  const flushToolImages = () => {
+    if (toolImages.length > 0) out.push({ role: "user", content: toolImages });
+    toolImages = [];
+  };
   for (const message of messages) {
+    if (message.role !== "tool") flushToolImages();
     if (message.role === "system" || message.role === "developer") continue;
     if (message.role === "user") {
-      // 图片只在 user 消息里（宿主的 `ImageBlock` 注释：当前生产适配器只声明纯文本输出）。
+      // User image parts can be sent directly; tool image parts are batched below.
       out.push({ role: "user", content: openAiUserContent(message.content, images) });
       continue;
     }
@@ -251,16 +267,24 @@ function openAiMessages(
       });
       continue;
     }
-    out.push({ role: "tool", tool_call_id: message.toolCallId, content: textOf(message.content) });
+    const imageBlocks = message.content.filter((block) => block.type === "image");
+    const text = textOf(message.content);
+    out.push({ role: "tool", tool_call_id: message.toolCallId, content: text || (imageBlocks.length > 0 ? "(see attached image)" : "") });
+    if (imageBlocks.length > 0) {
+      toolImages.push({ type: "text", text: `Images from tool result ${message.toolCallId}:` });
+      const projected = openAiUserContent(imageBlocks, images);
+      if (Array.isArray(projected)) toolImages.push(...projected);
+      else if (typeof projected === "string" && projected !== "") toolImages.push({ type: "text", text: projected });
+    }
   }
+  flushToolImages();
   return out;
 }
 
 /**
  * 构造一次请求的请求体（Chat Completions 形状）。
  *
- * **本期范围**：文本、工具声明与工具调用/结果；图片与文件投影、缓存断点、
- * `max_tokens` 自学习收紧不属于本期。
+ * Projects text, tools, user/tool images, and deterministic file handles.
  * @param options - 宿主的完整请求。
  * @param facts - 由适配器算出的请求事实。
  * @returns 可 `JSON.stringify` 的请求体。
@@ -270,11 +294,20 @@ export function buildRequestBody(
   facts: BodyFacts,
   images?: ReadonlyMap<string, RequestImageBytes>,
 ): unknown {
+  assertProjectableContent(options.messages);
   const tools: readonly ToolSchema[] = options.tools ?? [];
+  // The adapter folds system/developer text into facts; raw file references
+  // still need their deterministic handles before those messages are skipped.
+  const systemFiles = options.messages.flatMap((message) =>
+    message.role === "system" || message.role === "developer"
+      ? message.content.filter((block) => block.type === "file").map(fileBlockText)
+      : [],
+  );
+  const systemText = [facts.systemText, ...systemFiles].filter((part) => part !== "").join("\n");
   return {
     model: options.model,
     messages: [
-      ...(facts.systemText === "" ? [] : [{ role: "system", content: facts.systemText }]),
+      ...(systemText === "" ? [] : [{ role: "system", content: systemText }]),
       ...openAiMessages(options.messages, images),
     ],
     ...(tools.length === 0

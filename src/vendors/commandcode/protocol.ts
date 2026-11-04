@@ -23,8 +23,10 @@ import type {
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
 import {
+  assertProjectableContent,
   base64Of,
   dataUrlOf,
+  fileBlockText,
   missingImagePlaceholder,
   type RequestImageBytes,
 } from "../../core/image-projection";
@@ -278,10 +280,13 @@ export interface BodyFacts {
   sessionId?: string;
 }
 
-/** 把一段内容压成纯文本（文件/图片块属于第 3 期，这里只取文本块）。 */
+/** Keep text and the host file handle when this message position needs plain text. */
 function textOf(content: readonly ContentBlock[]): string {
   const parts: string[] = [];
-  for (const block of content) if (block.type === "text") parts.push(block.text);
+  for (const block of content) {
+    if (block.type === "text") parts.push(block.text);
+    else if (block.type === "file") parts.push(fileBlockText(block));
+  }
   return parts.join("");
 }
 
@@ -302,15 +307,23 @@ function toolSchema(parameters: Record<string, unknown>): Record<string, unknown
  * @param images - 已取到字节的图片（按 attachment id）。
  * @returns 纯字符串（无图）或内容数组。
  */
+type OpenAiUserPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 function openAiUserContent(
   content: readonly ContentBlock[],
   images?: ReadonlyMap<string, RequestImageBytes>,
-): unknown {
+): string | OpenAiUserPart[] {
   if (!content.some((block) => block.type === "image")) return textOf(content);
-  const parts: unknown[] = [];
+  const parts: OpenAiUserPart[] = [];
   for (const block of content) {
     if (block.type === "text") {
       if (block.text !== "") parts.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type === "file") {
+      parts.push({ type: "text", text: fileBlockText(block) });
       continue;
     }
     if (block.type !== "image") continue;
@@ -348,6 +361,10 @@ function messagesUserContent(
       if (block.text !== "") blocks.push({ type: "text", text: block.text });
       continue;
     }
+    if (block.type === "file") {
+      blocks.push({ type: "text", text: fileBlockText(block) });
+      continue;
+    }
     if (block.type !== "image") continue;
     const id = (block.attachment as { attachmentId?: string } | undefined)?.attachmentId;
     if (block.offloaded === true) {
@@ -378,8 +395,16 @@ function openAiMessages(
   images?: ReadonlyMap<string, RequestImageBytes>,
 ): unknown[] {
   const out: unknown[] = [];
+  const toolImages: OpenAiUserPart[] = [];
+  const flushToolImages = (): void => {
+    if (toolImages.length === 0) return;
+    out.push({ role: "user", content: [...toolImages] });
+    toolImages.length = 0;
+  };
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
+    // Match the SDK: all tool results must precede the supplementary user images.
+    if (message.role !== "tool") flushToolImages();
     if (message.role === "user") {
       // 图片必须真的发出去（审查 U07）。
       out.push({ role: "user", content: openAiUserContent(message.content, images) });
@@ -403,8 +428,20 @@ function openAiMessages(
       });
       continue;
     }
-    out.push({ role: "tool", tool_call_id: message.toolCallId, content: textOf(message.content) });
+    const projected = openAiUserContent(message.content, images);
+    const text = typeof projected === "string" ? projected : projected
+      .filter((part): part is Extract<OpenAiUserPart, { type: "text" }> => part.type === "text")
+      .map((part) => part.text).join("");
+    const imageParts = typeof projected === "string" ? [] : projected.filter((part) => part.type === "image_url");
+    out.push({
+      role: "tool", tool_call_id: message.toolCallId,
+      content: text || (imageParts.length > 0 ? "(see attached image)" : "(no tool output)"),
+    });
+    if (imageParts.length > 0) {
+      toolImages.push({ type: "text", text: `Image(s) from tool result ${message.toolCallId}:` }, ...imageParts);
+    }
   }
+  flushToolImages();
   return out;
 }
 
@@ -444,7 +481,7 @@ function anthropicMessages(
       continue;
     }
     push("user", [
-      { type: "tool_result", tool_use_id: message.toolCallId, content: textOf(message.content), is_error: message.isError === true },
+      { type: "tool_result", tool_use_id: message.toolCallId, content: messagesUserContent(message.content, images), is_error: message.isError === true },
     ]);
   }
   return out;
@@ -493,11 +530,18 @@ export function buildRequestBody(
   facts: BodyFacts,
   images?: ReadonlyMap<string, RequestImageBytes>,
 ): unknown {
+  assertProjectableContent(options.messages);
+  // The adapter folds system text; raw files still need their explicit handles.
+  const systemFiles = options.messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .flatMap((message) => message.content.filter((block) => block.type === "file"))
+    .map((block) => fileBlockText(block));
+  const systemText = [facts.systemText, ...systemFiles].filter((part) => part !== "").join("\n\n");
   const tools: readonly ToolSchema[] = options.tools ?? [];
   if (protocol === "openai") {
     return {
       model: options.model,
-      messages: [...(facts.systemText === "" ? [] : [{ role: "system", content: facts.systemText }]), ...openAiMessages(options.messages, images)],
+      messages: [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...openAiMessages(options.messages, images)],
       ...(tools.length === 0
         ? {}
         : {
@@ -525,7 +569,7 @@ export function buildRequestBody(
       // 6593-6597 行的线上实测），而档位（`output_config.effort`）只有开了它才起作用。
       ...(facts.selectableEffort === true ? { thinking: { type: "adaptive" } } : {}),
       messages: anthropicMessages(options.messages, images),
-      ...(facts.systemText === "" ? {} : { system: [{ type: "text", text: facts.systemText, cache_control: { type: "ephemeral" } }] }),
+      ...(systemText === "" ? {} : { system: [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }] }),
       ...(facts.reasoningEffort === undefined ? {} : { output_config: { effort: facts.reasoningEffort } }),
       ...(tools.length === 0
         ? {}
@@ -564,7 +608,7 @@ export function buildRequestBody(
         description: tool.description,
         input_schema: toolSchema(tool.parameters),
       })),
-      system: cliSystem(facts.systemText),
+      system: cliSystem(systemText),
       max_tokens: facts.maxTokens,
       temperature: options.temperature ?? 0.3,
       stream: true,

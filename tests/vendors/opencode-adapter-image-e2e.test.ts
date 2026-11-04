@@ -98,6 +98,7 @@ function sse(): Response {
 async function bodyWithImage(options: {
   /** `false` = 纯文本（对照组）。 */
   withImage?: boolean;
+  toolResult?: boolean;
   /** `true` = 图片已 offloaded（应发占位文本，不读字节）。 */
   offloaded?: boolean;
   /** `false` = 模拟宿主没提供读取器（取不到字节）。 */
@@ -159,13 +160,17 @@ async function bodyWithImage(options: {
 
   const stream = adapter.stream({
     model: "m-vision",
-    messages: [{ role: "user", content }],
+    messages: options.toolResult ? [
+      {role:"assistant",content:[{type:"tool-call",id:"call-1",name:"screenshot",arguments:"{}"}]},
+      {role:"tool",toolCallId:"call-1",content},
+    ] : [{ role: "user", content }],
     sessionId: "s1",
   } as unknown as GenerateOptions);
   for await (const _chunk of stream as AsyncIterable<StreamChunk>) {
     // 只关心出站正文
   }
   expect(bodies.length, "应当发出生成请求").toBeGreaterThan(0);
+  if (options.toolResult) expect(readCalls).toEqual(options.offloaded || !provideBytes ? [] : ["att-1"]);
   return bodies[0]!;
 }
 
@@ -239,4 +244,18 @@ describe("U07 · 图片必须真的发出去", () => {
       .join(" ");
     expect(text, "卸载的图要有占位说明").toContain("已卸载");
   });
+});
+
+describe("tool attachment adapter path",()=>{
+ it.each([false,true])("keeps tool attachment in actual outbound body, offloaded=%s",async offloaded=>{
+  const body=await bodyWithImage({toolResult:true,offloaded});
+  const text=JSON.stringify(body);
+  expect(text).toContain("tool_result");expect(text).toContain("call-1");
+  if(offloaded){expect(text).toContain("已卸载");expect(text).not.toContain(Buffer.from(PNG_BYTES).toString("base64"));}
+  else expect(text).toContain(Buffer.from(PNG_BYTES).toString("base64"));
+ });
+ it("keeps missing tool image placeholder when attachment service is absent",async()=>{
+  const body=await bodyWithImage({toolResult:true,provideBytes:false});
+  expect(JSON.stringify(body)).toContain("图片未能发送");
+ });
 });

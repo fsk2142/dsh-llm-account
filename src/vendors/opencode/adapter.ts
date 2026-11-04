@@ -33,6 +33,7 @@ import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
 import { createSingleFlight } from "../../core/single-flight";
+import { wantedImagesOf } from "../../core/image-projection";
 import type { ImageRefLike, RequestImageBytes } from "../../core/image-projection";
 import { opencodeSessionHeaders } from "./session";
 import { createCredentialGuard, type CredentialGuard } from "../../core/credential-guard";
@@ -1044,15 +1045,7 @@ async function imagesOf(
 ): Promise<ReadonlyMap<string, RequestImageBytes>> {
   const images = new Map<string, RequestImageBytes>();
   if (resolve === undefined) return images;
-  const wanted = new Map<string, ImageRefLike>();
-  for (const message of options.messages) {
-    for (const block of message.content) {
-      if (block.type !== "image" || block.offloaded === true) continue;
-      const ref = block.attachment as ImageRefLike | undefined;
-      const id = ref?.attachmentId;
-      if (typeof id === "string" && id !== "") wanted.set(id, ref as ImageRefLike);
-    }
-  }
+  const wanted = wantedImagesOf(options.messages);
   for (const [id, ref] of wanted) {
     try {
       const bytes = await resolve(ref, options.signal);
