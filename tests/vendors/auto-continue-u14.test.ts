@@ -86,9 +86,9 @@ describe("U14 · 截断后续写接到宿主", () => {
     expect(inbox.calls, "必须真的往 inbox 推了一条").toHaveLength(1);
     expect(inbox.calls[0]![0], "target 必须是宿主的 'next-step' 字面量").toBe("next-step");
     expect(
-      (inbox.calls[0]![1] as { content?: string }).content,
+      (inbox.calls[0]![1] as { content?: readonly { type: string; text: string }[] }).content,
       "推的消息内容就是续写指令",
-    ).toBe(CONTINUE_PROMPT);
+    ).toEqual([{ type: "text", text: CONTINUE_PROMPT }]);
   });
 
   it("**正常结束（stop）不续写**", async () => {

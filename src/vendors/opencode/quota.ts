@@ -117,23 +117,17 @@ async function opencodeAuthOf(
   deps: OpencodeQuotaDeps,
 ): Promise<{ key: string; headers?: Record<string, string> }> {
   if (!raw.startsWith(OAUTH_PREFIX)) return { key: raw };
-  try {
-    const resolved = await resolveOAuthCredential(raw, {
-      fetchImpl: deps.fetchImpl,
-      ...(deps.authBase === undefined ? {} : { authBase: deps.authBase }),
-      ...(deps.now === undefined ? {} : { now: deps.now }),
-    });
-    if (resolved === undefined) return { key: raw };
-    return {
-      key: resolved.key,
-      ...(resolved.headers === undefined ? {} : { headers: resolved.headers }),
-    };
-  } catch {
-    // 解析失败就按原值发 —— 让网关回答 401，而不是在本模块里伪造失败分类。
-    return { key: raw };
-  }
+  const resolved = await resolveOAuthCredential(raw, {
+    fetchImpl: deps.fetchImpl,
+    ...(deps.authBase === undefined ? {} : { authBase: deps.authBase }),
+    ...(deps.now === undefined ? {} : { now: deps.now }),
+  }, { signal: AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_USAGE_TIMEOUT_MS), throwOnTransient: true });
+  if (resolved === undefined) throw missingKeyError();
+  return { key: resolved.key, headers: resolved.headers };
 }
 export interface OpencodeQuotaDeps {
+  /** Production shares the adapter's refresh, persistence and credential guard. */
+  resolveAuth?: (ref: string, signal?: AbortSignal) => Promise<{ key: string; headers?: Record<string, string> } | undefined>;
   /** 这一读要报告的账号 ref；`undefined` 表示当前没有选中账号。 */
   ref: () => string | undefined;
   /** 解析该 ref 的密钥（凭据服务 / 环境变量 / auth.json 的注入点）。 */
@@ -370,31 +364,26 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
       // - 解析成空串/纯空白：按「没配密钥」处理。
       // 三种都必须是**已分类**的 `OpencodeUsageError`：裸抛出去调用方既拿不到 code，
       // 也不知道该不该重试、该不该保留上一次读数。
-      let resolved: string | undefined;
-      if (ref !== undefined) {
-        try {
-          resolved = await deps.resolveKey(ref);
-        } catch (error) {
-          if (isRecord(error) && error.code === "MISSING_CREDENTIAL") throw missingKeyError();
-          throw new OpencodeUsageError(`Could not resolve the OpenCode Go API key for account "${ref}"`, {
-            retryable: true,
-            retainPrevious: false,
-            cause: error,
-          });
+      let auth: { key: string; headers?: Record<string, string> } | undefined;
+      try {
+        if (ref === undefined) throw missingKeyError();
+        if (deps.resolveAuth !== undefined) {
+          auth = await deps.resolveAuth(ref, AbortSignal.timeout(timeoutMs));
+        } else {
+          const key = normalizeKey(await deps.resolveKey(ref));
+          if (key === undefined) throw missingKeyError();
+          auth = await opencodeAuthOf(key, deps);
         }
+        if (auth === undefined) throw missingKeyError();
+      } catch (error) {
+        if (error instanceof OpencodeUsageError) throw error;
+        if (isRecord(error) && error.code === "MISSING_CREDENTIAL") throw missingKeyError();
+        throw new OpencodeUsageError(`Could not resolve the OpenCode Go API key for account "${ref}"`, {
+          retryable: true,
+          retainPrevious: false,
+          cause: error,
+        });
       }
-      const key = normalizeKey(resolved);
-      if (key === undefined) throw missingKeyError();
-      /**
-       * **网页登录的凭据要解成 access token**（2026-11-04 外部审查 U02）。
-       *
-       * 聊天路径（adapter）走 `resolveOAuthCredential`：解出 access 并补
-       * `x-opencode-org-id`。额度路径原来没有这一步 —— 直接把 `ocoauth1:<blob>`
-       * 整串塞进 `Authorization: Bearer`，网关必然 401。
-       *
-       * 症状就是审查描述的：**能聊天、读不到额度**。
-       */
-      const auth = await opencodeAuthOf(key, deps);
 
       let response: Response;
       try {

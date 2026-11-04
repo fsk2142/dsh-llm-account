@@ -62,7 +62,7 @@ import { DEFAULT_API_BASE } from "./protocol";
 import type { CommandCodeProtocol } from "./protocol";
 import { createCommandCodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
-import { applyAutoContinue } from "../auto-continue";
+import { applyAutoContinue, repairLegacyContinueMessages } from "../auto-continue";
 import { applySearch } from "../search";
 import { gatewayAccessOf } from "../gateway-access";
 import { registerSearchProvider } from "../search-provider";
@@ -650,9 +650,12 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   };
   /** 最近一次的结束原因（`assistant/message` 的 `finish.kind`）。 */
   let lastFinishKind: string | undefined;
-  events.on("agent/pre-step", (payload: unknown) => {
+  events.on("agent/pre-step", (payload: unknown, next?: unknown) => {
     const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
     if (record.agent !== undefined) activeAgent = record.agent;
+    repairLegacyContinueMessages(record.messages);
+    // This is a waterfall: the host must receive its downstream enter/reject decision.
+    return typeof next === "function" ? (next as () => unknown)() : undefined;
   });
   /**
    * 记下 `assistant/message` 的 `finish.kind`。

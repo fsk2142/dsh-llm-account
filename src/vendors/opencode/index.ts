@@ -374,6 +374,7 @@ const guarded = guardedAccounts(accounts);
       return createOpencodeQuota({
         ref: () => ref,
         resolveKey: (candidate) => resolveAccountKey(ctx, credentials, candidate),
+        resolveAuth: (candidate, signal) => adapter.resolveAccountAuth(candidate, signal),
         fetchImpl: fetch,
         apiBase,
       }).snapshot();

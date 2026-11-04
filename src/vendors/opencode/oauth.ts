@@ -303,6 +303,14 @@ export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode): 
   return { status: "success", access, refresh, expiresAt: now + Math.round(expiresIn * 1_000) };
 }
 
+/** Refresh failures retain HTTP status so temporary outages remain retryable. */
+export class OAuthRefreshError extends Error {
+  constructor(readonly status: number) {
+    super(`token refresh failed (HTTP ${status})`);
+    this.name = "OAuthRefreshError";
+  }
+}
+
 /** 刷新一次 token；失败抛出（调用方按「不可用」处理）。 */
 export async function refreshOAuthCredential(
   deps: OAuthHttpDeps,
@@ -327,7 +335,7 @@ export async function refreshOAuthCredential(
     }),
   });
   const payload = await readJson(response);
-  if (!response.ok || !isRecord(payload)) throw new Error(`token refresh failed (HTTP ${response.status})`);
+  if (!response.ok || !isRecord(payload)) throw new OAuthRefreshError(response.status);
   const access = stringOf(payload, "access_token");
   const refresh = stringOf(payload, "refresh_token") ?? credential.refresh;
   const expiresIn = typeof payload.expires_in === "number" && payload.expires_in > 0 ? payload.expires_in : undefined;
@@ -371,7 +379,7 @@ export async function fetchOAuthOrg(deps: OAuthHttpDeps, access: string): Promis
 export async function resolveOAuthCredential(
   raw: string,
   deps: OAuthHttpDeps,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; throwOnTransient?: boolean },
 ): Promise<{ key: string; headers: Record<string, string>; updated?: string } | undefined> {
   const credential = parseOAuthCredential(raw);
   if (credential === undefined) return undefined;
@@ -387,8 +395,8 @@ export async function resolveOAuthCredential(
       headers: { "x-opencode-org-id": refreshed.orgId },
       updated: serializeOAuthCredential(refreshed),
     };
-  } catch {
-    // 刷新失败：旧 access token 已过期，**不能**继续用；调用方按缺凭据处理。
+  } catch (error) {
+    if (options?.throwOnTransient && (!(error instanceof OAuthRefreshError) || error.status === 408 || error.status === 429 || error.status >= 500)) throw error;
     return undefined;
   }
 }

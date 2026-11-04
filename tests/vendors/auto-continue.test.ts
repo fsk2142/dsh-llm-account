@@ -344,3 +344,19 @@ describe("waterfall 交接（2026-10-29）", () => {
     expect(action).toEqual({ kind: "retry" });
   });
 });
+
+it("continuation messages satisfy the real host's durable message consumer", async () => {
+  const ctx = fakeCtx();
+  let message: { id: string; role: string; source: { kind: string }; content: { type: string; text: string }[] } | undefined;
+  applyAutoContinue(ctx, () => ({ enabled: true, maxAttempts: 3, intervalMs: 0 }), {
+    inbox: { append: (target, input) => {
+      expect(target).toBe("next-step");
+      message = input as typeof message;
+    } },
+    lastFinishReason: () => "max-tokens",
+  });
+  await ctx.fire("agent/turn-stopping", { turn: 1 });
+  expect(message?.id).toBeTruthy();
+  expect(message?.source.kind).toBe("dsh-llm-account-auto-continue");
+  expect(message?.content).toEqual([{ type: "text", text: "继续" }]);
+});

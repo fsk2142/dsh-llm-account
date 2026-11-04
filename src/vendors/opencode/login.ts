@@ -88,6 +88,8 @@ class OpencodeLoginFlow implements OpencodeLogin {
     this.#abort?.abort();
     const abort = new AbortController();
     this.#abort = abort;
+    // A retry must not retain the previous terminal state while starting.
+    this.#status = { state: "idle" };
     let device: DeviceCode;
     try {
       device = await beginDeviceFlow(this.#deps);

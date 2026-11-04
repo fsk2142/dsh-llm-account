@@ -23,6 +23,8 @@
  * **关掉即静默**：开关关着时监听器虽然注册，但事件进来立刻交棒给下游（不重试、不续写），\n * 与「不注册」等价；只有 `probe` 那条路在缺少宿主探针时才不注册。
  * @module dsh-llm-account/src/vendors/auto-continue
  */
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
+
 import {
   shouldContinueOnTruncate,
   shouldRetryFailure,
@@ -69,6 +71,36 @@ export interface AutoContinueProbe {
 
 /** 续写时发给模型的用户消息（用户可读，也是模型能理解的指令）。 */
 export const CONTINUE_PROMPT = "继续";
+
+declare module "@deepseek-ai/dsh-llm" {
+  interface MessageSourceMap {
+    "dsh-llm-account-auto-continue": { kind: "dsh-llm-account-auto-continue" };
+  }
+}
+
+function continuationMessage() {
+  return createUserMessage({
+    content: [{ type: "text", text: CONTINUE_PROMPT }],
+    source: { kind: "dsh-llm-account-auto-continue" },
+  });
+}
+
+/** Repair only the exact unidentified input emitted by earlier plugin versions.
+ * The host claims persisted inbox input before pre-step and its fallback closes
+ * over that same mutable array, so replace members without replacing the array.
+ */
+export function repairLegacyContinueMessages(messages: unknown): void {
+  if (!Array.isArray(messages) || Object.isFrozen(messages)) return;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message: unknown = messages[index];
+    if (typeof message !== "object" || message === null) continue;
+    const record = message as Record<string, unknown>;
+    if (record.role !== "user" || record.content !== CONTINUE_PROMPT) continue;
+    if (Object.keys(record).length !== 2 || !Object.hasOwn(record, "role") || !Object.hasOwn(record, "content")) continue;
+    messages[index] = continuationMessage();
+  }
+}
+
 
 /**
  * 等一会儿（不阻塞事件循环），**可被 abort 提前打断**。
@@ -217,7 +249,7 @@ export function applyAutoContinue(
       bump(turn);
       // 推一条消息 → 宿主随后检查 `inbox.nextStep.length` 时不再为 0，本轮继续。
     // 必须带 target（宿主 Inbox.append(target, message)）：只传消息的话，运行时会把消息当成 target，本轮照样结束。
-    probe.inbox.append("next-step", { role: "user", content: CONTINUE_PROMPT });
+    probe.inbox.append("next-step", continuationMessage());
       return undefined;
     });
     if (typeof off === "function") disposers.push(off as () => void);

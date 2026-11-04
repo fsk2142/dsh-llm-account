@@ -1440,3 +1440,38 @@ it("**装配层复用同一个额度工厂**，重置锚点因此跨轮询存活
     vi.unstubAllGlobals();
   }
 }, 10_000);
+
+it("pre-step preserves the host waterfall decision and repairs only legacy continuation input", async () => {
+  const host = fakeHost();
+  commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+  const messages: unknown[] = [{ role: "user", content: "继续" }];
+  let tailCalls = 0;
+  host.ctx.on("agent/pre-step" as never, ((payload: { messages: unknown[] }) => {
+    tailCalls += 1;
+    return { kind: "enter", messages: payload.messages };
+  }) as never);
+  const { decision } = await host.fireWaterfall("agent/pre-step", { messages, turn: 1, step: 1 });
+  expect(tailCalls, "the real host dereferences decision.kind after this waterfall").toBe(1);
+  expect(decision).toMatchObject({ kind: "enter", messages: [{ role: "user", content: [{ type: "text", text: "继续" }], source: { kind: "dsh-llm-account-auto-continue" } }] });
+  const message = messages[0] as { id: string; source: { kind: string }; content: unknown[] };
+  expect(message.id).toBeTruthy();
+  expect(() => message.source.kind).not.toThrow();
+});
+
+it("legacy continuation repair leaves user messages and other producers untouched", async () => {
+  const host = fakeHost();
+  commandcode.apply(host.ctx, commandcode.Config(COMMAND_CODE_SHAPE));
+  const originals = [
+    { role: "user", content: "继续", id: "user-id" },
+    { role: "user", content: "继续", source: { kind: "user" } },
+    { role: "user", content: [{ type: "text", text: "继续" }] },
+    { role: "assistant", content: "继续" },
+    { role: "user", content: "continue" },
+    { role: "user", content: "继续", extra: true },
+  ];
+  const messages = [...originals];
+  host.ctx.on("agent/pre-step" as never, (() => ({ kind: "enter", messages })) as never);
+  const { decision } = await host.fireWaterfall("agent/pre-step", { messages });
+  expect(decision).toMatchObject({ kind: "enter" });
+  for (let index = 0; index < originals.length; index += 1) expect(messages[index]).toBe(originals[index]);
+});
