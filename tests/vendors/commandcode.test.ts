@@ -1036,3 +1036,45 @@ describe("U07 · Command Code 图片投影", () => {
     expect(text, "卸载的图要有占位说明").toContain("已卸载");
   });
 });
+
+/** 2026-11-04 外部审查 U13：已卸载的图片不能再读字节（共享函数统一拦）。 */
+it("U13：offloaded 的图片不读字节，只发占位文本", async () => {
+  let readCalls = 0;
+  const { fetchImpl, bodies } = bodyCapturingFetch();
+  const adapter = createCommandCodeAdapter({
+    config: () => ({ apiBase: "https://api.example.test" }),
+    rotation: new RotationEngine({ order: ["a"], rules: [], pinned: null }),
+    quota: stubQuota(),
+    accounts: stubAccounts(),
+    fetchImpl,
+    resolveStored: async () => "key-a",
+    resolveImage: async (ref: { attachmentId: string }) => {
+      readCalls += 1;
+      return { attachmentId: ref.attachmentId, data: new Uint8Array([1, 2, 3]), mediaType: "image/png" };
+    },
+  });
+
+  await collect(
+    adapter.stream({
+      ...request("deepseek/deepseek-v4.1-flash"),
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "这张图是什么？" },
+            {
+              type: "image",
+              attachment: { attachmentId: "att-1", mediaType: "image/png", bytes: 3, width: 1, height: 1 },
+              offloaded: true,
+            },
+          ] as never,
+        },
+      ],
+    }),
+  );
+
+  expect(readCalls, "已卸载的图片不该再读字节").toBe(0);
+  const serialized = JSON.stringify(bodies.at(-1) ?? {});
+  expect(serialized, "要有占位说明").toContain("图片已卸载");
+  expect(serialized, "不该出现真实图片数据").not.toContain("image_url");
+});

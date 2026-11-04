@@ -705,6 +705,17 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     for (const message of options.messages) {
       for (const block of message.content) {
         if (block.type !== "image") continue;
+        /**
+         * **已卸载的图片不读字节**（2026-11-04 外部审查 U13）。
+         *
+         * `offloaded: true` 的含义是「这张图已从请求里卸载」—— 宿主契约要求各条路由
+         * 只发「命名图片及其只读路径」的占位文本。这里再读字节就等于把卸载又撤销了：
+         * 请求被撑回原大小，用户为长对话做的缩减全部失效。
+         *
+         * 协议层（`openAiUserContent`）看到 `offloaded` 会发占位文本，所以这里只要
+         * **不收集**这张图即可。
+         */
+        if (block.offloaded === true) continue;
         const ref = block.attachment as ImageRefLike | undefined;
         const id = ref?.attachmentId;
         if (typeof id === "string" && id !== "") wanted.set(id, ref as ImageRefLike);

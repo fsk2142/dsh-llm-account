@@ -679,10 +679,24 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
        * 拿不到就静默跳过：inbox 保持为空，宿主按原逻辑结束本轮。
        */
       get inbox() {
-        const agent = activeAgent as
+        const cached = activeAgent as
           | { inbox: { append(target: "next-step", message: unknown): unknown } }
           | undefined;
-        return agent?.inbox ?? { append: () => undefined };
+        /**
+         * 缓存为空时退回宿主的 `agents.currentInitiator()`（兜底，不改变主路径）。
+         *
+         * 主路径是「`agent/pre-step` 时缓存」—— 那个事件必然带 agent，稳定可靠。
+         * 这里是第二道：万一某次 `turn-stopping` 发生在缓存建立之前，还能拿到当前 agent。
+         *
+         * 两者都拿不到就静默跳过（绝不抛错，见上面的说明）。
+         */
+        const fallback = (): { inbox: { append(target: "next-step", message: unknown): unknown } } | undefined => {
+          const get = (ctx as { get?: (name: string) => unknown }).get;
+          const agents = typeof get === "function" ? get.call(ctx, "agents") : undefined;
+          const current = (agents as { currentInitiator?: () => unknown } | undefined)?.currentInitiator?.();
+          return current as { inbox: { append(target: "next-step", message: unknown): unknown } } | undefined;
+        };
+        return cached?.inbox ?? fallback()?.inbox ?? { append: () => undefined };
       },
       lastFinishReason: () => lastFinishKind,
     },

@@ -515,3 +515,58 @@ it("stream：与档位无关的 400 不重放（上下文超长是确定性失�
   await expect(collect(adapter.stream(request("claude-sonnet-4-5")))).rejects.toBeInstanceOf(Error);
   expect(fetchImpl.calls).toHaveLength(1);
 });
+
+/**
+ * **已卸载的图片不能再读字节**（2026-11-04 外部审查 U13）。
+ *
+ * 审查原文：
+ *
+ * > `offloaded:true` 仍 `resolveImage` 并发 base64，违反本地 dsh-llm 的 ImageBlock 契约，
+ * > 图片卸载缩减请求的决定失效。
+ *
+ * 宿主把 `offloaded: true` 写在 `ImageBlock` 上，含义是「这张图已从请求里卸载」——
+ * 契约要求各条路由只发「命名图片及其只读路径」的占位文本，**不能**再读字节。
+ * 否则卸载就白做了：请求又被撑回原大小。
+ *
+ * 三个厂商都要遵守（opencode / commandcode 已修，这条盯 opendesign）。
+ */
+it("U13：offloaded 的图片不读字节，只发占位文本", async () => {
+  let readCalls = 0;
+  const fetchImpl = scriptedFetch([
+    () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
+  ]);
+  const adapter = createOpenDesignAdapter(
+    adapterDeps({
+      fetchImpl,
+      resolveStored: keysOf({ a: "sk-a" }),
+      resolveImage: async (ref: { attachmentId: string }) => {
+        readCalls += 1;
+        return { attachmentId: ref.attachmentId, data: new Uint8Array([1, 2, 3]), mediaType: "image/png" };
+      },
+    }),
+  );
+
+  const content = [
+    { type: "text" as const, text: "这张图是什么？" },
+    {
+      type: "image" as const,
+      attachment: { attachmentId: "att-1", mediaType: "image/png", bytes: 3, width: 1, height: 1 },
+      offloaded: true as const,
+    },
+  ];
+
+  await collect(
+    adapter.stream({
+      ...request("claude-sonnet-4-5"),
+      messages: [{ role: "user", content: content as never }],
+    } as never),
+  );
+
+  expect(readCalls, "已卸载的图片不该再读字节（否则卸载失去意义）").toBe(0);
+
+  // 出站正文里应当只有占位文本，没有图片块。
+  const body = fetchImpl.calls.at(-1)?.body;
+  const serialized = JSON.stringify(body ?? {});
+  expect(serialized, "不该出现 base64 图片").not.toContain("image_url");
+  expect(serialized, "要有占位说明").toContain("图片已卸载");
+});

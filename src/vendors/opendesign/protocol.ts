@@ -185,6 +185,18 @@ export function openAiUserContent(
     }
     if (block.type !== "image") continue;
     const id = block.attachment?.attachmentId;
+    /**
+     * **已卸载的图片发占位文本，不读字节**（2026-11-04 外部审查 U13）。
+     *
+     * `offloaded: true` 是宿主「这张图已从请求里卸载」的标记，契约要求发
+     * 「命名图片及其只读路径」的占位。adapter 侧已不再收集它的字节，
+     * 这里必须显式写占位 —— 否则会掉进下面的「未能发送」分支，语义也不对
+     * （不是发送失败，是**有意不发送**）。
+     */
+    if (block.offloaded === true) {
+      parts.push({ type: "text", text: `[图片已卸载：${typeof id === "string" ? id : "未知附件"}]` });
+      continue;
+    }
     const bytes = typeof id === "string" ? images?.get(id) : undefined;
     if (bytes === undefined) {
       // 取不到字节 → 文字占位（与宿主 `textOnlyImageText` 同一意图：让模型知道有图）。
