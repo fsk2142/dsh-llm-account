@@ -118,9 +118,26 @@ class OpencodeLoginFlow implements OpencodeLogin {
     return { ...this.#status };
   }
 
-  /** 取消等待中的尝试；终态不受影响。 */
+  /**
+   * 取消等待中的尝试；终态不受影响。
+   *
+   * **「启动中」也必须能取消**（2026-11-04 外部审查 U05）。
+   *
+   * `begin()` 里 `await beginDeviceFlow()` 期间状态还是 `idle`（还没拿到设备码），
+   * 原来这里以 `state !== "waiting"` 直接返回 —— 于是：
+   *
+   * 1. 用户点了取消，界面没反应；
+   * 2. `begin()` 随后拿到设备码，检查 `abort.signal.aborted` 时信号没置位；
+   * 3. 迟到的设备码把状态写成 `waiting` 并启动轮询，**取消被彻底忽略**。
+   *
+   * 现在无论处于哪个中间态都 abort 当前 controller：`begin()` 在拿码之后会检查
+   * `abort.signal.aborted` 并落到 `cancelled`，不会启动轮询、也不会写入账号。
+   * 终态（success/failed）仍然不受影响 —— 已经结束的尝试不该被改写。
+   */
   async cancel(): Promise<void> {
-    if (this.#status.state !== "waiting") return;
+    if (this.#status.state === "success") return;
+    // 已经因取消/超时/失败落定的，保持原样（不把 `timeout` 改写成 `cancelled`）。
+    if (this.#status.state === "failed") return;
     this.#status = { state: "failed", reason: "cancelled" };
     this.#abort?.abort();
   }

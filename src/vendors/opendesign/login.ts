@@ -678,7 +678,17 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
      *
      * 判据改成「内容与基线不同」：那是 vela 真的写入了这次登录的唯一证据。
      */
-    const baseline = await this.#readProfileText();
+    /**
+     * **先挂 exit 监听，再读基线**（2026-11-04 外部审查 U04）。
+     *
+     * 原来这两段的顺序是反的：先 `await this.#readProfileText()` 读基线，
+     * 之后才挂 `child.on("exit", …)`。子进程如果在那次**异步读取期间**退出
+     * （授权很快、或磁盘慢让读取变长），`exit` 事件已经过去了，
+     * 监听器永远等不到 —— 只能一路等到 deadline，最后报「超时」且账号没导入。
+     *
+     * 挂监听是同步操作，提前到读基线之前即可让窗口消失：
+     * 从这里往下，任何时刻的退出都会被捕获。
+     */
     let exited: { code: number | null } | undefined;
     const exit = new Promise<void>((resolve) => {
       child.on("exit", (code) => {
@@ -690,6 +700,7 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
         resolve();
       });
     });
+    const baseline = await this.#readProfileText();
     for (;;) {
       if (signal.aborted) return;
       if (this.#now() >= deadline) {
