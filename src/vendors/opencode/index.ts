@@ -72,6 +72,7 @@ import {
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
 import { createOpencodeAdapter } from "./adapter";
 import { createCredentialGuard } from "../../core/credential-guard";
+import { readImageBytes } from "../../core/image-projection";
 import type { OpencodeAdapterDeps, OpencodeConfig, OpencodeModelLimits } from "./adapter";
 import {
   OPENCODE_DEFAULT_REF,
@@ -465,6 +466,14 @@ const guarded = guardedAccounts(accounts);
     fetchImpl: fetch,
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
+    /**
+     * 图片字节（2026-11-04 外部审查 U07）。
+     *
+     * 每次请求现取服务：`ctx.get` 在附件服务可用之前返回 undefined，而插件可能在附件服务
+     * 挂载之前就已加载。原来**完全没有这一项**，于是图片被协议层静默跳过 ——
+     * 目录宣称 `image` 能力、模型却收不到图。
+     */
+    resolveImage: (ref, signal) => readImageBytes(ctx, ref, signal),
     // 网页登录刷新后的 blob 回写原凭据槽；普通 API key 不受影响。
     persistStored: (ref, value) => credentials.set(ref, value),
     promoteServed: promoteServedAccount,

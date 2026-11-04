@@ -22,6 +22,12 @@ import type {
   ToolSchema,
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
+import {
+  base64Of,
+  dataUrlOf,
+  missingImagePlaceholder,
+  type RequestImageBytes,
+} from "../../core/image-projection";
 
 /** 网关默认基地址（旧插件第 5361 行）。 */
 export const DEFAULT_API_BASE = "https://api.commandcode.ai";
@@ -273,13 +279,99 @@ function toolSchema(parameters: Record<string, unknown>): Record<string, unknown
   return { type: "object", properties: {}, additionalProperties: true, ...parameters };
 }
 
+/**
+ * OpenAI 形状的 user content：**文本 + 图片**（2026-11-04 外部审查 U07）。
+ *
+ * 原来只发 `textOf(content)`，图片被静默丢弃 —— 目录宣称 image 能力、模型却收不到图，
+ * 而且流正常完成，用户完全无法察觉。
+ *
+ * 三类图分开处理：`offloaded` 只发占位（不读字节）、取到字节发 `image_url`、
+ * 取不到也发占位 —— **都不静默丢**。
+ * @param content - 消息内容块。
+ * @param images - 已取到字节的图片（按 attachment id）。
+ * @returns 纯字符串（无图）或内容数组。
+ */
+function openAiUserContent(
+  content: readonly ContentBlock[],
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): unknown {
+  if (!content.some((block) => block.type === "image")) return textOf(content);
+  const parts: unknown[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      if (block.text !== "") parts.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type !== "image") continue;
+    const id = (block.attachment as { attachmentId?: string } | undefined)?.attachmentId;
+    if (block.offloaded === true) {
+      parts.push({ type: "text", text: offloadedImagePlaceholder(id) });
+      continue;
+    }
+    const bytes = typeof id === "string" ? images?.get(id) : undefined;
+    if (bytes === undefined) {
+      parts.push({ type: "text", text: missingImagePlaceholder(id) });
+      continue;
+    }
+    parts.push({ type: "image_url", image_url: { url: dataUrlOf(bytes) } });
+  }
+  return parts.length === 0 ? "" : parts;
+}
+
+/**
+ * Anthropic Messages 形状的 user content：**文本 + 图片**（审查 U07）。
+ *
+ * 这条路我们自己拼正文，所以直接写 Anthropic 的 `source` 形状
+ * （与 pi-ai 内部一致：`{ type: "image", source: { type: "base64", media_type, data } }`）。
+ * @param content - 消息内容块。
+ * @param images - 已取到字节的图片。
+ * @returns 内容块数组（至少一个空文本块，避免空数组被网关拒）。
+ */
+function messagesUserContent(
+  content: readonly ContentBlock[],
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): MessagesBlock[] {
+  const blocks: MessagesBlock[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      if (block.text !== "") blocks.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type !== "image") continue;
+    const id = (block.attachment as { attachmentId?: string } | undefined)?.attachmentId;
+    if (block.offloaded === true) {
+      blocks.push({ type: "text", text: offloadedImagePlaceholder(id) });
+      continue;
+    }
+    const bytes = typeof id === "string" ? images?.get(id) : undefined;
+    if (bytes === undefined) {
+      blocks.push({ type: "text", text: missingImagePlaceholder(id) });
+      continue;
+    }
+    blocks.push({
+      type: "image",
+      source: { type: "base64", media_type: bytes.mediaType, data: base64Of(bytes) },
+    });
+  }
+  return blocks.length === 0 ? [{ type: "text", text: "" }] : blocks;
+}
+
+/** 已 offloaded 的图片占位（宿主契约：只发占位，不发字节）。 */
+function offloadedImagePlaceholder(attachmentId: string | undefined): string {
+  return `[图片已卸载：${attachmentId ?? "未知附件"}（原图不在本次请求中）]`;
+}
+
 /** Chat Completions 的 messages 数组（旧插件 `buildOpenAIBody` 第 6564-6586 行）。 */
-function openAiMessages(messages: readonly RequestMessage[]): unknown[] {
+function openAiMessages(
+  messages: readonly RequestMessage[],
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): unknown[] {
   const out: unknown[] = [];
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
     if (message.role === "user") {
-      out.push({ role: "user", content: textOf(message.content) });
+      // 图片必须真的发出去（审查 U07）。
+      out.push({ role: "user", content: openAiUserContent(message.content, images) });
       continue;
     }
     if (message.role === "assistant") {
@@ -312,7 +404,10 @@ type MessagesBlock = Record<string, unknown>;
  * Messages 的 messages 数组（旧插件 `buildMessagesBody` 第 6617-6641 行的消息部分）。
  * 相邻同角色消息合并，避免上游对连续 user 消息的校验失败。
  */
-function anthropicMessages(messages: readonly RequestMessage[]): unknown[] {
+function anthropicMessages(
+  messages: readonly RequestMessage[],
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): unknown[] {
   const out: { role: string; content: MessagesBlock[] }[] = [];
   const push = (role: string, blocks: MessagesBlock[]): void => {
     const last = out.at(-1);
@@ -322,7 +417,8 @@ function anthropicMessages(messages: readonly RequestMessage[]): unknown[] {
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
     if (message.role === "user") {
-      push("user", [{ type: "text", text: textOf(message.content) }]);
+      // 图片必须真的发出去（审查 U07）。
+      push("user", messagesUserContent(message.content, images));
       continue;
     }
     if (message.role === "assistant") {
@@ -380,12 +476,17 @@ function cliThreadId(sessionId: string | undefined): string {
  * @param facts - 由适配器算出的请求事实。
  * @returns 可 `JSON.stringify` 的请求体。
  */
-export function buildRequestBody(protocol: CommandCodeProtocol, options: GenerateOptions, facts: BodyFacts): unknown {
+export function buildRequestBody(
+  protocol: CommandCodeProtocol,
+  options: GenerateOptions,
+  facts: BodyFacts,
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): unknown {
   const tools: readonly ToolSchema[] = options.tools ?? [];
   if (protocol === "openai") {
     return {
       model: options.model,
-      messages: [...(facts.systemText === "" ? [] : [{ role: "system", content: facts.systemText }]), ...openAiMessages(options.messages)],
+      messages: [...(facts.systemText === "" ? [] : [{ role: "system", content: facts.systemText }]), ...openAiMessages(options.messages, images)],
       ...(tools.length === 0
         ? {}
         : {
@@ -412,7 +513,7 @@ export function buildRequestBody(protocol: CommandCodeProtocol, options: Generat
       // 这个端点只认 `{ type: "adaptive" }`（`enabled` / `disabled` 都会被拒，旧插件第
       // 6593-6597 行的线上实测），而档位（`output_config.effort`）只有开了它才起作用。
       ...(facts.selectableEffort === true ? { thinking: { type: "adaptive" } } : {}),
-      messages: anthropicMessages(options.messages),
+      messages: anthropicMessages(options.messages, images),
       ...(facts.systemText === "" ? {} : { system: [{ type: "text", text: facts.systemText, cache_control: { type: "ephemeral" } }] }),
       ...(facts.reasoningEffort === undefined ? {} : { output_config: { effort: facts.reasoningEffort } }),
       ...(tools.length === 0
@@ -445,7 +546,7 @@ export function buildRequestBody(protocol: CommandCodeProtocol, options: Generat
     permissionMode: "standard",
     params: {
       model: options.model,
-      messages: openAiMessages(options.messages),
+      messages: openAiMessages(options.messages, images),
       tools: tools.map((tool) => ({
         type: "function",
         name: tool.name,

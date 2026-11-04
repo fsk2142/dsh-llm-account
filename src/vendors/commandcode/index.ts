@@ -69,6 +69,7 @@ import { registerSearchProvider } from "../search-provider";
 import { createSearchSlotSync } from "../search-release";
 import { probeSearchKey } from "../search-api";
 import { normalizeSearchKeyRefs } from "../../core/switching/search-keys";
+import { readImageBytes } from "../../core/image-projection";
 import { createUsagePort } from "../usage-store";
 import { modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
@@ -443,6 +444,8 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     fetchImpl: fetch,
     resolveStored: (ref) => credentials.resolve(ref),
     resolveEnvironment: (ref) => environmentValue(ctx, ref),
+    // 图片字节（2026-11-04 外部审查 U07）：原来完全没有这一项，图片被静默丢弃。
+    resolveImage: (ref, signal) => readImageBytes(ctx, ref, signal),
     authFileFallback: authKeyFromAuthFile,
     beforeRequest: (input) => switching.beforeRequest(input),
     // 用量采集：三条 provider 行共用一本台账（见 `usage-store`）。

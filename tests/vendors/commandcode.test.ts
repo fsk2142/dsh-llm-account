@@ -1,7 +1,7 @@
 import { LlmError, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { readFileSync } from "node:fs";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AccountPort, QuotaPort } from "../../src/core/adapter";
 import { RotationEngine } from "../../src/core/switching/rotation";
@@ -908,4 +908,131 @@ it("账号条目在但凭据解析不出 key 时也不返回模型", async () =>
   });
 
   await expect(adapter.listModels("commandcode")).resolves.toEqual([]);
+});
+
+/**
+ * 图片必须真的发出去（2026-11-04 外部审查 U07）。
+ *
+ * > 目录宣称image能力，混图出站只剩文字，纯图可变为空消息；流仍正常完成，
+ * > 用户无法知道模型没收到图。
+ *
+ * Command Code 有两条协议，两条各自要能带图：
+ *
+ * | 协议 | 图片形状 |
+ * | --- | --- |
+ * | `openai` | `{type:"image_url", image_url:{url:"data:…"}}` |
+ * | `messages` | `{type:"image", source:{type:"base64", media_type, data}}` |
+ */
+describe("U07 · Command Code 图片投影", () => {
+  /** 一张 1×1 PNG。 */
+  const PNG = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  ]);
+
+  /**
+   * 跑一次带图请求并交出请求体。
+   * @param options - 覆盖项。
+   * @returns 出站请求体。
+   */
+  async function bodyOf(options: {
+    /** 是否带图。 */
+    withImage?: boolean;
+    /** 图片是否已 offloaded。 */
+    offloaded?: boolean;
+    /** 是否提供字节读取器。 */
+    provideBytes?: boolean;
+  }): Promise<Record<string, unknown>> {
+    const { fetchImpl, bodies } = bodyCapturingFetch();
+    const content = options.withImage === false
+      ? [{ type: "text" as const, text: "只问文字" }]
+      : [
+          { type: "text" as const, text: "这张图是什么？" },
+          {
+            type: "image" as const,
+            attachment: { attachmentId: "att-1", mediaType: "image/png", bytes: PNG.byteLength, width: 1, height: 1 },
+            ...(options.offloaded === true ? { offloaded: true as const } : {}),
+          },
+        ];
+    const adapter = createCommandCodeAdapter({
+      config: () => ({ apiBase: "https://api.example.test" }),
+      rotation: new RotationEngine({ order: ["a"], rules: [], pinned: null }),
+      quota: stubQuota(),
+      accounts: stubAccounts(),
+      fetchImpl,
+      resolveStored: async () => "key-a",
+      ...(options.provideBytes === false
+        ? {}
+        : {
+            resolveImage: async (ref: { attachmentId: string }) => ({
+              attachmentId: ref.attachmentId,
+              data: PNG,
+              mediaType: "image/png",
+            }),
+          }),
+    });
+    await collect(adapter.stream({ ...request("deepseek/deepseek-v4.1-flash"), messages: [{ role: "user", content: content as never }] }));
+    expect(bodies.length, "应当发出请求").toBeGreaterThan(0);
+    return bodies.at(-1)!;
+  }
+
+  /**
+   * 从正文里取出所有 user 消息的内容块。
+   *
+   * **openai 协议的 messages 挂在 params 下**（`{ params: { messages: [...] } }`），
+   * 不是顶层 body.messages —— 读错层级会得到空列表，看起来像「图片没发出去」。
+   */
+  function userBlocks(body: Record<string, unknown>): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [];
+    const params = body.params;
+    const messages = Array.isArray(body.messages)
+      ? body.messages
+      : params !== null && typeof params === "object"
+        ? (params as Record<string, unknown>).messages
+        : undefined;
+    if (!Array.isArray(messages)) return out;
+    for (const message of messages) {
+      if (message === null || typeof message !== "object") continue;
+      const record = message as Record<string, unknown>;
+      if (record.role !== "user") continue;
+      const content = record.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block !== null && typeof block === "object") out.push(block as Record<string, unknown>);
+        }
+      }
+    }
+    return out;
+  }
+
+  it("**openai 协议：混图请求含 image_url 块**", async () => {
+    const body = await bodyOf({});
+    const blocks = userBlocks(body);
+    // openai 协议走的是 `choices` 线，正文里 user content 应当是数组。
+    const hasImage = blocks.some((block) => block.type === "image_url");
+    expect(hasImage, "目录宣称 image 能力就必须真的带图").toBe(true);
+  });
+
+  it("**取不到字节时发文字占位**，不静默丢弃", async () => {
+    const body = await bodyOf({ provideBytes: false });
+    const text = userBlocks(body)
+      .filter((block) => block.type === "text")
+      .map((block) => String(block.text ?? ""))
+      .join(" ");
+    expect(text, "取不到字节要让模型知道这里有图").toContain("图片未能发送");
+  });
+
+  it("纯文本请求不受影响", async () => {
+    const body = await bodyOf({ withImage: false });
+    expect(userBlocks(body).some((block) => block.type === "image_url")).toBe(false);
+  });
+
+  it("**offloaded 的图不读字节**（U13 契约）", async () => {
+    const body = await bodyOf({ offloaded: true });
+    expect(userBlocks(body).some((block) => block.type === "image_url")).toBe(false);
+    const text = userBlocks(body)
+      .filter((block) => block.type === "text")
+      .map((block) => String(block.text ?? ""))
+      .join(" ");
+    expect(text, "卸载的图要有占位说明").toContain("已卸载");
+  });
 });

@@ -27,6 +27,12 @@ import {
   attributionHeaders,
 } from "@deepseek-ai/dsh-llm";
 import { opencodeSessionHeaders } from "./session";
+import {
+  base64Of,
+  missingImagePlaceholder,
+  type ImageRefLike,
+  type RequestImageBytes,
+} from "../../core/image-projection";
 import type { ContentBlock, GenerateOptions, StreamChunk, TokenUsage, ToolSchema } from "@deepseek-ai/dsh-llm";
 import type {
   AssistantMessageEvent,
@@ -464,7 +470,65 @@ function toPiTool(tool: ToolSchema): PiTool {
  * @param options - 宿主的完整请求。
  * @returns pi-ai 的请求上下文（尚未 `normalizeContext`）。
  */
-export function toPiContext(options: GenerateOptions): PiContext {
+/**
+ * 把用户消息的内容块投影成 pi-ai 的形状：文本 + 图片（2026-11-04 外部审查 U07）。
+ *
+ * Anthropic 的图片形状是：
+ *
+ * ```json
+ * { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "…" } }
+ * ```
+ *
+ * 取不到字节或已被 offloaded 时发**占位文本** —— 两者都不许静默丢弃：
+ * 审查的原话是「流仍正常完成，用户无法知道模型没收到图」。
+ * @param content - 宿主的消息内容块。
+ * @param images - 已取到字节的图片（按 attachment id）。
+ * @returns pi-ai 的内容块数组。
+ */
+function piUserContent(
+  content: readonly ContentBlock[],
+  images: ReadonlyMap<string, RequestImageBytes> | undefined,
+): Extract<PiMessage, { role: "user" }>["content"] {
+  const blocks: Extract<PiMessage, { role: "user" }>["content"] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      if (block.text !== "") blocks.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type !== "image") continue;
+    const ref = block.attachment as ImageRefLike | undefined;
+    const id = ref?.attachmentId;
+    // 已卸载：只发占位，**绝不读字节**（U13 的契约：卸载是为了缩小请求）。
+    if (block.offloaded === true) {
+      blocks.push({ type: "text", text: offloadedImagePlaceholder(id) });
+      continue;
+    }
+    const bytes = typeof id === "string" ? images?.get(id) : undefined;
+    if (bytes === undefined) {
+      blocks.push({ type: "text", text: missingImagePlaceholder(id) });
+      continue;
+    }
+    // **pi-ai 的输入形状**是 `{ type: "image", mimeType, data }`：SDK 自己会包成
+    // Anthropic 的 `source: { type: "base64", media_type, data }`（见 anthropic-messages.js）。
+    // 直接写 `source` 会被丢掉，出站只剩 `{ type:"image", source:{ type:"base64" } }` —— 空壳。
+    blocks.push({
+      type: "image",
+      mimeType: bytes.mediaType,
+      data: base64Of(bytes),
+    } as never);
+  }
+  return blocks;
+}
+
+/** 已 offloaded 的图片占位文本（宿主契约：命名图片 + 只读路径，不发字节）。 */
+function offloadedImagePlaceholder(attachmentId: string | undefined): string {
+  return `[图片已卸载：${attachmentId ?? "未知附件"}（原图不在本次请求中）]`;
+}
+
+export function toPiContext(
+  options: GenerateOptions,
+  images?: ReadonlyMap<string, RequestImageBytes>,
+): PiContext {
   const messages: PiMessage[] = [];
   const toolNames = new Map<string, string>();
   for (const message of options.messages) {
@@ -509,11 +573,23 @@ export function toPiContext(options: GenerateOptions): PiContext {
       });
       continue;
     }
-    // 用户消息只取文本块（图片/文件投影属第 3 期）；工具结果**不在这里** ——
-    // 宿主把它们放在 `role: "tool"` 的独立消息里（上面那个分支）。
-    const text = textOf(message.content);
-    if (text !== "") {
-      messages.push({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
+    /**
+     * 用户消息：**文本 + 图片**（2026-11-04 外部审查 U07）。
+     *
+     * 原来只取 `textOf(...)`，图片块被直接跳过 —— 目录宣称 `image` 能力、用户也贴了图，
+     * 出站正文却只剩文字，而且流正常完成，用户完全无法察觉。
+     *
+     * 三类图分别处理：
+     * - `offloaded: true`：宿主已把这张图从请求里卸载，只发**占位文本**，不读字节
+     *   （审查 U13：不能把卸载的图又塞回去）；
+     * - 能取到字节：按 Anthropic 形状发 `image` + `source.base64`；
+     * - 取不到字节：发**占位文本**，绝不静默丢弃。
+     *
+     * 工具结果**不在这里** —— 宿主把它们放在 `role: "tool"` 的独立消息里（上面那个分支）。
+     */
+    const content = piUserContent(message.content, images);
+    if (content.length > 0) {
+      messages.push({ role: "user", content, timestamp: 0 });
     }
   }
   const tools = (options.tools ?? []).map((tool) => toPiTool(tool));

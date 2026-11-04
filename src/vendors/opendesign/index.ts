@@ -19,6 +19,7 @@
  * `disableSettingsAutoForm` 都与另两行同一套（装配顺序逐句对照 opencode）。
  * @module dsh-llm-account/src/vendors/opendesign/index
  */
+import { readImageBytes } from "../../core/image-projection";
 import { spawn } from "node:child_process";
 import type { Context } from "@deepseek-ai/cordis";
 import type { AdapterRegistrationHandle, LlmAdapter } from "@deepseek-ai/dsh-llm";
@@ -1015,48 +1016,3 @@ function waitForExit(child: ReturnType<typeof spawn>): Promise<number | null> {
   });
 }
 
-/**
- * 从宿主的 **attachment 服务**取一张图片的编码字节。
- *
- * 为什么需要这一层：宿主的 `ImageBlock` 只带 durable ref（`attachmentId`），**不含字节**。
- * 官方适配器（`dsh-llm-deepseek`）走的是同一条路：`ctx.get("attachments")` →
- * `readImageRequest(ref, target, signal)` → 拿到 `{ data, mediaType, width, height }`。
- *
- * 三处刻意的保守：
- * 1. **服务缺席就返回 `undefined`**（老宿主 / 附件插件未装）—— 图片降级成文字占位，
- *    不抛错、不假装发出去；
- * 2. **target 用宽高上限兜底**：拿不到原图尺寸时给一个足够大的目标，让附件服务自己按
- *    编码器的最优质量档降采样（`maxBytes` 给 5MB，远高于任何网关的内联上限）；
- * 3. 任何异常都吞掉并返回 `undefined`：一张图读失败不该让整次对话失败。
- * @param ctx - 插件上下文（用来 `get("attachments")`）。
- * @param ref - 宿主给的持久化图片引用。
- * @param signal - 请求取消信号。
- * @returns 编码后的字节与 MIME；拿不到时 `undefined`。
- */
-async function readImageBytes(
-  ctx: unknown,
-  ref: { attachmentId: string; mediaType?: string; bytes?: number; width?: number; height?: number },
-  signal?: AbortSignal,
-): Promise<{ attachmentId: string; data: Uint8Array; mediaType: string } | undefined> {
-  try {
-    const get = (ctx as { get?: (name: string) => unknown }).get;
-    const attachments = typeof get === "function" ? get.call(ctx, "attachments") : undefined;
-    // `isRecord` 已经排除 `null`（旧写法 `!isRecord(x) && typeof x !== "object"` 对 `null`
-    // 不成立 —— 那会落到下一行读属性并抛错，只靠外层 try/catch 兜住，读起来像覆盖了却漏了）。
-    if (!isRecord(attachments)) return undefined;
-    const read = (attachments as { readImageRequest?: unknown }).readImageRequest;
-    if (typeof read !== "function") return undefined;
-    // 目标尺寸交给编码器自己收敛：`width/height` 给源图上限量级，`maxBytes` 高于内联上限。
-    const target = { width: 4096, height: 4096, maxBytes: 5 * 1024 * 1024 };
-    const result: unknown = await (
-      read as (r: unknown, t: unknown, s?: AbortSignal) => Promise<unknown>
-    ).call(attachments, ref, target, signal);
-    if (!isRecord(result)) return undefined;
-    const data = result.data;
-    const mediaType = result.mediaType;
-    if (!(data instanceof Uint8Array) || typeof mediaType !== "string" || mediaType === "") return undefined;
-    return { attachmentId: ref.attachmentId, data, mediaType };
-  } catch {
-    return undefined;
-  }
-}

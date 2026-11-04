@@ -33,6 +33,7 @@ import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
 import { createSingleFlight } from "../../core/single-flight";
+import type { ImageRefLike, RequestImageBytes } from "../../core/image-projection";
 import { opencodeSessionHeaders } from "./session";
 import { createCredentialGuard, type CredentialGuard } from "../../core/credential-guard";
 import { OAUTH_PREFIX, resolveOAuthCredential } from "./oauth";
@@ -160,6 +161,14 @@ export interface OpencodeAdapterDeps {
   resolveStored?: (ref: string) => Promise<string | undefined>;
   /** `environment` 来源：启动环境读取（宿主 `launchEnvironmentOf(ctx).get(name)` 的注入点）。 */
   resolveEnvironment?: (name: string) => string | undefined;
+  /**
+   * 图片字节读取（宿主 `attachments.readImageRequest` 的注入点）。
+   *
+   * 2026-11-04 外部审查 U07：**原来根本没有这个依赖** —— 协议层只取文本，
+   * 图片被静默丢弃，而目录照样宣称 `image` 能力。接上之后，混图请求的图片
+   * 才会真的出现在出站正文里；取不到字节时降级成占位文本（仍不静默丢）。
+   */
+  resolveImage?: (ref: ImageRefLike, signal?: AbortSignal) => Promise<RequestImageBytes | undefined>;
   /** 凭据写入守卫（装配层注入，用于跨方法的代际协调）。 */
   credentialGuard?: CredentialGuard;
   /** 刷新后的 OAuth blob 回写凭据槽（只在原值是 blob、且确实刷新过时调用）。 */
@@ -623,6 +632,13 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const config = resolveConfig(raw);
     const record = await this.#recordFor(config, options.model, options.signal);
     const entry = record?.entry;
+    /**
+     * 取本次请求需要的图片字节（2026-11-04 外部审查 U07）。
+     *
+     * 没有 `resolveImage` 注入时返回空表 —— 协议层会把图片降级成占位文本，
+     * 仍然不静默丢弃。单张读失败同样只影响那一张。
+     */
+    const images = await imagesOf(options, this.#deps.resolveImage);
     const limits = raw.modelLimits?.[options.model];
     const contextWindow = limits?.contextWindow ?? entry?.contextWindow;
     const modelLimit = limits?.maxTokens ?? entry?.maxTokens;
@@ -648,7 +664,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     yield* runStream(
       streamOpencode({
         model,
-        context: toPiContext(options),
+        context: toPiContext(options, images),
         apiKey: auth.key,
         /**
          * **必须带 `x-opencode-session`**（2026-11-02 真机报障）。
@@ -964,4 +980,39 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
  */
 export function createOpencodeAdapter(deps: OpencodeAdapterDeps): LlmAdapter & CatalogModelsPort {
   return new OpencodeAdapter(deps);
+}
+
+/**
+ * 收集本次请求需要发送的图片字节。
+ *
+ * 只取**未被 offloaded** 的图片：`offloaded: true` 的含义是宿主已把这张图从请求里卸载，
+ * 再读字节等于把缩减后的请求又撑回去（审查 U13）。
+ * @param options - 宿主请求。
+ * @param resolve - 字节读取注入点。
+ * @returns attachment id → 字节。
+ */
+async function imagesOf(
+  options: GenerateOptions,
+  resolve: OpencodeAdapterDeps["resolveImage"],
+): Promise<ReadonlyMap<string, RequestImageBytes>> {
+  const images = new Map<string, RequestImageBytes>();
+  if (resolve === undefined) return images;
+  const wanted = new Map<string, ImageRefLike>();
+  for (const message of options.messages) {
+    for (const block of message.content) {
+      if (block.type !== "image" || block.offloaded === true) continue;
+      const ref = block.attachment as ImageRefLike | undefined;
+      const id = ref?.attachmentId;
+      if (typeof id === "string" && id !== "") wanted.set(id, ref as ImageRefLike);
+    }
+  }
+  for (const [id, ref] of wanted) {
+    try {
+      const bytes = await resolve(ref, options.signal);
+      if (bytes !== undefined) images.set(id, bytes);
+    } catch {
+      // 单张图读失败：留给协议层的占位文本，不打断整次请求。
+    }
+  }
+  return images;
 }

@@ -33,6 +33,11 @@ import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
+import {
+  wantedImagesOf,
+  type ImageRefLike,
+  type RequestImageBytes,
+} from "../../core/image-projection";
 import { parseCatalog } from "./catalog";
 import { knownEfforts } from "./efforts";
 import { classifyCommandCodeFailure, commandCodeLlmError } from "./failures";
@@ -151,6 +156,12 @@ export interface CommandCodeAdapterDeps {
   resolveStored?: (ref: string) => Promise<string | undefined>;
   /** `environment` 来源：启动环境读取（宿主 `launchEnvironmentOf(ctx).get(name)` 的注入点）。 */
   resolveEnvironment?: (name: string) => string | undefined;
+  /**
+   * 图片字节读取（2026-11-04 外部审查 U07 的注入点）。
+   *
+   * 原来没有这一项，协议层只取文本，图片被静默丢弃。
+   */
+  resolveImage?: (ref: ImageRefLike, signal?: AbortSignal) => Promise<RequestImageBytes | undefined>;
   /** 普通对话请求前的切换钩子；辅助调用（compaction/session-title）不调用。 */
   beforeRequest?: (input: { sessionId?: string; purpose?: string }) => Promise<void>;
   /**
@@ -583,11 +594,28 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
      * 流式阶段（`runStream`）同样用剩余预算，不再重置。
      */
     const deadline = new RequestDeadline(config.requestTimeoutMs);
+    /**
+     * 取本次请求需要的图片字节（2026-11-04 外部审查 U07）。
+     *
+     * 只取未被 offloaded 的图片；没有注入时返回空表，协议层会降级成占位文本 ——
+     * 仍然不静默丢弃。
+     */
+    const images = new Map<string, RequestImageBytes>();
+    if (this.#deps.resolveImage !== undefined) {
+      for (const [id, ref] of wantedImagesOf(options.messages)) {
+        try {
+          const bytes = await this.#deps.resolveImage(ref, options.signal);
+          if (bytes !== undefined) images.set(id, bytes);
+        } catch {
+          // 单张读失败：交给占位文本，不打断整次请求。
+        }
+      }
+    }
     const signalOpts = { ...(options.signal === undefined ? {} : { signal: options.signal }) };
     const deadlineOf = <T,>(operation: (signal?: AbortSignal) => Promise<T>): Promise<T> =>
       deadline.run(operation, config.streamIdleTimeoutMs, signalOpts);
     let response = await deadlineOf((signal) =>
-      this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
+      this.#post(config, protocol, key, buildRequestBody(protocol, options, facts, images), signal ?? options.signal),
     );
     if (!response.ok) {
       const body = await deadlineOf(() => readErrorBody(response));
@@ -595,7 +623,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
         // 回退顺序（旧插件第 7512-7519 行）：同一个账号、同一次尝试改用 CLI 传输重发。
         protocol = "cli";
         response = await deadlineOf((signal) =>
-          this.#post(config, protocol, key, buildRequestBody(protocol, options, facts), signal ?? options.signal),
+          this.#post(config, protocol, key, buildRequestBody(protocol, options, facts, images), signal ?? options.signal),
         );
         if (!response.ok) {
           const retryBody = await deadlineOf(() => readErrorBody(response));
