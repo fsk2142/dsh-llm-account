@@ -738,7 +738,6 @@ function modelRulesOf(document: Record<string, unknown>): ModelRule[] {
 }
 
 function accountStateOf(document: Record<string, unknown>): AccountState {
-  const slot = opencodeAccountSlot(document);
   const derived = orderOf(document);
   return {
     /**
@@ -752,7 +751,8 @@ function accountStateOf(document: Record<string, unknown>): AccountState {
      */
     order: document.autoSwitch === false ? derived.slice(0, 1) : derived,
     rules: modelRulesOf(document),
-    pinned: slot.pinned,
+    // 与 `pinnedRefOf` 同一判据：默认引用名不算固定账号（审查 U01）。
+    pinned: pinnedRefOf(document),
   };
 }
 
@@ -854,7 +854,25 @@ export function orderOf(document: Record<string, unknown>): string[] {
  * @returns 固定账号的 ref，或 `null`（自动轮换）。
  */
 function pinnedRefOf(document: Record<string, unknown>): string | null {
-  return opencodeAccountSlot(document).pinned;
+  const pinned = opencodeAccountSlot(document).pinned;
+  /**
+   * **默认引用名不算「固定」**（2026-11-04 外部审查 U01）。
+   *
+   * `select(null)`（取消固定）把顶层 `apiKeyEnv` 写成内置默认名，而那个名字在凭据库里
+   * 通常**不存在**。若把它当成固定账号，轮换引擎「永远先试 pinned」—— 于是
+   * `maxAttempts = 1` 时整次请求只打了幽灵槽，真实账号一个都不试，
+   * 报出来的却是「没有可用账号」。
+   *
+   * 与 `orderOf` 的判据保持一致：默认名按「没指定」处理。
+   *
+   * **但只在账号表里没有这个名字时才这样读**：用户可能真的固定了一个名叫
+   * `OPENCODE_API_KEY` 的账号（历史数据或手动命名），那种固定必须照常生效。
+   * 判据因此是「默认名 **且** 账号表查无此账号」，不是只看名字。
+   */
+  if (pinned === OPENCODE_DEFAULT_REF && accountRefsOf(document).length === 0) {
+    return null;
+  }
+  return pinned;
 }
 
 /** 额度读数报告的账号：固定账号优先，否则顺序里的第一个（下一个请求会用的那个）。 */

@@ -480,7 +480,7 @@ class OpencodeAccounts implements AccountPort {
    * 可选的目标包含**合成的默认槽**（{@link OPENCODE_DEFAULT_REF} 或顶层 `apiKeyEnv`，即使它
    * 不在 `accounts[]` 里）：`list()` 会把它列成第一行，页面拿这一行的 ref 回来固定时必须成立。
    * 写回的就是这个 ref 本身（opencode 的当前账号字段就是那一个 ref，没有槽 id 空间）。
-   * @param ref - 目标账号的 ref；`null` 表示自动轮换（写回默认引用名，旧插件第 6784-6786 行）。
+   * @param ref - 目标账号的 ref；`null` 表示自动轮换（**清空**顶层字段，见下）。
    */
   async select(ref: string | null): Promise<void> {
     if (ref !== null) {
@@ -489,7 +489,19 @@ class OpencodeAccounts implements AccountPort {
     }
     await this.#transaction("select", ref === null ? {} : { ref }, () =>
       this.#mutate(() => ({
-        ops: [{ op: "set", path: [ACTIVE_FIELD], value: ref ?? OPENCODE_DEFAULT_REF }],
+        /**
+         * 取消固定 = **清空**顶层当前账号字段（2026-11-04 外部审查 U01）。
+         *
+         * 旧写法在 `ref === null` 时写入 {@link OPENCODE_DEFAULT_REF}
+         * （`OPENCODE_API_KEY`）—— 那个名字在凭据库里通常**不存在**，而它又是一个
+         * 合法引用名，于是 `opencodeAccountSlot` 把它读成「用户固定了这个账号」。
+         * 后果：轮换引擎永远先试这个幽灵槽，`maxAttempts = 1` 时整次请求只打它，
+         * 真实账号一个都不试，却报「没有可用账号」。
+         *
+         * 空串在 `readAccountSlot` 里读作「没指定」（与字段缺失同义），所以清空是最
+         * 忠实的表达：既让自动轮换生效，也不留下一个指向空气的固定值。
+         */
+        ops: [{ op: "set", path: [ACTIVE_FIELD], value: ref ?? "" }],
         result: undefined,
       })),
     );

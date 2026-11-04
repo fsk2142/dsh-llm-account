@@ -551,14 +551,19 @@ it("replaceKey 走凭据服务，不写设置文档", async () => {
   expect(store.snapshot()).toEqual([]);
 });
 
-it("select 写当前账号：ref 固定该账号，null 回到默认引用名（自动轮换）", async () => {
+it("select 写当前账号：ref 固定该账号，null **清空**（自动轮换）", async () => {
+  // 2026-11-04 外部审查 U01：`select(null)` 原来写回 `OPENCODE_DEFAULT_REF`
+  // （`OPENCODE_API_KEY`）—— 那个名字在凭据库里通常不存在，却是个合法引用名，
+  // 于是被读成「用户固定了这个账号」。轮换引擎永远先试这个幽灵槽，
+  // `maxAttempts = 1` 时真实账号一个都不试，报「没有可用账号」。
   const { port, settings } = accountsPort(emptyDoc({ accounts: [entry("A", "a"), entry("B", "b")] }));
 
   await port.select("a");
   expect(settings.doc().apiKeyEnv).toBe("a");
 
   await port.select(null);
-  expect(settings.doc().apiKeyEnv).toBe(OPENCODE_DEFAULT_REF);
+  // 空串在 `readAccountSlot` 里读作「没指定」，与字段缺失同义。
+  expect(settings.doc().apiKeyEnv, "取消固定必须清空，不能留幽灵名").toBe("");
 
   await expect(port.select("missing")).rejects.toThrow(/unknown account ref/);
 });
