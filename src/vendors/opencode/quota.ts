@@ -34,6 +34,7 @@ import { opencodeSessionHeaders } from "./session";
 import type { QuotaPlan, QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
 import { DEFAULT_BASE_URL, isRecord, trimBase } from "./protocol";
+import { OAUTH_PREFIX, resolveOAuthCredential } from "./oauth";
 
 /** 额度端点路径（旧插件 `fetchUsage` 第 7899 行）。 */
 export const USAGE_PATH = "/usage";
@@ -100,6 +101,38 @@ export class OpencodeUsageError extends LlmError {
 }
 
 /** 额度端口的依赖。取数用的密钥与账号都要注入，端口自己不依赖 `ctx`。 */
+/**
+ * 把凭据串解成「这次额度请求要用的鉴权」。
+ *
+ * **网页登录（`ocoauth1:` 前缀）必须解成 access token + org 头**（审查 U02）：
+ * 整串 blob 当 Bearer 会 401，表现为「聊天能用、额度读不到」。
+ *
+ * 普通 API key 原样返回，且**不产生 org 头**（那类凭据没有 org 概念）。
+ * @param raw - 凭据原始值。
+ * @param deps - 额度端口依赖（取 fetch / authBase / now）。
+ * @returns 请求要用的 key 与额外头。
+ */
+async function opencodeAuthOf(
+  raw: string,
+  deps: OpencodeQuotaDeps,
+): Promise<{ key: string; headers?: Record<string, string> }> {
+  if (!raw.startsWith(OAUTH_PREFIX)) return { key: raw };
+  try {
+    const resolved = await resolveOAuthCredential(raw, {
+      fetchImpl: deps.fetchImpl,
+      ...(deps.authBase === undefined ? {} : { authBase: deps.authBase }),
+      ...(deps.now === undefined ? {} : { now: deps.now }),
+    });
+    if (resolved === undefined) return { key: raw };
+    return {
+      key: resolved.key,
+      ...(resolved.headers === undefined ? {} : { headers: resolved.headers }),
+    };
+  } catch {
+    // 解析失败就按原值发 —— 让网关回答 401，而不是在本模块里伪造失败分类。
+    return { key: raw };
+  }
+}
 export interface OpencodeQuotaDeps {
   /** 这一读要报告的账号 ref；`undefined` 表示当前没有选中账号。 */
   ref: () => string | undefined;
@@ -111,6 +144,14 @@ export interface OpencodeQuotaDeps {
   apiBase?: string;
   /** 请求预算（毫秒）；缺省 {@link DEFAULT_USAGE_TIMEOUT_MS}。 */
   timeoutMs?: number;
+  /**
+   * Console 基地址（OAuth 刷新端点用）；缺省 {@link DEFAULT_AUTH_BASE}。
+   *
+   * 只有网页登录的凭据会用到它 —— 见 {@link opencodeAuthOf}。
+   */
+  authBase?: string;
+  /** 时钟（测试注入）。 */
+  now?: () => number;
 }
 
 /** 读取非空字符串。 */
@@ -344,14 +385,26 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
       }
       const key = normalizeKey(resolved);
       if (key === undefined) throw missingKeyError();
+      /**
+       * **网页登录的凭据要解成 access token**（2026-11-04 外部审查 U02）。
+       *
+       * 聊天路径（adapter）走 `resolveOAuthCredential`：解出 access 并补
+       * `x-opencode-org-id`。额度路径原来没有这一步 —— 直接把 `ocoauth1:<blob>`
+       * 整串塞进 `Authorization: Bearer`，网关必然 401。
+       *
+       * 症状就是审查描述的：**能聊天、读不到额度**。
+       */
+      const auth = await opencodeAuthOf(key, deps);
 
       let response: Response;
       try {
         response = await deps.fetchImpl(`${base}${USAGE_PATH}`, {
           headers: {
           accept: "application/json",
-          Authorization: `Bearer ${key}`,
+            Authorization: `Bearer ${auth.key}`,
           // 网关对缺会话头的请求直接 400 MissingSessionID（2026-11-02）。
+            // 网页登录时要带 org 头（与聊天路径一致，见 opencodeAuthOf）。
+            ...(auth.headers ?? {}),
           ...opencodeSessionHeaders(),
           ...attributionHeaders(),
         },

@@ -886,11 +886,25 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       return true;
     }
     if (rows.length === 0) return false;
-    // 有条目但全都解析不出 key（凭据被删）：同样视为「没有可用账号」。
+    /**
+     * 有条目但全都解析不出 key（凭据被删）：视为「没有可用账号」。
+     *
+     * **判定必须与实际解析路径一致**（2026-11-04 外部审查 U09）：`stream` 走
+     * `resolveStored → resolveEnvironment` 两个来源，而这里原来只看 `resolveStored`。
+     * 于是「密钥配在环境变量里」的用户：`stream` 能成功，模型列表却是空的 ——
+     * 表现为「明明能聊天，模型选择器里什么都没有」。
+     *
+     * 两种来源都没注入时**仍按「无法判定」放过**（宁可多列几个用不了的，
+     * 也不误伤 —— 这是原有语义，不能弄丢）。
+     */
     for (const row of rows) {
       try {
-        const port = this.#deps.resolveStored;
-        if (port === undefined || (await port(row.ref)) !== undefined) return true;
+        const stored = this.#deps.resolveStored;
+        const environment = this.#deps.resolveEnvironment;
+        if (stored === undefined && environment === undefined) return true;
+        // 与 `resolveAccountKey` 同一次序：stored 优先，其次 environment。
+        if (stored !== undefined && (await stored(row.ref)) !== undefined) return true;
+        if (environment !== undefined && environment(row.ref) !== undefined) return true;
       } catch {
         return true;
       }
