@@ -30,9 +30,11 @@ import { applyAutoContinue, CONTINUE_PROMPT, type AutoContinueProbe } from "../.
 function hostOf(): {
   fire(event: string, ...args: unknown[]): Promise<void>;
   on(event: string, listener: (...args: unknown[]) => unknown): unknown;
+  get(name: string): unknown;
 } {
   const listeners = new Map<string, ((...args: unknown[]) => unknown)[]>();
   return {
+    get: (name) => name === "agents" ? { currentInitiator: () => ({ session: { id: "test-session" } }) } : undefined,
     on(event, listener) {
       const list = listeners.get(event) ?? [];
       list.push(listener);

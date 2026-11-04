@@ -33,6 +33,7 @@ import {
 
 /** 宿主 context 里本模块用到的最小形状（不绑定具体 cordis 类型）。 */
 export interface AutoContinueHost {
+  get?(name: string): unknown;
   on(event: string, listener: (...args: unknown[]) => unknown): unknown;
 }
 
@@ -58,7 +59,7 @@ export interface AutoContinueProbe {
    * 2. `append` 的第一个参数是 **target 字面量**。原来只传一个 message，
    *    运行时会把 message 当成 target，消息根本进不了 inbox。
    */
-  inbox: { append(target: "next-step", message: unknown): unknown };
+  inbox?: { append(target: "next-step", message: unknown): unknown };
   /**
    * 最近一次的结束原因（宿主 `finish.kind`：`"max-tokens"` 表示被输出上限截断）。
    *
@@ -66,7 +67,18 @@ export interface AutoContinueProbe {
    * `finish` 里，而订阅会话事件属于装配层的事。缺省返回 `undefined`，
    * 于是「截断续写」这条路径**默认不触发** —— 宁可什么都不做，也不要误续写。
    */
-  lastFinishReason?: () => string | undefined;
+  lastFinishReason?: (sessionId: string, turn: number) => string | undefined;
+}
+
+/** The host scopes currentInitiator to the active run; never infer identity from another event. */
+function currentSessionId(ctx: AutoContinueHost): string | undefined {
+  try {
+    const agents = ctx.get?.("agents") as { currentInitiator?: () => { session?: { id?: unknown } } | undefined } | undefined;
+    const id = agents?.currentInitiator?.()?.session?.id;
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 续写时发给模型的用户消息（用户可读，也是模型能理解的指令）。 */
@@ -156,14 +168,14 @@ export function applyAutoContinue(
 ): () => void {
   const disposers: (() => void)[] = [];
 
-  /** 每**轮次**的已自动继续次数：`turn` 变了就重新计数。 */
-  const attemptsByTurn = new Map<number, number>();
-  const attemptsOf = (turn: number): number => attemptsByTurn.get(turn) ?? 0;
-  const bump = (turn: number): void => {
-    attemptsByTurn.set(turn, attemptsOf(turn) + 1);
-    // 只留最近几轮：这个表不该无限长（长会话里 turn 会一直涨）。
-    if (attemptsByTurn.size > 32) {
-      const oldest = [...attemptsByTurn.keys()].sort((left, right) => left - right)[0];
+  // Both retries and truncation continuations share this session/turn budget.
+  const attemptsByTurn = new Map<string, number>();
+  const keyOf = (sessionId: string, turn: number): string => JSON.stringify([sessionId, turn]);
+  const attemptsOf = (sessionId: string, turn: number): number => attemptsByTurn.get(keyOf(sessionId, turn)) ?? 0;
+  const bump = (sessionId: string, turn: number): void => {
+    attemptsByTurn.set(keyOf(sessionId, turn), attemptsOf(sessionId, turn) + 1);
+    if (attemptsByTurn.size > 1024) {
+      const oldest = attemptsByTurn.keys().next().value;
       if (oldest !== undefined) attemptsByTurn.delete(oldest);
     }
   };
@@ -194,7 +206,9 @@ export function applyAutoContinue(
         typeof next === "function" ? await (next as () => Promise<unknown>)() : undefined;
 
       const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
-      const turn = typeof record.turn === "number" ? record.turn : 0;
+      const sessionId = currentSessionId(ctx);
+      const turn = record.turn;
+      if (sessionId === undefined || typeof turn !== "number" || !Number.isSafeInteger(turn) || turn < 0) return await handOff();
       const failure =
         typeof record.failure === "object" && record.failure !== null
           ? (record.failure as Record<string, unknown>)
@@ -209,12 +223,12 @@ export function applyAutoContinue(
        */
       const signal = record.signal instanceof AbortSignal ? record.signal : undefined;
       const current = settings();
-      const attempts = attemptsOf(turn);
+      const attempts = attemptsOf(sessionId, turn);
       if (!shouldRetryFailure(current, code, attempts)) {
         // 不归我们重试：**必须交棒**，否则会截断宿主自己的重试链。
         return await handOff();
       }
-      bump(turn);
+      bump(sessionId, turn);
       /**
        * **按配置的间隔等待再重试**。
        *
@@ -242,14 +256,18 @@ export function applyAutoContinue(
   if (probe !== undefined) {
     const off = ctx.on("agent/turn-stopping", async (payload: unknown) => {
       const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
-      const turn = typeof record.turn === "number" ? record.turn : 0;
-      const reason = probe.lastFinishReason?.();
+      const sessionId = currentSessionId(ctx);
+      const turn = record.turn;
+      if (sessionId === undefined || typeof turn !== "number" || !Number.isSafeInteger(turn) || turn < 0) return undefined;
+      const inbox = probe.inbox;
+      if (inbox === undefined) return undefined;
+      const reason = probe.lastFinishReason?.(sessionId, turn);
       const current = settings();
-      if (!shouldContinueOnTruncate(current, reason, attemptsOf(turn))) return undefined;
-      bump(turn);
+      if (!shouldContinueOnTruncate(current, reason, attemptsOf(sessionId, turn))) return undefined;
+      bump(sessionId, turn);
       // 推一条消息 → 宿主随后检查 `inbox.nextStep.length` 时不再为 0，本轮继续。
     // 必须带 target（宿主 Inbox.append(target, message)）：只传消息的话，运行时会把消息当成 target，本轮照样结束。
-    probe.inbox.append("next-step", continuationMessage());
+      inbox.append("next-step", continuationMessage());
       return undefined;
     });
     if (typeof off === "function") disposers.push(off as () => void);

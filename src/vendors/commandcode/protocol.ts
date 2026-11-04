@@ -11,7 +11,7 @@
  * 3. 其余失败交给适配器的失败分类（不在这里换账号）。
  * @module dsh-llm-account/src/vendors/commandcode/protocol
  */
-import { EMPTY_RESPONSE_CODE, ToolCallId, attributionHeaders, LlmError } from "@deepseek-ai/dsh-llm";
+import { CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, EMPTY_RESPONSE_CODE, ToolCallId, attributionHeaders, LlmError } from "@deepseek-ai/dsh-llm";
 import type {
   ContentBlock,
   FinishReason,
@@ -580,7 +580,7 @@ export function buildRequestBody(
  * 刻意不是 `LlmError`：它承载的是「厂商原始状态 + 原始正文」，由适配器用
  * {@link classifyCommandCodeFailure} 统一分类；直接抛给宿主会丢掉分类所需的证据。
  */
-export class CommandCodeStreamFailure extends Error {
+export class CommandCodeStreamFailure extends LlmError {
   /** 厂商给出的 HTTP 状态；流中途事件未带状态时为 `0`。 */
   readonly status: number;
   /** 厂商给出的原始错误正文。 */
@@ -591,7 +591,11 @@ export class CommandCodeStreamFailure extends Error {
    * @param body - 原始错误正文。
    */
   constructor(status: number, body: unknown) {
-    super(`Command Code stream error (status ${status})`);
+    const detail = typeof body === "string" ? body : JSON.stringify(body) ?? "";
+    const overflow = isContextWindowExceededError(detail);
+    super(`Command Code stream error (status ${status})${overflow ? `: ${detail}` : ""}`,
+      overflow ? CONTEXT_WINDOW_EXCEEDED_CODE : "PROVIDER_HTTP_ERROR",
+      status >= 100 ? { status } : undefined);
     this.name = "CommandCodeStreamFailure";
     this.status = status;
     this.body = body;

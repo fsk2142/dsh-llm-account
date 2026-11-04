@@ -108,7 +108,7 @@ function fakeHost(services: Readonly<Record<string, unknown>> = {}): FakeHost {
   const registrations: RecordedRegistration[] = [];
   const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
   const disposers: (() => void)[] = [];
-  const serviceMap = new Map(Object.entries(services));
+  const serviceMap = new Map(Object.entries({ agents: { currentInitiator: () => ({ session: { id: "test-session" } }) }, ...services }));
   const host = {
     llm: {
       registerAdapter(routes: string[], adapter: unknown): (() => void) & { replace: (next: string[]) => void } {
@@ -1474,4 +1474,37 @@ it("legacy continuation repair leaves user messages and other producers untouche
   const { decision } = await host.fireWaterfall("agent/pre-step", { messages });
   expect(decision).toMatchObject({ kind: "enter" });
   for (let index = 0; index < originals.length; index += 1) expect(messages[index]).toBe(originals[index]);
+});
+
+it("continuation uses only the current session's finish from the current turn", async () => {
+  const callsA: unknown[] = [], callsB: unknown[] = [];
+  const agentA = { session: { id: "A" }, inbox: { append: (_target: unknown, message: unknown) => callsA.push(message) } };
+  const agentB = { session: { id: "B" }, inbox: { append: (_target: unknown, message: unknown) => callsB.push(message) } };
+  let current: typeof agentA | undefined = agentA;
+  const settings = fakeSettings([{ ns: "llm-commandcode", value: { ...COMMAND_CODE_SHAPE, autoContinue: true, autoContinueMaxAttempts: 5 }, revision: 1 }]);
+  const host = fakeHost({ agents: { currentInitiator: () => current }, settings: settings.service });
+  commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, autoContinue: true, autoContinueMaxAttempts: 5 }));
+  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "max-tokens" } } });
+  host.emit("session/event", agentB.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "stop" } } });
+  await host.fireWaterfall("agent/turn-stopping", { turn: 1 });
+  expect(callsA).toHaveLength(1);
+  current = agentB;
+  await host.fireWaterfall("agent/turn-stopping", { turn: 1 });
+  expect(callsB).toHaveLength(0);
+  host.emit("session/event", agentB.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "max-tokens" } } });
+  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 1, finish: { kind: "stop" } } });
+  current = agentA;
+  await host.fireWaterfall("agent/turn-stopping", { turn: 1 });
+  expect(callsA, "another session's truncation must not continue this session").toHaveLength(1);
+  current = agentB;
+  await host.fireWaterfall("agent/turn-stopping", { turn: 1 });
+  expect(callsB).toHaveLength(1);
+  current = agentA;
+  await host.fireWaterfall("agent/turn-stopping", { turn: 2 });
+  expect(callsA, "an older turn's truncation cannot continue a newer turn").toHaveLength(1);
+  current = undefined;
+  host.emit("agent/pre-step", { agent: agentA, messages: [] });
+  host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 2, finish: { kind: "max-tokens" } } });
+  await host.fireWaterfall("agent/turn-stopping", { turn: 2 });
+  expect(callsA, "no current initiator must not use a previous agent").toHaveLength(1);
 });

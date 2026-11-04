@@ -17,8 +17,11 @@ import { DEFAULT_AUTO_CONTINUE } from "../../src/core/switching/auto-continue";
 
 /** 记录事件注册的最小假 ctx。 */
 function fakeCtx() {
+  let sessionId: string | undefined = "test-session";
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const ctx = {
+    setSession: (id: string | undefined) => { sessionId = id; },
+    get: (name: string) => name === "agents" ? { currentInitiator: () => sessionId === undefined ? undefined : { session: { id: sessionId } } } : undefined,
     on(event: string, listener: (...args: unknown[]) => unknown) {
       handlers.set(event, listener);
       return () => handlers.delete(event);
@@ -359,4 +362,45 @@ it("continuation messages satisfy the real host's durable message consumer", asy
   expect(message?.id).toBeTruthy();
   expect(message?.source.kind).toBe("dsh-llm-account-auto-continue");
   expect(message?.content).toEqual([{ type: "text", text: "继续" }]);
+});
+
+it("interleaved sessions have independent retry budgets at the same turn", async () => {
+  const ctx = fakeCtx();
+  applyAutoContinue(ctx, () => ({ enabled: true, maxAttempts: 1, intervalMs: 10 }));
+  const payload = { turn: 1, failure: { code: "TRANSPORT" } };
+  ctx.setSession("A");
+  const retryA = ctx.fire("agent/request-error", payload);
+  ctx.setSession("B");
+  const retryB = ctx.fire("agent/request-error", payload);
+  expect(await retryA).toEqual({ kind: "retry" });
+  expect(await retryB).toEqual({ kind: "retry" });
+  ctx.setSession("A");
+  expect(await ctx.fire("agent/request-error", payload)).toBeUndefined();
+  ctx.setSession("B");
+  expect(await ctx.fire("agent/request-error", payload)).toBeUndefined();
+});
+
+it("interleaved sessions have independent continuation budgets", async () => {
+  const ctx = fakeCtx();
+  const appended: unknown[] = [];
+  applyAutoContinue(ctx, () => ({ enabled: true, maxAttempts: 1, intervalMs: 0 }), {
+    inbox: { append: (_target, message) => appended.push(message) },
+    lastFinishReason: () => "max-tokens",
+  });
+  ctx.setSession("A"); await ctx.fire("agent/turn-stopping", { turn: 1 });
+  ctx.setSession("B"); await ctx.fire("agent/turn-stopping", { turn: 1 });
+  expect(appended).toHaveLength(2);
+});
+
+it("missing current session hands failures downstream and skips continuation", async () => {
+  const ctx = fakeCtx();
+  const appended: unknown[] = [];
+  applyAutoContinue(ctx, () => ({ enabled: true, maxAttempts: 1, intervalMs: 0 }), {
+    inbox: { append: (_target, message) => appended.push(message) },
+    lastFinishReason: () => "max-tokens",
+  });
+  ctx.setSession(undefined);
+  expect(await ctx.fire("agent/request-error", { turn: 1, failure: { code: "TRANSPORT" } }, async () => "downstream")).toBe("downstream");
+  await ctx.fire("agent/turn-stopping", { turn: 2 });
+  expect(appended).toHaveLength(0);
 });

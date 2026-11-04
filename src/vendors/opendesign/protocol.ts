@@ -17,7 +17,7 @@
  * `src/core/transport.ts` 的 `runStream`）。
  * @module dsh-llm-account/src/vendors/opendesign/protocol
  */
-import { EMPTY_RESPONSE_CODE, ToolCallId, attributionHeaders, LlmError } from "@deepseek-ai/dsh-llm";
+import { CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, EMPTY_RESPONSE_CODE, ToolCallId, attributionHeaders, LlmError } from "@deepseek-ai/dsh-llm";
 import type {
   ContentBlock,
   FinishReason,
@@ -349,7 +349,7 @@ export function errorReasonOf(body: unknown): string | undefined {
  *
  * 消息里**带上从正文提取的原因**（如果提取得到）：只报状态码的报错，用户无法自查。
  */
-export class OpenDesignStreamFailure extends Error {
+export class OpenDesignStreamFailure extends LlmError {
   /** 厂商给出的 HTTP 状态；流中途事件未带状态时为 `0`。 */
   readonly status: number;
   /** 厂商给出的原始错误正文。 */
@@ -361,7 +361,10 @@ export class OpenDesignStreamFailure extends Error {
    */
   constructor(status: number, body: unknown) {
     const reason = errorReasonOf(body);
-    super(`Open Design stream error (status ${status})${reason === undefined ? "" : `：${reason}`}`);
+    const detail = typeof body === "string" ? body : JSON.stringify(body) ?? "";
+    super(`Open Design stream error (status ${status})${reason === undefined ? "" : `：${reason}`}`,
+      isContextWindowExceededError(detail) ? CONTEXT_WINDOW_EXCEEDED_CODE : "PROVIDER_HTTP_ERROR",
+      status >= 100 ? { status } : undefined);
     this.name = "OpenDesignStreamFailure";
     this.status = status;
     this.body = body;

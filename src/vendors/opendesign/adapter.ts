@@ -975,6 +975,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * （换账号没有意义），调用方应原样上抛。
    */
   #classify(error: unknown): AttemptFailure | undefined {
+    // Context pressure belongs to the host compaction engine, including in-band errors.
+    if (error instanceof LlmError && error.code === "CONTEXT_WINDOW_EXCEEDED") return undefined;
     if (error instanceof OpenDesignStreamFailure) {
       const rejection = classifyOpenDesignFailure(error.status, error.body);
       if (rejection === undefined) return undefined;
