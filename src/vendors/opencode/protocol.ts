@@ -30,6 +30,7 @@ import { opencodeSessionHeaders } from "./session";
 import {
   base64Of,
   fileBlockText,
+  assistantImageText,
   assertProjectableContent,
   missingImagePlaceholder,
   type ImageRefLike,
@@ -557,6 +558,7 @@ export function toPiContext(
       for (const block of message.content) {
         if (block.type === "text") blocks.push({ type: "text", text: block.text });
         else if (block.type === "file") blocks.push({ type: "text", text: fileBlockText(block) });
+        else if (block.type === "image") blocks.push({ type: "text", text: assistantImageText(block) });
         else if (block.type === "reasoning") blocks.push({ type: "thinking", thinking: block.text });
         else if (block.type === "tool-call") {
           toolNames.set(block.id, block.name);

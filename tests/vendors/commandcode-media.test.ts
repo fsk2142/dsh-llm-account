@@ -13,8 +13,8 @@ const images: ReadonlyMap<string, RequestImageBytes> = new Map([["sha256:image",
 }]]);
 const text = { type: "text", text: "result text" };
 const protocols = ["openai", "messages", "cli"] as const;
-function request(protocol: typeof protocols[number], messages: unknown[], state: "bytes" | "offloaded" | "missing" = "bytes"): any {
-  const body = buildRequestBody(protocol, { provider: "commandcode", model: "fixture", messages } as GenerateOptions,
+function request(protocol: typeof protocols[number], messages: unknown[], state: "bytes" | "offloaded" | "missing" = "bytes", purpose?: GenerateOptions["purpose"]): any {
+  const body = buildRequestBody(protocol, { provider: "commandcode", model: "fixture", messages, ...(purpose === undefined ? {} : { purpose }) } as GenerateOptions,
     { maxTokens: 32, systemText: "" }, state === "missing" ? undefined : images) as any;
   return protocol === "cli" ? body.params : body;
 }
@@ -73,10 +73,28 @@ describe.each(protocols)("CommandCode %s preserves media through the complete re
     }
   });
 
-  it.each(["bytes", "offloaded", "missing"] as const)("assistant image (%s) fails explicitly instead of disappearing", (state) => {
-    expect(() => request(protocol, [{ role: "assistant", content: [text, file, image(state)] }], state)).toThrow(
-      expect.objectContaining({ code: "UNSUPPORTED_CONTENT" }),
-    );
+  for (const purpose of [undefined, "compaction", "session-title"] as const) {
+    it.each(["bytes", "offloaded", "missing"] as const)(`assistant history image (%s) for ${purpose ?? "chat"} preserves text and an image placeholder`, (state) => {
+      const body = request(protocol, [{ role: "assistant", content: [text, file, image(state)] }], state, purpose);
+      const serialized = JSON.stringify(body.messages);
+      expect(serialized).toContain("result text");
+      expect(serialized).toContain("report.txt");
+      expect(serialized).toContain("sha256:image");
+      expect(serialized).not.toContain("iVBORw==");
+      expect(serialized).not.toContain("image_url");
+      expect(serialized).not.toContain('"type":"image"');
+    });
+    it.each(["system", "developer"] as const)(`%s images remain explicitly unsupported for ${purpose ?? "chat"}`, (role) => {
+      expect(() => request(protocol, [{ role, content: [text, image()] }], "bytes", purpose)).toThrow(
+        expect.objectContaining({ code: "UNSUPPORTED_CONTENT" }),
+      );
+    });
+  }
+  it("pure assistant history images stay visible as a placeholder during compaction", () => {
+    const body = request(protocol, [{ role: "assistant", content: [image()] }], "bytes", "compaction");
+    expect(body.messages).toHaveLength(1);
+    expect(JSON.stringify(body.messages[0])).toContain("sha256:image");
+    expect(JSON.stringify(body.messages[0])).not.toContain("iVBORw==");
   });
 
   it.each(["user", "tool", "assistant", "system", "developer"] as const)("%s file retains the host file handle", (role) => {

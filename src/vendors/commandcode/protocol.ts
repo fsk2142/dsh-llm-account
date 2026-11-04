@@ -24,6 +24,7 @@ import type {
 import { randomUUID } from "node:crypto";
 import {
   assertProjectableContent,
+  assistantImageText,
   base64Of,
   dataUrlOf,
   fileBlockText,
@@ -281,11 +282,12 @@ export interface BodyFacts {
 }
 
 /** Keep text and the host file handle when this message position needs plain text. */
-function textOf(content: readonly ContentBlock[]): string {
+function textOf(content: readonly ContentBlock[], assistantImages = false): string {
   const parts: string[] = [];
   for (const block of content) {
     if (block.type === "text") parts.push(block.text);
     else if (block.type === "file") parts.push(fileBlockText(block));
+    else if (block.type === "image" && assistantImages) parts.push(assistantImageText(block));
   }
   return parts.join("");
 }
@@ -412,7 +414,7 @@ function openAiMessages(
     }
     if (message.role === "assistant") {
       const calls = message.content.filter((block) => block.type === "tool-call");
-      const text = textOf(message.content);
+      const text = textOf(message.content, true);
       out.push({
         role: "assistant",
         content: text,
@@ -471,7 +473,7 @@ function anthropicMessages(
     }
     if (message.role === "assistant") {
       const blocks: MessagesBlock[] = [];
-      const text = textOf(message.content);
+      const text = textOf(message.content, true);
       if (text !== "") blocks.push({ type: "text", text });
       for (const block of message.content) {
         if (block.type !== "tool-call") continue;

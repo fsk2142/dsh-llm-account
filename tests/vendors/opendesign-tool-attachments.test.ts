@@ -47,8 +47,16 @@ it.each([false, true])("keeps missing or offloaded tool images visible without s
   expect(wire).not.toContain("image_url");
 });
 
-it("rejects assistant images explicitly instead of silently deleting them", () => {
-  expect(() => project([{ role: "assistant", content: [image] }])).toThrowError(expect.objectContaining({ code: "UNSUPPORTED_CONTENT" }));
+it.each([undefined, "compaction", "session-title"])("preserves assistant image history as text for purpose %s", (purpose) => {
+  const body = buildRequestBody({ provider: "opendesign", model: "vision", ...(purpose === undefined ? {} : { purpose }), messages: [
+    { role: "assistant", content: [{ type: "text", text: "historical text" }, image] },
+    { role: "user", content: [{ type: "text", text: "continue" }] },
+  ] } as unknown as GenerateOptions, { maxTokens: 100, systemText: "" }, images) as { messages: Record<string, unknown>[] };
+  expect(body.messages.map((message) => message.role)).toEqual(["assistant", "user"]);
+  expect(body.messages[0]?.content).toContain("historical text");
+  expect(body.messages[0]?.content).toContain("shot");
+  expect(JSON.stringify(body)).not.toContain("data:image");
+  expect(JSON.stringify(body)).not.toContain("image_url");
 });
 
 it.each(["system", "developer"])("preserves raw %s file handles alongside the supplied system text", (role) => {

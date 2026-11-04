@@ -1,5 +1,5 @@
 import {describe,it,expect} from "vitest";
-import {fileBlockText,assertProjectableContent,wantedImagesOf} from "../../src/core/image-projection";
+import {fileBlockText,assertProjectableContent,wantedImagesOf,assistantImageText} from "../../src/core/image-projection";
 const image={type:"image",attachment:{attachmentId:"img-1"}} as const;
 const file={type:"file",attachment:{attachmentId:"sha256:"+"a".repeat(64),name:"manual.pdf",bytes:123}} as const;
 describe("non-text content contracts",()=>{
@@ -9,7 +9,7 @@ describe("non-text content contracts",()=>{
  it.each([null,{}, {attachmentId:"x",name:"x"},{attachmentId:"x",name:"x",bytes:-1}])("rejects malformed file reference %j",attachment=>{
   expect(()=>fileBlockText({type:"file",attachment} as never)).toThrowError(expect.objectContaining({code:"UNSUPPORTED_CONTENT"}));
  });
- it.each(["assistant","system","developer"])("rejects %s images before collecting bytes",role=>{
+ it.each(["system","developer"])("rejects %s images before collecting bytes",role=>{
   const messages=[{role,content:[image]}];
   expect(()=>assertProjectableContent(messages as never)).toThrowError(expect.objectContaining({code:"UNSUPPORTED_CONTENT"}));
   expect(()=>wantedImagesOf(messages as never)).toThrowError(expect.objectContaining({code:"UNSUPPORTED_CONTENT"}));
@@ -21,4 +21,8 @@ describe("non-text content contracts",()=>{
  it("does not re-read offloaded tool images",()=>{
   expect(wantedImagesOf([{role:"tool",content:[{...image,offloaded:true}]}] as never).size).toBe(0);
  });
+});
+
+it("assistant history preserves an explicit marker without attachment reads",()=>{
+ const messages=[{role:"assistant",content:[image]}];expect(()=>assertProjectableContent(messages as never)).not.toThrow();expect(wantedImagesOf(messages as never).size).toBe(0);expect(assistantImageText(image as never)).toContain("img-1");expect(assistantImageText(image as never)).toContain("历史");
 });

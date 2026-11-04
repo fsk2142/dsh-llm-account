@@ -28,7 +28,7 @@ import type {
   ToolSchema,
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
-import { assertProjectableContent, fileBlockText } from "../../core/image-projection";
+import { assertProjectableContent, assistantImageText, fileBlockText } from "../../core/image-projection";
 
 /** 推理网关默认基地址（计划 §1：`amr-link` 是运行时链路的入口）。 */
 export const DEFAULT_BASE_URL = "https://amr-link.open-design.ai/v1";
@@ -136,11 +136,12 @@ export interface BodyFacts {
 }
 
 /** Project text and durable file handles; images are handled separately. */
-function textOf(content: readonly ContentBlock[]): string {
+function textOf(content: readonly ContentBlock[], assistantImages = false): string {
   const parts: string[] = [];
   for (const block of content) {
     if (block.type === "text") parts.push(block.text);
     else if (block.type === "file") parts.push(fileBlockText(block));
+    else if (assistantImages && block.type === "image") parts.push(assistantImageText(block));
   }
   return parts.join("");
 }
@@ -251,7 +252,7 @@ function openAiMessages(
     }
     if (message.role === "assistant") {
       const calls = message.content.filter((block) => block.type === "tool-call");
-      const text = textOf(message.content);
+      const text = textOf(message.content, true);
       out.push({
         role: "assistant",
         content: text,

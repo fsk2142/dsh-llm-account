@@ -65,9 +65,11 @@ it("system and developer files become handles instead of disappearing", () => {
   expect((context.systemPrompt ?? "").split("report.pdf").length - 1).toBe(2);
 });
 
-it("an assistant image is rejected explicitly instead of silently filtered", () => {
+it("an assistant history image becomes an explicit text record without resending its bytes", () => {
   const options = request([], []);
-  expect(() => toPiContext({ ...options, messages: [createAssistantMessage({ content: [image], source: { provider: "dsh-opencode-go", model: "m" } })] })).toThrow(expect.objectContaining({ code: "UNSUPPORTED_CONTENT" }));
+  const context = toPiContext({ ...options, messages: [createAssistantMessage({ content: [image], source: { provider: "dsh-opencode-go", model: "m" } })] }, images);
+  expect(JSON.stringify(context)).toContain(attachment.attachmentId);
+  expect(JSON.stringify(context)).not.toContain(base64);
 });
 
 it("an SDK route that cannot take images rejects before sending a request", () => {

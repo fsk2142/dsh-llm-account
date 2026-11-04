@@ -40,11 +40,17 @@ export function fileBlockText(block: Extract<ContentBlock, { type: "file" }>): s
   return fileHandleText(block.attachment, undefined);
 }
 
+/** Assistant input is replayed history; preserve a marker without inventing visual contents. */
+export function assistantImageText(block: Extract<ContentBlock, { type: "image" }>): string {
+  const id = block.attachment?.attachmentId;
+  return `[历史 assistant 图片：${typeof id === "string" ? id : "未知附件"}；${block.offloaded === true ? "已卸载，" : ""}原图未内联，本次仅保留占位，不能据此推断图片内容]`;
+}
+
 /** Reject unsupported image roles before attachment I/O instead of silently dropping data. */
 export function assertProjectableContent(messages: readonly { role?: string; content: readonly ContentBlock[] }[]): void {
   for (const message of messages) for (const block of message.content) {
     if (block.type === "file") fileBlockText(block);
-    if (block.type === "image" && message.role !== undefined && message.role !== "user" && message.role !== "tool") {
+    if (block.type === "image" && message.role !== undefined && message.role !== "user" && message.role !== "tool" && message.role !== "assistant") {
       throw new LlmError(`Image blocks in ${message.role} messages are not supported by this route`, "UNSUPPORTED_CONTENT");
     }
   }
@@ -123,6 +129,7 @@ export function wantedImagesOf(
   assertProjectableContent(messages);
   const wanted = new Map<string, ImageRefLike>();
   for (const message of messages) {
+    if (message.role === "assistant") continue;
     for (const block of message.content) {
       if (block.type !== "image") continue;
       /**
