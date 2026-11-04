@@ -198,3 +198,41 @@ describe("U14 · max-tokens 粘住场景不能多余续写", () => {
     expect(inbox.calls, "已经正常收尾，不能再多续一次").toHaveLength(1);
   });
 });
+
+describe("U14 补遗 · 多会话不能串 inbox", () => {
+  /**
+   * `agent/turn-stopping` 的 payload **只有 `{ turn, signal }`**，不带 agent。
+   * 若实现用「全局最近一次见到的 agent」定位 inbox，多会话并发时 A 的 pre-step
+   * 会覆盖 B 的缓存 —— B 收尾时续写消息就推进了 A 的会话。
+   *
+   * 生产实现因此优先用宿主 `agents.currentInitiator()`（当前执行上下文的 agent），
+   * 缓存只作兜底。这条测试在 probe 层锁住「每次取的是当前 run 的 inbox」这一契约：
+   * 同一个 probe，两次触发时若 `agentOfCurrentRun` 换了对象，就必须写到新的那个。
+   */
+  it("probe 的 inbox 每次访问都现取（不是首次快照）", async () => {
+    const host = hostOf();
+    let currentInbox = inboxOf();
+    const seen: string[] = [];
+
+    const probe: AutoContinueProbe = {
+      get inbox() {
+        // 模拟「当前 run 的 agent 换了」：getter 每次读到新的。
+        seen.push("read");
+        return currentInbox as never;
+      },
+      lastFinishReason: () => "max-tokens",
+    };
+
+    applyAutoContinue(host as never, () => ({ ...SETTINGS, maxAttempts: 5 }), probe);
+
+    await host.fire("agent/turn-stopping", { turn: 1 });
+    expect(currentInbox.calls, "第一次写到当时的 inbox").toHaveLength(1);
+
+    // 换到另一个会话的 inbox（模拟 currentInitiator 变了）。
+    currentInbox = inboxOf();
+    await host.fire("agent/turn-stopping", { turn: 1 });
+
+    expect(currentInbox.calls, "第二次必须写到**新的**那个 inbox").toHaveLength(1);
+    expect(seen.length, "getter 必须每次访问都执行（不是首次快照）").toBe(2);
+  });
+});

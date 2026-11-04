@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   delegateStream,
   modelCandidates,
+  cachedModelCandidates,
+  noteCatalogModels,
   registerCatalogSource,
   resetCatalogSources,
   type CatalogSource,
@@ -156,5 +158,54 @@ describe("U08 · 不能误伤正常路径", () => {
     // 委托到启用那家照常工作。
     await drain(delegateStream({ provider: "opendesign", model: "m1" }, {}));
     expect(stateB.streamCalls, "启用的那家必须仍能接收委托").toBe(1);
+  });
+});
+
+describe("U08 补遗 · noteCatalogModels 也不能写入禁用厂商", () => {
+  beforeEach(() => {
+    resetCatalogSources();
+  });
+
+  /**
+   * `noteCatalogModels` 是缓存**真正的填充路径**：三家 adapter 的 `listModels`
+   * 成功后会把结果交进来（零额外请求）。它原来不检查可用性，于是
+   * 「先 listModels、后禁用」这个顺序会留下 60 秒脏窗口：
+   *
+   * - 候选里还有这家 → 被 `pickFallbackModel` 选中；
+   * - `delegateStream` 的复核拦住 → 返回 `undefined`；
+   * - 用户看到的是「换模型没反应」，而不是一个错误。
+   */
+  it("禁用的厂商经 noteCatalogModels 写入后仍不在候选里", async () => {
+    const state = { enabled: false, streamCalls: 0 };
+    registerCatalogSource(sourceOf(state));
+
+    // 模拟 adapter 的 listModels 成功后「顺手交进来」。
+    noteCatalogModels(PROVIDER, [{ id: "m1" }, { id: "m2" }]);
+
+    expect(cachedModelCandidates(), "禁用厂商不该进缓存").toEqual([]);
+  });
+
+  it("启用的厂商照常写入（不能把正常路径也挡住）", async () => {
+    const state = { enabled: true, streamCalls: 0 };
+    registerCatalogSource(sourceOf(state));
+
+    noteCatalogModels(PROVIDER, [{ id: "m1" }]);
+
+    const cached = cachedModelCandidates();
+    expect(cached, "启用的厂商要能写进缓存").toHaveLength(1);
+    expect(cached?.[0]?.model).toBe("m1");
+  });
+
+  it("**运行中禁用后，旧缓存条目被清掉**（重新 note 会移除）", async () => {
+    const state = { enabled: true, streamCalls: 0 };
+    registerCatalogSource(sourceOf(state));
+    noteCatalogModels(PROVIDER, [{ id: "m1" }]);
+    expect(cachedModelCandidates()).toHaveLength(1);
+
+    // 用户此刻禁用厂商。下一次 listModels 会再调 noteCatalogModels。
+    state.enabled = false;
+    noteCatalogModels(PROVIDER, [{ id: "m1" }]);
+
+    expect(cachedModelCandidates(), "禁用后旧条目必须清掉").toEqual([]);
   });
 });

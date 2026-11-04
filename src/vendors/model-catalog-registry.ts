@@ -161,6 +161,20 @@ export function noteCatalogModels(
   const value = cached === undefined ? [] : [...cached.value];
   // 先摘掉这一家的旧条目，再追加新的（同一家重复调用不会累积）。
   const kept = value.filter((candidate) => candidate.provider !== provider);
+  /**
+   * **禁用的厂商不写进缓存**（2026-11-04 外部审查 U08 的补遗）。
+   *
+   * `noteCatalogModels` 是缓存**真正的填充路径**（各家的 `listModels` 成功后顺手交进来），
+   * 它原来不检查可用性 —— 于是「先 listModels、后禁用」这个顺序会留下一个 60 秒的
+   * 脏窗口：候选里还有这家，被选中后 `delegateStream` 的复核会拦住，
+   * 结果是**换模型莫名失败**（用户看到的是「没反应」而不是错误）。
+   *
+   * 这里直接不写，缓存里干脆没有它。
+   */
+  if (sources.get(provider)?.available?.() === false) {
+    cached = { at: now, value: kept };
+    return;
+  }
   for (const row of models) {
     if (typeof row.id !== "string" || row.id.trim() === "") continue;
     kept.push({

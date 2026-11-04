@@ -616,8 +616,35 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   const events = ctx as unknown as {
     on(event: string, listener: (...args: unknown[]) => unknown): unknown;
   };
-  /** 最近一次见到的 agent（`turn-stopping` 的 payload 不带 agent，只能缓存）。 */
+  /** 最近一次见到的 agent（`currentInitiator()` 不可用时的兜底）。 */
   let activeAgent: unknown;
+  /**
+   * **当前这一轮的 agent**：优先问宿主的 `agents.currentInitiator()`，缓存只作兜底。
+   *
+   * ## 为什么这个顺序反过来了（2026-11-04 自检）
+   *
+   * `agent/turn-stopping` 的 payload 只有 `{ turn, signal }`，**不带 agent**。原先的做法是
+   * 「在 `agent/pre-step` 时缓存最近一次见到的 agent」，但那是**全局单值** ——
+   * 多会话并发时，A 会话的 pre-step 会覆盖 B 会话的缓存，于是 B 收尾时可能拿到 A 的
+   * inbox，续写消息就推进了别人的会话。
+   *
+   * `currentInitiator()` 读的是**当前执行上下文**里的 agent（宿主在 turn 收尾时仍在
+   * 该 agent 的调用栈内），对当前这一轮是准确的。缓存退化成兜底：万一某个宿主版本
+   * 没有这个服务，仍能靠 pre-step 缓存工作。
+   *
+   * 两者都拿不到就返回 `undefined`（调用方发空实现，静默跳过续写）。
+   */
+  const agentOfCurrentRun = ():
+    | { inbox: { append(target: "next-step", message: unknown): unknown } }
+    | undefined => {
+    const get = (ctx as { get?: (name: string) => unknown }).get;
+    const agents = typeof get === "function" ? get.call(ctx, "agents") : undefined;
+    const current = (agents as { currentInitiator?: () => unknown } | undefined)?.currentInitiator?.();
+    if (current !== undefined && current !== null) {
+      return current as { inbox: { append(target: "next-step", message: unknown): unknown } };
+    }
+    return activeAgent as { inbox: { append(target: "next-step", message: unknown): unknown } } | undefined;
+  };
   /** 最近一次的结束原因（`assistant/message` 的 `finish.kind`）。 */
   let lastFinishKind: string | undefined;
   events.on("agent/pre-step", (payload: unknown) => {
@@ -672,31 +699,15 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     //   inbox.append(target, message): void;   // nextStep 是只读数组，不是带 append 的对象
     {
       /**
-       * **拿不到 agent 时用空实现兜底，不抛错。**
+       * 往当前步骤追加续写消息。**拿不到 agent 时用空实现兜底，不抛错。**
        *
-       * 这个 getter 只在该监听器里用，而监听器是 async 且被宿主 `dispatch.serial` 调用 ——
-       * 抛出去会让宿主的 turn 收尾失败（一次续写机会换一次收尾异常，不值得）。
-       * 拿不到就静默跳过：inbox 保持为空，宿主按原逻辑结束本轮。
+       * 这个 getter 只在 `agent/turn-stopping` 监听器里用，而那个监听器是 async 且被宿主
+       * `dispatch.serial` 调用 —— 抛出去会让宿主的 turn 收尾失败
+       * （一次续写机会换一次收尾异常，明显不划算）。拿不到就静默跳过。
        */
       get inbox() {
-        const cached = activeAgent as
-          | { inbox: { append(target: "next-step", message: unknown): unknown } }
-          | undefined;
-        /**
-         * 缓存为空时退回宿主的 `agents.currentInitiator()`（兜底，不改变主路径）。
-         *
-         * 主路径是「`agent/pre-step` 时缓存」—— 那个事件必然带 agent，稳定可靠。
-         * 这里是第二道：万一某次 `turn-stopping` 发生在缓存建立之前，还能拿到当前 agent。
-         *
-         * 两者都拿不到就静默跳过（绝不抛错，见上面的说明）。
-         */
-        const fallback = (): { inbox: { append(target: "next-step", message: unknown): unknown } } | undefined => {
-          const get = (ctx as { get?: (name: string) => unknown }).get;
-          const agents = typeof get === "function" ? get.call(ctx, "agents") : undefined;
-          const current = (agents as { currentInitiator?: () => unknown } | undefined)?.currentInitiator?.();
-          return current as { inbox: { append(target: "next-step", message: unknown): unknown } } | undefined;
-        };
-        return cached?.inbox ?? fallback()?.inbox ?? { append: () => undefined };
+        const agent = agentOfCurrentRun();
+        return agent?.inbox ?? { append: () => undefined };
       },
       lastFinishReason: () => lastFinishKind,
     },
