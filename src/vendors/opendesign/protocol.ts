@@ -29,6 +29,7 @@ import type {
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
 import { assertProjectableContent, assistantImageText, fileBlockText } from "../../core/image-projection";
+import { omittedHistoryNotice, trimWireMessages } from "../../core/wire-limit";
 
 /** 推理网关默认基地址（计划 §1：`amr-link` 是运行时链路的入口）。 */
 export const DEFAULT_BASE_URL = "https://amr-link.open-design.ai/v1";
@@ -133,6 +134,15 @@ export interface BodyFacts {
   systemText: string;
   /** 已选定的推理档位 id；缺省表示不发这个字段。 */
   reasoningEffort?: string;
+  /**
+   * 出站 `messages[]` 的条数上限；缺省表示不限制。
+   *
+   * 网关（`amr-link.open-design.ai/v1`）对 `deepseek-v4.1-flash` 的条数硬上限是
+   * **1000 条**，超一条就 400 `context_length_exceeded`。这是条数而不是 token 限制，
+   * 宿主只按 token 判断压缩时机，所以**永远不会提前触发** —— 只能在这一层兜住。
+   * 见 `core/wire-limit.ts` 的完整说明。
+   */
+  maxRequestItems?: number;
 }
 
 /** Project text and durable file handles; images are handled separately. */
@@ -229,12 +239,31 @@ function toolSchema(parameters: Record<string, unknown>): Record<string, unknown
   return { type: "object", properties: {}, additionalProperties: true, ...parameters };
 }
 
-/** Chat Completions 的 messages 数组（OpenAI 形状：user / assistant(+tool_calls) / tool）。 */
+/**
+ * 投影后的一条 Chat Completions 消息。
+ *
+ * 只声明裁剪器要读的字段，其余（`content` 的形状、将来新增字段）保持宽松 ——
+ * 这个类型存在的意义是让 `trimWireMessages` 能识别工具调用与工具结果，
+ * 不是为了把整份 wire 形状钉死。
+ */
+interface WireMessage {
+  role: string;
+  content: unknown;
+  tool_calls?: unknown;
+  tool_call_id?: unknown;
+}
+
+/**
+ * Chat Completions 的 messages 数组（OpenAI 形状：user / assistant(+tool_calls) / tool）。
+ * @param messages - 宿主的请求消息。
+ * @param images - 可内联的图片字节。
+ * @returns 投影后的消息。
+ */
 function openAiMessages(
   messages: readonly RequestMessage[],
   images?: ReadonlyMap<string, RequestImageBytes>,
-): unknown[] {
-  const out: unknown[] = [];
+): WireMessage[] {
+  const out: WireMessage[] = [];
   // Chat Completions tool messages only accept text. Keep the complete result
   // batch together, then add its images as a user message, as pi-ai does.
   let toolImages: unknown[] = [];
@@ -305,12 +334,25 @@ export function buildRequestBody(
       : [],
   );
   const systemText = [facts.systemText, ...systemFiles].filter((part) => part !== "").join("\n");
+  /**
+   * **出站条数硬上限**（2026-11-05 修「1003 > 1000」）。
+   *
+   * 网关对 `messages[]` 有 1000 条的硬上限，而宿主只按 token 触发压缩 ——
+   * 条数超了永远不会被提前发现，于是每轮都 400，连压缩请求自己都 400
+   * （压缩发的还是同一份超限历史），形成无法自愈的死循环。
+   *
+   * 这里在**投影之后**裁：投影可能把一条输入展开成多条（工具图片会补一条 user），
+   * 所以按输入条数算预算会算错 —— 报错里的 1003 就是投影后的真实条数。
+   */
+  const projected = openAiMessages(options.messages, images);
+  const trimmed = trimWireMessages<WireMessage>(
+    [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...projected],
+    facts.maxRequestItems,
+    (dropped) => ({ role: "system", content: omittedHistoryNotice(dropped) }),
+  );
   return {
     model: options.model,
-    messages: [
-      ...(systemText === "" ? [] : [{ role: "system", content: systemText }]),
-      ...openAiMessages(options.messages, images),
-    ],
+    messages: trimmed.messages,
     ...(tools.length === 0
       ? {}
       : {

@@ -1,4 +1,4 @@
-import { wantedImagesOf } from "../../core/image-projection";
+import { collectImageBytes } from "../../core/image-projection";
 /**
  * Open Design 的宿主适配器：把共享内核串成一次真实请求。
  *
@@ -115,11 +115,31 @@ export interface OpenDesignConfig {
   streamIdleTimeoutMs?: number;
   /** 未指定 `maxTokens` 时的输出上限；缺省 {@link DEFAULT_GENERATE_MAX_TOKENS}。 */
   defaultMaxTokens?: number;
+  /**
+   * 出站 `messages[]` 的条数上限；缺省 {@link DEFAULT_MAX_REQUEST_ITEMS}。
+   *
+   * **这不是可选的调优项**：网关对 `messages[]` 有 1000 条的硬上限（实测
+   * `deepseek-v4.1-flash` 第 1001 条即 400 `context_length_exceeded`），
+   * 而宿主只按 token 触发压缩，条数永远不会被提前发现。超限时这里会**裁掉最旧的
+   * 历史并插入明确提示**，而不是让整轮失败。设成 `0` 可关闭裁剪（不建议）。
+   */
+  maxRequestItems?: number;
   /** 模型白名单（设置文档字段，形状不可信）。 */
   visibleModels?: readonly string[];
   /** 逐模型显式可见性开关（设置文档字段，形状不可信）。 */
   modelVisibility?: Readonly<Record<string, boolean>>;
 }
+
+/**
+ * 出站 `messages[]` 的默认条数上限（2026-11-05 修「1003 > 1000」）。
+ *
+ * 取网关对 `deepseek-v4.1-flash` 的实测硬上限。其它模型的实测上限更高（3000），
+ * 但统一按 1000 兜底有两个好处：**绝不会 400**，且 1000 条消息本来就远超任何正常
+ * 会话长度 —— 这个阈值只在「本来就要失败」的请求上生效。
+ *
+ * 需要在长会话里保留更多条时可以调高它。
+ */
+export const DEFAULT_MAX_REQUEST_ITEMS = 1_000;
 
 /** 一次请求循环需要的、已填好默认值的配置。 */
 interface ResolvedConfig {
@@ -127,6 +147,7 @@ interface ResolvedConfig {
   requestTimeoutMs: number;
   streamIdleTimeoutMs: number;
   defaultMaxTokens: number;
+  maxRequestItems: number;
 }
 
 /**
@@ -233,6 +254,18 @@ function resolveConfig(raw: OpenDesignConfig): ResolvedConfig {
     requestTimeoutMs: positive(raw.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS),
     streamIdleTimeoutMs: positive(raw.streamIdleTimeoutMs, DEFAULT_STREAM_IDLE_TIMEOUT_MS),
     defaultMaxTokens: positive(raw.defaultMaxTokens, DEFAULT_GENERATE_MAX_TOKENS),
+    /**
+     * 条数上限允许**显式关闭**（`0` 或负数 = 不裁剪）。
+     *
+     * 与上面几个不同：那些是「越小越糟」的超时/额度，`0` 明显是坏配置；
+     * 而这里 `0` 是一个有意义的取值（用户自己承担 400 的风险）。
+     */
+    maxRequestItems:
+      raw.maxRequestItems === undefined || !Number.isFinite(raw.maxRequestItems)
+        ? DEFAULT_MAX_REQUEST_ITEMS
+        : raw.maxRequestItems <= 0
+          ? 0
+          : Math.floor(raw.maxRequestItems),
   };
 }
 
@@ -674,6 +707,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       maxTokens: options.maxTokens === undefined ? cap : Math.min(options.maxTokens, cap),
       systemText: systemTextOf(options),
       ...(effort === undefined ? {} : { reasoningEffort: effort }),
+      // 出站条数硬上限（`0` = 关闭）。见 `core/wire-limit.ts` 的完整来由。
+      ...(config.maxRequestItems > 0 ? { maxRequestItems: config.maxRequestItems } : {}),
     };
     const wire = generateRequest({
       base: config.apiBase,
@@ -696,21 +731,16 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * @returns attachment id → 字节；没有图片或没有解析器时为空 Map。
    */
   async #imagesOf(options: GenerateOptions): Promise<ReadonlyMap<string, RequestImageBytes>> {
-    const resolve = this.#deps.resolveImage;
-    const images = new Map<string, RequestImageBytes>();
-    if (resolve === undefined) return images;
-    // **必须传完整的 `ImageAttachmentRef`**（2026-10-20 真机报障）：宿主的
-    // `readImageRequest` 会用 `mediaType` / `bytes` / `width` / `height` 做引用校验，
-    // 只给 `attachmentId` 会被拒绝，表现就是「图片未能发送」的占位。
-    const wanted = wantedImagesOf(options.messages);
-    for (const [id, ref] of wanted) {
-      try {
-        const resolved = await resolve(ref, options.signal);
-        if (resolved !== undefined) images.set(id, resolved);
-      } catch {
-        // 单张图读失败：留给文字占位，不打断整次请求。
-      }
-    }
+    if (this.#deps.resolveImage === undefined) return new Map();
+    /**
+     * **必须传完整的 `ImageAttachmentRef`**（2026-10-20 真机报障）：宿主的
+     * `readImageRequest` 会用 `mediaType` / `bytes` / `width` / `height` 做引用校验，
+     * 只给 `attachmentId` 会被拒绝，表现就是「图片未能发送」的占位。
+     *
+     * 总预算统一在 core 里执行（2026-11-05 外部审查 F06）：
+     * 单张上限挡不住「很多张大图」，判断散落三家会漏（U13 的教训）。
+     */
+    const { images } = await collectImageBytes(options.messages, this.#deps.resolveImage, options.signal);
     return images;
   }
 

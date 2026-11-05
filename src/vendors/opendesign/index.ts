@@ -198,6 +198,13 @@ export const Config: PluginConfigSchema = z.object(
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),
     /**
+     * 出站 `messages[]` 的条数上限；`0` = 不裁剪（2026-11-05）。
+     *
+     * 网关对条数有硬上限（`deepseek-v4.1-flash` 实测 1000 条），而宿主只按 token
+     * 触发压缩 —— 条数超限永远不可见，直到网关回 400。见 `core/wire-limit.ts`。
+     */
+    maxRequestItems: z.number(),
+    /**
      * 待清理凭据引用数组。删除账号只**记录**待清理的 ref（推理槽 + 控制面槽），
      * 真正 `credentials.unset` 留给确认该 ref 不再被引用的清理动作。
      */
@@ -735,6 +742,13 @@ function adapterConfigOf(document: Record<string, unknown>): OpenDesignConfig {
   const requestTimeoutMs = positiveNumber(document.requestTimeoutMs);
   const streamIdleTimeoutMs = positiveNumber(document.streamIdleTimeoutMs);
   const defaultMaxTokens = positiveNumber(document.defaultMaxTokens);
+  /**
+   * 条数上限**允许显式写 0**（= 关闭裁剪），所以不能用 `positiveNumber`。
+   *
+   * 与超时类字段不同：`0` 在这里是有意义的取值（用户自愿承担 400 的风险），
+   * 而超时的 `0` 只可能是坏配置。缺省/NaN 仍然回落到适配器的默认值。
+   */
+  const maxRequestItems = nonNegativeNumber(document.maxRequestItems);
   const modelVisibility = booleanMap(document.modelVisibility);
   const visibleModels = stringList(document.visibleModels);
   return {
@@ -744,9 +758,15 @@ function adapterConfigOf(document: Record<string, unknown>): OpenDesignConfig {
     ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
     ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),
     ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
+    ...(maxRequestItems === undefined ? {} : { maxRequestItems }),
     ...(modelVisibility === undefined ? {} : { modelVisibility }),
     ...(visibleModels === undefined ? {} : { visibleModels }),
   };
+}
+
+/** 读一个非负有限数（`0` 是合法值；缺省/负数/NaN 读作缺省）。 */
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 /** 读一个正有限数（缺省/0/负数/NaN 读作缺省，避免把坏配置变成「立即超时」）。 */
