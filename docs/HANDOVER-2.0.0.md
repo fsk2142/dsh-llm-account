@@ -67,7 +67,7 @@ src/
 
 ## 4. 这一版修了什么（2026-11-04 外部审查 14 项）
 
-审查目录（外部给的）：`C:\Users\FSK\Documents\Codex\2026-11-01\.../outputs/2026-11-04_DSH账户插件模型使用专项审查_1.9.0`
+审查目录（外部给的）：`<用户目录>\Documents\Codex\2026-11-01\.../outputs/2026-11-04_DSH账户插件模型使用专项审查_1.9.0`
 
 ### P1（6 组）
 
@@ -130,7 +130,7 @@ if (decision.kind === "reject") { ... }   // ← undefined 在这里炸
 `lastAssistantStreamChunk(data.stream, "finish")?.reason` 修正。
 
 **教训**：宿主 payload 形状一律从
-`C:\Users\FSK\AppData\Local\Programs\DeepSeek Harness\resources\app.asar`
+`<DSH 安装目录>\resources\app.asar`
 里解类型声明核对，不要猜。查法：
 
 ```powershell
@@ -192,6 +192,54 @@ U09 修 `#hasAnyAccount` 时，我丢掉了「两个解析器都没注入 → �
 
 审查报告自己列的「未验证」项还包括：工具调用/流式解析的延迟声明契约、
 音频/视频等其他模态（**不承诺支持**，但也不该静默接受后丢弃）。
+
+### 6.1 已定位但**不在本插件内**的宿主限制：消息条数没有上报通道
+
+2026-11-05 现场报错（`Open Design stream error (status 400)`）：
+
+```
+[code=context_length_exceeded] Input is too long: conversation history
+exceeds the allowed input item limit (1003 > 1000 items).
+```
+
+**根因（实测量化）**：`amr-link.open-design.ai/v1` 网关对 `messages[]` 有**条数**
+上限，`deepseek-v4.1-flash` 是 1000 条（实测：1000 条 → 200，1001 条 → 400）。
+同一网关其余 12 个模型接受 3000 条。`tools` 数组**不计入**，`system` 消息**计入**。
+
+而宿主的压缩时机只看 token：
+
+- `LlmModelContext` 只有 `contextWindow: number`（token），**没有任何条数字段**；
+- 触发阈值 = `floor(min(W×0.8, W−O−B))`，`B = 65536` —— 对
+  `deepseek-v4.1-flash`（`context_limit: 1048000`）约 **838k token**；
+- 1000 条消息在实测会话里约 490k token，**永远到不了 838k**。
+
+于是条数超限完全不可见，直到网关回 400。
+
+**为什么它会变成死循环**：报错正文让宿主 `Compact the conversation and retry`，
+宿主也确实做了。但**压缩请求本身**发的还是同一份超限历史 —— 压缩也 400，
+`compaction/end` 带着同一个 400，回合结束；下一轮照样 1003 条。
+**任何压缩策略在条数超限下都不可能自愈。**
+
+**本插件这一层做了什么**（`src/core/wire-limit.ts` + **Open Design** 投影层，
+`vendors/opendesign/protocol.ts`）：
+
+- 出站 `messages[]` 超过 `maxRequestItems`（Open Design 缺省 **1000**，可由配置改）
+  时，裁掉最旧的历史，**保留最近的一段**；
+- 插入一条**明确提示**（`[更早的 N 条历史消息已省略…不要假设你读过被省略的内容]`），
+  绝不静默丢；
+- **工具调用与结果成组裁剪**：`assistant.tool_calls` 与它的 `tool` 结果是
+  不可分割的一组，拆开会让请求本身非法（比超限更难查）；
+- 压缩器的请求走同一条投影路径，所以**压缩请求自己也能发出去** —— 死循环被打破。
+
+> **只接了 Open Design 一家，这是有意的**：实测这个条数上限只出现在
+> `amr-link.open-design.ai/v1`，另两家（`opencode.ai`、Command Code）没有观察到。
+> `trimWireMessages()` 是通用的，那些厂商哪天也报同样的 400 时，
+> 把 `maxRequestItems` 接进它们各自的 `BodyFacts` 即可 —— 不必重写逻辑。
+
+**上游该修的地方**（本插件改不了）：宿主应把「条数上限」作为模型事实上报
+（与 `contextWindow` 并列），让压缩在**条数**接近上限时就触发，而不是等网关 400。
+在那之前，这一层的裁剪是唯一可用的兜底。
+
 
 ---
 
@@ -323,7 +371,7 @@ $sha = git -C $repo rev-parse 'vX.Y.Z^{commit}'
 | `docs/FIX-1.9.9-2026-11-04.md` | 会话隔离与上下文溢出 |
 
 外部审查原件在
-`C:\Users\FSK\Documents\Codex\2026-11-01\c-work-dsh-plug-in-dsh\outputs\2026-11-04_DSH账户插件模型使用专项审查_1.9.0\`
+`<用户目录>\Documents\Codex\2026-11-01\c-work-dsh-plug-in-dsh\outputs\2026-11-04_DSH账户插件模型使用专项审查_1.9.0\`
 （`01_完整审查报告.md` 是主文档，`02_交给DSH的修复与验收计划.md` 有每项的验收标准）。
 
 ---
