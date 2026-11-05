@@ -14,6 +14,7 @@
  * 本模块只做 HTTP + 归一化，不碰设置、账号或轮换；注入 `fetch` 与时钟，测试无需真网。
  * @module dsh-llm-account/src/vendors/opencode/oauth
  */
+import { BodyTooLargeError, readBoundedJson } from "../../core/bounded-body";
 
 /** 凭据 blob 前缀（与普通 API key 区分）。 */
 export const OAUTH_PREFIX = "ocoauth1:";
@@ -70,12 +71,37 @@ export interface DeviceCode {
 
 /** 一次轮询的结果。 */
 export type PollResult =
-  | { status: "pending" }
+  /**
+   * `emptyBody`：这次 pending 是**空正文 400 的兜底**推断出来的，而不是服务端
+   * 明确回了 `authorization_pending`（F14）。调用方据此决定要不要推进连续计数。
+   */
+  | { status: "pending"; emptyBody?: true }
   | { status: "slow_down" }
   | { status: "denied" }
   | { status: "expired" }
   | { status: "error"; message: string }
   | { status: "success"; access: string; refresh: string; expiresAt: number };
+
+/**
+ * 连续多少次「空正文 400」之后判定为协议错误（2026-11-05 外部审查 F14）。
+ *
+ * ## 为什么需要上限
+ *
+ * 空正文 400 在历史上是「缺 `grant_type`」的畸形请求形态（见
+ * {@link DEVICE_CODE_GRANT_TYPE} 的注释），所以兜底成 pending 曾经是对的 ——
+ * 它救了那个 bug。但同一形态也可能表示**参数错、协议变更、被中间代理拒绝**，
+ * 这时把它当 pending，界面会一直停在「等待授权」，直到设备码过期才报 timeout。
+ *
+ * 复现：mock token 端点持续回空正文 400，实测轮询了 **300 次**才结束，
+ * 最终原因是 `timeout` —— 真实故障被伪装成了「用户还没授权」。
+ *
+ * ## 为什么是 3 而不是 1
+ *
+ * 真有「空正文但其实是 pending」的服务端行为时，第一次多等一个间隔几乎无感；
+ * 反过来，偶发的一次代理抖动也不该立刻把流程打死。3 次（≈3 个轮询间隔，
+ * 默认 5 秒起）足以区分「持续异常」与「偶发」。
+ */
+export const EMPTY_BODY_PENDING_TOLERANCE = 3;
 
 /** 解析凭据 blob；不是本前缀或形状不认识时返回 `undefined`（按普通 key 处理）。 */
 export function parseOAuthCredential(raw: string | undefined): OAuthCredential | undefined {
@@ -115,15 +141,30 @@ export function needsRefresh(credential: OAuthCredential, now: number): boolean 
   return credential.expiresAt - REFRESH_SKEW_MS <= now;
 }
 
-/** 读 JSON；非 2xx 不抛（调用方按端点语义处理）。 */
+/**
+ * OAuth 响应的字节上限：**256 KiB**（2026-11-05 外部审查 F13）。
+ *
+ * 这三个端点正常只回几百字节到几 KB（设备码、token、工作区列表）。256 KiB 是
+ * 一个非常宽松的上限 —— 正常响应永远碰不到它，而异常响应（代理错误页、服务端
+ * 把整个 HTML 页面甩回来）不会先把内存吃满再抛错。
+ *
+ * 为什么必须有：上一版走 `readJson` 里的 `response.text()`，先把**完整正文**
+ * 读进内存再解析。多账号并发刷新时这份峰值会叠加。
+ */
+const OAUTH_MAX_BODY_BYTES = 256 * 1024;
+
+/**
+ * 读 JSON；非 2xx 不抛（调用方按端点语义处理）。
+ *
+ * **有界**（F13）：分块读、按 UTF-8 字节计、超限立刻取消正文。超限会抛
+ * {@link BodyTooLargeError} —— 调用方必须把它与「空正文」「非法 JSON」区分开，
+ * 尤其不能让 token 轮询把超限误判成 `pending`（那会一直等到设备码过期）。
+ * @param response - 端点响应。
+ * @returns 解析后的值；空正文或非法 JSON 时 `undefined`。
+ * @throws {@link BodyTooLargeError} 正文超过 {@link OAUTH_MAX_BODY_BYTES}。
+ */
 async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (text.trim() === "") return undefined;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
+  return await readBoundedJson(response, OAUTH_MAX_BODY_BYTES);
 }
 
 /** 普通对象。 */
@@ -257,8 +298,25 @@ export async function beginDeviceFlow(deps: OAuthHttpDeps, signal?: AbortSignal)
  */
 export const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
-/** 用设备码换一次 token（可能返回 pending/slow_down）。 */
-export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode, signal?: AbortSignal): Promise<PollResult> {
+/**
+ * 用设备码换一次 token（可能返回 pending/slow_down）。
+ *
+ * @param deps - 注入的 `fetch` 与时钟。
+ * @param device - 设备码。
+ * @param signal - 取消信号。
+ * @param emptyBodyStreak - **此前连续出现过多少次空正文 400**（F14）。
+ *
+ *   调用方（`login.ts` 的轮询循环）负责计数并把它传进来：本函数是纯的，
+ *   不该自己持有跨调用状态（那会让「同一次轮询里第几次」变得不可测）。
+ *   达到 {@link EMPTY_BODY_PENDING_TOLERANCE} 就不再兜底成 pending，改为报协议错误。
+ * @returns 轮询结论。
+ */
+export async function pollDeviceToken(
+  deps: OAuthHttpDeps,
+  device: DeviceCode,
+  signal?: AbortSignal,
+  emptyBodyStreak = 0,
+): Promise<PollResult> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/auth/device/token`, {
     method: "POST",
     // 取消要能真正停掉在途轮询（F02）。网络层抛出的 abort 由调用方按取消处理。
@@ -270,6 +328,10 @@ export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode, s
       grant_type: DEVICE_CODE_GRANT_TYPE,
     }),
   });
+  /**
+   * **超限不是 pending**（F13）：正文太大时 `readJson` 抛 `BodyTooLargeError`，
+   * 让它冒泡成一次明确的失败，而不是被下面的空正文兜底误判。
+   */
   const payload = await readJson(response);
   if (!response.ok) {
     const error = isRecord(payload) ? stringOf(payload, "error") : undefined;
@@ -278,15 +340,23 @@ export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode, s
     if (error === "access_denied") return { status: "denied" };
     if (error === "expired_token") return { status: "expired" };
     /**
-     * **空 body 的 400 当作 pending**（兜底）。
+     * **空 body 的 400**：有限次兜底成 pending（F14）。
      *
-     * 上一版在缺 `grant_type` 时就是空 body 的 400，而它被当成 `error` —— 于是
-     * 每一次轮询都直接失败。现在带了 `grant_type`，正常情况下会拿到结构化的
-     * `error`；但服务端若再出现「空 body 但其实是 pending」的情形，按 pending
-     * 处理比按 error 处理更安全：最坏结果是一直等到 `expiresAt` 超时，
-     * 而不是在用户还有机会授权时就把流程打死。
+     * 历史上它正是「缺 `grant_type`」的畸形请求形态，所以兜底曾经救过那个 bug。
+     * 但同一形态也可能表示参数错、协议变更或被代理拒绝 —— 而兜底成 pending 会让
+     * 界面一直停在「等待授权」，直到设备码过期才报 timeout（实测轮询 300 次）。
+     *
+     * 现在：前 {@link EMPTY_BODY_PENDING_TOLERANCE} 次仍按 pending（容忍偶发抖动，
+     * 也兼容真实的服务端行为），连续超过就判定为协议错误，让用户立刻看到问题。
      */
-    if (payload === undefined && response.status === 400) return { status: "pending" };
+    if (payload === undefined && response.status === 400) {
+      // 标记出来源：调用方要区分「服务端明确说 pending」与「我们从空正文推断的」。
+      if (emptyBodyStreak < EMPTY_BODY_PENDING_TOLERANCE) return { status: "pending", emptyBody: true };
+      return {
+        status: "error",
+        message: `device token endpoint returned HTTP 400 with an empty body ${emptyBodyStreak + 1} times in a row`,
+      };
+    }
     return { status: "error", message: `device token request failed (HTTP ${response.status})` };
   }
   if (!isRecord(payload)) return { status: "error", message: "device token response is not an object" };

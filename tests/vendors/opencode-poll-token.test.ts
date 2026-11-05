@@ -23,7 +23,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { DEVICE_CODE_GRANT_TYPE, pollDeviceToken } from "../../src/vendors/opencode/oauth";
+import { DEVICE_CODE_GRANT_TYPE, EMPTY_BODY_PENDING_TOLERANCE, pollDeviceToken } from "../../src/vendors/opencode/oauth";
 
 /** 造一个设备码（形状与 `beginDeviceFlow` 的返回一致）。 */
 const DEVICE = {
@@ -101,16 +101,44 @@ describe("pollDeviceToken：请求体必须带 grant_type", () => {
     }
   });
 
-  it("**空 body 的 400 兜底按 pending**（不让用户还有机会时把流程打死）", async () => {
+  it("**空 body 的 400 仍兜底按 pending**，但标记成推断来源（F14）", async () => {
     /**
      * 上一版正是这里出问题：空 body 落进 `status: "error"`。
-     * 现在即使服务端再出现「空 body 但其实是 pending」，也继续轮询到 `expiresAt`。
+     * 现在首次仍按 pending（容忍偶发抖动，也兼容真实服务端行为），
+     * 但必须带上 `emptyBody` 标记 —— 轮询循环靠它累计「连续几次」，
+     * 超过 {@link EMPTY_BODY_PENDING_TOLERANCE} 才判定为协议错误。
      */
     const result = await pollDeviceToken(
       { fetchImpl: fetchCapturing(new Response("", { status: 400 })).fetchImpl },
       DEVICE,
     );
+    expect(result).toEqual({ status: "pending", emptyBody: true });
+  });
+
+  it("**结构化 pending 不带 emptyBody 标记**（计数要能归零）", async () => {
+    const result = await pollDeviceToken(
+      {
+        fetchImpl: fetchCapturing(
+          new Response(JSON.stringify({ _tag: "DeviceTokenError", error: "authorization_pending" }), { status: 400 }),
+        ).fetchImpl,
+      },
+      DEVICE,
+    );
     expect(result).toEqual({ status: "pending" });
+    expect((result as { emptyBody?: true }).emptyBody, "服务端明确说了 pending").toBeUndefined();
+  });
+
+  it("**连续空 body 超过容忍次数后报协议错误**（不再无限 pending）", async () => {
+    const fetchImpl = fetchCapturing(new Response("", { status: 400 })).fetchImpl;
+    // 前 EMPTY_BODY_PENDING_TOLERANCE 次仍是 pending。
+    for (let streak = 0; streak < EMPTY_BODY_PENDING_TOLERANCE; streak += 1) {
+      const result = await pollDeviceToken({ fetchImpl }, DEVICE, undefined, streak);
+      expect(result.status, `第 ${streak + 1} 次仍容忍`).toBe("pending");
+    }
+    // 第 tolerance+1 次：明确的协议错误，而不是继续等到过期。
+    const verdict = await pollDeviceToken({ fetchImpl }, DEVICE, undefined, EMPTY_BODY_PENDING_TOLERANCE);
+    expect(verdict.status).toBe("error");
+    expect(JSON.stringify(verdict)).toContain(String(EMPTY_BODY_PENDING_TOLERANCE + 1));
   });
 
   it("5xx 仍按 error（真正的服务端故障不该被当成 pending）", async () => {

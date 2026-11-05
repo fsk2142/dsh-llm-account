@@ -188,6 +188,14 @@ class OpencodeLoginFlow implements OpencodeLogin {
      * 不在登录尝试之间复用（`#run` 每次尝试重新初置）。
      */
     let pollIntervalMs = device.intervalMs;
+    /**
+     * 连续多少次轮询拿到「空正文 400」。
+     *
+     * 计数住在**循环里**而不是 `pollDeviceToken` 里：那个函数是纯的，跨调用状态
+     * 放在它内部会让「同一次轮询里第几次」不可测（也能被并发登录串味）。
+     * 语义见 {@link EMPTY_BODY_PENDING_TOLERANCE}。
+     */
+    let emptyBodyStreak = 0;
     while (!signal.aborted) {
       if (now() >= device.expiresAt) {
         this.#settle({ state: "failed", reason: "timeout" }, signal);
@@ -201,7 +209,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
       if (signal.aborted) return;
       let result: Awaited<ReturnType<typeof pollDeviceToken>>;
       try {
-        result = await pollDeviceToken(this.#deps, device, signal);
+        result = await pollDeviceToken(this.#deps, device, signal, emptyBodyStreak);
       } catch {
         // 取消优先于「网络失败」：用户点了停止不该被报成 `network`。
         if (signal.aborted) return;
@@ -209,7 +217,15 @@ class OpencodeLoginFlow implements OpencodeLogin {
         return;
       }
       if (signal.aborted) return;
-      if (result.status === "pending") continue;
+      if (result.status === "pending") {
+        /**
+         * 只有**空正文兜底**出来的 pending 才推进计数；服务端明确回
+         * `authorization_pending` 时计数归零 —— 那是正常协议形态，用户只是还没授权，
+         * 不该因为等得久就被判成协议错误（F14）。
+         */
+        emptyBodyStreak = result.emptyBody === true ? emptyBodyStreak + 1 : 0;
+        continue;
+      }
       if (result.status === "slow_down") {
         // RFC 8628 §3.5：慢下来就是真的慢下来，之后每一轮都用新间隔。
         pollIntervalMs += SLOW_DOWN_STEP_MS;
