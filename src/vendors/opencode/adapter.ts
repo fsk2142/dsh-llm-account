@@ -33,7 +33,7 @@ import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
 import { createSingleFlight } from "../../core/single-flight";
-import { wantedImagesOf } from "../../core/image-projection";
+import { collectImageBytes } from "../../core/image-projection";
 import type { ImageRefLike, RequestImageBytes } from "../../core/image-projection";
 import { opencodeSessionHeaders } from "./session";
 import { createCredentialGuard, type CredentialGuard } from "../../core/credential-guard";
@@ -654,7 +654,26 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     gateway: GatewayRecorder,
   ): AsyncGenerator<StreamChunk> {
     const config = resolveConfig(raw);
-    const record = await this.#recordFor(config, options.model, options.signal);
+    /**
+     * **每次尝试一个自己的网络 controller**（2026-11-05 外部审查 F04）。
+     *
+     * 上一版只把 `options.signal` 交给 `runStream`，**没有**传 `abortNetwork`：
+     * 整请求/流空闲超时后上层报超时、`iterator.return()` 也发了，但底层 `fetch`
+     * 的 signal 从未 abort —— socket 与 reader 一直挂着。
+     *
+     * `transport.ts` 的注释已经把这事说清楚了：卡在 Web Stream `read()` 上的
+     * reader 不响应 `return()`，只能靠 abort。Command Code 与 Open Design 都接了
+     * （`commandcode/adapter.ts`、`opendesign/adapter.ts` 的 `deadline.networkAbort()`），
+     * 只有 opencode 漏了 —— 这不是新设计，是**补齐第三家**。
+     *
+     * 为什么是「每次尝试新建」而不是共享一个：一个账号/一次尝试的取消不该影响
+     * 同进程里其他并发请求。
+     */
+    const network = new AbortController();
+    /** 调方取消 **或** 本 attempt 的网络超时，任一成立都让底层请求停下。 */
+    const attemptSignal =
+      options.signal === undefined ? network.signal : AbortSignal.any([options.signal, network.signal]);
+    const record = await this.#recordFor(config, options.model, attemptSignal);
     const entry = record?.entry;
     /**
      * 取本次请求需要的图片字节（2026-11-04 外部审查 U07）。
@@ -662,7 +681,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
      * 没有 `resolveImage` 注入时返回空表 —— 协议层会把图片降级成占位文本，
      * 仍然不静默丢弃。单张读失败同样只影响那一张。
      */
-    const images = await imagesOf(options, this.#deps.resolveImage);
+    const images = await imagesOf(options, this.#deps.resolveImage, attemptSignal);
     const limits = raw.modelLimits?.[options.model];
     const contextWindow = limits?.contextWindow ?? entry?.contextWindow;
     const modelLimit = limits?.maxTokens ?? entry?.maxTokens;
@@ -709,13 +728,27 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
           ? {}
           : { reasoningEffort: options.reasoningEffort as ThinkingLevel }),
         fetchImpl: gateway.fetch,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        // 交给 pi-ai 的必须是**合并后**的信号：调用方取消 或 本 attempt 超时都算数。
+        signal: attemptSignal,
         ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
         maxTokens,
       }),
       { requestTimeoutMs: config.requestTimeoutMs, streamIdleTimeoutMs: config.streamIdleTimeoutMs },
-      { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+      {
+        signal: options.signal,
+        /**
+         * **超时/取消时连底层网络一起停**（2026-11-05 外部审查 F04）。
+         *
+         * 与另两家同一行代码：`runStream` 在「没有正常消费完」时会先 `closeQuietly`
+         * 再调它。opencode 的正文同样来自 Web Stream，卡在 `read()` 时只有 abort
+         * 才能让 socket 释放。
+         */
+        abortNetwork: () => {
+          if (!network.signal.aborted) network.abort();
+        },
+      },
     );
+
   }
 
   /** 找一条目录记录；目录不可用时退化成「只有 id」的目录外模型（不抛）。 */
@@ -1033,26 +1066,22 @@ export function createOpencodeAdapter(deps: OpencodeAdapterDeps): OpencodeAdapte
 /**
  * 收集本次请求需要发送的图片字节。
  *
- * 只取**未被 offloaded** 的图片：`offloaded: true` 的含义是宿主已把这张图从请求里卸载，
+ * 只取**未被 offloaded** 的图片：`offloaded: true` 的含义是宿主已把这张图从请求里卸载,
  * 再读字节等于把缩减后的请求又撑回去（审查 U13）。
+ *
+ * **总预算在 `core/image-projection` 的 `collectImageBytes` 里统一执行**
+ * （2026-11-05 外部审查 F06）：单张上限挡不住「很多张大图」，而那正是长图文会话
+ * 的常态。判断下沉到 core 而不是三家各写一份 —— 与 U13 同一条教训。
  * @param options - 宿主请求。
  * @param resolve - 字节读取注入点。
+ * @param signal - 本次尝试的合并信号（调用方取消或本 attempt 超时）。
  * @returns attachment id → 字节。
  */
 async function imagesOf(
   options: GenerateOptions,
   resolve: OpencodeAdapterDeps["resolveImage"],
+  signal?: AbortSignal,
 ): Promise<ReadonlyMap<string, RequestImageBytes>> {
-  const images = new Map<string, RequestImageBytes>();
-  if (resolve === undefined) return images;
-  const wanted = wantedImagesOf(options.messages);
-  for (const [id, ref] of wanted) {
-    try {
-      const bytes = await resolve(ref, options.signal);
-      if (bytes !== undefined) images.set(id, bytes);
-    } catch {
-      // 单张图读失败：留给协议层的占位文本，不打断整次请求。
-    }
-  }
+  const { images } = await collectImageBytes(options.messages, resolve, signal ?? options.signal);
   return images;
 }

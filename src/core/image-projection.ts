@@ -40,10 +40,30 @@ export function fileBlockText(block: Extract<ContentBlock, { type: "file" }>): s
   return fileHandleText(block.attachment, undefined);
 }
 
-/** Assistant input is replayed history; preserve a marker without inventing visual contents. */
-export function assistantImageText(block: Extract<ContentBlock, { type: "image" }>): string {
-  const id = block.attachment?.attachmentId;
-  return `[历史 assistant 图片：${typeof id === "string" ? id : "未知附件"}；${block.offloaded === true ? "已卸载，" : ""}原图未内联，本次仅保留占位，不能据此推断图片内容]`;
+/**
+ * Assistant 历史图片的占位文本（2026-11-05 外部审查 F10）。
+ *
+ * ## 为什么不再拼 attachmentId
+ *
+ * 占位的作用是**告诉模型「这里原本有一张图，但这次没有内联」**。上一版把宿主的
+ * `attachmentId` 也拼了进去 —— 模型无法凭这个 id 读到附件（它只是本地持久化标识），
+ * 所以那段字符纯属无用输入：每张历史图都白吃一段 prompt。
+ *
+ * 同时它还是**内部标识的最小化问题**：附件 id 属于宿主内部命名空间，没有必要
+ * 出现在发往上游的正文里。
+ *
+ * 需要区分多张图时用**请求内序号**（见 {@link assistantImageText} 的 `index`），
+ * 那既够用又不暴露内部 id。
+ * @param block - assistant 消息里的图片块。
+ * @param index - 本次请求内第几张 assistant 历史图（从 1 开始；缺省不带序号）。
+ * @returns 占位文本。
+ */
+export function assistantImageText(block: Extract<ContentBlock, { type: "image" }>, index?: number): string {
+  // 序号拼在最前面：`[历史 assistant 图片 #2：已卸载，…]`。
+  // 没有序号时不能留空槽 —— `图片 ：` 这种多一个空格的形状很显眼。
+  const ordinal = index === undefined ? "" : ` #${index}`;
+  const offloaded = block.offloaded === true ? "已卸载，" : "";
+  return `[历史 assistant 图片${ordinal}：${offloaded}原图未内联，本次仅保留占位，不能据此推断图片内容]`;
 }
 
 /** Reject unsupported image roles before attachment I/O instead of silently dropping data. */
@@ -76,6 +96,112 @@ export interface RequestImageBytes {
 }
 
 /**
+ * 单张图片的字节上限（与宿主 `readImageRequest` 的内联额度同量级）。
+ *
+ * 注意：这是**单张**上限，挡不住「20 张各 5 MiB」—— 总预算见
+ * {@link IMAGE_REQUEST_BUDGET_BYTES} 与 {@link collectImageBytes}。
+ */
+const SINGLE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * 一次请求的**图片总预算**（2026-11-05 外部审查 F06）。
+ *
+ * ## 为什么需要
+ *
+ * 上一版只有单张 5 MiB 上限，没有任何总量约束。20 张满额图片 = 100 MiB 原始字节，
+ * base64 后约 133 MiB，还要再序列化成一份 JSON 请求体 —— 内存峰值不可预测。
+ * 长图文会话里这足以拖慢甚至拖垮一次请求，而用户看不出原因。
+ *
+ * ## 为什么是 24 MiB
+ *
+ * - 常见长会话的图片总量在个位数 MiB；
+ * - 24 MiB 原始字节 ≈ 32 MiB base64，对一次 chat 请求已是很大的正文档位；
+ * - 与「保留必要的视觉上下文」不冲突：超预算的旧图片降级成**占位文本**而不是
+ *   被静默删掉 —— 模型仍知道那里有图，只是这一张没内联。
+ */
+export const IMAGE_REQUEST_BUDGET_BYTES = 24 * 1024 * 1024;
+
+/** 一次请求最多内联多少张图片（与字节预算同时生效，防止小图刷满条数）。 */
+export const IMAGE_REQUEST_BUDGET_COUNT = 24;
+
+/** 图片收集的结论。 */
+export interface CollectedImages {
+  /** attachment id → 字节（只含真正内联的那些）。 */
+  images: Map<string, RequestImageBytes>;
+  /** 因超出预算而没内联的图片 id（协议层据此发占位文本）。 */
+  skipped: Set<string>;
+}
+
+/**
+ * 按**总预算**收集一次请求需要的图片字节（2026-11-05 外部审查 F06）。
+ *
+ * ## 与上一版的区别
+ *
+ * 三家适配器原来各写一个 `for (const [id, ref] of wantedImagesOf(...))` 循环：
+ * 只受单张上限约束，没有总数/总字节上限，也没有并发控制。判断散落三处还会漏
+ * （U13 就是这么漏掉两家的）。
+ *
+ * 现在统一在这里：
+ *
+ * 1. **串行读取**：`readImageBytes` 是解码 + 可能缩放的 CPU/IO 混合操作，
+ *    `Promise.all` 同时加载多张大图只会把峰值叠起来；
+ * 2. **总字节 / 总张数预算**：任一耗尽就**停止内联**，剩下的交给占位文本；
+ * 3. **先来先得**：`wantedImagesOf` 按消息顺序产出，所以优先内联**较早**的图？
+ *    —— 不，这里反过来：预算紧张时应当优先保留**最近**出现的图片，
+ *    因此遍历前先反转成「最近的优先」，命中后按 id 放回 Map（Map 顺序不影响出站）。
+ *
+ * **绝不静默丢弃**：没内联的 id 会进 `skipped`，协议层照旧输出占位文本。
+ * @param messages - 宿主的请求消息。
+ * @param resolve - 单张图片的字节读取注入点；缺席时返回空结果（协议层全员占位）。
+ * @param signal - 请求取消信号。
+ * @returns 内联的字节与因预算跳过 id 集合。
+ */
+export async function collectImageBytes(
+  messages: readonly { role?: string; content: readonly ContentBlock[] }[],
+  resolve: ((ref: ImageRefLike, signal?: AbortSignal) => Promise<RequestImageBytes | undefined>) | undefined,
+  signal?: AbortSignal,
+  budget: { maxBytes?: number; maxCount?: number } = {},
+): Promise<CollectedImages> {
+  const images = new Map<string, RequestImageBytes>();
+  const skipped = new Set<string>();
+  if (resolve === undefined) return { images, skipped };
+
+  const maxBytes = budget.maxBytes ?? IMAGE_REQUEST_BUDGET_BYTES;
+  const maxCount = budget.maxCount ?? IMAGE_REQUEST_BUDGET_COUNT;
+
+  // 最近出现的图片优先：预算紧张时保留对话尾部（那才是这一轮真正要看的图）。
+  const wanted = [...wantedImagesOf(messages).entries()].reverse();
+  let usedBytes = 0;
+  for (const [id, ref] of wanted) {
+    if (signal?.aborted === true) break;
+    if (images.size >= maxCount) {
+      skipped.add(id);
+      continue;
+    }
+    let bytes: RequestImageBytes | undefined;
+    try {
+      bytes = await resolve(ref, signal);
+    } catch {
+      // 单张读失败：交给占位文本，不打断整次请求。
+      bytes = undefined;
+    }
+    if (bytes === undefined) {
+      skipped.add(id);
+      continue;
+    }
+    const size = bytes.data.byteLength;
+    if (usedBytes + size > maxBytes) {
+      // 超预算：**这一张也不发**（发一半的图没有意义），交给占位文本。
+      skipped.add(id);
+      continue;
+    }
+    usedBytes += size;
+    images.set(id, bytes);
+  }
+  return { images, skipped };
+}
+
+/**
  * 从插件上下文取一张图的字节。
  *
  * 走宿主的 `attachments.readImageRequest(ref, target, signal)`：
@@ -102,7 +228,7 @@ export async function readImageBytes(
     const read = (attachments as { readImageRequest?: unknown }).readImageRequest;
     if (typeof read !== "function") return undefined;
     // 目标尺寸交给编码器自己收敛：`width/height` 给源图上限量级，`maxBytes` 高于内联上限。
-    const target = { width: 4096, height: 4096, maxBytes: 5 * 1024 * 1024 };
+    const target = { width: 4096, height: 4096, maxBytes: SINGLE_IMAGE_MAX_BYTES };
     const result: unknown = await (
       read as (r: unknown, t: unknown, s?: AbortSignal) => Promise<unknown>
     ).call(attachments, ref, target, signal);

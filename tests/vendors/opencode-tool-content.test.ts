@@ -68,7 +68,9 @@ it("system and developer files become handles instead of disappearing", () => {
 it("an assistant history image becomes an explicit text record without resending its bytes", () => {
   const options = request([], []);
   const context = toPiContext({ ...options, messages: [createAssistantMessage({ content: [image], source: { provider: "dsh-opencode-go", model: "m" } })] }, images);
-  expect(JSON.stringify(context)).toContain(attachment.attachmentId);
+  // 占位写明「这里原本有图」，但**不带内部 attachmentId**（2026-11-05 外部审查 F10）。
+  expect(JSON.stringify(context)).toContain("历史 assistant 图片");
+  expect(JSON.stringify(context)).not.toContain(attachment.attachmentId);
   expect(JSON.stringify(context)).not.toContain(base64);
 });
 

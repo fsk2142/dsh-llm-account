@@ -31,7 +31,11 @@ for(const vendor of ["commandcode","opencode","opendesign"] as const) for(const 
   const chunks:StreamChunk[]=[];
   for await(const chunk of route.stream({provider:vendor,model:"m",purpose,messages:[{role:"user",content:[{type:"text",text:"question"}]},{role:"assistant",content:[{type:"text",text:"answer-before-image"},{type:"image",attachment:{attachmentId:"old-history",mediaType:"image/png",bytes:3,width:1,height:1}}]},{role:"user",content:[{type:"text",text:"summarize"}]}]} as never))chunks.push(chunk);
   expect(requests).toHaveLength(1);const body=JSON.stringify(requests[0]);
-  expect(body).toContain("answer-before-image");expect(body).toContain("old-history");expect(body).toContain("历史");expect(body).not.toContain(Buffer.from(bytes).toString("base64"));expect(reads).toBe(0);
+  expect(body).toContain("answer-before-image");expect(body).toContain("历史");
+  // **不再发送内部 attachmentId**（2026-11-05 外部审查 F10）：占位只需要说「这里原本有图」。
+  // 上面已有 `expect(body).not.toContain("old-history")` 的相邻断言，这里明确写下来。
+  expect(body).not.toContain("old-history");
+  expect(body).not.toContain(Buffer.from(bytes).toString("base64"));expect(reads).toBe(0);
   expect(chunks.some(c=>c.type==="text-delta"&&c.text==="SUMMARY_OK")).toBe(true);expect(chunks.at(-1)).toMatchObject({type:"finish",reason:{kind:"stop"}});
  });
 }

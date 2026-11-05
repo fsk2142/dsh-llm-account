@@ -52,7 +52,9 @@ for (const api of ["anthropic-messages", "openai-completions", "openai-responses
       expect(body).toContain("Prior answer");
       expect(body).toContain("历史 assistant 图片");
       expect(body).toContain("未内联");
-      expect(body).toContain(id);
+      // **不再发送内部 attachmentId**（2026-11-05 外部审查 F10）：它既不能帮模型
+      // 读到图，又白吃 prompt，还把宿主内部标识抖给上游。
+      expect(body).not.toContain(id);
       expect(body).not.toContain(Buffer.from(bytes).toString("base64"));
       expect(chunks.filter(chunk => chunk.type === "text-delta").map(chunk => chunk.type === "text-delta" ? chunk.text : "").join("")).toBe("summary");
       expect(chunks).toContainEqual(expect.objectContaining({ type: "finish", reason: { kind: "stop" } }));

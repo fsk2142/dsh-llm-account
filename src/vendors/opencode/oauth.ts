@@ -176,9 +176,17 @@ function absoluteVerificationUri(authBase: string, uri: string): string {
 }
 
 /** 申请设备码。 */
-export async function beginDeviceFlow(deps: OAuthHttpDeps): Promise<DeviceCode> {
+export async function beginDeviceFlow(deps: OAuthHttpDeps, signal?: AbortSignal): Promise<DeviceCode> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/auth/device/code`, {
     method: "POST",
+    /**
+     * **必须带 signal**（2026-11-05 外部审查 F02）。
+     *
+     * 上一版三个网络函数（设备码 / 轮询 / 读工作区）都没有 `signal` 参数：
+     * 用户点「取消」只能改本地状态，已经发出的 `fetch` 继续挂在网络上，
+     * `begin()` 也就永远等不到它 —— 界面上像没反应，进程里留下无主的请求。
+     */
+    ...(signal === undefined ? {} : { signal }),
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({ client_id: OAUTH_CLIENT_ID }),
   });
@@ -250,9 +258,11 @@ export async function beginDeviceFlow(deps: OAuthHttpDeps): Promise<DeviceCode> 
 export const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
 /** 用设备码换一次 token（可能返回 pending/slow_down）。 */
-export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode): Promise<PollResult> {
+export async function pollDeviceToken(deps: OAuthHttpDeps, device: DeviceCode, signal?: AbortSignal): Promise<PollResult> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/auth/device/token`, {
     method: "POST",
+    // 取消要能真正停掉在途轮询（F02）。网络层抛出的 abort 由调用方按取消处理。
+    ...(signal === undefined ? {} : { signal }),
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({
       client_id: OAUTH_CLIENT_ID,
@@ -345,8 +355,14 @@ export async function refreshOAuthCredential(
 }
 
 /** 读工作区；读不到或形状不认识时 `undefined`（登录流按失败处理）。 */
-export async function fetchOAuthOrg(deps: OAuthHttpDeps, access: string): Promise<{ id: string; name?: string } | undefined> {
+export async function fetchOAuthOrg(
+  deps: OAuthHttpDeps,
+  access: string,
+  signal?: AbortSignal,
+): Promise<{ id: string; name?: string } | undefined> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/api/orgs`, {
+    // 同上：这是登录流程的第三个网络阶段，取消必须能打断它（F02）。
+    ...(signal === undefined ? {} : { signal }),
     headers: { authorization: `Bearer ${access}`, accept: "application/json" },
   });
   if (!response.ok) return undefined;

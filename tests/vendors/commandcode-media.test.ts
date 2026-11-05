@@ -79,7 +79,9 @@ describe.each(protocols)("CommandCode %s preserves media through the complete re
       const serialized = JSON.stringify(body.messages);
       expect(serialized).toContain("result text");
       expect(serialized).toContain("report.txt");
-      expect(serialized).toContain("sha256:image");
+      // 占位仍说明「这里原本有图」，但**不带内部 attachmentId**（2026-11-05 外部审查 F10）。
+      expect(serialized).toContain("历史 assistant 图片");
+      expect(serialized).not.toContain("sha256:image");
       expect(serialized).not.toContain("iVBORw==");
       expect(serialized).not.toContain("image_url");
       expect(serialized).not.toContain('"type":"image"');
@@ -93,7 +95,8 @@ describe.each(protocols)("CommandCode %s preserves media through the complete re
   it("pure assistant history images stay visible as a placeholder during compaction", () => {
     const body = request(protocol, [{ role: "assistant", content: [image()] }], "bytes", "compaction");
     expect(body.messages).toHaveLength(1);
-    expect(JSON.stringify(body.messages[0])).toContain("sha256:image");
+    expect(JSON.stringify(body.messages[0])).toContain("历史 assistant 图片");
+    expect(JSON.stringify(body.messages[0])).not.toContain("sha256:image");
     expect(JSON.stringify(body.messages[0])).not.toContain("iVBORw==");
   });
 

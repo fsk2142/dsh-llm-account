@@ -21,7 +21,7 @@ import type {
   TokenUsage,
   ToolSchema,
 } from "@deepseek-ai/dsh-llm";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   assertProjectableContent,
   assistantImageText,
@@ -506,14 +506,49 @@ function cliSystem(systemText: string): string | MessagesBlock[] {
 }
 
 /**
- * CLI 传输的 threadId（旧插件 `cliThreadId` 第 6457-6465 行做 sha1 派生；本期先用
- * 会话 id 本身或随机 UUID —— 派生细节属于第 2 期的缓存对齐项）。
+ * 辅助调用（无 sessionId）的派生种子：**进程级常量**。
+ *
+ * 必须是常量 —— 每次请求现生成等于「又回到了随机 UUID」，那正是 F09 的症状。
+ */
+const PROCESS_THREAD_SEED = `dsh-llm-account/commandcode-cli/${process.pid}/${process.platform}`;
+
+/**
+ * CLI 传输的 `threadId`：**从 sessionId 稳定派生**。
+ *
+ * ## 为什么不再用 `randomUUID()`（2026-11-05 外部审查 F09，实测确认）
+ *
+ * 上一版只在 sessionId 是纯 UUID 时直接用它，否则每次调用生成一个随机 UUID。
+ * 审查当时把它列为「条件性风险：需先确认宿主 ID 格式」—— 现在确认了：
+ *
+ * 本机 240 个会话目录里，**85 个是 `session-<uuid>` 前缀形态**（含最新的主会话），
+ * 155 个纯 UUID 全部是 `origin: subagent` 派生会话。也就是说**主会话 id 不是纯 UUID**，
+ * 上面那个分支永远走不到，`threadId` 每次请求都变。
+ *
+ * 后果正是审查猜的那种：服务端会话无法复用、prompt cache 命中率下降、token 白烧。
+ *
+ * ## 为什么不直接透传 sessionId
+ *
+ * 审查明确提醒「不要直接改成任意字符串透传」—— CLI 端点的 `threadId` 是它自己的
+ * 标识空间，任意字符（含中文、斜杠）未必被接受。所以用 **sha1 派生的稳定短串**：
+ *
+ * - 同一会话的每次请求得到同一个值（可复用、可缓存）；
+ * - 不同会话几乎不可能碰撞（sha1 前 32 hex = 128 bit）；
+ * - 字符集是 `[0-9a-f]`，任何端点都接受；
+ * - 与 `opencode/session.ts` 的「清洗后透传」互补而不是冲突：那边把 id 放进 HTTP 头
+ *   （需要可读性），这里放进 JSON body 的标识字段（只需要稳定性）。
+ *
+ * 这是旧插件 `cliThreadId` 的同一思路（sha1 派生），不再是「第 2 期再对齐」的半成品。
+ * @param sessionId - 宿主给的会话 id（可能缺省：标题生成、compaction 等辅助调用）。
+ * @returns 稳定的 32 位十六进制 threadId。
  */
 function cliThreadId(sessionId: string | undefined): string {
-  if (sessionId !== undefined && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
-    return sessionId;
+  const raw = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (raw === "") {
+    // 辅助调用（标题/压缩）没有会话身份：仍然给一个进程级稳定值，
+    // 而不是每次随机 —— 随机等于把同一类辅助请求打散到无数 thread。
+    return createHash("sha1").update(PROCESS_THREAD_SEED).digest("hex").slice(0, 32);
   }
-  return randomUUID();
+  return createHash("sha1").update(raw).digest("hex").slice(0, 32);
 }
 
 /**

@@ -23,6 +23,14 @@ import {
 /** 本登录流所属的 provider 路由（ref 生成的厂商段）。 */
 export const OPENCODE_LOGIN_VENDOR: VendorId = "dsh-opencode-go";
 
+/**
+ * `slow_down` 一次后面隔增加多少毫秒。
+ *
+ * RFC 8628 §3.5 的原文是「increase the interval by 5 seconds」——
+ * 这是**规范要求**，不是调参余地。
+ */
+const SLOW_DOWN_STEP_MS = 5_000;
+
 /** 登录依赖。 */
 export interface OpencodeLoginDeps extends OAuthHttpDeps {
   /**
@@ -104,7 +112,9 @@ class OpencodeLoginFlow implements OpencodeLogin {
     this.#status = { state: "idle" };
     let device: DeviceCode;
     try {
-      device = await beginDeviceFlow(this.#deps);
+      // **把本次尝试的 signal 交给设备码申请**（2026-11-05 外部审查 F02）：
+      // 用户取消后这个 fetch 必须立刻结束，而不是继续挂在网络上。
+      device = await beginDeviceFlow(this.#deps, abort.signal);
     } catch (error: unknown) {
       if (this.#abort !== abort || abort.signal.aborted) return { state: "failed", reason: "cancelled" };
       // 端点回了 HTTP 4xx/5xx（服务端拒绝、路由变了）**不是**网络错误：两种原因对用户
@@ -166,28 +176,43 @@ class OpencodeLoginFlow implements OpencodeLogin {
    */
   async #run(device: DeviceCode, signal: AbortSignal): Promise<void> {
     const now = this.#deps.now ?? (() => Date.now());
+    /**
+     * **轮询间隔是可变的**（2026-11-05 外部审查 F03）。
+     *
+     * RFC 8628 §3.5：收到 `slow_down` 之后，**本次及后续**请求的轮询间隔必须
+     * 增加 5 秒。上一版只 `continue`，注释还写着「间隔保持」—— 那是把 bug 当设计，
+     * 对着规范读会觉得理直气壮，对着服务端读就是持续过快打 token 端点，
+     * 更容易被限流甚至暂时封锁。
+     *
+     * 初始值取设备码响应的 `interval`；每次 `slow_down` 累加 5s，不再回退。
+     * 不在登录尝试之间复用（`#run` 每次尝试重新初置）。
+     */
+    let pollIntervalMs = device.intervalMs;
     while (!signal.aborted) {
       if (now() >= device.expiresAt) {
         this.#settle({ state: "failed", reason: "timeout" }, signal);
         return;
       }
       try {
-        await this.#sleep(device.intervalMs, signal);
+        await this.#sleep(pollIntervalMs, signal);
       } catch {
         return;
       }
       if (signal.aborted) return;
       let result: Awaited<ReturnType<typeof pollDeviceToken>>;
       try {
-        result = await pollDeviceToken(this.#deps, device);
+        result = await pollDeviceToken(this.#deps, device, signal);
       } catch {
+        // 取消优先于「网络失败」：用户点了停止不该被报成 `network`。
+        if (signal.aborted) return;
         this.#settle({ state: "failed", reason: "network" }, signal);
         return;
       }
       if (signal.aborted) return;
       if (result.status === "pending") continue;
       if (result.status === "slow_down") {
-        // 服务端要求放慢：等下一轮（间隔保持，至少不再更密）。
+        // RFC 8628 §3.5：慢下来就是真的慢下来，之后每一轮都用新间隔。
+        pollIntervalMs += SLOW_DOWN_STEP_MS;
         continue;
       }
       if (result.status === "denied") {
@@ -205,8 +230,10 @@ class OpencodeLoginFlow implements OpencodeLogin {
 
       let org: Awaited<ReturnType<typeof fetchOAuthOrg>>;
       try {
-        org = await fetchOAuthOrg(this.#deps, result.access);
+        org = await fetchOAuthOrg(this.#deps, result.access, signal);
       } catch {
+        // 取消优先（F02）：被 abort 的 org 查询不是「服务不可用」。
+        if (signal.aborted) return;
         org = undefined;
       }
       if (signal.aborted) return;

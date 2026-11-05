@@ -20,7 +20,8 @@
  *    ```
  *    所以「往 `inbox.nextStep` 推一条消息」就能让本轮继续。
  *
- * **关掉即静默**：开关关着时监听器虽然注册，但事件进来立刻交棒给下游（不重试、不续写），\n * 与「不注册」等价；只有 `probe` 那条路在缺少宿主探针时才不注册。
+ * **关掉即静默**：开关关着时监听器虽然注册，但事件进来立刻交棒给下游（不重试、不续写），
+ * 与「不注册」等价；只有 `probe` 那条路在缺少宿主探针时才不注册。
  * @module dsh-llm-account/src/vendors/auto-continue
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
@@ -180,26 +181,27 @@ export function applyAutoContinue(
     }
   };
 
-  {    /**
-     * `agent/request-error` 是 **waterfall**，签名是 `(payload, next) => decision`。
-     *
-     * `cordis` 的实现（`EventsService.waterfall`）：
-     *
-     * ```js
-     * const next = () => (cbs.shift() ?? inner)(...args);
-     * return next();
-     * ```
-     *
-     * 也就是说：**监听器不调用 `next()`，链路就在这里终止** —— 后面的监听器永远收不到
-     * 这次失败。宿主自带的 `dsh-llm-retry` 也挂在这个事件上，它是个中间件
-     * （`(payload, next) => recover(payload, next)`），靠 `next()` 交棒。
-     *
-     * 原来的写法是 `return undefined` 而不调 `next()`：如果我们排在 `llm-retry`
-     * **前面**，宿主那条重试链就被我们吞掉了 —— 表现为「fetch failed 没有自动继续」。
-     *
-     * 现在两条出口都显式接力：不重试 → `next()`；重试 → 返回决策（终止链路，这是
-     * waterfall 的正确用法）。
-     */
+  /**
+   * `agent/request-error` 是 **waterfall**，签名是 `(payload, next) => decision`。
+   *
+   * `cordis` 的实现（`EventsService.waterfall`）：
+   *
+   * ```js
+   * const next = () => (cbs.shift() ?? inner)(...args);
+   * return next();
+   * ```
+   *
+   * 也就是说：**监听器不调用 `next()`，链路就在这里终止** —— 后面的监听器永远收不到
+   * 这次失败。宿主自带的 `dsh-llm-retry` 也挂在这个事件上，它是个中间件
+   * （`(payload, next) => recover(payload, next)`），靠 `next()` 交棒。
+   *
+   * 原来的写法是 `return undefined` 而不调 `next()`：如果我们排在 `llm-retry`
+   * **前面**，宿主那条重试链就被我们吞掉了 —— 表现为「fetch failed 没有自动继续」。
+   *
+   * 现在两条出口都显式接力：不重试 → `next()`；重试 → 返回决策（终止链路，这是
+   * waterfall 的正确用法）。
+   */
+  {
     const off = ctx.on("agent/request-error", async (payload: unknown, next?: unknown) => {
       /** 调用下游；没有 `next`（旧宿主/假 ctx）时退化成 `undefined`。 */
       const handOff = async (): Promise<unknown> =>
@@ -266,7 +268,7 @@ export function applyAutoContinue(
       if (!shouldContinueOnTruncate(current, reason, attemptsOf(sessionId, turn))) return undefined;
       bump(sessionId, turn);
       // 推一条消息 → 宿主随后检查 `inbox.nextStep.length` 时不再为 0，本轮继续。
-    // 必须带 target（宿主 Inbox.append(target, message)）：只传消息的话，运行时会把消息当成 target，本轮照样结束。
+      // 必须带 target（宿主 Inbox.append(target, message)）：只传消息的话，运行时会把消息当成 target，本轮照样结束。
       inbox.append("next-step", continuationMessage());
       return undefined;
     });

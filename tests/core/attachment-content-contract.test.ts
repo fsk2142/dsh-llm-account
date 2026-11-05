@@ -24,5 +24,8 @@ describe("non-text content contracts",()=>{
 });
 
 it("assistant history preserves an explicit marker without attachment reads",()=>{
- const messages=[{role:"assistant",content:[image]}];expect(()=>assertProjectableContent(messages as never)).not.toThrow();expect(wantedImagesOf(messages as never).size).toBe(0);expect(assistantImageText(image as never)).toContain("img-1");expect(assistantImageText(image as never)).toContain("历史");
+ const messages=[{role:"assistant",content:[image]}];expect(()=>assertProjectableContent(messages as never)).not.toThrow();expect(wantedImagesOf(messages as never).size).toBe(0);
+ expect(assistantImageText(image as never)).toContain("历史");
+ // **占位不再携带内部 attachmentId**（2026-11-05 外部审查 F10）。
+ expect(assistantImageText(image as never)).not.toContain("img-1");
 });

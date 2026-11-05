@@ -54,7 +54,9 @@ it.each([undefined, "compaction", "session-title"])("preserves assistant image h
   ] } as unknown as GenerateOptions, { maxTokens: 100, systemText: "" }, images) as { messages: Record<string, unknown>[] };
   expect(body.messages.map((message) => message.role)).toEqual(["assistant", "user"]);
   expect(body.messages[0]?.content).toContain("historical text");
-  expect(body.messages[0]?.content).toContain("shot");
+  // 占位在，但**不带内部 attachmentId**（2026-11-05 外部审查 F10）。
+  expect(body.messages[0]?.content).toContain("历史 assistant 图片");
+  expect(body.messages[0]?.content).not.toContain("shot");
   expect(JSON.stringify(body)).not.toContain("data:image");
   expect(JSON.stringify(body)).not.toContain("image_url");
 });

@@ -34,7 +34,7 @@ import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
 import {
-  wantedImagesOf,
+  collectImageBytes,
   type ImageRefLike,
   type RequestImageBytes,
 } from "../../core/image-projection";
@@ -599,18 +599,11 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
      *
      * 只取未被 offloaded 的图片；没有注入时返回空表，协议层会降级成占位文本 ——
      * 仍然不静默丢弃。
+     *
+     * **总预算统一在 core 里执行**（2026-11-05 外部审查 F06）：单张上限挡不住
+     * 「很多张大图」，而那正是长图文会话的常态。
      */
-    const images = new Map<string, RequestImageBytes>();
-    if (this.#deps.resolveImage !== undefined) {
-      for (const [id, ref] of wantedImagesOf(options.messages)) {
-        try {
-          const bytes = await this.#deps.resolveImage(ref, options.signal);
-          if (bytes !== undefined) images.set(id, bytes);
-        } catch {
-          // 单张读失败：交给占位文本，不打断整次请求。
-        }
-      }
-    }
+    const images = (await collectImageBytes(options.messages, this.#deps.resolveImage, options.signal)).images;
     const signalOpts = { ...(options.signal === undefined ? {} : { signal: options.signal }) };
     const deadlineOf = <T,>(operation: (signal?: AbortSignal) => Promise<T>): Promise<T> =>
       deadline.run(operation, config.streamIdleTimeoutMs, signalOpts);

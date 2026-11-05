@@ -277,7 +277,35 @@ export interface OpencodeCatalogRecord {
   free?: boolean;
 }
 
-/** 目录来源：`list()` 交回合并后的记录（带 TTL 缓存）。 */
+/**
+ * 一次在途加载。
+ *
+ * **为什么需要「代号 + 共享 controller」**（2026-11-05 外部审查 F01）：
+ *
+ * 上一版用单个 `inFlight` 变量兼职三件事 —— 并发去重、结果回写、指针清理 ——
+ * 于是产生两个可复现的缺陷：
+ *
+ * 1. **旧结果覆盖新结果**：`fresh` 只是 `inFlight = undefined`，旧 Promise 并未取消；
+ *    它稍后完成时照样执行 `cached = records`，用户点了刷新，缓存又被打回旧值。
+ * 2. **取消串扰**：所有等待者共享**第一个调用方**的 signal。A 取消时底层请求被取消，
+ *    还在等的 B 跟着一起失败 —— 尽管 B 自己的信号好好的。
+ *
+ * 现在：每次加载有自己的 `generation` 与 `AbortController`。
+ * - 只有 `generation === generationSeq`（最新一代）的结果允许写缓存；
+ * - `finally` 只在 `current === entry` 时清指针，旧加载不会把新指针抹掉；
+ * - 调用方的 signal **只取消自己的等待**，全部等待者都走了才 abort 共享请求。
+ */
+interface CatalogLoad {
+  /** 本次加载的唯一代号（递增）。 */
+  readonly generation: number;
+  /** 共享的取消入口：所有等待者都放弃时才 abort。 */
+  readonly controller: AbortController;
+  /** 结果 promise（所有等待者共用同一次网络请求）。 */
+  promise: Promise<OpencodeCatalogRecord[]>;
+  /** 仍在等待的调用方数量。 */
+  waiters: number;
+}
+
 export interface OpencodeCatalog {
   /**
    * @param signal - 调用方取消信号（`listModels`/`resolveModel` 传自己的信号）。
@@ -286,12 +314,74 @@ export interface OpencodeCatalog {
   list(signal?: AbortSignal, fresh?: boolean): Promise<OpencodeCatalogRecord[]>;
 }
 
-/** 读一段有界的 JSON 正文（旧插件用 `fetchJsonResponse` 的字节上限做同一件事）。 */
+/**
+ * 读一段**真正有界**的 JSON 正文。
+ *
+ * ## 为什么不能先 `response.text()` 再量长度（2026-11-05 外部审查 F05）
+ *
+ * 上一版是：
+ *
+ * ```ts
+ * const text = await response.text();      // ← 先把整个响应读进内存
+ * if (text.length > limit) throw …        // ← 再检查，晚了
+ * ```
+ *
+ * 两个问题：
+ *
+ * 1. **上限来得太晚**：一个 200 MB 的错误页会先被完整分配成字符串，之后才抛错。
+ *    上限原本的意义是「防止异常大响应」，这样写等于没有。
+ * 2. **单位错了**：`text.length` 是 UTF-16 码元数，不是字节数。中文正文的 UTF-8
+ *    字节数是它的 3 倍 —— 注释写着 byte limit，实际放行的是 3 倍额度。
+ *
+ * 现在：分块读，**累计 UTF-8 字节**，一超限就 `reader.cancel()` 并抛错 ——
+ * 后面的 chunk 不会再被读进来。
+ *
+ * 有 `Content-Length` 时先做一次快速拒绝，省掉必然失败的读取。
+ * @param response - 已拿到响应头的响应。
+ * @param limit - 允许的最大**字节**数。
+ * @returns 解析后的 JSON。
+ */
 async function readJsonBounded(response: Response, limit: number): Promise<unknown> {
-  const text = await response.text();
-  if (text.length > limit) {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    // 头里就超了：不必读正文，但要释放连接。
+    try {
+      await response.body?.cancel();
+    } catch {
+      // 取消失败不影响结论。
+    }
     throw new LlmError(`opencode catalog response exceeds the ${limit} byte limit`, "DISCOVERY_FAILED");
   }
+
+  let text: string;
+  if (response.body === null) {
+    text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > limit) {
+      throw new LlmError(`opencode catalog response exceeds the ${limit} byte limit`, "DISCOVERY_FAILED");
+    }
+  } else {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done === true) break;
+        if (value === undefined) continue;
+        total += value.byteLength;
+        if (total > limit) {
+          // **立刻停**：超限之后不再索取任何 chunk。
+          await reader.cancel().catch(() => {});
+          throw new LlmError(`opencode catalog response exceeds the ${limit} byte limit`, "DISCOVERY_FAILED");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    text = new TextDecoder().decode(Buffer.concat(chunks));
+  }
+
   try {
     return JSON.parse(text);
   } catch (error) {
@@ -330,7 +420,10 @@ export function createOpencodeCatalog(input: {
       : METADATA_BUDGET_MS;
   let cached: OpencodeCatalogRecord[] | undefined;
   let expiresAt = 0;
-  let inFlight: Promise<OpencodeCatalogRecord[]> | undefined;
+  /** 最新一代的代号：只有它返回的结果允许写缓存。 */
+  let generationSeq = 0;
+  /** 当前共享的在途加载（并发去重）。 */
+  let current: CatalogLoad | undefined;
 
   const requestSignal = (signal: AbortSignal | undefined, budgetMs: number): AbortSignal =>
     signal === undefined ? AbortSignal.timeout(budgetMs) : AbortSignal.any([signal, AbortSignal.timeout(budgetMs)]);
@@ -386,22 +479,22 @@ export function createOpencodeCatalog(input: {
       const meta = metadataById.get(entry.id);
       const contextWindow = meta?.contextWindow ?? entry.contextWindow;
       const maxTokens = meta?.maxTokens ?? entry.maxTokens;
-    // 档位来源优先级：网关 `/models` 的 capabilities → models.dev 的 reasoning_options。
-    const efforts = entry.efforts ?? meta?.efforts;
+      // 档位来源优先级：网关 `/models` 的 capabilities → models.dev 的 reasoning_options。
+      const efforts = entry.efforts ?? meta?.efforts;
       return {
         entry: {
           id: entry.id,
           name: names[index] ?? entry.name,
           ...(contextWindow === undefined ? {} : { contextWindow }),
           ...(maxTokens === undefined ? {} : { maxTokens }),
-      // **网关公布的档位优先**：`/models` 是目录本身的必需请求，永远拿得到；
-      // models.dev 元数据可能抓取失败。反过来会让用户选的 `max` 被宿主拒掉（2026-11-03 报障）。
-      ...(efforts === undefined ? {} : { efforts }),
+          // **网关公布的档位优先**：`/models` 是目录本身的必需请求，永远拿得到；
+          // models.dev 元数据可能抓取失败。反过来会让用户选的 `max` 被宿主拒掉（2026-11-03 报障）。
+          ...(efforts === undefined ? {} : { efforts }),
           inputModalities: meta?.inputModalities ?? entry.inputModalities,
         },
         api: meta?.api ?? DEFAULT_API,
         reasoning: meta?.reasoning === true,
-    efforts: efforts ?? [],
+        efforts: efforts ?? [],
         ...(meta?.company === undefined ? {} : { company: meta.company }),
         ...(meta?.free === true ? { free: true } : {}),
       };
@@ -413,30 +506,121 @@ export function createOpencodeCatalog(input: {
     /**
      * 读目录（带 TTL 缓存）。
      *
-     * @param signal - 调用方取消信号。
+     * @param signal - 调用方取消信号。**只取消自己的等待**，不影响其他等待者（F01）。
      * @param fresh - **绕过缓存**（2026-11-04 外部审查 U10）。
      *
      *   `CatalogModelsPort.catalogModels(fresh)` 的契约就是「刷新按钮必须真的重读」，
      *   而这里原来只收 `signal`、无条件走 TTL —— 用户在 TTL 内点刷新，界面就是
      *   「点了没反应」，服务端已经变了的列表永远看不到。
      *
-     *   与 `inFlight` 的配合：`fresh` 时不复用进行中的请求，否则「刷新」会拿到
-     *   上一次那份还没落地的旧结果。
+     * ## 并发语义（2026-11-05 外部审查 F01 重写）
+     *
+     * | 场景 | 行为 |
+     * | --- | --- |
+     * | 多个普通读取并发 | 共用同一次网络请求（去重） |
+     * | `fresh` | **另起一代**，不复用在途请求；旧一代的结果**不再**能写缓存 |
+     * | 某个调用方取消 | 只有它自己 reject；共享请求活到最后一个等待者也走掉 |
+     * | 旧加载的 `finally` | 不会清掉新一代的指针（比较 `current === entry`） |
      */
     async list(signal?: AbortSignal, fresh = false): Promise<OpencodeCatalogRecord[]> {
       const stamp = now();
       if (!fresh && cached !== undefined && stamp < expiresAt) return cached;
-      if (fresh) inFlight = undefined;
-      inFlight ??= load(signal)
-        .then((records) => {
-          cached = records;
-          expiresAt = now() + ttlMs;
-          return records;
-        })
-        .finally(() => {
-          inFlight = undefined;
-        });
-      return inFlight;
+
+      // 已取消的调用方：连共享请求都不该发起（也不该占用别人的 in-flight）。
+      if (signal?.aborted === true) throw cancelledError(signal);
+
+      // fresh = 旧一代作废。这里**不** abort 旧 controller：它的等待者还要各自收尾，
+      // 只是它写不了缓存了（generation 已过期）。
+      if (fresh) {
+        generationSeq += 1;
+        current = undefined;
+      }
+
+      const existing = current;
+      const entry = existing ?? startLoad();
+      // 复用在途请求时**也要计入等待者**：全部走光才该 abort 共享请求。
+      if (existing !== undefined) existing.waiters += 1;
+      return waitFor(entry, signal);
     },
   };
+
+  /**
+   * 起一代新的加载。
+   * @returns 新的在途加载（`waiters` 初始为 1，代表本次调用方）。
+   */
+  function startLoad(): CatalogLoad {
+    const controller = new AbortController();
+    const entry: CatalogLoad = {
+      generation: generationSeq,
+      controller,
+      promise: undefined as unknown as Promise<OpencodeCatalogRecord[]>,
+      waiters: 1,
+    };
+    entry.promise = load(controller.signal).then((records) => {
+      // **只有最新一代能写缓存**：旧请求晚到时不覆盖用户刚刷新出来的结果。
+      if (entry.generation === generationSeq) {
+        cached = records;
+        expiresAt = now() + ttlMs;
+      }
+      return records;
+    });
+    current = entry;
+    // 指针清理用身份比较：旧一代的 finally 不能把新一代抹掉。
+    void entry.promise
+      .catch(() => {})
+      .finally(() => {
+        if (current === entry) current = undefined;
+      });
+    return entry;
+  }
+
+  /**
+   * 等一份加载的结果，并把「调用方取消」与「加载失败」分开。
+   *
+   * 取消只 reject **本调用方**；`releaseWaiter` 在最后一个等待者离开时
+   * abort 共享请求，所以一个组件取消不会拖死其他人（F01 的第二个缺陷）。
+   * @param entry - 在途加载。
+   * @param signal - 本调用方的取消信号。
+   * @returns 目录记录。
+   */
+  async function waitFor(entry: CatalogLoad, signal: AbortSignal | undefined): Promise<OpencodeCatalogRecord[]> {
+    if (signal === undefined) return entry.promise;
+    if (signal.aborted) {
+      releaseWaiter(entry);
+      throw cancelledError(signal);
+    }
+
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = (): void => {
+        releaseWaiter(entry);
+        reject(cancelledError(signal));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([entry.promise, aborted]);
+    } finally {
+      // 正常返回后摘掉监听：长命的调用方 signal 不该累积监听器。
+      if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * 一个等待者放弃；全部走光才 abort 共享请求（否则一个组件取消会拖死其他人）。
+   * @param entry - 在途加载。
+   */
+  function releaseWaiter(entry: CatalogLoad): void {
+    entry.waiters -= 1;
+    if (entry.waiters > 0) return;
+    if (current === entry) current = undefined;
+    if (!entry.controller.signal.aborted) entry.controller.abort();
+  }
+
+  /** 调用方取消时的错误（带 `signal.reason`，便于上游区分「谁取消的」）。 */
+  function cancelledError(signal: AbortSignal): LlmError {
+    return signal.reason === undefined
+      ? new LlmError("the caller aborted the catalog read", "ABORTED")
+      : new LlmError("the caller aborted the catalog read", "ABORTED", { cause: signal.reason });
+  }
 }
