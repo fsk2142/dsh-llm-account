@@ -28,7 +28,7 @@ const PROFILE = JSON.stringify({
       runtimeKey: "rt-1",
       apiUrl: "https://amr-link.open-design.ai/v1",
       linkUrl: "https://amr-link.open-design.ai",
-      user: { id: "u1", email: "fsk@example.com", name: "FSK", plan: "GOAT" },
+      user: { id: "u1", email: "user@example.com", name: "Sample User", plan: "GOAT" },
       workspaceId: "ws-1",
     },
   },

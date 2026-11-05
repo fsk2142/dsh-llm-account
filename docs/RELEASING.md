@@ -174,3 +174,5 @@ fix(opendesign): 去掉合成的月度额度条
 | `scripts/mutation-check.py` | 变异检验：对指定测试做反向编辑，确认它们真的会红 |
 | `scripts/fix-doc-headings.mjs` | 修 Markdown 标题层级（主题 H2 / 子节 H3） |
 | `scripts/scrub-history.mjs` | 清理提交历史里的对话痕迹，见 [SCRUB-COMMIT-HISTORY.md](SCRUB-COMMIT-HISTORY.md) |
+| `scripts/scrub-conversation-traces.mjs` | 清理**工作区**注释与文档里的对话痕迹（`用户 2026-…` 这类）；默认 `--dry-run`，加 `--apply` 才改。与上一行的区别：它改的是当前文件，不改历史 |
+| `scripts/archive/` | **已归档的一次性脚本**（历史重写用的脱敏过滤）。不是运行时依赖，见该目录的 README |

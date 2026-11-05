@@ -41,12 +41,12 @@ function threadIdOf(sessionId: string | undefined): string {
 
 describe("F09 · CLI threadId 稳定派生", () => {
   it("**同一会话连续两次请求得到相同 threadId**", () => {
-    const id = "session-7daef554-dc28-46ec-8f22-6208f3618b7b";
+    const id = "session-7daef554-0000-4000-8000-000000000001";
     expect(threadIdOf(id)).toBe(threadIdOf(id));
   });
 
   it("真实宿主形态（`session-` 前缀）也稳定 —— 这正是上一版会失效的输入", () => {
-    const prefixed = "session-31f25379-850a-4889-8bc3-2e70bcab8c50";
+    const prefixed = "session-31f25379-0000-4000-8000-000000000002";
     expect(threadIdOf(prefixed)).toBe(threadIdOf(prefixed));
   });
 

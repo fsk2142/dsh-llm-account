@@ -68,7 +68,7 @@ const PROFILE_TEXT = JSON.stringify({
       runtimeKey: "rt-1",
       apiUrl: "https://amr-link.open-design.ai/v1",
       linkUrl: "https://amr-link.open-design.ai",
-      user: { id: "u1", email: "fsk@example.com", name: "FSK", plan: "GOAT" },
+      user: { id: "u1", email: "user@example.com", name: "Sample User", plan: "GOAT" },
       workspaceId: "ws-1",
     },
   },
@@ -138,11 +138,11 @@ it("设备授权成功：状态先 waiting（带授权网址与验证码），�
   expect(storeKey).toHaveBeenCalledTimes(1);
   const [input] = storeKey.mock.calls[0] as unknown as [Record<string, unknown>];
   expect(input).toMatchObject({
-    ref: accountRef("opendesign", "fsk@example.com"),
+    ref: accountRef("opendesign", "user@example.com"),
     key: "rt-1",
     controlKey: "ctrl-1",
     workspaceId: "ws-1",
-    label: "fsk@example.com",
+    label: "user@example.com",
 });
 });
 
@@ -313,7 +313,7 @@ it("登录产物解析：prod 槽优先、单槽回退、没有 runtimeKey 不�
   expect(parseAmrProfile('{"profiles":{"a":{"runtimeKey":"1"},"b":{"runtimeKey":"2"}}}')).toBeUndefined();
   expect(parseAmrProfile("not json")).toBeUndefined();
   // 标签：邮箱 → 显示名 → 槽名。
-  expect(profileLabel(parseAmrProfile(PROFILE_TEXT)!)).toBe("fsk@example.com");
+  expect(profileLabel(parseAmrProfile(PROFILE_TEXT)!)).toBe("user@example.com");
   expect(profileLabel(parseAmrProfile('{"profiles":{"prod":{"runtimeKey":"k","user":{"name":"N"}}}}')!)).toBe("N");
   expect(profileLabel(parseAmrProfile('{"profiles":{"solo":{"runtimeKey":"k"}}}')!)).toBe("solo");
 });

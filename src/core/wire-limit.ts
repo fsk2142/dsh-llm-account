@@ -177,16 +177,21 @@ export function trimWireMessages<T extends WireMessageLike>(
    *
    * 这一组的最后一条是本轮的用户输入（丢了等于空请求），而整组又不可拆 ——
    * 两条路都通向失败，所以如实报出来。
+   *
+   * **预算里不再给提示留一格**：提示会并进第一条 system（见下方 `notice` 的说明），
+   * 而 system 段本来就整段保留。没有 system 时才需要自建一条 —— 那一种情形由
+   * `budget` 的 `head0 === undefined` 分支处理。
    */
   const lastGroup = groups.at(-1);
-  if (system.length >= limit || (groups.length === 1 && lastGroup !== undefined && system.length + lastGroup.length + 1 > limit)) {
-    throw new WireLimitExceededError(limit, system.length + (lastGroup?.length ?? 0));
+  const noticeSlot = system.length === 0 ? 1 : 0;
+  if (system.length >= limit || (groups.length === 1 && lastGroup !== undefined && system.length + lastGroup.length + noticeSlot > limit)) {
+    throw new WireLimitExceededError(limit, system.length + (lastGroup?.length ?? 0) + noticeSlot);
   }
 
-  // 提示自己占一格，所以可用预算要减一；再减掉 system 段。
-  // **不再用 `Math.max(1, …)`**：那是超限的直接来源（F16）。
-  const budget = limit - system.length - 1;
-  if (budget <= 0) throw new WireLimitExceededError(limit, system.length + 1);
+  // 从最新往旧取：预算紧张时保留**最近**的历史。
+  // **不用 `Math.max(1, …)`**：那是超限的直接来源（F16）。
+  const budget = limit - system.length - noticeSlot;
+  if (budget <= 0) throw new WireLimitExceededError(limit, system.length + noticeSlot);
 
   const kept: T[][] = [];
   let used = 0;
@@ -201,15 +206,59 @@ export function trimWireMessages<T extends WireMessageLike>(
 
   // 一条都放不下：最后一组（不可拆）比整个预算还大 → 无解。
   if (kept.length === 0) {
-    throw new WireLimitExceededError(limit, system.length + (lastGroup?.length ?? 0) + 1);
+    throw new WireLimitExceededError(limit, system.length + (lastGroup?.length ?? 0) + noticeSlot);
   }
 
   const dropped = messages.length - system.length - used;
-  return {
-    messages: [...system, makeNotice(dropped), ...kept.flat()],
-    dropped,
-    noticeInserted: true,
-  };
+  /**
+   * ## 提示必须**并进第一条 system**，不能自造第二条（自审发现）
+   *
+   * 原实现把提示当成一条**独立的 system 消息**插在 system 段之后。实测出站序列是
+   * `["system","system","user",…]` —— 两个问题：
+   *
+   * 1. 多数网关（含 OpenAI 官方）只在开头读**一条** system，或要求 system 必须全部
+   *    在开头连续出现；第二条位于历史之前的过渡位置，行为未定义；
+   * 2. 更要紧的是**提示可能被静默忽略** —— 那么「不要假设你读过被省略的内容」这句
+   *    就白写了，模型会以为自己看到了完整历史。这正是当初写这条提示要防的事。
+   *
+   * 现在：有 system 就把提示追加到**第一条**的内容尾部（保持一条 system）；
+   * 没有 system 才自造一条放开头。
+   *
+   * 这样也顺带省下一格预算（提示不再单独占位），见 `budget` 的计算。
+   */
+  const notice = makeNotice(dropped);
+  const head0 = system[0];
+  const merged: T[] =
+    head0 === undefined
+      ? [notice, ...kept.flat()]
+      : [
+          {
+            ...head0,
+            content: mergeNoticeIntoContent(head0, notice),
+          } as T,
+          ...system.slice(1),
+          ...kept.flat(),
+        ];
+  return { messages: merged, dropped, noticeInserted: true };
+}
+
+/**
+ * 把提示并进原 system 消息的 `content`。
+ *
+ * `content` 在两家 wire 形状里都是字符串（Open Design 的 system 是纯文本），但为了
+ * 不假设任何一家的形状，这里做保守处理：字符串就直接拼接，其它类型退化成
+ * 「保留原文 + 提示文本数组」。
+ * @param head - 第一条 system 消息。
+ * @param notice - 提示消息（它的 `content` 是提示正文）。
+ * @returns 新的 content 值。
+ */
+function mergeNoticeIntoContent(head: WireMessageLike, notice: WireMessageLike): unknown {
+  const base = (head as { content?: unknown }).content;
+  const extra = (notice as { content?: unknown }).content;
+  if (typeof base === "string" && typeof extra === "string") {
+    return base === "" ? extra : `${base}\n\n${extra}`;
+  }
+  return [base, extra];
 }
 
 /**

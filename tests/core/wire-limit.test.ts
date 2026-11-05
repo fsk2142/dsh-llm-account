@@ -160,9 +160,48 @@ describe("F16 · `limit` 是严格不变量，绝不超发", () => {
   });
 
   it("**最后一组工具调用比预算大时不再整组塞进来**", () => {
-    // limit=4，system 1 条 + 提示 1 条 → 预算 2；最后一组 3 条装不下。
-    const input: Wire[] = [{ role: "system", content: "S" }, ...users(2), ...toolGroup("c1")];
-    expect(() => trimWireMessages(input, 4, notice)).toThrow(WireLimitExceededError);
+    /**
+     * limit=3、system 1 条（提示并进它、不额外占位）→ 预算 2；
+     * 最后一组是 3 条 tool 组，装不下 → 必须抛，而不是硬塞成 limit+1。
+     */
+    const input: Wire[] = [{ role: "system", content: "S" }, ...users(1), ...toolGroup("c1")];
+    expect(() => trimWireMessages(input, 3, notice)).toThrow(WireLimitExceededError);
+  });
+
+  it("**提示并进第一条 system，不自造第二条**（自审发现的 BUG）", () => {
+    /**
+     * 原实现把提示当成独立 system 插在 system 段之后，出站是
+     * `["system","system",…]`。多数网关只读开头的第一条 system，于是
+     * 「不要假设你读过被省略的内容」可能被静默忽略 —— 那正是这条提示要防的事。
+     */
+    const input: Wire[] = [{ role: "system", content: "你是助手" }, ...users(30)];
+    const result = trimWireMessages(input, 10, notice);
+    const systems = result.messages.filter((message) => message.role === "system");
+    expect(systems, "**只能有一条 system**").toHaveLength(1);
+    expect(systems[0]?.content, "原 system 文本保留").toContain("你是助手");
+    expect(systems[0]?.content, "提示并进来了").toContain("省略");
+    expect(result.messages[0]?.role, "它必须在开头").toBe("system");
+  });
+
+  it("原本没有 system 时，自建一条并在开头", () => {
+    const result = trimWireMessages(users(30), 10, notice);
+    expect(result.messages[0]?.role).toBe("system");
+    expect(result.messages[0]?.content).toContain("省略");
+    expect(result.messages.filter((message) => message.role === "system")).toHaveLength(1);
+  });
+
+  it("多条 system 时只合并进第一条，其余原样保留（不乱序）", () => {
+    const input: Wire[] = [
+      { role: "system", content: "A" },
+      { role: "system", content: "B" },
+      ...users(30),
+    ];
+    const result = trimWireMessages(input, 12, notice);
+    const systems = result.messages.filter((message) => message.role === "system");
+    expect(systems).toHaveLength(2);
+    expect(systems[0]?.content, "第一条带提示").toContain("省略");
+    expect(systems[0]?.content).toContain("A");
+    expect(systems[1]?.content, "第二条不受影响").toBe("B");
   });
 
   it("**所有能裁的输入分支，输出都不超过 limit**（穷举边界）", () => {
