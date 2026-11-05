@@ -17,6 +17,9 @@
  * 3. **标题里不该有**：日期括号（`（2026-…）`）、多件事的连接符（` + `）、
  *    「一个会误导的」这类评价性尾巴。
  *
+ * 规则本体住在 `scripts/commit-titles.mjs`（纯函数，可被测试直接 import）；
+ * 本文件只负责**读 git 与打印**。这样测试跑的是生产实现，不是它的副本。
+ *
  * 用法：
  *   node scripts/check-commit-titles.mjs              # 检查上一个 tag 之后的提交
  *   node scripts/check-commit-titles.mjs --all        # 检查全部历史
@@ -26,28 +29,35 @@
  */
 import { execFileSync } from "node:child_process";
 
-/** 允许的 type 前缀。 */
-const TYPES = ["feat", "fix", "chore", "docs", "test", "refactor", "style", "build", "perf", "revert"];
-
-/** 标题硬上限（GitHub 会截断）。 */
-const MAX_LEN = 72;
-/** 建议上限（超了给提示，不失败）。 */
-const SOFT_LEN = 50;
+import { partition } from "./commit-titles.mjs";
 
 /** 读 git 输出。 */
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
 
-/** 取要检查的提交范围。 */
-function subjectsOf(argv) {
-  if (argv.includes("--all")) {
-    return git(["log", "--format=%s"]).split("\n").filter(Boolean);
-  }
+/**
+ * 取要检查的提交（**带 SHA**：豁免按 SHA 精确匹配，不能只看标题 ——
+ * 同一个标题可能被将来的提交原样复用，那时它必须重新受约束）。
+ * @param argv - 命令行参数。
+ * @returns `{ sha, subject }` 列表。
+ */
+function commitsOf(argv) {
+  const format = "--format=%H%x09%s";
+  const toPairs = (raw) =>
+    raw
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const at = line.indexOf("\t");
+        return at < 0 ? { sha: "", subject: line } : { sha: line.slice(0, at), subject: line.slice(at + 1) };
+      });
+
+  if (argv.includes("--all")) return toPairs(git(["log", format]));
   const limitAt = argv.indexOf("--limit");
   if (limitAt >= 0) {
     const n = Number(argv[limitAt + 1] ?? "20");
-    return git(["log", `-${n}`, "--format=%s"]).split("\n").filter(Boolean);
+    return toPairs(git(["log", `-${n}`, format]));
   }
   // 默认：上一个 tag 之后（没有 tag 时取全部）。
   let range;
@@ -57,82 +67,36 @@ function subjectsOf(argv) {
   } catch {
     range = "HEAD";
   }
-  return git(["log", range, "--format=%s"]).split("\n").filter(Boolean);
-}
-
-/** 标题里的具体问题。 */
-function problemsOf(subject) {
-  const problems = [];
-  const prefix = subject.match(/^([a-z]+)(\([^)]*\))?!?[:：]/);
-  if (prefix === null) {
-    problems.push("缺少 type 前缀（feat/fix/chore/docs/…）");
-  } else if (!TYPES.includes(prefix[1])) {
-    problems.push(`未知 type「${prefix[1]}」`);
-  }
-  if (subject.length > MAX_LEN) {
-    problems.push(`超过 ${MAX_LEN} 字符（${subject.length}）`);
-  }
-  // 日期括号：把「什么时候」写进标题属于正文内容。
-  if (/（20\d\d-\d\d/.test(subject) || /\(20\d\d-\d\d/.test(subject)) {
-    problems.push("标题里有日期，应移到正文");
-  }
-  return problems;
-}
-
-/**
- * 标题里的「软信号」：不阻塞，但值得提醒。
- *
- * ` + ` 只在**两侧都是动宾短语**时才算「做了两件事」。像
- * `重写为「功能 + 操作」两段结构` 里的 ` + ` 是在描述一个结构名，
- * 不是两件事 —— 直接当错误会误伤。所以这条降级为提示。
- * @param subject - 提交标题。
- * @returns 提示文本，或 `undefined`。
- */
-function hintOf(subject) {
-  if (!/ \+ /.test(subject)) return undefined;
-  // 去掉引号/括号里的内容再看：`「功能 + 操作」` 这种不算两件事。
-  const outside = subject.replace(/「[^」]*」|\([^)]*\)|（[^）]*）/g, "");
-  return / \+ /.test(outside) ? "标题里出现「 + 」，确认是否一个提交做了两件事" : undefined;
+  return toPairs(git(["log", range, format]));
 }
 
 /** 主流程。 */
 function main() {
-  const subjects = subjectsOf(process.argv.slice(2));
-  if (subjects.length === 0) {
+  const commits = commitsOf(process.argv.slice(2));
+  if (commits.length === 0) {
     console.log("提交标题检查：没有待检查的提交");
     return;
   }
 
-  const failed = [];
-  const long = [];
-  const hinted = [];
-  for (const subject of subjects) {
-    const problems = problemsOf(subject);
-    if (problems.length > 0) {
-      failed.push({ subject, problems });
-      continue;
-    }
-    if (subject.length > SOFT_LEN) long.push({ subject, len: subject.length });
-    const hint = hintOf(subject);
-    if (hint !== undefined) hinted.push({ subject, hint });
-  }
+  const { failed, long, hinted, exempted, checked } = partition(commits);
+  const exemptNote = exempted === 0 ? "" : `（另有 ${exempted} 个已发布提交按 SHA 豁免）`;
 
   if (hinted.length > 0) {
-    console.log(`提交标题：${hinted.length} 个需要确认（不阻塞）`);
+    console.log(`提交标题：${hinted.length} 个需要确认（不阻塞）${exemptNote}`);
     for (const item of hinted) console.log(`  ? ${item.subject}\n      · ${item.hint}`);
   }
 
   if (long.length > 0) {
-    console.log(`提交标题：${long.length} 个超过建议长度 ${SOFT_LEN} 字符（不阻塞）`);
+    console.log(`提交标题：${long.length} 个超过建议长度（不阻塞）${exemptNote}`);
     for (const item of long) console.log(`  ${item.len}  ${item.subject}`);
   }
 
   if (failed.length === 0) {
-    console.log(`提交标题：${subjects.length} 个全部合规`);
+    console.log(`提交标题：${checked} 个全部合规${exemptNote}`);
     return;
   }
 
-  console.error(`提交标题：${failed.length} / ${subjects.length} 个有问题`);
+  console.error(`提交标题：${failed.length} / ${checked} 个有问题${exemptNote}`);
   for (const item of failed) {
     console.error(`  ✗ ${item.subject}`);
     for (const problem of item.problems) console.error(`      · ${problem}`);

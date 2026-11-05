@@ -98,7 +98,13 @@ jobs:
             || { echo "::error::lib/client.js 缺少 __ModuleLoader__ banner"; exit 1; }
           echo "✓ lib/client.js 的 loader banner 在位"
 
-      - name: 换行与提交标题规范
-        run: |
-          node scripts/check-final-newline.mjs
-          node scripts/check-commit-titles.mjs --limit 5
+      # 两个检查拆成独立 step（2026-11-05）：
+      # 原来合并成一个 step，任何一个失败都只显示同一行红色，看不出是哪一项坏了
+      # —— v2.0.0 那次 CI 红了一个多星期，实际只是提交标题超 2 个字符。
+      - name: 文件末尾换行
+        run: node scripts/check-final-newline.mjs
+
+      - name: 提交标题规范
+        # 只查最近 5 条：历史提交的标题不可能再改（改写已发布历史代价更高）。
+        # 已发布的超长标题按 SHA 在脚本里精确豁免，见 GRANDFATHERED。
+        run: node scripts/check-commit-titles.mjs --limit 5
