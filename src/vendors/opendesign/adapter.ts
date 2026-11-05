@@ -37,6 +37,7 @@ import type {
 
 import type { AccountPort, AccountView, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
+import { createCatalogFlight, type CatalogFlight } from "../../core/catalog-flight";
 import { pickApiKey } from "../../core/credentials";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
@@ -325,15 +326,44 @@ interface AttemptFailure {
   thrown: unknown;
 }
 
+/**
+ * 目录缓存的复合键：基地址 + 密钥。
+ *
+ * 用 `\0` 当分隔符而不是 `:` / `|` —— 基地址是 URL、密钥是任意字符串，
+ * 两个常见分隔符都可能出现在其中，那会让「不同的 (base, key) 拼出同一个键」，
+ * 于是把**别人的缓存**当成自己的。`\0` 在两个源里都不可能出现。
+ * @param apiBase - 网关基地址。
+ * @param key - 目录请求用的密钥（可能缺省）。
+ * @returns 复合键。
+ */
+function catalogKeyOf(apiBase: string, key: string | undefined): string {
+  return `${apiBase}\u0000${key ?? ""}`;
+}
+
+/**
+ * 拆回复合键。
+ * @param composite - `catalogKeyOf` 的产物。
+ * @returns 基地址与密钥。
+ */
+function parseCatalogKey(composite: string): { apiBase: string; key: string | undefined } {
+  const at = composite.indexOf("\u0000");
+  if (at < 0) return { apiBase: composite, key: undefined };
+  const key = composite.slice(at + 1);
+  return { apiBase: composite.slice(0, at), key: key === "" ? undefined : key };
+}
+
 /** Open Design 适配器：宿主 `LlmAdapter` 的一个真实子类。 */
 class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #deps: OpenDesignAdapterDeps;
 
-  /** 目录缓存：同一基地址 + 同一把密钥在 TTL 内复用；并发的请求共用同一个 promise。 */
-  #catalogCache: { base: string; key: string | undefined; at: number; entries: CatalogEntry[] } | undefined;
-
-  /** 在途的目录请求（并发去重：模型选择器一次能并发问好几条）。 */
-  #catalogInFlight: Promise<CatalogEntry[]> | undefined;
+  /**
+   * 目录读取（TTL + **按「基地址 + 密钥」分键** + 独立取消 + 内部超时）。
+   *
+   * 抽到 `core/catalog-flight`（2026-11-05 外部审查 F15/F17）：原来这里是裸
+   * `#catalogInFlight`，键只在**缓存**里比较、在途请求却不分键 —— 换账号密钥后
+   * 新配置会复用旧密钥的在途请求；`fresh` 也複用它；等待者共用第一个 signal。
+   */
+  readonly #catalogFlight: CatalogFlight<CatalogEntry[]>;
 
   /**
    * @param deps - 配置读取、轮换引擎、端口与各 I/O 注入点。
@@ -341,6 +371,15 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
   constructor(deps: OpenDesignAdapterDeps) {
     super();
     this.#deps = deps;
+    this.#catalogFlight = createCatalogFlight<CatalogEntry[]>({
+      ttlMs: CATALOG_TTL_MS,
+      timeoutMs: MODELS_TIMEOUT_MS,
+      // 键是 `apiBase\0key`（见 `#catalogKeyOf`）：两家都靠键隔离，不靠额外状态。
+      load: async (composite, signal) => {
+        const { apiBase, key } = parseCatalogKey(composite);
+        return await this.#fetchCatalog(apiBase, key, signal);
+      },
+    });
   }
 
   /** @returns 路由的展示元数据（name 用产品名，id 必须是路由 id）。 */
@@ -812,45 +851,36 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
   /**
    * 拉目录并解析（TTL 缓存 + 并发去重）。
    *
-   * 缓存键是「基地址 + 密钥」：换账号/换基地址立即失效；`now` 走真实时钟（60 秒的量级，
-   * 不需要注入）。
+   * 缓存与在途请求都按**「基地址 + 密钥」**分键：换账号或换基地址 → 新键 →
+   * 不复用旧请求（2026-11-05 外部审查 F15）。取消与超时的语义见
+   * `core/catalog-flight.ts`。
    * @param config - 已填默认值的配置。
-   * @param signal - 宿主的取消信号（有缓存时不发请求，信号自然用不上）。
+   * @param signal - 宿主的取消信号（只影响**本调用方**的等待）。
+   * @param fresh - 绕过缓存与在途请求重读（刷新按钮）。
    * @returns 目录条目。
    */
   async #catalog(config: ResolvedConfig, signal?: AbortSignal, fresh = false): Promise<CatalogEntry[]> {
     const key = await this.#catalogKey();
-    const cached = this.#catalogCache;
-    // `fresh` = 绕过缓存重读（刷新按钮）：TTL 内点刷新若拿缓存，界面上就是「点了没反应」。
-    if (!fresh && cached !== undefined && cached.base === config.apiBase && cached.key === key && Date.now() - cached.at <= CATALOG_TTL_MS) {
-      return cached.entries;
-    }
-    if (this.#catalogInFlight !== undefined) return this.#catalogInFlight;
-    const pending = this.#fetchCatalog(config, key, signal);
-    this.#catalogInFlight = pending;
-    try {
-      const entries = await pending;
-      this.#catalogCache = { base: config.apiBase, key, at: Date.now(), entries };
-      return entries;
-    } finally {
-      this.#catalogInFlight = undefined;
-    }
+    return await this.#catalogFlight.read(catalogKeyOf(config.apiBase, key), {
+      ...(signal === undefined ? {} : { signal }),
+      fresh,
+    });
   }
 
   /**
    * 真正打一次目录端点。
-   * @param config - 已填默认值的配置。
+   *
+   * `signal` 由 `catalog-flight` 传入，**已经合并**了调用方取消与 10 秒内部超时
+   * （F17：原来写的是 `signal ?? timeout`，调用方一给 signal，上限就没了）。
+   * @param apiBase - 目录端点基地址。
    * @param key - 目录请求用的推理密钥。
-   * @param signal - 宿主的取消信号。
+   * @param signal - 已合并的取消信号。
    * @returns 目录条目。
    */
-  async #fetchCatalog(config: ResolvedConfig, key: string | undefined, signal?: AbortSignal): Promise<CatalogEntry[]> {
+  async #fetchCatalog(apiBase: string, key: string | undefined, signal: AbortSignal): Promise<CatalogEntry[]> {
     // 目录与推理同一条 Bearer（2026-10-18 实测：不带密钥回 401 missing_api_key）。
-    const { url, headers } = catalogRequest(config.apiBase, key);
-    const response = await this.#deps.fetchImpl(url, {
-      headers,
-      signal: signal ?? AbortSignal.timeout(MODELS_TIMEOUT_MS),
-    });
+    const { url, headers } = catalogRequest(apiBase, key);
+    const response = await this.#deps.fetchImpl(url, { headers, signal });
     if (!response.ok) {
       throw new LlmError(`Open Design models endpoint returned ${response.status}`, "PROVIDER_HTTP_ERROR", {
         status: response.status,

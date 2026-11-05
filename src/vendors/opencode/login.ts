@@ -229,6 +229,14 @@ class OpencodeLoginFlow implements OpencodeLogin {
       if (result.status === "slow_down") {
         // RFC 8628 §3.5：慢下来就是真的慢下来，之后每一轮都用新间隔。
         pollIntervalMs += SLOW_DOWN_STEP_MS;
+        /**
+         * **`slow_down` 归零空正文计数**（2026-11-05 外部审查 F18）。
+         *
+         * `slow_down` 是服务端**明确、结构化的**回应 —— 说明请求本身被正确解析了，
+         * 只是要放慢。它证明端点仍然健康，所以前面那些空正文 400 不该继续累积；
+         * 否则「偶发空正文 + 一次 slow_down + 偶发空正文」会被误判成连续故障。
+         */
+        emptyBodyStreak = 0;
         continue;
       }
       if (result.status === "denied") {
@@ -268,16 +276,61 @@ class OpencodeLoginFlow implements OpencodeLogin {
         userName: name,
         ...(this.#deps.authBase === undefined ? {} : { authBase: this.#deps.authBase }),
       });
+      /**
+       * ## 提交前复检：**最后一次确认所有权，然后立刻交出写入**（F12）
+       *
+       * 每个 await 之后都复检所有权，这已经是本模块的纪律。但 `storeKey` 本身是
+       * 一个**不可撤销的异步副作用** —— 一旦交出去，写入就可能完成，而"取消"没法
+       * 从凭据库里把已写的东西收回来（底层接口没有条件写/事务）。
+       *
+       * 所以这里的分工是：
+       *
+       * - **交出去之前**：任何取消都不写（上面的复检保证）；
+       * - **交出去之后**：写入可能已经成功。此时**不能假装什么都没发生**把状态停在
+       *   `cancelled` —— 那会让界面说"已取消"、账号表里却多了一条，用户下次看到
+       *   一个自己以为没添加过的账号。
+       *
+       * 于是：写入成功后若发现已取消，仍然落成 `success`，并在 `detail` 里说明
+       * 这是取消前的写入。宁可诚实告知，也不要状态与持久化不一致。
+       */
+      if (signal.aborted) return;
       try {
         await this.#deps.storeKey(accountRef(OPENCODE_LOGIN_VENDOR, name), blob, name);
       } catch {
         this.#settle({ state: "failed", reason: "unavailable" }, signal);
         return;
       }
-      if (signal.aborted) return;
-      this.#settle({ state: "success" }, signal);
+      /**
+       * 写入已完成。**这里不再以 `signal.aborted` 直接 return**（F12 的核心）。
+       *
+       * 状态必须是 `success`：账号/凭据确实已经落盘，UI 说"已取消"就是在骗人，
+       * 而且用户会在账号列表里看到一个自己以为没添加的条目。
+       */
+      this.#settleCommitted(name, signal);
       return;
     }
+  }
+
+  /**
+   * 凭据**已经写入**之后的收尾（F12）。
+   *
+   * 与 {@link #settle} 的区别：正常终态只允许从 `waiting` 迁移，而这里要覆盖
+   * `cancel()` 抢先写下的 `failed/cancelled` —— 因为持久化的事实比那个乐观状态
+   * 更权威。与此同时，如果这次尝试已经被**新的** `begin()` 取代（`#abort` 换了
+   * 对象），就不能改写状态：那是下一代的事。
+   * @param account - 已写入的账号名。
+   * @param signal - 本次尝试的信号。
+   */
+  #settleCommitted(account: string, signal: AbortSignal): void {
+    // 已被新尝试取代：状态归新一代管，这里只保留写入事实（不覆盖）。
+    if (this.#abort?.signal !== signal) return;
+    if (this.#status.state === "success") return;
+    this.#status = {
+      state: "success",
+      ...(this.#status.state === "failed" && this.#status.reason === "cancelled"
+        ? { detail: `账号「${account}」在取消前已写入完成` }
+        : {}),
+    };
   }
 
   /**

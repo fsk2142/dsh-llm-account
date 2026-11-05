@@ -14,7 +14,7 @@
  * 本模块只做 HTTP + 归一化，不碰设置、账号或轮换；注入 `fetch` 与时钟，测试无需真网。
  * @module dsh-llm-account/src/vendors/opencode/oauth
  */
-import { BodyTooLargeError, readBoundedJson } from "../../core/bounded-body";
+import { BodyTooLargeError, readBoundedJson, readBoundedJsonResult } from "../../core/bounded-body";
 
 /** 凭据 blob 前缀（与普通 API key 区分）。 */
 export const OAUTH_PREFIX = "ocoauth1:";
@@ -54,6 +54,13 @@ export interface OAuthHttpDeps {
   fetchImpl: typeof fetch;
   /** Console 基地址；缺省 {@link DEFAULT_AUTH_BASE}。 */
   authBase?: string;
+  /**
+   * 允许的 Console 主机列表（含子域）；缺省 `["opencode.ai"]`（安全加固）。
+   *
+   * 测试与自建部署用这个显式放宽。**默认只放行真实服务** —— 目标地址决定了
+   * refresh token 会被发到哪里，默认收紧比默认放开稳妥。
+   */
+  allowAuthHosts?: readonly string[];
   /** 时钟（测试注入）。 */
   now?: () => number;
 }
@@ -178,10 +185,80 @@ function stringOf(value: Record<string, unknown>, key: string): string | undefin
   return typeof found === "string" && found !== "" ? found : undefined;
 }
 
-/** Console 基地址（去掉结尾斜杠）。 */
+/**
+ * Console 基地址（去掉结尾斜杠），**并校验主机**（安全加固）。
+ *
+ * 校验放在这里而不是各调用点：设备码、轮询、刷新、工作区四条路径都经过它，
+ * 漏一处的后果就是「refresh token 被发到了别处」。
+ * @param deps - 注入的 HTTP 依赖。
+ * @param credential - 可选的凭据 blob（它的 `authBase` 是第二来源）。
+ * @returns 已校验的基地址。
+ */
 function authBaseOf(deps: OAuthHttpDeps, credential?: OAuthCredential): string {
+  const allowed = deps.allowAuthHosts ?? DEFAULT_ALLOWED_AUTH_HOSTS;
   const base = deps.authBase ?? credential?.authBase ?? DEFAULT_AUTH_BASE;
-  return base.replace(/\/+$/, "");
+  return assertAuthBase(base, allowed);
+}
+
+/**
+ * 允许的 Console 主机（安全加固，2026-11-05 复审）。
+ *
+ * ## 为什么需要
+ *
+ * `authBase` 会决定**刷新 token 被发到哪个端点**。它有两个来源：
+ *
+ * 1. `deps.authBase`（装配层注入，生产路径上从不设置）；
+ * 2. **凭据 blob 里的 `authBase` 字段** —— 一旦本机凭据库被写入伪造的 blob，
+ *    刷新时 refresh_token 就会被送到攻击者主机。
+ *
+ * 后者需要先能写凭据库（那已经接近完全失控），所以这是**纵深防御**而不是当前
+ * 可利用的漏洞。但代价极低：把目标限制在我们自己的域名上即可。
+ *
+ * ## 为什么默认只放行 opencode.ai
+ *
+ * 唯一的真实服务就是它。测试与自建部署通过 `allowAuthHosts` 显式放宽 ——
+ * 「默认安全，需要时显式开口」比「默认随便连」稳妥。
+ */
+const DEFAULT_ALLOWED_AUTH_HOSTS: readonly string[] = ["opencode.ai"];
+
+/** 主机是否在允许列表里（含子域）。 */
+function isAllowedAuthHost(host: string, allowed: readonly string[]): boolean {
+  const normalized = host.toLowerCase();
+  return allowed.some((entry) => {
+    const candidate = entry.toLowerCase();
+    return normalized === candidate || normalized.endsWith(`.${candidate}`);
+  });
+}
+
+/**
+ * 校验并规范化 Console 基地址。
+ *
+ * 不接受 `http://`（token 明文过网）、不允许空主机、不允许非允许列表的主机。
+ * 校验失败**抛错**而不是静默回落到默认值 —— 静默回落会让「配错了」表现为
+ * 「登录莫名其妙走错地方」，比直接报错难查得多。
+ * @param raw - 待校验的基地址。
+ * @param allowed - 允许的主机列表（含子域）。
+ * @returns 去掉结尾斜杠的基地址。
+ * @throws 协议不是 https、无法解析、或主机不在允许列表时。
+ */
+function assertAuthBase(raw: string, allowed: readonly string[]): string {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(`authBase is not a valid URL: ${trimmed}`);
+  }
+  if (url.protocol !== "https:") {
+    throw new Error(`authBase must use https (got ${url.protocol.replace(":", "")}): ${trimmed}`);
+  }
+  if (!isAllowedAuthHost(url.hostname, allowed)) {
+    throw new Error(
+      `authBase host "${url.hostname}" is not allowed (allowed: ${allowed.join(", ")}). ` +
+        "Refusing to send credentials to an unrecognized host.",
+    );
+  }
+  return trimmed;
 }
 
 /**
@@ -201,17 +278,37 @@ function authBaseOf(deps: OAuthHttpDeps, credential?: OAuthCredential): string {
  * 两个都是**相对路径**。界面用 `isHttpUrl(authUrl)` 判定能不能给 `href`，相对路径
  * 判为 `false` → 链接不可点，用户只看到一串没有域名的文字。
  *
- * ## 规则
+ * ## 规则（含安全加固）
  *
- * - 已经是 `http://` / `https://` → 原样返回（服务端将来给绝对地址也照常工作）；
- * - 以 `/` 开头 → 接到 `authBase` 后面；
- * - 其它（理论上不会出现）→ 也接到 `authBase/` 后面，而不是丢弃。
- * @param authBase - Console 基地址（已去掉结尾斜杠）。
+ * - 以 `/` 开头（或其它相对形态）→ 接到 `authBase` 后面。这是**唯一**信任的来源，
+ *   因为 `authBase` 已经过 {@link assertAuthBase} 校验；
+ * - 已经是绝对 URL → **同样要校验**主机在允许列表内。否则服务端（或中间人）可以
+ *   返回 `https://opencode.ai.evil.test/...` 把用户导向仿冒登录页，而用户看到的
+ *   域名前半段是对的；
+ * - 主机不在允许列表 → **拒绝并抛错**，不返回一个「看起来能点」的链接。
+ * @param authBase - 已校验的 Console 基地址（已去掉结尾斜杠）。
  * @param uri - 服务端给的验证地址（可能是相对路径）。
+ * @param allowed - 允许的主机列表（含子域）。
  * @returns 绝对 URL。
+ * @throws 相对形态之外、且主机不在允许列表时。
  */
-function absoluteVerificationUri(authBase: string, uri: string): string {
-  if (/^https?:\/\//iu.test(uri)) return uri;
+function absoluteVerificationUri(authBase: string, uri: string, allowed: readonly string[]): string {
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(uri)) {
+    // 绝对 URL（或其它带 scheme 的形态）：必须是我们信任的主机。
+    let parsed: URL;
+    try {
+      parsed = new URL(uri);
+    } catch {
+      throw new Error(`verification URI is not a valid URL: ${uri}`);
+    }
+    if (parsed.protocol !== "https:" || !isAllowedAuthHost(parsed.hostname, allowed)) {
+      throw new Error(
+        `verification URI points at an untrusted host (${parsed.hostname}); refusing to hand out the link`,
+      );
+    }
+    return uri;
+  }
+  // 相对路径：拼到已校验的 authBase 上，天然可信。
   const suffix = uri.startsWith("/") ? uri : `/${uri}`;
   return `${authBase}${suffix}`;
 }
@@ -261,7 +358,7 @@ export async function beginDeviceFlow(deps: OAuthHttpDeps, signal?: AbortSignal)
   if (deviceCode === undefined || userCode === undefined || rawUri === undefined) {
     throw new Error("device code response is missing device_code/user_code/verification_uri");
   }
-  const verificationUri = absoluteVerificationUri(authBaseOf(deps), rawUri);
+  const verificationUri = absoluteVerificationUri(authBaseOf(deps), rawUri, deps.allowAuthHosts ?? DEFAULT_ALLOWED_AUTH_HOSTS);
   const intervalSeconds = typeof payload.interval === "number" && payload.interval > 0 ? payload.interval : 5;
   const expiresIn = typeof payload.expires_in === "number" && payload.expires_in > 0 ? payload.expires_in : 600;
   const now = deps.now?.() ?? Date.now();
@@ -329,16 +426,29 @@ export async function pollDeviceToken(
     }),
   });
   /**
-   * **超限不是 pending**（F13）：正文太大时 `readJson` 抛 `BodyTooLargeError`，
-   * 让它冒泡成一次明确的失败，而不是被下面的空正文兜底误判。
+   * **超限不是 pending**（F13）；**坏 JSON 也不是空正文**（F19）。
+   *
+   * 用三态结论而不是 `undefined`：空正文是 pending 的正常表达，而 HTML 错误页 /
+   * 被截断的正文是**协议错误** —— 两者混在一起会让坏 JSON 一直等到过期。
    */
-  const payload = await readJson(response);
+  const parsed = await readBoundedJsonResult(response, OAUTH_MAX_BODY_BYTES);
+  const payload = parsed.kind === "json" ? parsed.value : undefined;
   if (!response.ok) {
     const error = isRecord(payload) ? stringOf(payload, "error") : undefined;
     if (error === "authorization_pending") return { status: "pending" };
     if (error === "slow_down") return { status: "slow_down" };
     if (error === "access_denied") return { status: "denied" };
     if (error === "expired_token") return { status: "expired" };
+    /**
+     * **非空但解析不出来**：不是 pending（F19）。
+     *
+     * 上一版把「空正文」与「坏 JSON」都折叠成 `undefined`，于是服务端回一页 HTML
+     * 错误页时，轮询会把它当成「用户还没授权」，一路等到设备码过期。现在立刻报错，
+     * 并把正文长度带进 message 便于排查（不打印正文本身：可能含敏感信息）。
+     */
+    if (parsed.kind === "invalid") {
+      return { status: "error", message: `device token endpoint returned HTTP ${response.status} with a non-JSON body` };
+    }
     /**
      * **空 body 的 400**：有限次兜底成 pending（F14）。
      *
@@ -349,7 +459,7 @@ export async function pollDeviceToken(
      * 现在：前 {@link EMPTY_BODY_PENDING_TOLERANCE} 次仍按 pending（容忍偶发抖动，
      * 也兼容真实的服务端行为），连续超过就判定为协议错误，让用户立刻看到问题。
      */
-    if (payload === undefined && response.status === 400) {
+    if (parsed.kind === "empty" && response.status === 400) {
       // 标记出来源：调用方要区分「服务端明确说 pending」与「我们从空正文推断的」。
       if (emptyBodyStreak < EMPTY_BODY_PENDING_TOLERANCE) return { status: "pending", emptyBody: true };
       return {

@@ -107,12 +107,55 @@ function groupsOf<T extends WireMessageLike>(messages: readonly T[]): T[][] {
 }
 
 /**
+ * 无法在 `limit` 内合法裁剪。
+ *
+ * 什么情况下会抛：
+ *
+ * - `system` 段本身就已经占满 `limit`（丢掉 system 等于换了个助手，那是更大的破坏）；
+ * - 只剩一个**不可分割的工具调用组**比预算还大（拆开会让请求非法，见 {@link groupsOf}）。
+ *
+ * 为什么抛而不是「尽力而为」：上一版为了保住最后一组会**超出 limit**（F16），
+ * 而超限的结果就是网关 400 —— 用户拿到的是「Open Design stream error」，既看不懂
+ * 也不知道该怎么办。明确抛错至少能让调用方给出「这次请求太大」这种可行动的提示。
+ *
+ * **绝不发送已知超过硬上限的请求**是这里的第一原则。
+ */
+export class WireLimitExceededError extends Error {
+  /**
+   * @param limit - 硬上限。
+   * @param irreducible - 无法再压缩的条数（system 段 + 最后一组）。
+   */
+  constructor(
+    readonly limit: number,
+    readonly irreducible: number,
+  ) {
+    super(
+      `cannot trim the request to ${limit} messages: the irreducible part (system messages + the last tool-call group) already takes ${irreducible}`,
+    );
+    this.name = "WireLimitExceededError";
+  }
+}
+
+/**
  * 把投影后的消息裁到条数上限以内。
  *
+ * ## `limit` 是**严格**不变量（2026-11-05 外部审查 F16）
+ *
+ * 上一版有两个漏洞，都能让输出超过 `limit`：
+ *
+ * 1. `Math.max(1, limit - system.length - 1)` —— system 段占满预算时仍强行保一条；
+ * 2. 「最后一组比预算大就整组保留」—— 那组 4 条、预算 2 条时输出就是 `limit + 2`。
+ *
+ * 两个都源于同一句错误的自我安慰：「宁可略微超限也要保住这一轮的输入」。
+ * 但超限的**实际后果**是网关 400、整轮失败 —— 比“这次输入太大”糟得多。
+ *
+ * 现在：能裁就裁到 `limit` 以内；裁不到就抛 {@link WireLimitExceededError}，
+ * 由调用方给出可行动的提示。**不发送已知会被拒绝的请求。**
  * @param messages - 投影后的完整消息（含 system）。
  * @param limit - 允许的最大条数；非正数/非有限值表示不限制。
  * @param makeNotice - 生成「历史已省略」提示（各家把它造成自己的消息形状）。
  * @returns 裁剪结论。
+ * @throws {@link WireLimitExceededError} 无法在 `limit` 内合法裁剪时。
  */
 export function trimWireMessages<T extends WireMessageLike>(
   messages: readonly T[],
@@ -129,8 +172,21 @@ export function trimWireMessages<T extends WireMessageLike>(
   const system = messages.slice(0, head);
   const groups = groupsOf(messages.slice(head));
 
+  /**
+   * 只有一组、且它自己就装不下剩余预算 → 无解。
+   *
+   * 这一组的最后一条是本轮的用户输入（丢了等于空请求），而整组又不可拆 ——
+   * 两条路都通向失败，所以如实报出来。
+   */
+  const lastGroup = groups.at(-1);
+  if (system.length >= limit || (groups.length === 1 && lastGroup !== undefined && system.length + lastGroup.length + 1 > limit)) {
+    throw new WireLimitExceededError(limit, system.length + (lastGroup?.length ?? 0));
+  }
+
   // 提示自己占一格，所以可用预算要减一；再减掉 system 段。
-  const budget = Math.max(1, limit - system.length - 1);
+  // **不再用 `Math.max(1, …)`**：那是超限的直接来源（F16）。
+  const budget = limit - system.length - 1;
+  if (budget <= 0) throw new WireLimitExceededError(limit, system.length + 1);
 
   const kept: T[][] = [];
   let used = 0;
@@ -142,14 +198,10 @@ export function trimWireMessages<T extends WireMessageLike>(
     kept.unshift(group);
     used += group.length;
   }
-  // 病态情形：最后一组自己就超过预算。宁可略微超限，也要保住这一轮的输入 ——
-  // 只发一条提示过去等于空请求，那一定失败。
-  if (kept.length === 0 && groups.length > 0) {
-    const last = groups[groups.length - 1];
-    if (last !== undefined) {
-      kept.push(last);
-      used += last.length;
-    }
+
+  // 一条都放不下：最后一组（不可拆）比整个预算还大 → 无解。
+  if (kept.length === 0) {
+    throw new WireLimitExceededError(limit, system.length + (lastGroup?.length ?? 0) + 1);
   }
 
   const dropped = messages.length - system.length - used;

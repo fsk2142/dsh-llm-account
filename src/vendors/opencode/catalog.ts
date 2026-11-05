@@ -22,6 +22,7 @@ import { LlmError } from "@deepseek-ai/dsh-llm";
 import type { ModelModality } from "@deepseek-ai/dsh-llm";
 
 import type { CatalogEntry } from "../../core/adapter";
+import { BodyTooLargeError, readBoundedText } from "../../core/bounded-body";
 import { assignUniqueNames } from "../../core/model-names";
 import {
   DEFAULT_API,
@@ -315,71 +316,36 @@ export interface OpencodeCatalog {
 }
 
 /**
- * 读一段**真正有界**的 JSON 正文。
+ * 读一段**真正有界**的 JSON 正文（目录请求用）。
  *
- * ## 为什么不能先 `response.text()` 再量长度（2026-11-05 外部审查 F05）
+ * ## 实现已下沉到 `core/bounded-body`（2026-11-05 复审的去重项）
  *
- * 上一版是：
+ * 这里原先有一份完整的分块实现，OAuth 那边（F13）又写了一份**同样的逻辑**。
+ * 两份实现意味着**两处都要修、两处都可能漏** —— 与
+ * `docs/HANDOVER-2.0.0.md` §5.5 是同一条教训。现在共用一份，各自保留自己的
+ * 错误映射：目录侧翻译成 `DISCOVERY_FAILED`，OAuth 侧抛原始错误让调用方分类。
  *
- * ```ts
- * const text = await response.text();      // ← 先把整个响应读进内存
- * if (text.length > limit) throw …        // ← 再检查，晚了
- * ```
- *
- * 两个问题：
- *
- * 1. **上限来得太晚**：一个 200 MB 的错误页会先被完整分配成字符串，之后才抛错。
- *    上限原本的意义是「防止异常大响应」，这样写等于没有。
- * 2. **单位错了**：`text.length` 是 UTF-16 码元数，不是字节数。中文正文的 UTF-8
- *    字节数是它的 3 倍 —— 注释写着 byte limit，实际放行的是 3 倍额度。
- *
- * 现在：分块读，**累计 UTF-8 字节**，一超限就 `reader.cancel()` 并抛错 ——
- * 后面的 chunk 不会再被读进来。
- *
- * 有 `Content-Length` 时先做一次快速拒绝，省掉必然失败的读取。
+ * 保留的语义与原来一致：
+ * - 按 **UTF-8 字节**计（不是字符数）；
+ * - `Content-Length` 先快速拒绝；
+ * - 超限**立刻 cancel**，后面的 chunk 不再索取；
+ * - 非法 JSON → `DISCOVERY_FAILED`。
  * @param response - 已拿到响应头的响应。
  * @param limit - 允许的最大**字节**数。
  * @returns 解析后的 JSON。
+ * @throws {@link LlmError} 超限或非法 JSON 时（码都是 `DISCOVERY_FAILED`）。
  */
 async function readJsonBounded(response: Response, limit: number): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) {
-    // 头里就超了：不必读正文，但要释放连接。
-    try {
-      await response.body?.cancel();
-    } catch {
-      // 取消失败不影响结论。
-    }
-    throw new LlmError(`opencode catalog response exceeds the ${limit} byte limit`, "DISCOVERY_FAILED");
-  }
-
   let text: string;
-  if (response.body === null) {
-    text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > limit) {
-      throw new LlmError(`opencode catalog response exceeds the ${limit} byte limit`, "DISCOVERY_FAILED");
+  try {
+    text = await readBoundedText(response, limit);
+  } catch (error: unknown) {
+    if (error instanceof BodyTooLargeError) {
+      throw new LlmError(`opencode catalog response exceeds the ${limit} byte limit`, "DISCOVERY_FAILED", {
+        cause: error,
+      });
     }
-  } else {
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done === true) break;
-        if (value === undefined) continue;
-        total += value.byteLength;
-        if (total > limit) {
-          // **立刻停**：超限之后不再索取任何 chunk。
-          await reader.cancel().catch(() => {});
-          throw new LlmError(`opencode catalog response exceeds the ${limit} byte limit`, "DISCOVERY_FAILED");
-        }
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    text = new TextDecoder().decode(Buffer.concat(chunks));
+    throw error;
   }
 
   try {

@@ -30,6 +30,7 @@ import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
+import { createCatalogFlight, type CatalogFlight } from "../../core/catalog-flight";
 import { pickApiKey } from "../../core/credentials";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
@@ -264,11 +265,16 @@ interface AttemptFailure {
 class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   readonly #deps: CommandCodeAdapterDeps;
 
-  /** 目录缓存：同一基地址在 TTL 内复用；换配置（基地址变化）立即失效。 */
-  #catalogCache: { base: string; at: number; entries: CatalogEntry[] } | undefined;
-
-  /** 在途的目录请求（并发去重：模型选择器一次能并发问好几条）。 */
-  #catalogInFlight: Promise<CatalogEntry[]> | undefined;
+  /**
+   * 目录读取（TTL + 按键并发去重 + 独立取消 + 内部超时）。
+   *
+   * **抽到 `core/catalog-flight`**（2026-11-05 外部审查 F15/F17）：原来这里的
+   * `#catalogInFlight` 是一个裸 Promise，不区分基地址 —— 用户切网关后新配置会
+   * 复用旧配置的在途请求，模型列表串用；`fresh` 也不复位它（刷新按钮无效）；
+   * 所有等待者共用第一个调用方的 signal（取消串扰）；且 `signal ?? timeout`
+   * 让调用方一给 signal，10 秒上限就消失了。
+   */
+  readonly #catalogFlight: CatalogFlight<CatalogEntry[]>;
 
   /**
    * @param deps - 配置读取、轮换引擎、端口与各 I/O 注入点。
@@ -276,6 +282,17 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   constructor(deps: CommandCodeAdapterDeps) {
     super();
     this.#deps = deps;
+    /**
+     * 目录读取器：**按基地址分键**。
+     *
+     * Command Code 的目录只属于端点（`/models` 不带账号语义），所以键就是基地址；
+     * 缓存与在途请求都按它隔离。换基地址 → 天生的新键，不会复用旧 Promise。
+     */
+    this.#catalogFlight = createCatalogFlight<CatalogEntry[]>({
+      ttlMs: CATALOG_TTL_MS,
+      timeoutMs: MODELS_TIMEOUT_MS,
+      load: async (base, signal) => this.#fetchCatalog(base, signal),
+    });
   }
 
   /** @returns 路由的展示元数据（name 用产品名，id 必须是路由 id）。 */
@@ -712,44 +729,31 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   }
 
   /**
-   * 拉目录并解析（TTL 缓存 + 并发去重）。
+   * 拉目录并解析（TTL 缓存 + 按键并发去重 + 独立取消）。
    *
-   * 缓存键是**基地址**：换基地址立即失效（目录属于端点，不属于账号）。60 秒的量级用真实
-   * 时钟即可，不需要注入。
+   * 缓存与在途请求都按**基地址**分键：换基地址 → 新键 → 不复用旧请求
+   * （2026-11-05 外部审查 F15）。取消与超时的语义见 `core/catalog-flight.ts`。
    * @param config - 已填默认值的配置。
-   * @param signal - 宿主的取消信号（有缓存时不发请求，信号自然用不上）。
+   * @param signal - 宿主的取消信号（只影响**本调用方**的等待）。
+   * @param fresh - 绕过缓存与在途请求重读（刷新按钮）。
    * @returns 目录条目。
    */
   async #catalog(config: ResolvedConfig, signal?: AbortSignal, fresh = false): Promise<CatalogEntry[]> {
-    const cached = this.#catalogCache;
-    // `fresh` = 绕过缓存重读（刷新按钮）：TTL 内点刷新若拿缓存，界面上就是「点了没反应」。
-    if (!fresh && cached !== undefined && cached.base === config.apiBase && Date.now() - cached.at <= CATALOG_TTL_MS) {
-      return cached.entries;
-    }
-    if (this.#catalogInFlight !== undefined) return this.#catalogInFlight;
-    const pending = this.#fetchCatalog(config, signal);
-    this.#catalogInFlight = pending;
-    try {
-      const entries = await pending;
-      this.#catalogCache = { base: config.apiBase, at: Date.now(), entries };
-      return entries;
-    } finally {
-      this.#catalogInFlight = undefined;
-    }
+    return await this.#catalogFlight.read(config.apiBase, { ...(signal === undefined ? {} : { signal }), fresh });
   }
 
   /**
    * 真正打一次目录端点。
-   * @param config - 已填默认值的配置。
-   * @param signal - 宿主的取消信号。
+   *
+   * `signal` 由 `catalog-flight` 传入，**已经合并**了调用方取消与 10 秒内部超时
+   * （F17：原来写的是 `signal ?? timeout`，调用方一给 signal，上限就没了）。
+   * @param apiBase - 目录端点基地址（就是分键用的键）。
+   * @param signal - 已合并的取消信号。
    * @returns 目录条目。
    */
-  async #fetchCatalog(config: ResolvedConfig, signal?: AbortSignal): Promise<CatalogEntry[]> {
-    const { url, headers } = catalogRequest(config.apiBase);
-    const response = await this.#deps.fetchImpl(url, {
-      headers,
-      signal: signal ?? AbortSignal.timeout(MODELS_TIMEOUT_MS),
-    });
+  async #fetchCatalog(apiBase: string, signal: AbortSignal): Promise<CatalogEntry[]> {
+    const { url, headers } = catalogRequest(apiBase);
+    const response = await this.#deps.fetchImpl(url, { headers, signal });
     if (!response.ok) {
       throw new LlmError(`Command Code models endpoint returned ${response.status}`, "PROVIDER_HTTP_ERROR", {
         status: response.status,

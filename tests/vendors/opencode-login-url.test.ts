@@ -93,12 +93,32 @@ describe("opencode 网页登录：验证链接必须可打开", () => {
     expect(device.verificationUri, "兜底也要能点").toBe("https://opencode.ai/console/device");
   });
 
-  it("自定义 authBase 时按它补全", async () => {
+  it("自定义 authBase 时按它补全（需显式放行该主机）", async () => {
     const device = await beginDeviceFlow({
       fetchImpl: fetchOf(deviceCodeResponse({ verification_uri_complete: "/console/device?user_code=X" })),
       authBase: "https://staging.example.test",
+      // 安全加固之后默认只放行 opencode.ai；自建/预发环境必须显式开口。
+      allowAuthHosts: ["example.test"],
     });
     expect(device.verificationUri).toBe("https://staging.example.test/console/device?user_code=X");
+  });
+
+  it("**未放行的 authBase 直接被拒绝**（不静默回落，也不发出去）", async () => {
+    await expect(
+      beginDeviceFlow({
+        fetchImpl: fetchOf(deviceCodeResponse()),
+        authBase: "https://evil.test",
+      }),
+    ).rejects.toThrow(/not allowed/);
+  });
+
+  it("**http:// 的 authBase 被拒绝**（token 不该明文过网）", async () => {
+    await expect(
+      beginDeviceFlow({
+        fetchImpl: fetchOf(deviceCodeResponse()),
+        authBase: "http://opencode.ai",
+      }),
+    ).rejects.toThrow(/https/);
   });
 
   it("两种字段都缺时报错（而不是给出不可点的链接）", async () => {

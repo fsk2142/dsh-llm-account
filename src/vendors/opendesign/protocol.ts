@@ -29,7 +29,7 @@ import type {
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
 import { assertProjectableContent, assistantImageText, fileBlockText } from "../../core/image-projection";
-import { omittedHistoryNotice, trimWireMessages } from "../../core/wire-limit";
+import { omittedHistoryNotice, trimWireMessages, WireLimitExceededError } from "../../core/wire-limit";
 
 /** 推理网关默认基地址（计划 §1：`amr-link` 是运行时链路的入口）。 */
 export const DEFAULT_BASE_URL = "https://amr-link.open-design.ai/v1";
@@ -345,11 +345,26 @@ export function buildRequestBody(
    * 所以按输入条数算预算会算错 —— 报错里的 1003 就是投影后的真实条数。
    */
   const projected = openAiMessages(options.messages, images);
-  const trimmed = trimWireMessages<WireMessage>(
-    [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...projected],
-    facts.maxRequestItems,
-    (dropped) => ({ role: "system", content: omittedHistoryNotice(dropped) }),
-  );
+  let trimmed: ReturnType<typeof trimWireMessages<WireMessage>>;
+  try {
+    trimmed = trimWireMessages<WireMessage>(
+      [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...projected],
+      facts.maxRequestItems,
+      (dropped) => ({ role: "system", content: omittedHistoryNotice(dropped) }),
+    );
+  } catch (error: unknown) {
+    /**
+     * 裁不进上限（`system` 段占满，或最后一组工具调用不可拆且过大）。
+     *
+     * **不能退化成「照发」**（F16）：那一定被网关拒绝，用户看到的是
+     * `Open Design stream error` —— 既看不懂也不知道怎么办。这里翻译成可行动的
+     * `INVALID_REQUEST`，界面至少能说清「这次请求太大」。
+     */
+    if (error instanceof WireLimitExceededError) {
+      throw new LlmError(error.message, "INVALID_REQUEST", { cause: error });
+    }
+    throw error;
+  }
   return {
     model: options.model,
     messages: trimmed.messages,

@@ -86,7 +86,7 @@ it("cancel works during a retry starting from a failed login", async () => {
   const login = createOpencodeLogin({ fetchImpl: (async () => { if (++calls === 1) throw Error("network"); return await new Promise<Response>(resolve => { finish = resolve; }); }) as typeof fetch, storeKey, sleep: async () => new Promise(() => {}) });
   expect((await login.begin()).state).toBe("failed");
   const retry = login.begin(); await login.cancel();
-  finish(json({ device_code: "device", user_code: "ABCD", verification_uri: "https://example.test/activate" }));
+  finish(json({ device_code: "device", user_code: "ABCD", verification_uri: "/console/device" }));
   expect(await retry).toMatchObject({ state: "failed", reason: "cancelled" });
   expect(storeKey).not.toHaveBeenCalled();
 });
@@ -124,7 +124,7 @@ it("concurrent device-code begins share startup instead of canceling the newest 
   const login = createOpencodeLogin({ fetchImpl: fetchImpl as typeof fetch, storeKey: vi.fn(), sleep: async () => new Promise(() => {}) });
   const first = login.begin(), second = login.begin();
   expect(fetchImpl).toHaveBeenCalledTimes(1);
-  finish(json({ device_code: "device", user_code: "ABCD", verification_uri: "https://example.test/activate" }));
+  finish(json({ device_code: "device", user_code: "ABCD", verification_uri: "/console/device" }));
   expect(await first).toEqual(await second);
   expect((await login.status()).state).toBe("waiting");
   await login.cancel();
@@ -134,9 +134,9 @@ it("a canceled startup cannot overwrite a later attempt when its device response
   const pending: ((response: Response) => void)[] = [];
   const login = createOpencodeLogin({ fetchImpl: (async () => await new Promise<Response>(resolve => pending.push(resolve))) as typeof fetch, storeKey: vi.fn(), sleep: async () => new Promise(() => {}) });
   const old = login.begin(); await login.cancel(); const fresh = login.begin();
-  pending[1]!(json({ device_code: "new", user_code: "NEW", verification_uri: "https://example.test/new" }));
+  pending[1]!(json({ device_code: "new", user_code: "NEW", verification_uri: "/console/device" }));
   expect((await fresh).state).toBe("waiting");
-  pending[0]!(json({ device_code: "old", user_code: "OLD", verification_uri: "https://example.test/old" }));
+  pending[0]!(json({ device_code: "old", user_code: "OLD", verification_uri: "/console/device" }));
   await old;
   expect(await login.status()).toMatchObject({ state: "waiting", userCode: "NEW" });
   await login.cancel();

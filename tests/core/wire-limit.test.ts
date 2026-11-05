@@ -25,7 +25,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ContentBlock, GenerateOptions } from "@deepseek-ai/dsh-llm";
 
-import { omittedHistoryNotice, trimWireMessages } from "../../src/core/wire-limit";
+import { WireLimitExceededError, omittedHistoryNotice, trimWireMessages } from "../../src/core/wire-limit";
 import { DEFAULT_MAX_REQUEST_ITEMS } from "../../src/vendors/opendesign/adapter";
 import { buildRequestBody } from "../../src/vendors/opendesign/protocol";
 
@@ -140,6 +140,58 @@ describe("wire-limit · 纯裁剪逻辑", () => {
   it("提示文本说明「不要假设读过被省略的内容」", () => {
     expect(omittedHistoryNotice(7)).toContain("7");
     expect(omittedHistoryNotice(7)).toContain("不要假设");
+  });
+});
+
+describe("F16 · `limit` 是严格不变量，绝不超发", () => {
+  /** 造一组「assistant(tool_calls) + 2 条 tool」的不可拆组。 */
+  function toolGroup(id: string): Wire[] {
+    return [
+      { role: "assistant", content: "", tool_calls: [{ id, type: "function" }] },
+      { role: "tool", tool_call_id: id, content: "r0" },
+      { role: "tool", tool_call_id: id, content: "r1" },
+    ];
+  }
+
+  it("**system 段占满预算时不再硬塞一条**（上一版 `Math.max(1, …)` 的漏洞）", () => {
+    const input: Wire[] = [{ role: "system", content: "A" }, { role: "system", content: "B" }, ...users(5)];
+    // limit=2、system 已占 2 条 —— 上一版会输出 3 条（超发 1）。
+    expect(() => trimWireMessages(input, 2, notice)).toThrow(WireLimitExceededError);
+  });
+
+  it("**最后一组工具调用比预算大时不再整组塞进来**", () => {
+    // limit=4，system 1 条 + 提示 1 条 → 预算 2；最后一组 3 条装不下。
+    const input: Wire[] = [{ role: "system", content: "S" }, ...users(2), ...toolGroup("c1")];
+    expect(() => trimWireMessages(input, 4, notice)).toThrow(WireLimitExceededError);
+  });
+
+  it("**所有能裁的输入分支，输出都不超过 limit**（穷举边界）", () => {
+    const inputs: Wire[][] = [
+      users(30),
+      [{ role: "system", content: "S" }, ...users(30)],
+      [...users(50), ...toolGroup("a"), ...toolGroup("b")],
+      [{ role: "system", content: "S" }, { role: "system", content: "T" }, ...users(40)],
+    ];
+    for (const input of inputs) {
+      for (const limit of [3, 5, 8, 12, 20, 50]) {
+        let output: Wire[];
+        try {
+          output = trimWireMessages(input, limit, notice).messages;
+        } catch (error: unknown) {
+          // 只有「无法合法裁剪」才允许抛，别的错一律不可接受。
+          expect(error).toBeInstanceOf(WireLimitExceededError);
+          continue;
+        }
+        expect(output.length, `limit=${limit} 时不得超发`).toBeLessThanOrEqual(limit);
+      }
+    }
+  });
+
+  it("超发错误带上限与不可约条数，便于上层给出可行动提示", () => {
+    const error = new WireLimitExceededError(10, 12);
+    expect(error.limit).toBe(10);
+    expect(error.irreducible).toBe(12);
+    expect(error.message).toContain("10");
   });
 });
 

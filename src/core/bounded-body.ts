@@ -103,14 +103,54 @@ export async function readBoundedText(response: Response, limit: number): Promis
  * @returns 解析后的值；空正文或非法 JSON 时 `undefined`。
  * @throws {@link BodyTooLargeError} 超过上限时。
  */
-export async function readBoundedJson(response: Response, limit: number): Promise<unknown> {
+/**
+ * 一次有界 JSON 读取的**三态结论**。
+ *
+ * 为什么必须区分「空」与「非法」（2026-11-05 外部审查 F19）：
+ *
+ * OAuth 的 token 端点用**空正文 400** 表达 pending，那是正常协议形态，所以空正文
+ * 要能兜底。但**非空的坏 JSON** 是另一回事 —— 那可能是 HTML 错误页、被代理改写的
+ * 响应、或协议变更。上一版两者都返回 `undefined`，于是坏 JSON 也被当成
+ * 「用户还没授权」，界面一直转圈到设备码过期。
+ */
+export type BoundedJsonResult =
+  /** 正文为空（或纯空白）—— 按端点语义解释。 */
+  | { kind: "empty" }
+  /** 解析成功的 JSON。 */
+  | { kind: "json"; value: unknown }
+  /** 非空但解析不出来（HTML 错误页、被截断的正文…）。 */
+  | { kind: "invalid" };
+
+/**
+ * 读一段有界的 JSON 正文，**保留「空」与「非法」的区别**。
+ * @param response - 已拿到响应头的响应。
+ * @param limit - 允许的最大 UTF-8 字节数。
+ * @returns 三态结论。
+ * @throws {@link BodyTooLargeError} 超过上限时。
+ */
+export async function readBoundedJsonResult(response: Response, limit: number): Promise<BoundedJsonResult> {
   const text = await readBoundedText(response, limit);
-  if (text.trim() === "") return undefined;
+  if (text.trim() === "") return { kind: "empty" };
   try {
-    return JSON.parse(text);
+    return { kind: "json", value: JSON.parse(text) as unknown };
   } catch {
-    return undefined;
+    return { kind: "invalid" };
   }
+}
+
+/**
+ * 读一段有界的 JSON 正文（折叠版）。
+ *
+ * 空正文与非法 JSON 都返回 `undefined`。需要区分两者时用
+ * {@link readBoundedJsonResult}。
+ * @param response - 已拿到响应头的响应。
+ * @param limit - 允许的最大 UTF-8 字节数。
+ * @returns 解析后的值；空正文或非法 JSON 时 `undefined`。
+ * @throws {@link BodyTooLargeError} 超过上限时。
+ */
+export async function readBoundedJson(response: Response, limit: number): Promise<unknown> {
+  const result = await readBoundedJsonResult(response, limit);
+  return result.kind === "json" ? result.value : undefined;
 }
 
 /**
