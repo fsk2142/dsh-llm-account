@@ -44,11 +44,26 @@ function positiveNumber(value: unknown): number | undefined {
  * 网关同时公布 `context_limit`（真天花板 ≈104.8 万）与 `context_budget`
  * （预算 23~40 万）。按定义 `budget = limit − 输出预留`，所以正常数据里 limit 永远更大。
  *
+ * ## 哪个才是天花板：二分实测
+ *
+ * 对着 `deepseek-v4.1-flash` 直接发真实请求，用 `usage.prompt_tokens` 逐档加长：
+ *
+ * | prompt_tokens | 结果 |
+ * | --- | --- |
+ * | 978039 / 1017039 / 1036239 / 1045839 | 200 |
+ * | **1048239** | **200**（最大一次成功） |
+ * | 1048576 / 1048700 / 1049000 / 1049500 / 1050000 | 400 |
+ * | **~1050419** | **400**（最小一次失败） |
+ *
+ * 天花板落在 1048239 与 1048576 之间，与 `context_limit`（1048000，≈1 MiB）吻合，
+ * **与 328000 毫无关系**。opencode 公布的 `limit.context = 1000000` 是同一件事。
+ *
  * ## 为什么不写成按字段名排序的 `??` 链
  *
  * 2.1.1 的事故正是因为有人把 `context_budget` 挪到了 `context_limit` 前面 —— 一行
- * 顺序调整，压缩阈值就从 838400 掉到 134464，用户看到的是「会话刚开始就压缩」。
- * **取最大值不依赖书写顺序**，这类改动于是不再可能悄悄改变行为。
+ * 顺序调整，阈值就从 `floor(min(1048000×0.8, 1048000−128000−65536)) = 838400` 掉到
+ * `floor(min(328000×0.8, 328000−128000−65536)) = 134464`（约 270 条消息），用户看到的是
+ * 「会话刚开始就压缩」。**取最大值不依赖书写顺序**，这类改动于是不再可能悄悄改变行为。
  *
  * 万一哪天网关给出 `budget > limit`（按定义属于坏数据），取大值也仍是更安全的一侧：
  * 报大了只是压缩更晚触发，而上下文超限是**可自愈**的（宿主认那条 400，剪枝、压缩后
@@ -168,39 +183,14 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     // ② 宿主的自动压缩插件读到 `info.context === undefined` 直接抛错，**该路由完全不压缩**，
     // 最终以 HTTP 400（上下文超限）收场（日志实测 91.6 万 token 时被拒）。
     //
-    // 取值优先级：扁平字段（若有）> `metadata` 里三个容量字段的**最大值**
-    // （见 {@link capacityOf}：取最大值而不是按名字排序，避免再次出现 2.1.1 那类
-    // 「调一下顺序就把 1M 变成 328K」的事故）。
-    //
-    // **为什么 `context_limit` 优先（2026-11-06 用真实请求实测，推翻前一次判断）**：
-    // 网关同时公布两个容量字段 —— `context_limit`（~100 万）和 `context_budget`
-    // （23~40 万）。曾经的判断是「budget 才是网关每次请求真正给的额度」，因此优先取
-    // budget。**那个判断是错的**，实测把这条结论打掉了：
-    //
-    // 对 `deepseek-v4.1-flash` 直接发真实请求，用 `usage.prompt_tokens` 做二分：
-    //
-    // | prompt_tokens | 结果 |
-    // | --- | --- |
-    // | 978039 / 1017039 / 1036239 / 1045839 | 200 |
-    // | **1048239** | **200**（最大一次成功） |
-    // | 1048576 / 1048700 / 1049000 / 1049500 / 1050000 | 400 |
-    // | **~1050419** | **400**（最小一次失败） |
-    //
-    // 真正的上限落在 1048239 与 1048576 之间，与 `context_limit`（1048000，约 1 MiB）
-    // 吻合，**与 328000 毫无关系**。328000 从来不是 token 天花板。
-    //
-    // 取 budget 的代价是压缩时机被提前了 6 倍多：`thresholdTokens =
-    // floor(min(328000×0.8, 328000−128000−65536)) = 134464`，于是约 13 万 token
-    // （≈270 条消息）就开始压缩 —— 用户看到的就是「最新版本很快就压缩了」。
-    // 而正确取 `context_limit` 时阈值是 `floor(min(1048000×0.8,
-    // 1048000−128000−65536)) = 838400`，与官方的 1M 语义一致（opencode 的
-    // `limit.context = 1000000` 就是同一件事）。
-    //
-    // 顺带纠正一个曾经的误判：`context_budget` 并不是「条数上限的解药」。条数上限
-    // （第 1001 条 → 400）与 token 容量是两个独立约束，宿主的
-    // `LlmModelContext` 里根本没有条数字段，所以**任何** token 阈值都不可能提前
-    // 发现条数超限，只能靠出站裁剪（{@link trimWireMessages}）兜底 + 宿主的
-    // `context-overflow` 反应式压缩自救。
+    // 取值：扁平字段（若有）优先，否则交给 {@link capacityOf}（`metadata` 里三个容量字段
+    // 取**最大值**）。那个函数里有完整依据：`context_limit` 才是 token 天花板
+    // （二分实测 1048239 仍 200、1048576 起 400），`context_budget`（23~40 万）是预算；
+    // 曾经误取 budget，阈值掉到 134464 token（约 270 条消息），就是「最新版本很快就压缩了」。
+    // 顺带一条纠错：`context_budget` 也不是条数上限的解药 —— 条数（第 1001 条 → 400）与
+    // token 容量是两个独立约束，宿主的 `LlmModelContext` 里根本没有条数字段，所以**任何**
+    // token 阈值都不可能提前发现条数超限，只能靠出站裁剪（{@link trimWireMessages}）兜底
+    // 加上宿主 `context-overflow` 的反应式压缩自救。
     const meta = isRecord(raw.metadata) ? raw.metadata : undefined;
     const contextWindow = positiveNumber(raw.context_length ?? raw.contextWindow) ?? capacityOf(meta);
     const maxTokens = positiveNumber(
