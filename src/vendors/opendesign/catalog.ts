@@ -39,6 +39,34 @@ function positiveNumber(value: unknown): number | undefined {
 }
 
 /**
+ * 从 `metadata` 里读上下文容量：**取其中最大的那个**（2026-11-06 防回归）。
+ *
+ * 网关同时公布 `context_limit`（真天花板 ≈104.8 万）与 `context_budget`
+ * （预算 23~40 万）。按定义 `budget = limit − 输出预留`，所以正常数据里 limit 永远更大。
+ *
+ * ## 为什么不写成按字段名排序的 `??` 链
+ *
+ * 2.1.1 的事故正是因为有人把 `context_budget` 挪到了 `context_limit` 前面 —— 一行
+ * 顺序调整，压缩阈值就从 838400 掉到 134464，用户看到的是「会话刚开始就压缩」。
+ * **取最大值不依赖书写顺序**，这类改动于是不再可能悄悄改变行为。
+ *
+ * 万一哪天网关给出 `budget > limit`（按定义属于坏数据），取大值也仍是更安全的一侧：
+ * 报大了只是压缩更晚触发，而上下文超限是**可自愈**的（宿主认那条 400，剪枝、压缩后
+ * 重发）；报小了则是每一种会话都被提前压缩，且用户完全无从察觉。
+ * @param meta - 已确认是普通对象的 `metadata`。
+ * @returns 上下文窗口；三个字段里都没有正数时为 `undefined`（保持「未公布」，不编数字）。
+ */
+function capacityOf(meta: Record<string, unknown> | undefined): number | undefined {
+  if (meta === undefined) return undefined;
+  let best: number | undefined;
+  for (const value of [meta.context_limit, meta.context_budget, meta.contextWindow]) {
+    const candidate = positiveNumber(value);
+    if (candidate !== undefined && (best === undefined || candidate > best)) best = candidate;
+  }
+  return best;
+}
+
+/**
  * 从一份负载里取出模型数组。
  *
  * 线上是 `{ object: "list", data: [...] }`；网关的其它端点与本地缓存可能给
@@ -140,8 +168,9 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     // ② 宿主的自动压缩插件读到 `info.context === undefined` 直接抛错，**该路由完全不压缩**，
     // 最终以 HTTP 400（上下文超限）收场（日志实测 91.6 万 token 时被拒）。
     //
-    // 取值优先级：扁平字段（若有）> `metadata.context_limit` > `metadata.context_budget`
-    // > `metadata.contextWindow`。
+    // 取值优先级：扁平字段（若有）> `metadata` 里三个容量字段的**最大值**
+    // （见 {@link capacityOf}：取最大值而不是按名字排序，避免再次出现 2.1.1 那类
+    // 「调一下顺序就把 1M 变成 328K」的事故）。
     //
     // **为什么 `context_limit` 优先（2026-11-06 用真实请求实测，推翻前一次判断）**：
     // 网关同时公布两个容量字段 —— `context_limit`（~100 万）和 `context_budget`
@@ -173,9 +202,7 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     // 发现条数超限，只能靠出站裁剪（{@link trimWireMessages}）兜底 + 宿主的
     // `context-overflow` 反应式压缩自救。
     const meta = isRecord(raw.metadata) ? raw.metadata : undefined;
-    const contextWindow = positiveNumber(
-      raw.context_length ?? raw.contextWindow ?? meta?.context_limit ?? meta?.context_budget ?? meta?.contextWindow,
-    );
+    const contextWindow = positiveNumber(raw.context_length ?? raw.contextWindow) ?? capacityOf(meta);
     const maxTokens = positiveNumber(
       raw.max_output_tokens ?? raw.maxTokens ?? raw.publishedMaxTokens ?? meta?.output_budget ?? meta?.max_output_tokens,
     );

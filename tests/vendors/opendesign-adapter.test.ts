@@ -468,6 +468,40 @@ it("stream：400 是请求级失败 → 不换账号（换号不可能改变结�
   expect(fetchImpl.calls.map((call) => call.key)).toEqual(["sk-a"]);
 });
 
+it("**账号试完时抛可重试的那一条，不是最后碰巧失败的那一条**（2026-11-06「额度已用尽」误报）", async () => {
+  // 真实事故（2026-11-06 16:28）：一个请求内按规则顺序连试 3 个账号 ——
+  // 第 1 个只是瞬时 5xx，第 2、3 个都是 402 `insufficient_balance`。
+  // 旧代码用尽时抛**最后一条**（配额），于是：
+  //   ① 用户看到「本轮运行失败，当前请求的额度已用尽」，以为账号没钱；
+  //   ② `QUOTA` 在 `NEVER_RETRY_CODES` 里 → 宿主的自动继续不会重试，这一轮直接死掉；
+  //   ③ 用户手动发「继续」立刻成功（跨请求 `tried` 重置，第 1 个账号本来就没问题）。
+  //
+  // 修法：用尽时优先抛可重试的那一条（`core/failures.ts` 的 `pickExhaustedFailure`），
+  // 宿主等 2 秒自动重试就能救回这一轮。
+  const quotaBody = { error: { code: "insufficient_balance", message: "该账号的额度已用尽" } };
+  const fetchImpl = scriptedFetch([
+    () => new Response(JSON.stringify({ error: { message: "upstream error" } }), { status: 500 }),
+    () => new Response(JSON.stringify(quotaBody), { status: 402 }),
+    () => new Response(JSON.stringify(quotaBody), { status: 402 }),
+  ]);
+  const adapter = createOpenDesignAdapter(
+    adapterDeps({
+      fetchImpl,
+      rotation: new RotationEngine({ order: ["a", "b", "c"], rules: [], pinned: null }),
+      resolveStored: keysOf({ a: "sk-a", b: "sk-b", c: "sk-c" }),
+      // 与线上一致：账号尝试上限 = autoContinueMaxAttempts = 3。
+      maxTried: () => 3,
+    }),
+  );
+
+  const error = await collect(adapter.stream(request())).catch((reason: unknown) => reason);
+  // 三个账号都试过了（顺序 = 规则顺序）。
+  expect(fetchImpl.calls.map((call) => call.key)).toEqual(["sk-a", "sk-b", "sk-c"]);
+  // 抛的是第 1 个账号的 5xx，**不是**最后那条配额 —— 否则宿主不会重试。
+  expect((error as LlmError).code, "抛 server 才能让宿主自动重试救回这一轮").toBe("SERVER");
+  expect(String((error as Error).message)).not.toMatch(/额度已用尽/u);
+});
+
 it("**stop 序列会发到请求体**（2026-10-20 对齐官方：不再拒绝）", async () => {
   // 官方 `dsh-llm-deepseek` 直接透传 `options.stop`；旧实现在这里抛 UNSUPPORTED_OPTION
   // 是因为当时没实现。现在实现了，宿主传下来的 stop 必须真的到达上游 ——

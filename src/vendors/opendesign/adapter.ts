@@ -39,6 +39,7 @@ import type { AccountPort, AccountView, FailureKind, CatalogEntry, CatalogModel,
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { createCatalogFlight, type CatalogFlight } from "../../core/catalog-flight";
 import { pickApiKey } from "../../core/credentials";
+import { pickExhaustedFailure } from "../../core/failures";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
@@ -644,6 +645,21 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     const config = resolveConfig(this.#deps.config());
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
+    /**
+     * 本请求内**按尝试顺序**记录的全部失败（2026-11-06 修：「额度已用尽」误报）。
+     *
+     * 用尽时不能直接抛最后一条：链条里有可自愈的瞬时失败、最后一条却是不可重试的
+     * 终态时，会把一个本来能救回来的回合判死。选择逻辑见 {@link pickExhaustedFailure}。
+     */
+    const failures: AttemptFailure[] = [];
+    /** 试完了：抛「最值得让宿主重试」的那一条，而不是碰巧最后失败的那一条。 */
+    const throwExhausted = (): never => {
+      const picked = pickExhaustedFailure(failures) ?? lastFailure;
+      if (picked === undefined) {
+        throw new LlmError(`llm-opendesign: 模型 "${options.model}" 的所有 Open Design 账号都不可用`, "MISSING_CREDENTIAL");
+      }
+      throw picked.thrown;
+    };
     /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
   /**
    * 本次请求是否**已经换过模型**。
@@ -692,7 +708,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
             }
           }
         }
-        if (lastFailure !== undefined) throw lastFailure.thrown;
+        if (lastFailure !== undefined) throwExhausted();
         throw new LlmError(
           `llm-opendesign: 没有可用于模型 "${options.model}" 的 Open Design 账号；请先在账号页添加账号，或把密钥写入凭据库`,
           "MISSING_CREDENTIAL",
@@ -716,7 +732,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
             "MISSING_CREDENTIAL",
           ),
         };
-        if (tried.size >= this.#maxTried()) throw lastFailure.thrown;
+        failures.push(lastFailure);
+        if (tried.size >= this.#maxTried()) throwExhausted();
         continue;
       }
 
@@ -779,10 +796,11 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       }
       this.#deps.rotation.markRejected(ref, classified.rejection);
       lastFailure = classified;
+      failures.push(classified);
       this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
       // 唯一的换账号条件：已输出 / 已消耗 token / 已中止都不换。
       if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
-      if (tried.size >= this.#maxTried()) throw classified.thrown;
+      if (tried.size >= this.#maxTried()) throwExhausted();
     }
   }
 

@@ -111,6 +111,39 @@ describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实�
       expect(parsed.entries[0]!.contextWindow, JSON.stringify(metadata)).toBeUndefined();
     }
   });
+
+  it("**取三者最大值，不依赖字段书写顺序**（2.1.1 事故的防回归）", () => {
+    // 事故本身：把 `context_budget` 挪到 `context_limit` 前面，一行顺序调整就让上报的
+    // 窗口从 1,048,000 变成 328,000 —— 压缩阈值从 838400 掉到 134464（约 270 条消息），
+    // 用户看到「会话刚开始就压缩」，且没有任何报错能提示这件事。
+    //
+    // 所以这里**不再用按名字排序的 `??` 链**，而是取 `metadata` 里三个容量字段的最大值。
+    // 按定义 `budget = limit − 输出预留`，正常数据里 limit 必然更大；真出现 budget >
+    // limit 的坏数据，取大值也仍是安全的一侧（报大了只是压缩更晚，而上下文超限可自愈；
+    // 报小了是每一次会话都被提前压缩，用户完全无从察觉）。
+    const both = parseCatalog({
+      data: [{ id: "m", metadata: { context_budget: 328_000, context_limit: 1_048_000, output_budget: 128_000 } }],
+    });
+    expect(both.entries[0]!.contextWindow, "两个都在时必须取大的那个").toBe(1_048_000);
+
+    // 键的书写顺序不该有任何影响。
+    const reversed = parseCatalog({
+      data: [{ id: "m", metadata: { context_limit: 1_048_000, context_budget: 328_000 } }],
+    });
+    expect(reversed.entries[0]!.contextWindow).toBe(1_048_000);
+
+    // 坏数据（budget 比 limit 大）：仍然取大值 —— 安全的那一侧。
+    const inverted = parseCatalog({
+      data: [{ id: "m", metadata: { context_limit: 328_000, context_budget: 1_048_000 } }],
+    });
+    expect(inverted.entries[0]!.contextWindow, "取大值，不按名字取").toBe(1_048_000);
+
+    // 只有 contextWindow 这一种第三字段时也参与比较。
+    const alias = parseCatalog({
+      data: [{ id: "m", metadata: { contextWindow: 2_000_000, context_limit: 1_048_000 } }],
+    });
+    expect(alias.entries[0]!.contextWindow).toBe(2_000_000);
+  });
 });
 
 describe("输入模态：opendesign 放在 architecture.input_modalities（2026-10-20 实测）", () => {

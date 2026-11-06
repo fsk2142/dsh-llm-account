@@ -29,6 +29,7 @@ import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
+import { pickExhaustedFailure } from "../../core/failures";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
@@ -428,6 +429,22 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const raw = this.#deps.config();
     const tried = new Set<string>();
     let lastFailure: AttemptFailure | undefined;
+    /**
+     * 本请求内**按尝试顺序**记录的全部失败（2026-11-06 与 opendesign 同步）。
+     *
+     * 用尽时不能直接抛最后一条：链条里有可自愈的瞬时失败、最后一条却是不可重试的
+     * 终态（`quota` / `invalid-credential`）时，宿主的自动继续不会重试，会把一个本来
+     * 能救回来的回合判死。选择逻辑见 `core/failures.ts` 的 `pickExhaustedFailure`。
+     */
+    const failures: AttemptFailure[] = [];
+    /** 试完了：抛「最值得让宿主重试」的那一条，而不是碰巧最后失败的那一条。 */
+    const throwExhausted = (): never => {
+      const picked = pickExhaustedFailure(failures) ?? lastFailure;
+      if (picked === undefined) {
+        throw new LlmError(`llm-opencode-go: all OpenCode Go accounts are unavailable for model "${options.model}"`, "MISSING_CREDENTIAL");
+      }
+      throw picked.thrown;
+    };
     /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
   /**
    * 本次请求是否**已经换过模型**。
@@ -478,7 +495,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
             }
           }
         }
-        if (lastFailure !== undefined) throw lastFailure.thrown;
+        if (lastFailure !== undefined) throwExhausted();
         throw new LlmError(
           `llm-opencode-go: no OpenCode Go account is available for model "${options.model}"; add an account or store its API key`,
           "MISSING_CREDENTIAL",
@@ -501,7 +518,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         };
         this.#deps.rotation.markRejected(ref, rejection);
         lastFailure = { rejection, thrown: error };
-        if (tried.size >= this.#maxTried()) throw error;
+        failures.push(lastFailure);
+        if (tried.size >= this.#maxTried()) throwExhausted();
         continue;
       }
       if (auth === undefined) {
@@ -519,7 +537,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
             "MISSING_CREDENTIAL",
           ),
         };
-        if (tried.size >= this.#maxTried()) throw lastFailure.thrown;
+        failures.push(lastFailure);
+        if (tried.size >= this.#maxTried()) throwExhausted();
         continue;
       }
 
@@ -609,10 +628,11 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       }
       this.#deps.rotation.markRejected(ref, classified.rejection);
       lastFailure = classified;
+      failures.push(classified);
       this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
       // 唯一的换账号条件（Task 5 的判定）：已输出 / 已消耗 token / 已中止都不换。
       if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
-      if (tried.size >= this.#maxTried()) throw classified.thrown;
+      if (tried.size >= this.#maxTried()) throwExhausted();
     }
   }
 
