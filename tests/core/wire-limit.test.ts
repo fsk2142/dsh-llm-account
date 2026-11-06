@@ -278,3 +278,86 @@ describe("wire-limit · 端到端（Open Design 请求体）", () => {
     expect(body.messages).toHaveLength(1500);
   });
 });
+
+/**
+ * ## 前缀缓存（prompt caching）不能被裁剪打碎（2026-11-06）
+ *
+ * 现场：Open Design 的缓存命中率**暴跌**，opencode 不受影响。范围恰好对上 ——
+ * `trimWireMessages` 只接在 Open Design 上，另两家没有这条路径。
+ *
+ * 机制有两重，都会让「从头连续相同的 token」这一条件失效：
+ *
+ * 1. 窗口取的是「最近 N 组」，每多一轮就往后挪一格 → 第二条消息就和上一轮不同；
+ * 2. 提示文案里的 `${dropped}` 条数每轮都在变，而它被并进**第一条 system**。
+ *
+ * 两者叠加时实测公共前缀是 **0 条（0.0%）**，且肉眼看不出来（system 前 70 字符一致）。
+ * 修法是把「丢弃多少组」量化到块边界：一个块内窗口不动，请求退化成「末尾追加」。
+ */
+describe("裁剪必须保持前缀稳定（否则缓存全灭）", () => {
+  /** 造一段带 system 的历史。 */
+  function withSystem(count: number): Wire[] {
+    const out: Wire[] = [{ role: "system", content: "你是助手，规则 A。" }];
+    for (let index = 0; index < count; index += 1) {
+      out.push({ role: index % 2 === 0 ? "user" : "assistant", content: `第 ${index} 条` });
+    }
+    return out;
+  }
+
+  /** 按给定上限裁一次，返回出站消息。 */
+  function cut(messages: Wire[], limit: number): Wire[] {
+    return trimWireMessages<Wire>(messages, limit, (dropped) => ({
+      role: "system",
+      content: omittedHistoryNotice(dropped),
+    })).messages;
+  }
+
+  /** 两条序列在消息层面的公共前缀长度。 */
+  function commonPrefix(left: Wire[], right: Wire[]): number {
+    let index = 0;
+    while (
+      index < left.length &&
+      index < right.length &&
+      left[index]!.role === right[index]!.role &&
+      left[index]!.content === right[index]!.content
+    ) {
+      index += 1;
+    }
+    return index;
+  }
+
+  it("相邻两轮的公共前缀必须接近整段（不是 0）", () => {
+    const LIMIT = 1_000;
+    const current = cut(withSystem(1_200), LIMIT);
+    const next = cut(withSystem(1_202), LIMIT);
+
+    const shared = commonPrefix(current, next);
+    // 旧实现这里是 0：system 末尾的条数变了 + 窗口挪了两格。
+    expect(shared, "至少要把上一条请求的绝大部分复用上").toBeGreaterThan(current.length * 0.9);
+    // 首条 system（含「已省略 N 条」提示）必须逐字相同。
+    expect(current[0]!.content, "system 变了就等于从第 0 个 token 就失效").toBe(next[0]!.content);
+  });
+
+  it("窗口在一个块内保持不动，只做末尾追加", () => {
+    const LIMIT = 1_000;
+    const first = cut(withSystem(1_200), LIMIT);
+    // 前进 10 条（远小于块大小）：窗口完全不动。
+    const later = cut(withSystem(1_210), LIMIT);
+    expect(later.length, "条数只增不减（追加）").toBeGreaterThan(first.length);
+    expect(commonPrefix(first, later), "整段前缀都该命中").toBe(first.length);
+  });
+
+  it("提示里的条数在一个块内必须稳定（它是 system 的一部分）", () => {
+    const LIMIT = 1_000;
+    const a = cut(withSystem(1_200), LIMIT);
+    const b = cut(withSystem(1_205), LIMIT);
+    expect(a[0]!.content).toBe(b[0]!.content);
+  });
+
+  it("量化不会把出站条数顶出上限", () => {
+    const LIMIT = 500;
+    for (const total of [600, 777, 900, 1_500]) {
+      const out = cut(withSystem(total), LIMIT);
+      expect(out.length, `输入 ${total} 时出站 ${out.length}`).toBeLessThanOrEqual(LIMIT);
+    }
+  });
+});

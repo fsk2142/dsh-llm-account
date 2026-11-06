@@ -69,6 +69,16 @@ export interface WireTrimResult<T extends WireMessageLike> {
 }
 
 /**
+ * 窗口起点的量化块大小（单位：**组**）。
+ *
+ * 取 64 组的理由：一次典型回合产生 1～3 组，所以窗口起点大约每 20～60 个回合才挪一次；
+ * 其余回合的请求退化成「在末尾追加」，前缀缓存能整段命中。
+ *
+ * 块太小（比如 8）会频繁挪动，缓存收益不明显；块太大则在跳变那一轮丢得过多。
+ */
+const DROP_BLOCK_GROUPS = 64;
+
+/**
  * 判断一条投影后的消息是不是「工具调用」的开头。
  * @param message - 投影后的消息。
  * @returns 是否带 `tool_calls`。
@@ -209,7 +219,37 @@ export function trimWireMessages<T extends WireMessageLike>(
     throw new WireLimitExceededError(limit, system.length + (lastGroup?.length ?? 0) + noticeSlot);
   }
 
-  const dropped = messages.length - system.length - used;
+  /**
+   * ## 窗口起点必须**量化**，否则每轮都换前缀（2026-11-06，缓存命中率暴跌）
+   *
+   * 上一版取的是「正好装得下的最近 N 组」。问题是：每多一轮对话，`groups` 就长一条，
+   * 于是窗口起点**每轮都往后挪一格** —— 而前缀缓存（prompt caching）比的是
+   * **从头开始连续相同**的 token。起点一挪，第二条消息就跟上一轮不一样，命中率直接归零。
+   *
+   * 更隐蔽的是提示文案里的 `${dropped}` 条数也每轮在变，而它被并进**第一条 system** ——
+   * 那条消息位于请求最开头，于是连「system 能命中」这点残羹都没了。实测连续两轮的
+   * 公共前缀是 **0 条（0.0%）**，肉眼还看不出差别（前 70 个字符完全一样）。
+   *
+   * 现在把「丢弃多少组」向上量化到 `DROP_BLOCK_GROUPS` 的整数倍：窗口起点在一个块内
+   * **保持不动**，请求就退化成「在末尾追加」—— 这才是缓存友好的形状。每积满一个块才
+   * 跳一次，跳的那一轮会全量失效，其余轮次正常命中。
+   *
+   * 向上取整（丢得更多、留得更少）保证仍然落在预算内，绝不会因为量化而超限。
+   */
+  const rawStart = groups.length - kept.length;
+  const aligned = Math.ceil(rawStart / DROP_BLOCK_GROUPS) * DROP_BLOCK_GROUPS;
+  /**
+   * 取整结果越界时**退回原始起点**。
+   *
+   * 短请求（组数不到一个块）里 `aligned` 会大于 `groups.length - 1`，硬取整就只剩最后
+   * 一组 —— 那会把「工具调用 + 结果」这一整组之外的上下文全丢掉，甚至留下一个孤立的
+   * user 消息。这类请求本来也短，缓存收益可以放弃，**正确性优先**。
+   */
+  const start = aligned <= groups.length - 1 ? aligned : rawStart;
+  const windowed = groups.slice(start);
+  const usedFinal = windowed.reduce((sum, group) => sum + group.length, 0);
+
+  const dropped = messages.length - system.length - usedFinal;
   /**
    * ## 提示必须**并进第一条 system**，不能自造第二条（自审发现）
    *
@@ -230,14 +270,14 @@ export function trimWireMessages<T extends WireMessageLike>(
   const head0 = system[0];
   const merged: T[] =
     head0 === undefined
-      ? [notice, ...kept.flat()]
+      ? [notice, ...windowed.flat()]
       : [
           {
             ...head0,
             content: mergeNoticeIntoContent(head0, notice),
           } as T,
           ...system.slice(1),
-          ...kept.flat(),
+          ...windowed.flat(),
         ];
   return { messages: merged, dropped, noticeInserted: true };
 }
