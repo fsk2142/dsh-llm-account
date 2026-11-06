@@ -121,13 +121,15 @@ export interface OpenDesignConfig {
    * 出站 `messages[]` 的条数上限；缺省 {@link DEFAULT_MAX_REQUEST_ITEMS}。
    *
    * 网关对 `messages[]` 有 1000 条的硬上限（实测 `deepseek-v4.1-flash` 第 1001 条即
-   * 400 `context_length_exceeded`），而宿主只有 token 概念、**没有条数概念**，所以条数
-   * 无法被提前纳入压缩判定。
+   * 400 `context_length_exceeded`；`tools[]` 与 content 分片**都不**额外计数，2026-11-06
+   * 复测），而宿主只有 token 概念、**没有条数概念**，所以条数无法被提前纳入压缩判定。
    *
    * 超限时这里**裁掉最旧的历史并插入明确提示**，而不是让整轮失败。这是兜底：
-   * 条数超限本身也是**可自愈**的（宿主把它认成 `CONTEXT_WINDOW_EXCEEDED`，剪枝、
-   * 压缩后自动重发，见 `core/wire-limit.ts` 的模块注释），裁剪只是省掉那一次白跑的
-   * 请求。设成 `0` 可关闭裁剪（不建议）。
+   * 条数超限理论上也能自愈（宿主把它认成 `CONTEXT_WINDOW_EXCEEDED` 后剪枝、压缩、重发），
+   * 但**压缩请求自己先撞上限时那条路会断**（实测 18:40：压缩请求 1001 条被拒，
+   * 紧接的主请求 1002 条也被拒，整轮直接失败）。所以这一层不能关。
+   *
+   * **非正数一律回落到默认值**，不再是「`0` = 关闭」—— 见 `resolveConfig` 里的说明。
    */
   maxRequestItems?: number;
   /**
@@ -375,17 +377,21 @@ function resolveConfig(raw: OpenDesignConfig): ResolvedConfig {
     streamIdleTimeoutMs: positive(raw.streamIdleTimeoutMs, DEFAULT_STREAM_IDLE_TIMEOUT_MS),
     defaultMaxTokens: positive(raw.defaultMaxTokens, DEFAULT_GENERATE_MAX_TOKENS),
     /**
-     * 条数上限允许**显式关闭**（`0` 或负数 = 不裁剪）。
+     * 条数上限**不再是可关闭的开关**（2026-11-06 修：`0` 导致裁剪静默失效）。
      *
-     * 与上面几个不同：那些是「越小越糟」的超时/额度，`0` 明显是坏配置；
-     * 而这里 `0` 是一个有意义的取值（用户自己承担 400 的风险）。
+     * 旧语义是「`0` 或负数 = 不裁剪，用户自己承担 400 的风险」。实际后果是：
+     * 只要设置文档把这一项落成 `0`（`z.number()` 没写默认值时很容易发生），
+     * 出站裁剪就**静默关闭**，而这条网关的 1000 条硬上限不会因此消失 ——
+     * 于是在 1001/1002 条时收到一条看不懂的 `context_length_exceeded`，
+     * 连压缩请求自己都发不出去（实测 2026-11-06 18:40，turn 357）。
+     *
+     * 现在：非正数/非有限值一律回落到 {@link DEFAULT_MAX_REQUEST_ITEMS}。
+     * 需要更宽的上限（另一家网关实测 3000）就写一个**正数**，不要写 0 去关它。
      */
     maxRequestItems:
-      raw.maxRequestItems === undefined || !Number.isFinite(raw.maxRequestItems)
+      raw.maxRequestItems === undefined || !Number.isFinite(raw.maxRequestItems) || raw.maxRequestItems <= 0
         ? DEFAULT_MAX_REQUEST_ITEMS
-        : raw.maxRequestItems <= 0
-          ? 0
-          : Math.floor(raw.maxRequestItems),
+        : Math.floor(raw.maxRequestItems),
     // 覆盖值只在合法时进入解析结果；坏值当作没设，回落到目录公布值。
     ...(isValidContextWindow(raw.contextWindow) ? { contextWindow: raw.contextWindow } : {}),
     ...(() => {
@@ -901,8 +907,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       maxTokens: options.maxTokens === undefined ? cap : Math.min(options.maxTokens, cap),
       systemText: systemTextOf(options),
       ...(effort === undefined ? {} : { reasoningEffort: effort }),
-      // 出站条数硬上限（`0` = 关闭）。见 `core/wire-limit.ts` 的完整来由。
-      ...(config.maxRequestItems > 0 ? { maxRequestItems: config.maxRequestItems } : {}),
+      // 出站条数硬上限（`resolveConfig` 保证是正数，这里**无条件**传过去 —— 见那里的注释）
+      maxRequestItems: config.maxRequestItems,
     };
     const wire = generateRequest({
       base: config.apiBase,

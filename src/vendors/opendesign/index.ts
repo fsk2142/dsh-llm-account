@@ -60,7 +60,7 @@ import {
 } from "../assembly";
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
 import { createOpenDesignAdapter } from "./adapter";
-import { isValidContextWindow, readContextWindowOverrides } from "./adapter";
+import { DEFAULT_MAX_REQUEST_ITEMS, isValidContextWindow, readContextWindowOverrides } from "./adapter";
 import type { OpenDesignAdapterDeps, OpenDesignConfig } from "./adapter";
 import {
   OPENDESIGN_DEFAULT_REF,
@@ -199,13 +199,17 @@ export const Config: PluginConfigSchema = z.object(
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),
     /**
-     * 出站 `messages[]` 的条数上限；`0` = 不裁剪（2026-11-05）。
+     * 出站 `messages[]` 的条数上限；非正数一律回落到默认值（2026-11-06 修）。
      *
-     * 网关对条数有硬上限（`deepseek-v4.1-flash` 实测 1000 条），而宿主只有 token
-     * 概念、没有条数概念 —— 条数不会被提前纳入压缩判定。超限时裁剪兜底；即便漏掉，
-     * 宿主也能把它当上下文超限剪枝压缩后自愈。见 `core/wire-limit.ts`。
+     * 网关对条数有硬上限（`deepseek-v4.1-flash` 实测 1000 条，`tools[]` 不额外计数），
+     * 而宿主只有 token 概念、没有条数概念 —— 条数不会被提前纳入压缩判定。
+     *
+     * **为什么写了 `.default()`**：`z.number()` 不写默认值时，设置文档很容易把它落成
+     * `0`，而旧语义里 `0` 等于「关闭裁剪」—— 于是这一层静默失效，1001 条时收到
+     * `context_length_exceeded`，连压缩请求自己都发不出去。默认值写死在这里，
+     * 文档里就不会再出现那个要命的 `0`。
      */
-    maxRequestItems: z.number(),
+    maxRequestItems: z.number().default(DEFAULT_MAX_REQUEST_ITEMS),
     /**
      * 覆盖宿主计量的**上下文窗口**（全局）；`0`/负数/非整数一律视为未设置。
      *
@@ -757,12 +761,16 @@ function adapterConfigOf(document: Record<string, unknown>): OpenDesignConfig {
   const streamIdleTimeoutMs = positiveNumber(document.streamIdleTimeoutMs);
   const defaultMaxTokens = positiveNumber(document.defaultMaxTokens);
   /**
-   * 条数上限**允许显式写 0**（= 关闭裁剪），所以不能用 `positiveNumber`。
+   * 条数上限**只接受正数**（2026-11-06 修：`0` 不再等于「关闭裁剪」）。
    *
-   * 与超时类字段不同：`0` 在这里是有意义的取值（用户自愿承担 400 的风险），
-   * 而超时的 `0` 只可能是坏配置。缺省/NaN 仍然回落到适配器的默认值。
+   * 旧实现用 `nonNegativeNumber`，把设置文档里的 `0` 原样传下去；适配器那边再把 `0`
+   * 解释成「不裁剪」。两层都默认「用户是故意的」，结果为一次真实的整轮失败买了单
+   * （1002 > 1000，连压缩请求自己都发不出去）。
+   *
+   * 现在非正数一律当作**没设**，由适配器回落到 `DEFAULT_MAX_REQUEST_ITEMS`。
+   * 想要更宽的上限（别家网关实测 3000）就写一个正数。
    */
-  const maxRequestItems = nonNegativeNumber(document.maxRequestItems);
+  const maxRequestItems = positiveNumber(document.maxRequestItems);
   /**
    * 上下文窗口覆盖：全局值必须是**正整数秒**……不，是合法窗口（1 ~ 1000 万的安全整数）；
    * 按模型那张表由适配器再清洗一遍（`readContextWindowOverrides`），这里只做形状传递 ——
@@ -787,10 +795,7 @@ function adapterConfigOf(document: Record<string, unknown>): OpenDesignConfig {
   };
 }
 
-/** 读一个非负有限数（`0` 是合法值；缺省/负数/NaN 读作缺省）。 */
-function nonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
+/** 读一个正有限数（缺省/0/负数/NaN 读作缺省，避免把坏配置变成「立即超时」）。 */
 
 /** 读一个正有限数（缺省/0/负数/NaN 读作缺省，避免把坏配置变成「立即超时」）。 */
 function positiveNumber(value: unknown): number | undefined {

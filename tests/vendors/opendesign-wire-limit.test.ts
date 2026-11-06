@@ -110,9 +110,19 @@ it("配置缺省时回落到 1000（现场那个上限），不是 `undefined`",
   expect(JSON.stringify(body.messages)).toContain("省略");
 });
 
-it("配置写 0 = 关闭裁剪（用户自愿承担 400 的风险）", async () => {
-  const body = await outboundBody(() => ({ maxRequestItems: 0 }), 1_003);
-  expect(body.messages.length, "完全不裁").toBe(1_003);
+it("**配置写 0 不再关闭裁剪**：非正数一律回落到默认上限（2026-11-06 事故）", async () => {
+  // 旧语义是「0 = 不裁剪，用户自愿承担 400」。实际后果是一次整轮失败：
+  // 2026-11-06 18:40，压缩请求 1001 条被拒（`compaction/end` 带 error），紧接的
+  // 主请求 1002 条也被拒 —— 连自愈路径都因为「压缩请求自己超限」而断掉。
+  //
+  // 所以 0/负数/NaN 现在都当作「没设」，由 resolveConfig 回落到 DEFAULT_MAX_REQUEST_ITEMS。
+  for (const value of [0, -1, Number.NaN]) {
+    const body = await outboundBody(() => ({ maxRequestItems: value }), 1_003);
+    expect(body.messages.length, `maxRequestItems=${String(value)} 时仍要裁剪`).toBeLessThanOrEqual(
+      DEFAULT_MAX_REQUEST_ITEMS,
+    );
+    expect(JSON.stringify(body.messages)).toContain("省略");
+  }
 });
 
 it("未超限的请求不被改动（不给正常请求加噪音）", async () => {
