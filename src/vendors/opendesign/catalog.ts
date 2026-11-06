@@ -140,11 +140,21 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     // ② 宿主的自动压缩插件读到 `info.context === undefined` 直接抛错，**该路由完全不压缩**，
     // 最终以 HTTP 400（上下文超限）收场（日志实测 91.6 万 token 时被拒）。
     //
-    // 取值优先级：扁平字段（若有）> `metadata.context_limit`。仍取不到才留空 ——
-    // 保持「未公布」与「公布为 0」的区别，不编数字。
+    // 取值优先级：扁平字段（若有）> `metadata.context_budget` > `metadata.context_limit`。
+    //
+    // **为什么 budget 优先（2026-11-06 根治条数超限）**：网关同时公布两个容量字段 ——
+    // `context_limit`（~100 万，模型的理论上限）和 `context_budget`（23~40 万，**网关
+    // 每次请求真正给的额度**）。旧实现只取前者，于是宿主的 token 压缩阈值被算成
+    // `floor(min(1048000×0.8, 1048000−128000−65536)) ≈ 838k`，而 1000 条消息在实测
+    // 会话里只有约 **49 万** token —— 阈值永远够不着，压缩永远不触发，历史一路涨到
+    // 网关的 1000 **条数**上限，然后 400。
+    //
+    // 改用 budget（deepseek-v4.1-flash：328000）后阈值落到
+    // `min(262400, 328000−128000−65536) = 134464` token，约合 270 条消息就压缩，
+    // 远早于 1000 条 —— 条数上限从此不会再被摸到，出站裁剪退化为纯兜底。
     const meta = isRecord(raw.metadata) ? raw.metadata : undefined;
     const contextWindow = positiveNumber(
-      raw.context_length ?? raw.contextWindow ?? meta?.context_limit ?? meta?.contextWindow,
+      raw.context_length ?? raw.contextWindow ?? meta?.context_budget ?? meta?.context_limit ?? meta?.contextWindow,
     );
     const maxTokens = positiveNumber(
       raw.max_output_tokens ?? raw.maxTokens ?? raw.publishedMaxTokens ?? meta?.output_budget ?? meta?.max_output_tokens,

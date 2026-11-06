@@ -122,29 +122,27 @@ it("未超限的请求不被改动（不给正常请求加噪音）", async () =
 });
 
 /**
- * 2026-11-06 现场第二次报错：`1017 > 1000 items`。
+ * ## `tools[]` **不**占条目预算（2026-11-06 复核，推翻当天早上的推测）
  *
- * 那时 `messages[]` 已经被裁到**正好 1000** 条 —— 零余量。网关把 `tools[]` 也数进
- * input items，1000 + 17 个工具 = 1017，于是每轮都超、每轮都 400。
- * 修法：预算先扣掉工具。
+ * 早上看到 `1017 > 1000`，先入为主地以为「1000 条消息 + 17 个工具 = 1017」。
+ * 复核 `docs/HANDOVER-2.0.0.md` 的实测记录：网关**不数 tools、数 system**
+ * （1000 条 → 200，1001 条 → 400）。所以 1017 的真实含义是「那一版根本没在裁剪」——
+ * 对方装的是旧产物，不是工具被算了进去。
+ *
+ * 结论：裁剪预算只按消息算。如果扣掉工具数，会白丢几十条历史（这次会话 tools=58），
+ * 却换不来任何保护。
  */
-it("**tools[] 也占条目预算**（否则 1000 条消息 + 17 个工具 = 1017 > 1000）", async () => {
+it("裁剪预算**不扣工具数**（实测 tools 不计入网关的 item 上限）", async () => {
   const body = await outboundBody(() => ({ maxRequestItems: 1_000 }), 1_200, manyTools(17));
   expect(body.tools?.length, "工具原样发出，不丢").toBe(17);
-  expect(
-    body.messages.length + (body.tools?.length ?? 0),
-    "消息 + 工具一起算，必须落在上限以内",
-  ).toBeLessThanOrEqual(1_000);
+  expect(body.messages.length, "按消息数裁到上限，不为工具让位").toBeLessThanOrEqual(1_000);
+  expect(body.messages.length, "不该因为 17 个工具就少留 17 条").toBeGreaterThan(900);
   expect(JSON.stringify(body.messages), "仍然明确告知历史被省略").toContain("省略");
 });
 
-it("工具很多时也不越界（预算按工具数动态收缩）", async () => {
-  const tools = manyTools(60);
-  const body = await outboundBody(() => ({ maxRequestItems: 100 }), 500, tools);
-  expect(body.messages.length + 60).toBeLessThanOrEqual(100);
-  expect(body.messages.length).toBeGreaterThan(0);
-});
-
-it("工具占满上限时给出可行动的报错，而不是发一个必然被拒的请求", async () => {
-  await expect(outboundBody(() => ({ maxRequestItems: 5 }), 10, manyTools(5))).rejects.toThrow(/工具定义/);
+it("工具再多也不影响消息预算", async () => {
+  const withTools = await outboundBody(() => ({ maxRequestItems: 100 }), 500, manyTools(60));
+  const withoutTools = await outboundBody(() => ({ maxRequestItems: 100 }), 500);
+  expect(withTools.messages.length).toBe(withoutTools.messages.length);
+  expect(withTools.messages.length).toBeLessThanOrEqual(100);
 });

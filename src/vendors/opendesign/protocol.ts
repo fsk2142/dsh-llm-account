@@ -335,36 +335,31 @@ export function buildRequestBody(
   );
   const systemText = [facts.systemText, ...systemFiles].filter((part) => part !== "").join("\n");
   /**
-   * **出站条数硬上限**（2026-11-05 修「1003 > 1000」，2026-11-06 补「1017 > 1000」）。
+   * **出站条数硬上限**（2026-11-05 修「1003 > 1000」）。
    *
-   * 网关对一次请求的 **input items** 有 1000 条硬上限，而宿主只按 token 触发压缩 ——
+   * 网关对 `messages[]` 有 1000 条的硬上限，而宿主只按 token 触发压缩 ——
    * 条数超了永远不会被提前发现，于是每轮都 400，连压缩请求自己都 400
    * （压缩发的还是同一份超限历史），形成无法自愈的死循环。
    *
    * 这里在**投影之后**裁：投影可能把一条输入展开成多条（工具图片会补一条 user），
    * 所以按输入条数算预算会算错 —— 报错里的 1003 就是投影后的真实条数。
    *
-   * ## `tools[]` 也算 item（2026-11-06）
+   * ## `tools[]` 不算（2026-11-06 复核）
    *
-   * 上一版只把 `messages[]` 裁到正好 `maxRequestItems`，于是**零余量**：网关把
-   * 工具定义一起数进去，实测就出现「我们已经裁到 1000 条，网关仍报 1017 > 1000」——
-   * 差的那 17 个就是工具个数。所以预算必须**先扣掉工具**，否则永远差几条、每轮都超。
+   * 曾经一度以为网关把工具也数进 items（依据是同事那条 `1017 > 1000`）。复核
+   * `docs/HANDOVER-2.0.0.md` 的实测记录：**`tools` 不计入、`system` 计入**
+   * （1000 条 → 200，1001 条 → 400）。所以 `1017` 的真实含义是「那一版根本没在裁剪」
+   * —— 对方装的是旧产物。这里不做 `- tools.length` 的扣减：那会白丢几十条历史。
+   *
+   * 真正的解药在 `catalog.ts`：让宿主的 token 阈值落在条数上限之前触发压缩，
+   * 这段裁剪只是兜底。
    */
   const projected = openAiMessages(options.messages, images);
-  const toolItems = tools.length;
-  const messageLimit =
-    facts.maxRequestItems === undefined ? undefined : facts.maxRequestItems - toolItems;
-  if (messageLimit !== undefined && messageLimit < 1) {
-    throw new LlmError(
-      `工具定义（${toolItems} 个）已经占满一次请求的条目上限（${facts.maxRequestItems}），没有留给对话历史的空间。`,
-      "INVALID_REQUEST",
-    );
-  }
   let trimmed: ReturnType<typeof trimWireMessages<WireMessage>>;
   try {
     trimmed = trimWireMessages<WireMessage>(
       [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...projected],
-      messageLimit,
+      facts.maxRequestItems,
       (dropped) => ({ role: "system", content: omittedHistoryNotice(dropped) }),
     );
   } catch (error: unknown) {

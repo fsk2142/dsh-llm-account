@@ -46,13 +46,17 @@ describe("parseCatalog：显示名", () => {
 });
 
 describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实测）", () => {
-  it("**从 metadata.context_limit / output_budget 读容量**（顶层没有这两个字段）", () => {
+  it("**优先取 metadata.context_budget**（网关每次请求的真实额度），退回 context_limit", () => {
     // 线上目录的真实形状（`/v1/models` 实测）：顶层只有 id/object/created/owned_by/
     // architecture/metadata/default/enabled，**没有** context_length / max_output_tokens。
     // 只认顶层的旧实现把 12 个模型全读成「未公布」，连带两个后果：
     //   ① 宿主不显示会话长度；
     //   ② 宿主的自动压缩插件拿到 info.context === undefined 后直接抛错，该路由**完全不压缩**，
     //      最终以 HTTP 400（上下文超限）收场。
+    //
+    // 2026-11-06：容量改取 `context_budget`。取 `context_limit`（~100 万）时宿主的压缩阈值
+    // 是 838k token，而 1000 条消息只有约 49 万 token —— 压缩永远不触发，历史涨到网关的
+    // 1000 **条数**上限后每轮 400。取 budget 后阈值落到 134k token，约 270 条就压缩。
     const parsed = parseCatalog({
       object: "list",
       data: [
@@ -60,14 +64,27 @@ describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实�
           id: "deepseek-v4.1-flash",
           object: "model",
           owned_by: "vela",
-          metadata: { cost: "low", capability: "advanced", context_limit: 1048000, output_budget: 128000 },
+          metadata: {
+            cost: "low",
+            capability: "advanced",
+            context_limit: 1048000,
+            context_budget: 328000,
+            output_budget: 128000,
+          },
           default: true,
           enabled: true,
         },
       ],
     });
-    expect(parsed.entries[0]!.contextWindow).toBe(1048000);
+    expect(parsed.entries[0]!.contextWindow).toBe(328000);
     expect(parsed.entries[0]!.maxTokens).toBe(128000);
+  });
+
+  it("没有 context_budget 时退回 context_limit（别家网关不公布 budget）", () => {
+    const parsed = parseCatalog({
+      data: [{ id: "m", metadata: { context_limit: 1_048_000, output_budget: 32_000 } }],
+    });
+    expect(parsed.entries[0]!.contextWindow).toBe(1_048_000);
   });
 
   it("扁平字段优先于 metadata（别家网关的形状更好时照旧生效）", () => {
