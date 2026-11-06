@@ -54,10 +54,15 @@ const GLM_TIERS: readonly string[] = ["low", "high", "max"];
 /**
  * Kimi：k3.1 起官方 `low / high / max`（默认 `max`）。
  *
- * `kimi-k2.7-code` **官方根本不支持 `reasoning_effort`**（思考强制开启，
- * `thinking.type` 只收 `enabled`），所以它在实测表里显式声明为空 —— 不摆选择器。
+ * `kimi-k2.7-code` 单独一档 —— **实测（2026-11-06 现场）它认 `low` / `high`，`max` 报 400**。
+ * 官方文档说那款「不收 `reasoning_effort`」，但这个网关确实收，而且思考量随档位变化
+ * （low→84、high→102 推理 token）。曾经按官方文档把它声明成空数组，等于把一个能用
+ * 的功能藏掉，已按实测改回 `low / high`。
  */
 const KIMI_TIERS: readonly string[] = ["low", "high", "max"];
+
+/** `kimi-k2.7-code`：实测只到 `high`（`max` → 400）。 */
+const KIMI_CODE_TIERS: readonly string[] = ["low", "high"];
 
 /**
  * 未实测族（gemini / grok / qwen / mimo / hy）的保守集。
@@ -82,8 +87,8 @@ export const MEASURED_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   "glm-5.3-flashx": GLM_TIERS,
   "gpt-6-luna": GPT_TIERS,
   "hy4-preview": GENERIC_TIERS,
-  // 官方不支持 `reasoning_effort`（思考强制开启）—— 显式空数组 = 不声明档位。
-  "kimi-k2.7-code": [],
+  // 实测：low / high 都收，max → 400（2026-11-06 现场复测）。
+  "kimi-k2.7-code": KIMI_CODE_TIERS,
   "mimo-v2.6-flash": GENERIC_TIERS,
   "mimo-v2.6-pro": GENERIC_TIERS,
 };
@@ -173,24 +178,34 @@ export function allowedEffortsIn(body: unknown): readonly string[] {
 }
 
 /**
- * 网关拒绝了某个档位时，挑一个「不高于它、但被允许」的最强档位。
+ * 网关拒绝了某个档位时，挑一个**比它更强、且被允许**的档位（升档）。
+ *
+ * ## 为什么是升档而不是降档（2026-11-06 用户要求）
+ *
+ * 原来的策略是「降一档」：选不高于请求值的最强档位。实测下来这会把用户的意图
+ * **悄悄削弱** —— 用户点 `xhigh`，网关只认到 `high`，于是这次请求的思考量比预期少。
+ * 升档则相反：宁可多想一点，也不要比用户要的少。
+ *
+ * 这是**有意的方向性偏置**：推理档位调高的代价是多花 token，调低的代价是答案质量下降，
+ * 而用户选择高档次本身就是在表达「我愿意为质量付钱」。
+ *
+ * ## 没有更强的档位时
+ *
+ * 返回 `undefined`，由调用方**去掉字段**重发 —— 也就是交回厂商默认。
+ * 不退回一个更弱的显式档位：那正是要避免的静默降档。
  * @param requested - 用户/宿主选的档位。
  * @param allowed - 网关白名单。
- * @returns 可用的替代档位；没有更弱的可选项时为 `undefined`（调用方会去掉字段重发）。
+ * @returns 更强的可用档位；没有更强项（或白名单为空）时为 `undefined`。
  */
-export function nearestAllowedEffort(requested: string, allowed: readonly string[]): string | undefined {
+export function upgradeAllowedEffort(requested: string, allowed: readonly string[]): string | undefined {
   const wanted = STRENGTH_ORDER.indexOf(requested.toLowerCase());
   const usable = allowed
     .map((value) => ({ value, rank: STRENGTH_ORDER.indexOf(value) }))
     .filter((entry) => entry.rank >= 0)
     .sort((left, right) => left.rank - right.rank);
   if (usable.length === 0) return undefined;
-  // 用户选的那档不在表里（自定义 id）时按「最高可用」处理。
+  // 用户选的那档不在强弱表里（自定义 id）时无法比较，按「最高可用」处理 —— 同样不降档。
   if (wanted < 0) return usable[usable.length - 1]!.value;
-  let best: string | undefined;
-  for (const entry of usable) {
-    if (entry.rank > wanted) break;
-    best = entry.value;
-  }
-  return best ?? usable[0]!.value;
+  // 严格更强的第一个；找不到就是「已经到顶」，返回 undefined 让调用方去掉字段。
+  return usable.find((entry) => entry.rank > wanted)?.value;
 }

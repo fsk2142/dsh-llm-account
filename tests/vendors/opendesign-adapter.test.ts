@@ -547,11 +547,36 @@ it("resolveModel：目录不声明档位时按模型族兜底（宿主的思考�
   expect(resolved.name).toBe("Claude-Sonnet-4.5");
 });
 
-it("stream：网关拒绝档位但念出白名单时，按白名单降一档重发（不是直接丢掉档位）", async () => {
+it("stream：网关拒绝档位时**向上**挑白名单里更强的档位重发（不降档）", async () => {
   const fetchImpl = scriptedFetch([
-    // ① 带 max 的请求被网关拒，且把白名单念出来（真实口吻，2026-10-18 实测）。
-    //    注意：不再先查目录 —— 用户选的档位一律原样发（2026-11-03），
-    //    所以这里第一发就是带 max 的生成请求。
+    // ① 带 xhigh 的请求被网关拒，白名单最高只到 high（真实口吻，2026-10-18 实测）。
+    () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "[code=invalid_request_error] reasoning effort is unsupported for claude-haiku-5.5; use one of low, medium, high",
+          },
+        }),
+        { status: 400 },
+      ),
+    // ② 重发。
+    () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
+  ]);
+  const { chunks, calls } = await runStream(
+    { ...request("claude-haiku-5.5"), reasoningEffort: ReasoningEffortId("low") },
+    adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }),
+  );
+
+  expect(calls).toHaveLength(2);
+  expect(field(calls[0]!.body, "reasoning_effort")).toBe("low");
+  // 白名单里比 low 强的第一个是 medium —— 升档，而不是退回 low 或去掉。
+  expect(field(calls[1]!.body, "reasoning_effort"), "升档优先，绝不降档").toBe("medium");
+  expect(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "ok")).toBe(true);
+});
+
+it("stream：所选已是白名单最高档时**去掉字段**重发，不退回更弱的档位", async () => {
+  const fetchImpl = scriptedFetch([
+    // 用户选 max，网关只认到 high：没有更强的档位可升。
     () =>
       new Response(
         JSON.stringify({
@@ -561,20 +586,17 @@ it("stream：网关拒绝档位但念出白名单时，按白名单降一档重�
         }),
         { status: 400 },
       ),
-    // ② 降一档（high）重发 → 成功。
     () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
   ]);
-  const { chunks, calls } = await runStream(
+  const { calls } = await runStream(
     { ...request("glm-5.3-flash"), reasoningEffort: ReasoningEffortId("max") },
     adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }),
   );
 
   expect(calls).toHaveLength(2);
-  // 第一发就是用户选的 max（不再先查目录做白名单过滤）。
   expect(field(calls[0]!.body, "reasoning_effort")).toBe("max");
-  // 用户的选择只退到白名单里最强的那档，而不是整段消失。
-  expect(field(calls[1]!.body, "reasoning_effort")).toBe("high");
-  expect(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "ok")).toBe(true);
+  // 关键：**不是** high。降档会让这次请求的思考量低于用户要求。
+  expect(field(calls[1]!.body, "reasoning_effort"), "没有更强项时交回厂商默认，不静默降档").toBeUndefined();
 });
 
 it("stream：网关不认 reasoning_effort（400）且没念白名单时去掉字段重发一次，回答照常拿到", async () => {

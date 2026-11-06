@@ -13,7 +13,7 @@ import {
   allowedEffortsIn,
   effortsFor,
   familyEfforts,
-  nearestAllowedEffort,
+  upgradeAllowedEffort,
 } from "../../src/vendors/opendesign/efforts";
 
 describe("parseCatalog：显示名", () => {
@@ -172,8 +172,8 @@ describe("effortsFor：思考强度", () => {
   it("实测的逐模型差异照抄：GLM 三档、Kimi K2.7 官方不支持档位", () => {
     expect(effortsFor("glm-5.3-flash")).toEqual(["low", "high", "max"]);
     expect(effortsFor("glm-5.3-flashx")).toEqual(["low", "high", "max"]);
-    // 官方：kimi-k2.7-code 思考强制开启，**不收 reasoning_effort** —— 不摆选择器。
-    expect(effortsFor("kimi-k2.7-code")).toEqual([]);
+    // 实测（2026-11-06 现场）：kimi-k2.7-code 认 low / high，max 报 400 —— 不是「不支持档位」。
+    expect(effortsFor("kimi-k2.7-code")).toEqual(["low", "high"]);
   });
 
   it("目录没声明时按模型族兜底（每档都能对上官方文档）", () => {
@@ -226,16 +226,22 @@ describe("网关白名单的两种口吻都能读（降一档重发靠它）", (
     expect(allowedEffortsIn(undefined)).toEqual([]);
   });
 
-  it("降一档挑「不高于所选、且被允许」的最强项", () => {
-    expect(nearestAllowedEffort("max", ["low", "high", "max"])).toBe("max");
-    // `ultra` 比 `max` 弱一档（实测顺序 none…xhigh, ultra, max）：降档只能退到 high。
-    expect(nearestAllowedEffort("ultra", ["low", "high", "max"])).toBe("high");
-    expect(nearestAllowedEffort("max", ["none", "minimal", "low", "medium", "high", "xhigh"])).toBe("xhigh");
-    expect(nearestAllowedEffort("low", ["medium", "high"])).toBe("medium");
-    expect(nearestAllowedEffort("low", [])).toBeUndefined();
-    // `off` 与 `none` 是同一档：网关只认 `none` 时降成它，不会升成 max。
-    expect(nearestAllowedEffort("off", ["none", "low", "high", "max"])).toBe("none");
+  it("**升档**挑「比所选更强、且被允许」的最弱项（绝不降档）", () => {
+    // 所选档位已经是允许集里的最高档：没有更强的 → undefined（调用方去掉字段，交回厂商默认）。
+    // 关键：**不退回** high —— 那是静默降档，正是要避免的。
+    expect(upgradeAllowedEffort("max", ["low", "high", "max"])).toBeUndefined();
+    // `ultra` 弱于 `max`：升到 `max`，而不是原来的降成 `high`。
+    expect(upgradeAllowedEffort("ultra", ["low", "high", "max"])).toBe("max");
+    // 白名单最高只到 xhigh：`max` 没有更强的可升 → undefined（不降成 xhigh）。
+    expect(upgradeAllowedEffort("max", ["none", "minimal", "low", "medium", "high", "xhigh"])).toBeUndefined();
+    // 所选比允许集都弱：升到最接近的更强项。
+    expect(upgradeAllowedEffort("low", ["medium", "high"])).toBe("medium");
+    expect(upgradeAllowedEffort("low", [])).toBeUndefined();
+    // `off` 强于 `none`：升成 `none`（关思考）而不是升到 high/max。
+    expect(upgradeAllowedEffort("off", ["none", "low", "high", "max"])).toBe("none");
+    // 网关只认更弱的档位时：`off` 升到 `low`（保留思考，符合「宁可多想」）。
+    expect(upgradeAllowedEffort("off", ["low", "high"])).toBe("low");
     // 自定义档位 id（不在强弱表里）：按最强可用项处理。
-    expect(nearestAllowedEffort("enterprise", ["low", "high"])).toBe("high");
+    expect(upgradeAllowedEffort("enterprise", ["low", "high"])).toBe("high");
   });
 });

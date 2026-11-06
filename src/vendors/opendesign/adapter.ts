@@ -46,7 +46,7 @@ import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
 import { parseCatalog } from "./catalog";
-import { allowedEffortsIn, effortsFor, nearestAllowedEffort } from "./efforts";
+import { allowedEffortsIn, effortsFor, upgradeAllowedEffort } from "./efforts";
 import { classifyOpenDesignFailure, openDesignLlmError } from "./failures";
 import {
   DEFAULT_BASE_URL,
@@ -799,11 +799,14 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     let response = await deadlineOf((signal) => this.#post(config, options, key, effort, signal));
     if (!response.ok) {
       const body = await deadlineOf(() => readErrorBody(response));
-      // 兜底：网关不认这个档位（400 + 点名 reasoning_effort）时按它念出的白名单**降一档**重发；
-      // 白名单读不出来（或没有更弱的选项）才去掉字段。声明档位靠的是实测表 / 模型族推断，
-      // 推断错的代价不该是整次请求失败 —— 最多退一档，回答照常拿到。
+      // 兜底：网关不认这个档位（400 + 点名 reasoning_effort）时，按它念出的白名单**升一档**重发。
+      //
+      // **故意向上而不是向下**（2026-11-06 用户要求）：降档会把用户的意图悄悄削弱 ——
+      // 用户点 `xhigh`、网关只认到 `high`，那次请求的思考量就比他要求的少。升档的代价只是
+      // 多花 token，而降档的代价是答案质量下降。没有更强的档位时返回 `undefined`，
+      // 这里会去掉字段、交回厂商默认，**不退回一个更弱的显式档位**。
       if (response.status === 400 && effort !== undefined && mentionsEffortField(body)) {
-        const fallback = nearestAllowedEffort(effort, allowedEffortsIn(body));
+        const fallback = upgradeAllowedEffort(effort, allowedEffortsIn(body));
         const retry = await deadlineOf((signal) =>
           this.#post(config, options, key, fallback === effort ? undefined : fallback, signal),
         );
