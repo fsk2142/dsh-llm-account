@@ -140,21 +140,41 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
     // ② 宿主的自动压缩插件读到 `info.context === undefined` 直接抛错，**该路由完全不压缩**，
     // 最终以 HTTP 400（上下文超限）收场（日志实测 91.6 万 token 时被拒）。
     //
-    // 取值优先级：扁平字段（若有）> `metadata.context_budget` > `metadata.context_limit`。
+    // 取值优先级：扁平字段（若有）> `metadata.context_limit` > `metadata.context_budget`
+    // > `metadata.contextWindow`。
     //
-    // **为什么 budget 优先（2026-11-06 根治条数超限）**：网关同时公布两个容量字段 ——
-    // `context_limit`（~100 万，模型的理论上限）和 `context_budget`（23~40 万，**网关
-    // 每次请求真正给的额度**）。旧实现只取前者，于是宿主的 token 压缩阈值被算成
-    // `floor(min(1048000×0.8, 1048000−128000−65536)) ≈ 838k`，而 1000 条消息在实测
-    // 会话里只有约 **49 万** token —— 阈值永远够不着，压缩永远不触发，历史一路涨到
-    // 网关的 1000 **条数**上限，然后 400。
+    // **为什么 `context_limit` 优先（2026-11-06 用真实请求实测，推翻前一次判断）**：
+    // 网关同时公布两个容量字段 —— `context_limit`（~100 万）和 `context_budget`
+    // （23~40 万）。曾经的判断是「budget 才是网关每次请求真正给的额度」，因此优先取
+    // budget。**那个判断是错的**，实测把这条结论打掉了：
     //
-    // 改用 budget（deepseek-v4.1-flash：328000）后阈值落到
-    // `min(262400, 328000−128000−65536) = 134464` token，约合 270 条消息就压缩，
-    // 远早于 1000 条 —— 条数上限从此不会再被摸到，出站裁剪退化为纯兜底。
+    // 对 `deepseek-v4.1-flash` 直接发真实请求，用 `usage.prompt_tokens` 做二分：
+    //
+    // | prompt_tokens | 结果 |
+    // | --- | --- |
+    // | 978039 / 1017039 / 1036239 / 1045839 | 200 |
+    // | **1048239** | **200**（最大一次成功） |
+    // | 1048576 / 1048700 / 1049000 / 1049500 / 1050000 | 400 |
+    // | **~1050419** | **400**（最小一次失败） |
+    //
+    // 真正的上限落在 1048239 与 1048576 之间，与 `context_limit`（1048000，约 1 MiB）
+    // 吻合，**与 328000 毫无关系**。328000 从来不是 token 天花板。
+    //
+    // 取 budget 的代价是压缩时机被提前了 6 倍多：`thresholdTokens =
+    // floor(min(328000×0.8, 328000−128000−65536)) = 134464`，于是约 13 万 token
+    // （≈270 条消息）就开始压缩 —— 用户看到的就是「最新版本很快就压缩了」。
+    // 而正确取 `context_limit` 时阈值是 `floor(min(1048000×0.8,
+    // 1048000−128000−65536)) = 838400`，与官方的 1M 语义一致（opencode 的
+    // `limit.context = 1000000` 就是同一件事）。
+    //
+    // 顺带纠正一个曾经的误判：`context_budget` 并不是「条数上限的解药」。条数上限
+    // （第 1001 条 → 400）与 token 容量是两个独立约束，宿主的
+    // `LlmModelContext` 里根本没有条数字段，所以**任何** token 阈值都不可能提前
+    // 发现条数超限，只能靠出站裁剪（{@link trimWireMessages}）兜底 + 宿主的
+    // `context-overflow` 反应式压缩自救。
     const meta = isRecord(raw.metadata) ? raw.metadata : undefined;
     const contextWindow = positiveNumber(
-      raw.context_length ?? raw.contextWindow ?? meta?.context_budget ?? meta?.context_limit ?? meta?.contextWindow,
+      raw.context_length ?? raw.contextWindow ?? meta?.context_limit ?? meta?.context_budget ?? meta?.contextWindow,
     );
     const maxTokens = positiveNumber(
       raw.max_output_tokens ?? raw.maxTokens ?? raw.publishedMaxTokens ?? meta?.output_budget ?? meta?.max_output_tokens,

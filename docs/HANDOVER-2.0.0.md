@@ -219,12 +219,21 @@ exceeds the allowed input item limit (1003 > 1000 items).
   `deepseek-v4.1-flash`（`context_limit: 1048000`）约 **838k token**；
 - 1000 条消息在实测会话里约 490k token，**永远到不了 838k**。
 
-于是条数超限完全不可见，直到网关回 400。
+于是条数超限不会被**提前**发现，直到网关回 400。
 
-**为什么它会变成死循环**：报错正文让宿主 `Compact the conversation and retry`，
-宿主也确实做了。但**压缩请求本身**发的还是同一份超限历史 —— 压缩也 400，
-`compaction/end` 带着同一个 400，回合结束；下一轮照样 1003 条。
-**任何压缩策略在条数超限下都不可能自愈。**
+> **2026-11-06 晚更正**：本节原先写的是「任何压缩策略在条数超限下都不可能自愈」，
+> 并据此改取 `metadata.context_budget`（328000）当容量。那个结论**是错的**，
+> 那个改法**已经把上下文从 100 万砍到 32.8 万**（阈值 134464 token ≈ 270 条消息，
+> 会话刚开始就压缩），已回退。真实情况是：
+>
+> 1. 官方的 `isContextWindowExceededError` **认**这条 400，`agent/request-error`
+>    接缝会剪枝、压缩、返回 `{kind:"retry"}` 重发 —— 所以它是可自愈的；
+> 2. 压缩请求重放的是 `buildSummarizationInput`，读**会话日志**而不是那份超限投影，
+>    所以「压缩请求自身也超限」也不成立；
+> 3. 容量必须报真实天花板：二分实测 `prompt_tokens` 1,048,239 → 200，首个失败点
+>    ≈1,050,419，正好对上 `context_limit = 1048000`。
+>
+> 正确取舍：**条数上限交给官方自愈（代价是白跑一次请求），容量报真实值。**
 
 **本插件这一层做了什么**（`src/core/wire-limit.ts` + **Open Design** 投影层，
 `vendors/opendesign/protocol.ts`）：
@@ -235,7 +244,7 @@ exceeds the allowed input item limit (1003 > 1000 items).
   绝不静默丢；
 - **工具调用与结果成组裁剪**：`assistant.tool_calls` 与它的 `tool` 结果是
   不可分割的一组，拆开会让请求本身非法（比超限更难查）；
-- 压缩器的请求走同一条投影路径，所以**压缩请求自己也能发出去** —— 死循环被打破。
+- 裁剪是**兜底**：官方在条数超限后本来就会自愈，这一层只是省掉那次白跑的请求。
 
 > **只接了 Open Design 一家，这是有意的**：实测这个条数上限只出现在
 > `amr-link.open-design.ai/v1`，另两家（`opencode.ai`、Command Code）没有观察到。
@@ -244,7 +253,7 @@ exceeds the allowed input item limit (1003 > 1000 items).
 
 **上游该修的地方**（本插件改不了）：宿主应把「条数上限」作为模型事实上报
 （与 `contextWindow` 并列），让压缩在**条数**接近上限时就触发，而不是等网关 400。
-在那之前，这一层的裁剪是唯一可用的兜底。
+在那之前，这一层的裁剪是兜底；即便漏掉，官方的超限自愈路径也能接住。
 
 
 ---

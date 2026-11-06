@@ -335,14 +335,21 @@ export function buildRequestBody(
   );
   const systemText = [facts.systemText, ...systemFiles].filter((part) => part !== "").join("\n");
   /**
-   * **出站条数硬上限**（2026-11-05 修「1003 > 1000」）。
+   * **出站条数兜底**（2026-11-05 修「1003 > 1000」，2026-11-06 改正结论）。
    *
-   * 网关对 `messages[]` 有 1000 条的硬上限，而宿主只按 token 触发压缩 ——
-   * 条数超了永远不会被提前发现，于是每轮都 400，连压缩请求自己都 400
-   * （压缩发的还是同一份超限历史），形成无法自愈的死循环。
+   * 网关对 `messages[]` 有 1000 条硬上限，而宿主只有 token 概念 —— 条数超限不会被
+   * 提前纳入压缩判定（见 `core/wire-limit.ts` 的模块注释）。
    *
    * 这里在**投影之后**裁：投影可能把一条输入展开成多条（工具图片会补一条 user），
    * 所以按输入条数算预算会算错 —— 报错里的 1003 就是投影后的真实条数。
+   *
+   * ## 兜底，不是唯一防线
+   *
+   * 曾经以为条数超限会形成「无法自愈的死循环」（依据是压缩请求发的还是同一份超限
+   * 历史）。**那个结论是错的**：宿主的 `isContextWindowExceededError` 认这条 400，
+   * `agent/request-error` 会先剪枝、再压缩、然后重发；而 `buildSummarizationInput`
+   * 重放的是会话日志、不是那份超限投影。所以即便这里漏掉，也能自愈 —— 裁剪只是省掉
+   * 一次白跑的请求。
    *
    * ## `tools[]` 不算（2026-11-06 复核）
    *
@@ -350,9 +357,6 @@ export function buildRequestBody(
    * `docs/HANDOVER-2.0.0.md` 的实测记录：**`tools` 不计入、`system` 计入**
    * （1000 条 → 200，1001 条 → 400）。所以 `1017` 的真实含义是「那一版根本没在裁剪」
    * —— 对方装的是旧产物。这里不做 `- tools.length` 的扣减：那会白丢几十条历史。
-   *
-   * 真正的解药在 `catalog.ts`：让宿主的 token 阈值落在条数上限之前触发压缩，
-   * 这段裁剪只是兜底。
    */
   const projected = openAiMessages(options.messages, images);
   let trimmed: ReturnType<typeof trimWireMessages<WireMessage>>;

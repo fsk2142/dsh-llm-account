@@ -46,7 +46,7 @@ describe("parseCatalog：显示名", () => {
 });
 
 describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实测）", () => {
-  it("**优先取 metadata.context_budget**（网关每次请求的真实额度），退回 context_limit", () => {
+  it("**优先取 metadata.context_limit**（网关真实的 token 天花板），退回 context_budget", () => {
     // 线上目录的真实形状（`/v1/models` 实测）：顶层只有 id/object/created/owned_by/
     // architecture/metadata/default/enabled，**没有** context_length / max_output_tokens。
     // 只认顶层的旧实现把 12 个模型全读成「未公布」，连带两个后果：
@@ -54,9 +54,13 @@ describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实�
     //   ② 宿主的自动压缩插件拿到 info.context === undefined 后直接抛错，该路由**完全不压缩**，
     //      最终以 HTTP 400（上下文超限）收场。
     //
-    // 2026-11-06：容量改取 `context_budget`。取 `context_limit`（~100 万）时宿主的压缩阈值
-    // 是 838k token，而 1000 条消息只有约 49 万 token —— 压缩永远不触发，历史涨到网关的
-    // 1000 **条数**上限后每轮 400。取 budget 后阈值落到 134k token，约 270 条就压缩。
+    // 2026-11-06 终裁：容量取 `context_limit`（`context_budget` 只是**预算**，不是天花板）。
+    // 依据是拿真实 `prompt_tokens` 二分这个网关（不是猜语义）：
+    //   978039 / 1017039 / 1036239 / 1045839 / 1048239 → 全部 HTTP 200；
+    //   1048576 / 1048700 / 1049000 / 1049500 / 1050000 → 全部 400 upstream_error。
+    // 天花板落在 1048239 与 1048576 之间，与 `context_limit` 的 1048000（≈1 MiB）吻合，
+    // 与 328000 毫无关系。取 budget 的旧代码把压缩阈值压到 134464 token（约 270 条），
+    // 这就是用户看到的「最新版本很快就压缩了」——一次真实的 6 倍提前量。
     const parsed = parseCatalog({
       object: "list",
       data: [
@@ -76,15 +80,15 @@ describe("容量：opendesign 把 context 放在 metadata 里（2026-10-20 实�
         },
       ],
     });
-    expect(parsed.entries[0]!.contextWindow).toBe(328000);
+    expect(parsed.entries[0]!.contextWindow, "context_limit 才是天花板，不是 context_budget").toBe(1_048_000);
     expect(parsed.entries[0]!.maxTokens).toBe(128000);
   });
 
-  it("没有 context_budget 时退回 context_limit（别家网关不公布 budget）", () => {
+  it("没有 context_limit 时退回 context_budget（别家网关只公布预算）", () => {
     const parsed = parseCatalog({
-      data: [{ id: "m", metadata: { context_limit: 1_048_000, output_budget: 32_000 } }],
+      data: [{ id: "m", metadata: { context_budget: 328_000, output_budget: 32_000 } }],
     });
-    expect(parsed.entries[0]!.contextWindow).toBe(1_048_000);
+    expect(parsed.entries[0]!.contextWindow, "少了天花板才轮到预算").toBe(328_000);
   });
 
   it("扁平字段优先于 metadata（别家网关的形状更好时照旧生效）", () => {

@@ -263,10 +263,11 @@ it("resolveModel：目录拉不到时退化成裸模型，请求照旧能发出�
  * 宿主的压缩阈值完全由 `context.contextWindow` 决定：
  * `floor(min(W×0.8, W−O−B))`，`B = 65536`。
  *
- * 事故回顾：目录公布 `context_limit: 1048000`，取它算出阈值 838400 token，
- * 而 1000 条消息只有约 49 万 token —— 压缩永远够不着，历史涨到网关条数上限后每轮 400。
+ * 事故回顾：目录里 `context_limit: 1048000`（真实天花板，二分实测 1048239 仍 200、
+ * 1048576 起 400）与 `context_budget: 328000`（预算，不是容量）并存。曾经误取 budget，
+ * 阈值被压到 134464 token —— 约 270 条消息就压缩，用户看到的是「最新版本很快就压缩了」。
  *
- * 默认值已经在目录层修正（改取 `context_budget`）；这里是**不改代码就能纠正**的逃生阀：
+ * 默认值已在目录层定为一档（取 `context_limit`）；这里是**不改代码就能纠正**的逃生阀：
  * 按模型覆盖 → 全局覆盖 → 目录值。
  */
 describe("resolveModel：上下文窗口可被设置覆盖", () => {
@@ -301,11 +302,11 @@ describe("resolveModel：上下文窗口可被设置覆盖", () => {
     expect(resolved.context?.contextWindow).toBe(500_000);
   });
 
-  it("都不设时用目录值（默认取 context_budget，不是 context_limit）", async () => {
+  it("都不设时用目录值（默认取 context_limit，不是 context_budget）", async () => {
     const fetchImpl = scriptedFetch([wide]);
     const adapter = createOpenDesignAdapter(adapterDeps({ fetchImpl }));
     const resolved = await adapter.resolveModel("opendesign", "od-wide");
-    expect(resolved.context?.contextWindow, "328000 才能在 1000 条之前触发压缩").toBe(328_000);
+    expect(resolved.context?.contextWindow, "1048000 是二分实测出的真实天花板").toBe(1_048_000);
   });
 
   it("坏值（0/负数/小数/超界/非数字）一律忽略，回落到下一级", async () => {
@@ -321,7 +322,7 @@ describe("resolveModel：上下文窗口可被设置覆盖", () => {
         }),
       );
       const resolved = await adapter.resolveModel("opendesign", "od-wide");
-      expect(resolved.context?.contextWindow, `坏值 ${String(bad)} 不该被采用`).toBe(328_000);
+      expect(resolved.context?.contextWindow, `坏值 ${String(bad)} 不该被采用`).toBe(1_048_000);
     }
   });
 

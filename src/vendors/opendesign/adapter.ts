@@ -119,10 +119,14 @@ export interface OpenDesignConfig {
   /**
    * 出站 `messages[]` 的条数上限；缺省 {@link DEFAULT_MAX_REQUEST_ITEMS}。
    *
-   * **这不是可选的调优项**：网关对 `messages[]` 有 1000 条的硬上限（实测
-   * `deepseek-v4.1-flash` 第 1001 条即 400 `context_length_exceeded`），
-   * 而宿主只按 token 触发压缩，条数永远不会被提前发现。超限时这里会**裁掉最旧的
-   * 历史并插入明确提示**，而不是让整轮失败。设成 `0` 可关闭裁剪（不建议）。
+   * 网关对 `messages[]` 有 1000 条的硬上限（实测 `deepseek-v4.1-flash` 第 1001 条即
+   * 400 `context_length_exceeded`），而宿主只有 token 概念、**没有条数概念**，所以条数
+   * 无法被提前纳入压缩判定。
+   *
+   * 超限时这里**裁掉最旧的历史并插入明确提示**，而不是让整轮失败。这是兜底：
+   * 条数超限本身也是**可自愈**的（宿主把它认成 `CONTEXT_WINDOW_EXCEEDED`，剪枝、
+   * 压缩后自动重发，见 `core/wire-limit.ts` 的模块注释），裁剪只是省掉那一次白跑的
+   * 请求。设成 `0` 可关闭裁剪（不建议）。
    */
   maxRequestItems?: number;
   /**
@@ -130,12 +134,15 @@ export interface OpenDesignConfig {
    *
    * 为什么需要这个旋钮：宿主的自动压缩阈值是
    * `floor(min(W×0.8, W−O−B))`，`W` 就是我们通过 `resolveModel` 上报的
-   * `context.contextWindow`。而网关 `/v1/models` 公布的容量字段有好几个
-   * （`context_limit` 约 100 万、`context_budget` 23~40 万），取错一个就会让阈值
-   * 高到够不着 —— 历史永远涨到网关的条数上限才 400（2026-11-06 事故）。
+   * `context.contextWindow`。网关 `/v1/models` 的 `metadata` 里容量字段有好几个，
+   * 语义完全不同（2026-11-06 二分实测定案）：
    *
-   * 目录修复（改取 `context_budget`）是默认值层面的修正；这个字段留一个
-   * **不改代码就能纠正**的逃生阀：网关口径再变时，改设置即可。
+   * - `context_limit` **约 104.8 万**，是真天花板：prompt 104,8239 token 仍 200，
+   *   首个失败点 ≈ 1,050,419（`400 upstream_error`）。目录取的就是它。
+   * - `context_budget` 23~40 万，是「预算」不是能力上限。曾经误取它，`W` 变成
+   *   328,000 → 阈值掉到 134,464 token（约 270 条消息）→ 会话刚开始就压缩。
+   *
+   * 这个字段留一个**不改代码就能纠正**的逃生阀：网关口径再变时，改设置即可。
    */
   contextWindow?: number;
   /** 按模型覆盖上下文窗口（键为模型 id）；优先级高于 {@link contextWindow}。 */
