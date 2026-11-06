@@ -168,6 +168,44 @@ export interface OpenDesignConfig {
 export const DEFAULT_MAX_REQUEST_ITEMS = 1_000;
 
 /**
+ * 各模型实测的条数硬上限（2026-11-06 复核，直接打网关量的）。
+ *
+ * `deepseek-v4.1-flash` 是 **1000**（第 1001 条即 400）；同一网关其余模型实测接受
+ * **3000**。计数只数 `messages[]` 的条数 —— `tools[]` 与 content 分片都**不**额外计数
+ * （复测：1000 条 200 / 1001 条 400 / 950 条+58 工具 200 / 998 条+2 tool_calls 200）。
+ */
+const ITEM_CAP_BY_MODEL: Readonly<Record<string, number>> = {
+  "deepseek-v4.1-flash": 1_000,
+};
+
+/** 没量过的模型按 3000 兜底（与「其余模型」的实测值一致），再大的请求由配置自己压。 */
+const ITEM_CAP_FALLBACK = 3_000;
+
+/**
+ * 一个模型真正能收多少条消息。
+ * @param model - 模型 id。
+ * @returns 实测硬上限。
+ */
+export function itemCapOf(model: string): number {
+  return ITEM_CAP_BY_MODEL[model] ?? ITEM_CAP_FALLBACK;
+}
+
+/**
+ * 出站条数上限 = **配置值与模型实测上限取小**。
+ *
+ * 为什么要多这一道：设置里只有一个全局旋钮，而同一个网关不同模型的上限并不一样
+ * （1000 vs 3000）。用户为了别的模型把旋钮调到 3000 之后，`deepseek-v4.1-flash`
+ * 上的 1002 条就会被原样放行 —— 正是 2026-11-06 turn 357 那次失败的样子。
+ * 取小值保证了「无论配置写多大，都不会超过这个模型真正能收的条数」。
+ * @param configured - 配置解析出的上限（`resolveConfig` 保证是正数）。
+ * @param model - 模型 id。
+ * @returns 实际生效的上限。
+ */
+export function effectiveItemLimit(configured: number, model: string): number {
+  return Math.min(configured, itemCapOf(model));
+}
+
+/**
  * 合法上下文窗口的上下界。
  *
  * 与主流实现一致：必须是**安全整数**且在 `[1, 10_000_000]` 内。越界或非整数一律
@@ -907,8 +945,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       maxTokens: options.maxTokens === undefined ? cap : Math.min(options.maxTokens, cap),
       systemText: systemTextOf(options),
       ...(effort === undefined ? {} : { reasoningEffort: effort }),
-      // 出站条数硬上限（`resolveConfig` 保证是正数，这里**无条件**传过去 —— 见那里的注释）
-      maxRequestItems: config.maxRequestItems,
+      // 出站条数硬上限：配置值再按**该模型实测上限**钳一次（`resolveConfig` 保证是正数）
+      maxRequestItems: effectiveItemLimit(config.maxRequestItems, options.model),
     };
     const wire = generateRequest({
       base: config.apiBase,

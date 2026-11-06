@@ -17,7 +17,12 @@ import { expect, it } from "vitest";
 import type { ContentBlock, GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/dsh-llm";
 
 import { RotationEngine } from "../../src/core/switching/rotation";
-import { DEFAULT_MAX_REQUEST_ITEMS, createOpenDesignAdapter } from "../../src/vendors/opendesign/adapter";
+import {
+  DEFAULT_MAX_REQUEST_ITEMS,
+  createOpenDesignAdapter,
+  effectiveItemLimit,
+  itemCapOf,
+} from "../../src/vendors/opendesign/adapter";
 import type { OpenDesignAdapterDeps } from "../../src/vendors/opendesign/adapter";
 
 /** 最小账号/额度桩（本文件不碰那两条路径）。 */
@@ -110,8 +115,7 @@ it("配置缺省时回落到 1000（现场那个上限），不是 `undefined`",
   expect(JSON.stringify(body.messages)).toContain("省略");
 });
 
-it("**配置写 0 不再关闭裁剪**：非正数一律回落到默认上限（2026-11-06 事故）", async () => {
-  // 旧语义是「0 = 不裁剪，用户自愿承担 400」。实际后果是一次整轮失败：
+it("**配置写 0 不再关闭裁剪**：非正数一律回落到默认上限（2026-11-06 事故）", async () => {  // 旧语义是「0 = 不裁剪，用户自愿承担 400」。实际后果是一次整轮失败：
   // 2026-11-06 18:40，压缩请求 1001 条被拒（`compaction/end` 带 error），紧接的
   // 主请求 1002 条也被拒 —— 连自愈路径都因为「压缩请求自己超限」而断掉。
   //
@@ -129,6 +133,25 @@ it("未超限的请求不被改动（不给正常请求加噪音）", async () =
   const body = await outboundBody(() => ({ maxRequestItems: 1_000 }), 6);
   expect(body.messages.length).toBe(6);
   expect(JSON.stringify(body.messages)).not.toContain("省略");
+});
+
+it("**配置再大也被该模型的实测上限钳住**（全局旋钮 vs 各模型上限不一致）", async () => {
+  // 设置里只有一个全局旋钮，而同一网关不同模型的上限并不一样：deepseek-v4.1-flash 是
+  // 1000，其余模型实测接受 3000。用户为别的模型把旋钮调到 3000 之后，
+  // deepseek-v4.1-flash 上的 1002 条就会被原样放行 —— 正是 turn 357 那次失败的样子。
+  expect(itemCapOf("deepseek-v4.1-flash"), "这个模型实测只收 1000 条").toBe(1_000);
+  expect(itemCapOf("glm-5.3-flash"), "其余模型实测 3000").toBe(3_000);
+  expect(itemCapOf("没量过的模型"), "没量过就按 3000 兜底").toBe(3_000);
+
+  expect(effectiveItemLimit(3_000, "deepseek-v4.1-flash"), "配置 3000 也要压到 1000").toBe(1_000);
+  expect(effectiveItemLimit(3_000, "glm-5.3-flash"), "别的模型不压").toBe(3_000);
+  expect(effectiveItemLimit(200, "glm-5.3-flash"), "配置更小时听配置的").toBe(200);
+  expect(effectiveItemLimit(1_000, "deepseek-v4.1-flash"), "恰好等于上限时保持").toBe(1_000);
+
+  // 端到端：配置写 3000、请求 1003 条，出站仍必须 ≤1000。
+  const body = await outboundBody(() => ({ maxRequestItems: 3_000 }), 1_003);
+  expect(body.messages.length).toBeLessThanOrEqual(1_000);
+  expect(JSON.stringify(body.messages)).toContain("省略");
 });
 
 /**
