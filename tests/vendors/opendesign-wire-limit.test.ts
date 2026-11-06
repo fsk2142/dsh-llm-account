@@ -23,6 +23,7 @@ import {
   effectiveItemLimit,
   itemCapOf,
 } from "../../src/vendors/opendesign/adapter";
+import { buildRequestBody } from "../../src/vendors/opendesign/protocol";
 import type { OpenDesignAdapterDeps } from "../../src/vendors/opendesign/adapter";
 
 /** 最小账号/额度桩（本文件不碰那两条路径）。 */
@@ -178,4 +179,24 @@ it("工具再多也不影响消息预算", async () => {
   const withoutTools = await outboundBody(() => ({ maxRequestItems: 100 }), 500);
   expect(withTools.messages.length).toBe(withoutTools.messages.length);
   expect(withTools.messages.length).toBeLessThanOrEqual(100);
+});
+
+/**
+ * ## 协议层兜底：`BodyFacts.maxRequestItems` 缺失时**仍然要裁**
+ *
+ * 2026-11-06 turn 357 的事故里，网关报的是 `(1001 > 1000 items)` 和 `(1002 > 1000 items)`
+ * —— 正好是原始历史长度。裁剪一旦生效会按 64 组对齐砍到 938 条左右，所以那两个数字
+ * 说明**一个字都没裁**：`trimWireMessages` 拿到了 `undefined` 就原样返回。
+ *
+ * 上游任何一环（设置文档 → `adapterConfigOf` → `resolveConfig` → `#post`）把它弄丢，
+ * 都不该让这一层裸奔。这条用例固定住「拿不到上限就按 1000 裁」。
+ */
+it("**不传上限时协议层自己兜底裁到 1000**（上游配置断链也不许裸奔）", () => {
+  const messages = longHistory(1_003);
+  const body = buildRequestBody({ provider: "opendesign", model: "deepseek-v4.1-flash", messages }, {
+    maxTokens: 1_024,
+    systemText: "SYS",
+  }) as { messages: { role: string }[] };
+  expect(body.messages.length, "没有上限也必须裁").toBeLessThanOrEqual(1_000);
+  expect(JSON.stringify(body.messages), "模型知道历史被省略").toContain("省略");
 });

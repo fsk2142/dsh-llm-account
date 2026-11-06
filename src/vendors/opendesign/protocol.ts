@@ -34,6 +34,19 @@ import { omittedHistoryNotice, trimWireMessages, WireLimitExceededError } from "
 /** 推理网关默认基地址（计划 §1：`amr-link` 是运行时链路的入口）。 */
 export const DEFAULT_BASE_URL = "https://amr-link.open-design.ai/v1";
 
+/**
+ * 出站 `messages[]` 的**协议层兜底上限**（2026-11-06 加固）。
+ *
+ * 与适配器里的 `DEFAULT_MAX_REQUEST_ITEMS` 是同一个数字，但**刻意各自定义**：
+ * 这一份的职责是「无论上游配置怎么坏，都不把已知会被拒的请求发出去」。
+ * 适配器那份的职责是「配置缺省时给一个合理默认」。
+ *
+ * 为什么需要两份：2026-11-06 的事故里，配置链路只要有一环把上限落成
+ * `0`/`undefined`，这一层就静默停止裁剪，而网关的 1000 条硬上限照旧生效 ——
+ * 结果是整轮失败，连压缩自救的请求也一起被拒。
+ */
+const WIRE_ITEM_CAP = 1_000;
+
 /** 目录端点路径（OpenAI 形状：基地址已含 `/v1`）。 */
 export const MODELS_PATH = "/models";
 
@@ -363,7 +376,18 @@ export function buildRequestBody(
   try {
     trimmed = trimWireMessages<WireMessage>(
       [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...projected],
-      facts.maxRequestItems,
+      /**
+       * **协议层的默认上限，不依赖配置链路**（2026-11-06 加固）。
+       *
+       * 之前这一位直接传 `facts.maxRequestItems`：只要上游（设置文档 → `adapterConfigOf`
+       * → `resolveConfig`）有任何一环把它落成 `0`/`undefined`，`trimWireMessages` 就
+       * 拿着 `undefined` 原样返回 —— 裁剪**静默失效**，而网关的 1000 条硬上限不会因此消失。
+       * 实测代价是整轮失败，而且连「压缩自救」的那次请求也一起 400（turn 357）。
+       *
+       * 现在这里自带兜底：拿不到上限就按 {@link WIRE_ITEM_CAP} 裁。少留几条历史，
+       * 远好过一次看不懂的 400。想要更宽的上限仍然可以在设置里写正数（会被传进来）。
+       */
+      facts.maxRequestItems ?? WIRE_ITEM_CAP,
       (dropped) => ({ role: "system", content: omittedHistoryNotice(dropped) }),
     );
   } catch (error: unknown) {

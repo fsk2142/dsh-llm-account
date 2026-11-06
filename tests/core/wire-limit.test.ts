@@ -270,12 +270,16 @@ describe("wire-limit · 端到端（Open Design 请求体）", () => {
     expect(body.messages.length, "压缩请求自己也要能发出去").toBeLessThanOrEqual(DEFAULT_MAX_REQUEST_ITEMS);
   });
 
-  it("没有 maxRequestItems 时保持旧行为（其它厂商/其它网关不受影响）", () => {
+  it("**没有 maxRequestItems 时也不能裸奔**：协议层按 1000 兜底（2026-11-06 改）", () => {
+    // 旧行为是「没传上限就原样发出」。那次事故证明这条约定太脆：上游任何一环把上限
+    // 弄丢，1001 条就被原样送到网关，整轮失败（而且连压缩自救的请求也一起 400）。
+    // 现在协议层自己兜底 —— 少留几条历史，远好过一次看不懂的 400。
     const body = buildRequestBody(
       { provider: "opendesign", model: "m", messages: longHistory(1500) } as unknown as GenerateOptions,
       { maxTokens: 100, systemText: "" },
     ) as { messages: Wire[] };
-    expect(body.messages).toHaveLength(1500);
+    expect(body.messages.length).toBeLessThanOrEqual(1_000);
+    expect(JSON.stringify(body.messages), "模型知道历史被省略").toContain("省略");
   });
 });
 
