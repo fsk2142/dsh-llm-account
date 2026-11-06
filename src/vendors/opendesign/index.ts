@@ -215,7 +215,7 @@ export const Config: PluginConfigSchema = z.object(
      */
     contextWindow: z.number(),
     /** 按模型覆盖上下文窗口（键为模型 id）；优先级高于上面的全局值。 */
-    contextWindowOverrides: z.dict(z.number(), z.string()),
+    contextWindowOverrides: z.dict(z.number()).default({}),
     /**
      * 待清理凭据引用数组。删除账号只**记录**待清理的 ref（推理槽 + 控制面槽），
      * 真正 `credentials.unset` 留给确认该 ref 不再被引用的清理动作。

@@ -181,6 +181,41 @@ export function isValidContextWindow(value: unknown): value is number {
 }
 
 /**
+ * 宿主压缩插件的**默认压力余量**（`@deepseek-ai/dsh-compaction-basic` 的
+ * `headroomTokens` 缺省值）。
+ *
+ * 它的预算公式是 `W − O − B`，`O` 取请求的 `maxTokens`（`reservedCompletionTokens`
+ * 先读会话请求头、再退回模型声明的 `defaultMaxTokens`），`B` 就是这个余量。
+ * 三者关系一旦不满足 `W > O + B`，插件会在首次解析该模型时抛
+ * `TargetPressureConfigError` —— 那条路由**完全不压缩**。所以输出上限必须留出它。
+ *
+ * 注意：用户可以改宿主的 `headroomTokens`。这里按**默认值**留量；若调大余量，
+ * 需要同步调大窗口或调小输出上限。
+ */
+const COMPACTION_HEADROOM_TOKENS = 65_536;
+
+/** 给对话历史保留的最低预算（token）；低于它就没什么可压缩的了。 */
+const MIN_MESSAGE_BUDGET_TOKENS = 8_192;
+
+/**
+ * 把输出上限压到「窗口 − 压缩余量 − 最低消息预算」以内。
+ *
+ * @param declared - 目录公布的输出上限（可能未公布）。
+ * @param contextWindow - 生效的上下文窗口（可能未公布）。
+ * @returns 夹取后的输出上限；窗口小到装不下余量时**原样返回目录值**
+ * （让宿主的配置报错如实冒出来，而不是伪造一个 1 token 的输出上限）。
+ */
+export function clampOutputToWindow(
+  declared: number | undefined,
+  contextWindow: number | undefined,
+): number | undefined {
+  if (declared === undefined || contextWindow === undefined) return declared;
+  const cap = contextWindow - COMPACTION_HEADROOM_TOKENS - MIN_MESSAGE_BUDGET_TOKENS;
+  if (cap < 1) return declared;
+  return Math.min(declared, cap);
+}
+
+/**
  * 只保留合法条目的按模型覆盖表；空表/非对象/坏值一律视为未设置。
  * @param raw - 设置文档里的原始值（形状不可信）。
  * @returns 清洗后的覆盖表；没有合法条目时为 `undefined`。
@@ -557,19 +592,13 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     // 上下文窗口：覆盖优先（按模型 → 全局 → 目录）。宿主的压缩阈值完全由它决定。
     const contextWindow = effectiveContextWindow(entry?.contextWindow, model, config);
     /**
-     * 输出上限必须**夹到窗口以内**。
+     * 输出上限必须给压缩留出余量（**不能只夹到窗口本身**）。
      *
-     * 宿主的压缩预算是 `W − O − B`：`O` 取 `defaultMaxTokens`，`B = 65536`。
-     * 如果 `O ≥ W`，预算 ≤ 0，压缩插件会在加载/首用时直接抛
-     * `TargetPressureConfigError` —— 那条路由就**完全不压缩**（2.0.0 踩过）。
-     * 所以这里取 `min(目录公布值, 窗口)`，宁可少给输出，也不能让压缩失效。
+     * 宿主的压缩预算是 `W − O − B`（`B = 65536`，`O` 取请求的 `maxTokens`）。
+     * 若只做 `min(O, W)`，`O = W` 时预算正好是 `−B` —— 仍然是负数，压缩仍然抛
+     * `TargetPressureConfigError`。所以要按 `W − B − 最低消息预算` 来夹。
      */
-    const maxTokens =
-      entry?.maxTokens === undefined
-        ? undefined
-        : contextWindow === undefined
-          ? entry.maxTokens
-          : Math.min(entry.maxTokens, contextWindow);
+    const maxTokens = clampOutputToWindow(entry?.maxTokens, contextWindow);
     return {
       provider,
       id: model,

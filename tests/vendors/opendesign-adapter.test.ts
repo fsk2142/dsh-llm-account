@@ -325,15 +325,28 @@ describe("resolveModel：上下文窗口可被设置覆盖", () => {
     }
   });
 
-  it("输出上限被夹到窗口以内（否则压缩预算变成负数，压缩直接失效）", async () => {
+  it("输出上限给压缩留出余量（只夹到窗口本身仍会让预算变负）", async () => {
     const fetchImpl = scriptedFetch([wide, wide]);
     const adapter = createOpenDesignAdapter(
       adapterDeps({ fetchImpl, config: () => ({ contextWindow: 100_000, contextWindowOverrides: {} }) }),
     );
     const resolved = await adapter.resolveModel("opendesign", "od-wide");
-    // 目录公布 output_budget = 128000，比覆盖后的窗口 100000 还大。
+    // 目录公布 output_budget = 128000，比窗口 100000 还大。
     expect(resolved.context?.contextWindow).toBe(100_000);
-    expect(resolved.defaultMaxTokens, "必须 ≤ 窗口，否则 W−O−B ≤ 0").toBe(100_000);
+    // 100000 − 65536（压缩余量）− 8192（最低消息预算）= 26272
+    expect(resolved.defaultMaxTokens, "必须留出 65536 余量 + 8192 消息预算").toBe(26_272);
+    // 关键不变量：W − O − B > 0，否则宿主压缩直接抛错、该路由完全不压缩。
+    expect(100_000 - 26_272 - 65_536).toBeGreaterThan(0);
+  });
+
+  it("窗口装不下余量时原样返回目录值（让宿主的配置报错如实冒出来）", async () => {
+    const fetchImpl = scriptedFetch([wide]);
+    // 60000 < 65536 + 8192：无论怎么夹都不可能有正的预算。
+    const adapter = createOpenDesignAdapter(
+      adapterDeps({ fetchImpl, config: () => ({ contextWindow: 60_000, contextWindowOverrides: {} }) }),
+    );
+    const resolved = await adapter.resolveModel("opendesign", "od-wide");
+    expect(resolved.defaultMaxTokens, "不伪造 1 token 的输出上限").toBe(128_000);
   });
 });
 
