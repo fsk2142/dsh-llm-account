@@ -17,7 +17,7 @@
  */
 import { LlmError, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, RequestMessage, StreamChunk } from "@deepseek-ai/dsh-llm";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AccountPort, AccountView, QuotaPort } from "../../src/core/adapter";
 import { RotationEngine } from "../../src/core/switching/rotation";
@@ -254,6 +254,86 @@ it("resolveModel：目录拉不到时退化成裸模型，请求照旧能发出�
     id: "od-unknown",
     name: "Od-Unknown",
     inputModalities: ["text"],
+  });
+});
+
+/**
+ * ## 上下文窗口的覆盖旋钮（2026-11-06）
+ *
+ * 宿主的压缩阈值完全由 `context.contextWindow` 决定：
+ * `floor(min(W×0.8, W−O−B))`，`B = 65536`。
+ *
+ * 事故回顾：目录公布 `context_limit: 1048000`，取它算出阈值 838400 token，
+ * 而 1000 条消息只有约 49 万 token —— 压缩永远够不着，历史涨到网关条数上限后每轮 400。
+ *
+ * 默认值已经在目录层修正（改取 `context_budget`）；这里是**不改代码就能纠正**的逃生阀：
+ * 按模型覆盖 → 全局覆盖 → 目录值。
+ */
+describe("resolveModel：上下文窗口可被设置覆盖", () => {
+  /** 造一个「目录公布 100 万窗口、输出 12.8 万」的响应。 */
+  const wide = () =>
+    catalogResponse([
+      {
+        id: "od-wide",
+        name: "OD Wide",
+        metadata: { context_limit: 1_048_000, context_budget: 328_000, output_budget: 128_000 },
+      },
+    ]);
+
+  it("按模型覆盖优先于全局覆盖，也优先于目录", async () => {
+    const fetchImpl = scriptedFetch([wide, wide]);
+    const adapter = createOpenDesignAdapter(
+      adapterDeps({
+        fetchImpl,
+        config: () => ({ contextWindow: 500_000, contextWindowOverrides: { "od-wide": 200_000 } }),
+      }),
+    );
+    const resolved = await adapter.resolveModel("opendesign", "od-wide");
+    expect(resolved.context?.contextWindow, "按模型的值赢").toBe(200_000);
+  });
+
+  it("没有按模型覆盖时用全局值", async () => {
+    const fetchImpl = scriptedFetch([wide]);
+    const adapter = createOpenDesignAdapter(
+      adapterDeps({ fetchImpl, config: () => ({ contextWindow: 500_000 }) }),
+    );
+    const resolved = await adapter.resolveModel("opendesign", "od-wide");
+    expect(resolved.context?.contextWindow).toBe(500_000);
+  });
+
+  it("都不设时用目录值（默认取 context_budget，不是 context_limit）", async () => {
+    const fetchImpl = scriptedFetch([wide]);
+    const adapter = createOpenDesignAdapter(adapterDeps({ fetchImpl }));
+    const resolved = await adapter.resolveModel("opendesign", "od-wide");
+    expect(resolved.context?.contextWindow, "328000 才能在 1000 条之前触发压缩").toBe(328_000);
+  });
+
+  it("坏值（0/负数/小数/超界/非数字）一律忽略，回落到下一级", async () => {
+    for (const bad of [0, -1, 1.5, 20_000_000, Number.NaN, "500000"]) {
+      const fetchImpl = scriptedFetch([wide]);
+      const adapter = createOpenDesignAdapter(
+        adapterDeps({
+          fetchImpl,
+          config: () => ({
+            contextWindow: bad as unknown as number,
+            contextWindowOverrides: { "od-wide": bad as unknown as number },
+          }),
+        }),
+      );
+      const resolved = await adapter.resolveModel("opendesign", "od-wide");
+      expect(resolved.context?.contextWindow, `坏值 ${String(bad)} 不该被采用`).toBe(328_000);
+    }
+  });
+
+  it("输出上限被夹到窗口以内（否则压缩预算变成负数，压缩直接失效）", async () => {
+    const fetchImpl = scriptedFetch([wide, wide]);
+    const adapter = createOpenDesignAdapter(
+      adapterDeps({ fetchImpl, config: () => ({ contextWindow: 100_000, contextWindowOverrides: {} }) }),
+    );
+    const resolved = await adapter.resolveModel("opendesign", "od-wide");
+    // 目录公布 output_budget = 128000，比覆盖后的窗口 100000 还大。
+    expect(resolved.context?.contextWindow).toBe(100_000);
+    expect(resolved.defaultMaxTokens, "必须 ≤ 窗口，否则 W−O−B ≤ 0").toBe(100_000);
   });
 });
 

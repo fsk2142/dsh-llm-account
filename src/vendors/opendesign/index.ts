@@ -60,6 +60,7 @@ import {
 } from "../assembly";
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
 import { createOpenDesignAdapter } from "./adapter";
+import { isValidContextWindow, readContextWindowOverrides } from "./adapter";
 import type { OpenDesignAdapterDeps, OpenDesignConfig } from "./adapter";
 import {
   OPENDESIGN_DEFAULT_REF,
@@ -204,6 +205,17 @@ export const Config: PluginConfigSchema = z.object(
      * 触发压缩 —— 条数超限永远不可见，直到网关回 400。见 `core/wire-limit.ts`。
      */
     maxRequestItems: z.number(),
+    /**
+     * 覆盖宿主计量的**上下文窗口**（全局）；`0`/负数/非整数一律视为未设置。
+     *
+     * 宿主的自动压缩阈值是 `floor(min(W×0.8, W−O−B))`，`W` 就是这里上报的值。
+     * 网关公布的容量字段有好几个（`context_limit` 约 100 万、`context_budget` 23~40 万），
+     * 取错会让阈值高到永远够不着 —— 历史涨到网关的条数上限才 400（2026-11-06 事故）。
+     * 默认值已经从目录修正；这个字段是**不改代码就能纠正**的逃生阀。
+     */
+    contextWindow: z.number(),
+    /** 按模型覆盖上下文窗口（键为模型 id）；优先级高于上面的全局值。 */
+    contextWindowOverrides: z.dict(z.number(), z.string()),
     /**
      * 待清理凭据引用数组。删除账号只**记录**待清理的 ref（推理槽 + 控制面槽），
      * 真正 `credentials.unset` 留给确认该 ref 不再被引用的清理动作。
@@ -749,6 +761,13 @@ function adapterConfigOf(document: Record<string, unknown>): OpenDesignConfig {
    * 而超时的 `0` 只可能是坏配置。缺省/NaN 仍然回落到适配器的默认值。
    */
   const maxRequestItems = nonNegativeNumber(document.maxRequestItems);
+  /**
+   * 上下文窗口覆盖：全局值必须是**正整数秒**……不，是合法窗口（1 ~ 1000 万的安全整数）；
+   * 按模型那张表由适配器再清洗一遍（`readContextWindowOverrides`），这里只做形状传递 ——
+   * 两层校验是故意的：设置文档可能被手改，程序化装配也可能绕过 schema。
+   */
+  const contextWindow = isValidContextWindow(document.contextWindow) ? document.contextWindow : undefined;
+  const contextWindowOverrides = readContextWindowOverrides(document.contextWindowOverrides);
   const modelVisibility = booleanMap(document.modelVisibility);
   const visibleModels = stringList(document.visibleModels);
   return {
@@ -759,6 +778,8 @@ function adapterConfigOf(document: Record<string, unknown>): OpenDesignConfig {
     ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),
     ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
     ...(maxRequestItems === undefined ? {} : { maxRequestItems }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(contextWindowOverrides === undefined ? {} : { contextWindowOverrides }),
     ...(modelVisibility === undefined ? {} : { modelVisibility }),
     ...(visibleModels === undefined ? {} : { visibleModels }),
   };

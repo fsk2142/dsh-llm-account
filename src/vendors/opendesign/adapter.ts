@@ -125,6 +125,21 @@ export interface OpenDesignConfig {
    * 历史并插入明确提示**，而不是让整轮失败。设成 `0` 可关闭裁剪（不建议）。
    */
   maxRequestItems?: number;
+  /**
+   * **覆盖宿主计量的上下文窗口**（全局）；缺省用目录公布值。
+   *
+   * 为什么需要这个旋钮：宿主的自动压缩阈值是
+   * `floor(min(W×0.8, W−O−B))`，`W` 就是我们通过 `resolveModel` 上报的
+   * `context.contextWindow`。而网关 `/v1/models` 公布的容量字段有好几个
+   * （`context_limit` 约 100 万、`context_budget` 23~40 万），取错一个就会让阈值
+   * 高到够不着 —— 历史永远涨到网关的条数上限才 400（2026-11-06 事故）。
+   *
+   * 目录修复（改取 `context_budget`）是默认值层面的修正；这个字段留一个
+   * **不改代码就能纠正**的逃生阀：网关口径再变时，改设置即可。
+   */
+  contextWindow?: number;
+  /** 按模型覆盖上下文窗口（键为模型 id）；优先级高于 {@link contextWindow}。 */
+  contextWindowOverrides?: Readonly<Record<string, number>>;
   /** 模型白名单（设置文档字段，形状不可信）。 */
   visibleModels?: readonly string[];
   /** 逐模型显式可见性开关（设置文档字段，形状不可信）。 */
@@ -142,6 +157,65 @@ export interface OpenDesignConfig {
  */
 export const DEFAULT_MAX_REQUEST_ITEMS = 1_000;
 
+/**
+ * 合法上下文窗口的上下界。
+ *
+ * 与主流实现一致：必须是**安全整数**且在 `[1, 10_000_000]` 内。越界或非整数一律
+ * 当作「没设」——宁可回落到目录值，也不要让请求带着一个网关必然拒绝的窗口上线。
+ */
+const MIN_CONTEXT_WINDOW = 1;
+const MAX_CONTEXT_WINDOW = 10_000_000;
+
+/**
+ * 判断一个值能不能当上下文窗口用。
+ * @param value - 待检查的值。
+ * @returns 是否是合法的窗口（安全整数、在界内）。
+ */
+export function isValidContextWindow(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= MIN_CONTEXT_WINDOW &&
+    value <= MAX_CONTEXT_WINDOW
+  );
+}
+
+/**
+ * 只保留合法条目的按模型覆盖表；空表/非对象/坏值一律视为未设置。
+ * @param raw - 设置文档里的原始值（形状不可信）。
+ * @returns 清洗后的覆盖表；没有合法条目时为 `undefined`。
+ */
+export function readContextWindowOverrides(raw: unknown): Record<string, number> | undefined {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const entries = Object.entries(raw as Record<string, unknown>).filter(
+    (entry) => entry[0] !== "" && isValidContextWindow(entry[1]),
+  );
+  return entries.length === 0 ? undefined : Object.fromEntries(entries as [string, number][]);
+}
+
+/**
+ * 一个模型最终上报的上下文窗口：**按模型覆盖 → 全局覆盖 → 目录公布值**。
+ *
+ * 优先级照抄成熟实现（`@mars-sea/dsh-commandcode-provider` 的
+ * `effectiveContextWindow`）：覆盖值只在合法时生效，坏值静默回落到下一级，
+ * 绝不把非法窗口交给宿主 —— 那会让压缩预算算成 0 或负数。
+ * @param catalog - 目录公布的值（可能未公布）。
+ * @param model - 模型 id。
+ * @param config - 适配器配置（可能带覆盖）。
+ * @returns 生效的窗口；全都取不到时为 `undefined`（不宣告）。
+ */
+export function effectiveContextWindow(
+  catalog: number | undefined,
+  model: string,
+  config: Pick<OpenDesignConfig, "contextWindow" | "contextWindowOverrides">,
+): number | undefined {
+  const overrides = readContextWindowOverrides(config.contextWindowOverrides);
+  const perModel = overrides?.[model];
+  if (isValidContextWindow(perModel)) return perModel;
+  if (isValidContextWindow(config.contextWindow)) return config.contextWindow;
+  return catalog;
+}
+
 /** 一次请求循环需要的、已填好默认值的配置。 */
 interface ResolvedConfig {
   apiBase: string;
@@ -149,6 +223,8 @@ interface ResolvedConfig {
   streamIdleTimeoutMs: number;
   defaultMaxTokens: number;
   maxRequestItems: number;
+  contextWindow?: number;
+  contextWindowOverrides?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -267,6 +343,12 @@ function resolveConfig(raw: OpenDesignConfig): ResolvedConfig {
         : raw.maxRequestItems <= 0
           ? 0
           : Math.floor(raw.maxRequestItems),
+    // 覆盖值只在合法时进入解析结果；坏值当作没设，回落到目录公布值。
+    ...(isValidContextWindow(raw.contextWindow) ? { contextWindow: raw.contextWindow } : {}),
+    ...(() => {
+      const overrides = readContextWindowOverrides(raw.contextWindowOverrides);
+      return overrides === undefined ? {} : { contextWindowOverrides: overrides };
+    })(),
   };
 }
 
@@ -472,13 +554,29 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
     // 目录声明优先，其次逐模型实测表 / 模型族兜底（Open Design 的目录**从不**公布档位 ——
     // 不兜底就永远没有思考强度可选，实际情况原话）。
     const efforts = effortsFor(model, entry?.efforts);
+    // 上下文窗口：覆盖优先（按模型 → 全局 → 目录）。宿主的压缩阈值完全由它决定。
+    const contextWindow = effectiveContextWindow(entry?.contextWindow, model, config);
+    /**
+     * 输出上限必须**夹到窗口以内**。
+     *
+     * 宿主的压缩预算是 `W − O − B`：`O` 取 `defaultMaxTokens`，`B = 65536`。
+     * 如果 `O ≥ W`，预算 ≤ 0，压缩插件会在加载/首用时直接抛
+     * `TargetPressureConfigError` —— 那条路由就**完全不压缩**（2.0.0 踩过）。
+     * 所以这里取 `min(目录公布值, 窗口)`，宁可少给输出，也不能让压缩失效。
+     */
+    const maxTokens =
+      entry?.maxTokens === undefined
+        ? undefined
+        : contextWindow === undefined
+          ? entry.maxTokens
+          : Math.min(entry.maxTokens, contextWindow);
     return {
       provider,
       id: model,
       name: entry?.name ?? officialModelName(model),
       inputModalities: entry?.inputModalities ?? ["text"],
-      ...(entry?.contextWindow === undefined ? {} : { context: { contextWindow: entry.contextWindow } }),
-      ...(entry?.maxTokens === undefined ? {} : { defaultMaxTokens: entry.maxTokens }),
+      ...(contextWindow === undefined ? {} : { context: { contextWindow } }),
+      ...(maxTokens === undefined ? {} : { defaultMaxTokens: maxTokens }),
       // **能力声明**（2026-10-20 对齐官方实现）：官方 `dsh-llm-deepseek` 在目录里硬编码
       // 等同的两项。它们影响的是「中途改系统提示 / 增删工具」时的缓存策略，不是用户选项：
       // - `in-history`：任意位置的 `system` 消息都读作最新系统提示，改提示只需追加；

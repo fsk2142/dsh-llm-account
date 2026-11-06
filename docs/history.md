@@ -682,3 +682,39 @@ tools=58），已经撤回。
 > 完整的因果链：容量取错（`context_limit` 而非 `context_budget`）→ 压缩阈值 838k
 > 偏高到够不着 → 历史涨到 1000 **条数**上限 → 网关 400 → 加出站裁剪兜底 → 裁剪每轮
 > 移动窗口 → 前缀缓存全灭。修最上游那一环，后面三个症状一起消失。
+
+### 五、补两个逃生阀：窗口可覆盖 + 输出上限夹取
+
+用户在提「能不能直接把网关加进官方模型，让压缩走官方那套」时给出了
+`Mars-Sea/dsh-commandcode-provider` 作为参照。看过它的实现后，有两点值得抄：
+
+1. **上下文窗口可配置**：`effectiveContextWindow = 按模型覆盖 → 全局覆盖 → 目录值`，
+   覆盖值不合法就静默回落到下一级；
+2. **`maxTokens` 夹到窗口以内**（`min(目录输出上限, 窗口)`）。
+
+第 2 点尤其要紧：宿主的压缩预算是 `W − O − B`（`B = 65536`）。若 `O ≥ W`，预算 ≤ 0，
+`dsh-compaction-basic` 会在首次解析该模型时抛 `TargetPressureConfigError` —— 那条路由
+**完全不压缩**。2.0.0 交接文档里记过一次（91.6 万 token 被拒），但当时的修法是「让目录
+读得到 capacity」，没有把 `O` 和 `W` 的一致性管起来。现在补上。
+
+第 1 点的价值不是「算得更准」，而是**算错了不用改代码**。我们已经把默认值修正为
+`context_budget`，但网关口径随时可能再变；有了 `contextWindow` / `contextWindowOverrides`，
+用户改设置即可，不必等我们发版。
+
+顺带澄清一个误解（因为它是这次讨论的起点）：**压缩逻辑一直是官方的**。
+`@deepseek-ai/dsh-compaction-basic` 是宿主内置插件，我们从头到尾没有实现过自己的压缩 ——
+只负责「发现模型」和「告诉宿主这个模型有多大」。所以「接入官方模型就能用官方压缩」这个
+路线并不成立：DSH 根本没有「自定义 OpenAI 兼容网关」的内置 provider（LLM 相关包只有
+`dsh-llm-deepseek*`、`dsh-llm-pi-ai` 与核心 `dsh-llm`），第三方网关只能以 provider 插件
+的形式接入 —— 那个参照仓库本身也是 provider 插件。
+
+实现细节：
+
+- `isValidContextWindow`：安全整数且在 `[1, 10_000_000]`；
+- `readContextWindowOverrides`：丢弃空键与坏值，空表视为未设置；
+- 两层校验（设置层 + 适配器层）：设置文档可能被手改，程序化装配也可能绕过 schema；
+- `resolveModel` 用生效窗口上报 `context.contextWindow`，并把 `defaultMaxTokens` 夹到窗口内。
+
+变异测试：把覆盖逻辑去掉、`min` 去掉，三条用例立刻失败。
+
+测试：199 文件 / 2072 用例通过。
