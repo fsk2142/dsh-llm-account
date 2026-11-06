@@ -34,11 +34,13 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-sonnet-5-5": ["low", "medium", "high", "xhigh", "max"],
   "deepseek/deepseek-v4-flash-fast": ["low", "high", "max"],
-  "deepseek/deepseek-v4.1-flash": ["off", "low", "high", "max"],
-  "deepseek/deepseek-v4.1-flash-fast": ["off", "low", "high", "max"],
-  "deepseek/deepseek-v4-flash": ["off", "high", "max"],
-  "deepseek/deepseek-v4-flash-vision-exp": ["off", "high", "max"],
-  "deepseek/deepseek-v4-pro": ["off", "high", "max"],
+  // DeepSeek 官方没有 `off`（关闭思考是 `thinking.type` / `reasoning.effort: none`，不是
+  // `reasoning_effort` 的取值）；本表原来误抄成 `off`，2026-11-06 按官方口径删掉。
+  "deepseek/deepseek-v4.1-flash": ["low", "high", "max"],
+  "deepseek/deepseek-v4.1-flash-fast": ["low", "high", "max"],
+  "deepseek/deepseek-v4-flash": ["high", "max"],
+  "deepseek/deepseek-v4-flash-vision-exp": ["high", "max"],
+  "deepseek/deepseek-v4-pro": ["high", "max"],
   "google/gemini-3.1-flash-lite": ["low", "medium", "high"],
   "google/gemini-3.5-flash": ["low", "medium", "high"],
   "google/gemini-3.5-flash-lite": ["low", "medium", "high"],

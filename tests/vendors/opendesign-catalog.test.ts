@@ -141,29 +141,38 @@ describe("effortsFor：思考强度", () => {
     expect(effortsFor("claude-sonnet-4-5", ["low", "max"])).toEqual(["low", "max"]);
   });
 
-  it("DeepSeek 按**官方四档**声明：off / low / high / max（用户确认的口径）", () => {
-    // 网关实际还接受 none/minimal/medium/xhigh/ultra（别名摊平到上游四档），但界面只摆官方四档。
+  it("DeepSeek 按**官方三档**声明：low / high / max（官方文档没有 off）", () => {
+    // 官方文档 reasoning_effort 只收 low/high/max；关闭思考是 thinking.type / reasoning.effort，
+    // 不是 reasoning_effort 的取值 —— 所以选择器里不该出现 off。
     for (const model of ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash", "deepseek-v4-flash-vision-exp"]) {
-      expect(effortsFor(model)).toEqual(["off", "low", "high", "max"]);
+      expect(effortsFor(model)).toEqual(["low", "high", "max"]);
+      expect(effortsFor(model)).not.toContain("off");
     }
     // 大小写与空白不该让实测表失配（目录 id 一直小写，但别指望）。
     expect(effortsFor("  DeepSeek-V4-Pro  ")).toEqual(MEASURED_EFFORTS["deepseek-v4-pro"]);
   });
 
-  it("实测的逐模型差异照抄：GLM 三档、Kimi 没有 max", () => {
+  it("实测的逐模型差异照抄：GLM 三档、Kimi K2.7 官方不支持档位", () => {
     expect(effortsFor("glm-5.3-flash")).toEqual(["low", "high", "max"]);
     expect(effortsFor("glm-5.3-flashx")).toEqual(["low", "high", "max"]);
-    expect(effortsFor("kimi-k2.7-code")).toEqual(["low", "high"]);
+    // 官方：kimi-k2.7-code 思考强制开启，**不收 reasoning_effort** —— 不摆选择器。
+    expect(effortsFor("kimi-k2.7-code")).toEqual([]);
   });
 
-  it("目录没声明时按模型族兜底（含 max，这是选择器能出现的唯一来源）", () => {
-    expect(effortsFor("claude-sonnet-4-5-20250929")).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(effortsFor("anthropic/claude-opus-4-1")).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(effortsFor("gpt-5.1")).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    // 未实测的族：保守集（有 max，但不声称 none/minimal/ultra）。
-    expect(effortsFor("gemini-2.5-pro")).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(effortsFor("grok-4.5")).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(effortsFor("qwen3-max")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  it("目录没声明时按模型族兜底（每档都能对上官方文档）", () => {
+    expect(effortsFor("claude-sonnet-4-5-20250929")).toEqual(["low", "medium", "high", "max"]);
+    expect(effortsFor("anthropic/claude-opus-4-1")).toEqual(["low", "medium", "high", "max"]);
+    expect(effortsFor("gpt-5.1")).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    // 未实测的族：只给各家官方都认的三档。
+    expect(effortsFor("gemini-2.5-pro")).toEqual(["low", "medium", "high"]);
+    expect(effortsFor("grok-4.5")).toEqual(["low", "medium", "high"]);
+    expect(effortsFor("qwen3-max")).toEqual(["low", "medium", "high"]);
+  });
+
+  it("任何族都不该声明官方没有的 `off`（2026-11-06 修正）", () => {
+    for (const model of ["deepseek-v4-pro", "claude-opus-5", "gpt-5.1", "glm-5.3-flash", "gemini-2.5-pro", "kimi-k3.1-pro"]) {
+      expect(effortsFor(model)).not.toContain("off");
+    }
   });
 
   it("认不出的模型**不声明**档位（猜一组只会换来 400）", () => {

@@ -57,8 +57,12 @@ function longHistory(count: number): RequestMessage[] {
 }
 
 /** 跑一次 stream，返回**最后一次**生成请求的请求体。 */
-async function outboundBody(config: OpenDesignAdapterDeps["config"], history: number): Promise<{ messages: { role: string }[] }> {
-  let body: { messages: { role: string }[] } | undefined;
+async function outboundBody(
+  config: OpenDesignAdapterDeps["config"],
+  history: number,
+  tools?: readonly { name: string; description: string; parameters: Record<string, unknown> }[],
+): Promise<{ messages: { role: string }[]; tools?: unknown[] }> {
+  let body: { messages: { role: string }[]; tools?: unknown[] } | undefined;
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const text = String(url);
     if (text.endsWith("/models")) {
@@ -73,12 +77,22 @@ async function outboundBody(config: OpenDesignAdapterDeps["config"], history: nu
     provider: "opendesign",
     model: "deepseek-v4.1-flash",
     messages: longHistory(history),
+    ...(tools === undefined ? {} : { tools }),
   } as unknown as GenerateOptions;
   for await (const _chunk of adapter.stream(options) as AsyncIterable<StreamChunk>) {
     // 消费完即可
   }
   if (body === undefined) throw new Error("没有截到生成请求");
   return body;
+}
+
+/** 造 n 个工具定义（形状与宿主 `ToolSchema` 一致）。 */
+function manyTools(count: number): { name: string; description: string; parameters: Record<string, unknown> }[] {
+  return Array.from({ length: count }, (_, index) => ({
+    name: `tool_${index}`,
+    description: "d",
+    parameters: { type: "object", properties: {} },
+  }));
 }
 
 it("**配置里的 maxRequestItems 真的作用到出站请求体**（端到端）", async () => {
@@ -105,4 +119,32 @@ it("未超限的请求不被改动（不给正常请求加噪音）", async () =
   const body = await outboundBody(() => ({ maxRequestItems: 1_000 }), 6);
   expect(body.messages.length).toBe(6);
   expect(JSON.stringify(body.messages)).not.toContain("省略");
+});
+
+/**
+ * 2026-11-06 现场第二次报错：`1017 > 1000 items`。
+ *
+ * 那时 `messages[]` 已经被裁到**正好 1000** 条 —— 零余量。网关把 `tools[]` 也数进
+ * input items，1000 + 17 个工具 = 1017，于是每轮都超、每轮都 400。
+ * 修法：预算先扣掉工具。
+ */
+it("**tools[] 也占条目预算**（否则 1000 条消息 + 17 个工具 = 1017 > 1000）", async () => {
+  const body = await outboundBody(() => ({ maxRequestItems: 1_000 }), 1_200, manyTools(17));
+  expect(body.tools?.length, "工具原样发出，不丢").toBe(17);
+  expect(
+    body.messages.length + (body.tools?.length ?? 0),
+    "消息 + 工具一起算，必须落在上限以内",
+  ).toBeLessThanOrEqual(1_000);
+  expect(JSON.stringify(body.messages), "仍然明确告知历史被省略").toContain("省略");
+});
+
+it("工具很多时也不越界（预算按工具数动态收缩）", async () => {
+  const tools = manyTools(60);
+  const body = await outboundBody(() => ({ maxRequestItems: 100 }), 500, tools);
+  expect(body.messages.length + 60).toBeLessThanOrEqual(100);
+  expect(body.messages.length).toBeGreaterThan(0);
+});
+
+it("工具占满上限时给出可行动的报错，而不是发一个必然被拒的请求", async () => {
+  await expect(outboundBody(() => ({ maxRequestItems: 5 }), 10, manyTools(5))).rejects.toThrow(/工具定义/);
 });

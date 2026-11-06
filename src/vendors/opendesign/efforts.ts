@@ -21,24 +21,51 @@
  */
 
 /**
- * DeepSeek 的**官方四档**：`off / low / high / max`。
+ * DeepSeek 的官方档位：`low / high / max`。**没有 `off`。**
  *
- * 网关其实还接受 `none / minimal / medium / xhigh / ultra`（把别名摊平成上游的四档），
- * 但全摆出来只会让选择器变成一张让人选不清的表 —— 官方口径是四档，界面就四档。
+ * 依据 <https://api-docs.deepseek.com/zh-cn/guides/thinking_mode>：OpenAI 格式的
+ * `reasoning_effort` 与 Anthropic 格式的 `output_config.effort` 都只接受这三档。
+ * 关闭思考是**另一个字段**（OpenAI 格式 `thinking.type: "disabled"`，Anthropic 格式
+ * `reasoning.effort: "none"`），不是 `reasoning_effort` 的取值。
+ *
+ * 2026-11-06 修：这里原本写的是 `off / low / high / max`。`off` 五家官方文档都没有，
+ * 是本文件自造的 —— 发出去必然被网关 400，然后靠下面的降档兜底重发，白多一轮往返。
  */
-const DEEPSEEK_TIERS: readonly string[] = ["off", "low", "high", "max"];
+const DEEPSEEK_TIERS: readonly string[] = ["low", "high", "max"];
 
-/** Claude / GPT / 未实测族：官方档位到 `max`（`none`/`minimal` 是网关别名，不摆出来）。 */
-const FIVE_TIERS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+/**
+ * Claude：官方 `low / medium / high / max`。
+ *
+ * 注意 `xhigh` 不是 Anthropic 的值（那是 OpenAI 的），旧表把它当通用档摆给了 Claude。
+ */
+const CLAUDE_TIERS: readonly string[] = ["low", "medium", "high", "max"];
 
-/** GLM 只认三档（网关原文：`use one of low, high, max`）。 */
+/**
+ * GPT 推理模型：官方枚举 `none / minimal / low / medium / high / xhigh / max`。
+ *
+ * 依据 OpenAI 官方 SDK 的 `ReasoningEffort`（`none` 仅 gpt-5.1 起、`xhigh` 仅
+ * gpt-5.1-codex-max 之后）。具体模型支持哪些由网关校验，被拒时下面会自动降一档。
+ */
+const GPT_TIERS: readonly string[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** GLM 只认三档（网关原文：`use one of low, high, max`；官方文档同）。 */
 const GLM_TIERS: readonly string[] = ["low", "high", "max"];
 
-/** Kimi：网关明确不接受 `max`（原文只到 `xhigh`），官方口径也就两档。 */
-const KIMI_TIERS: readonly string[] = ["low", "high"];
+/**
+ * Kimi：k3.1 起官方 `low / high / max`（默认 `max`）。
+ *
+ * `kimi-k2.7-code` **官方根本不支持 `reasoning_effort`**（思考强制开启，
+ * `thinking.type` 只收 `enabled`），所以它在实测表里显式声明为空 —— 不摆选择器。
+ */
+const KIMI_TIERS: readonly string[] = ["low", "high", "max"];
 
-/** 未实测族用的保守集：有 `max`，但不声明只有部分厂商认的 `none` / `minimal` / `ultra`。 */
-const GENERIC_TIERS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+/**
+ * 未实测族（gemini / grok / qwen / mimo / hy）的保守集。
+ *
+ * 只放**各家官方都认**的三档：Gemini 用 `thinking_level`、Grok/Qwen 口径各不相同，
+ * 没有一家把 `xhigh` / `ultra` 写进官方文档 —— 猜一个上去就是把用户的档位选择变成 400。
+ */
+const GENERIC_TIERS: readonly string[] = ["low", "medium", "high"];
 
 /**
  * 网关实测的逐模型白名单（2026-10-18，账号可用的 12 个模型全部覆盖）。
@@ -46,33 +73,34 @@ const GENERIC_TIERS: readonly string[] = ["low", "medium", "high", "xhigh", "max
  * 键是小写 id（比对时统一小写）；值按由弱到强排列，选择器直接用这个顺序。
  */
 export const MEASURED_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  "claude-haiku-5.5": FIVE_TIERS,
+  "claude-haiku-5.5": CLAUDE_TIERS,
   "deepseek-v4-flash": DEEPSEEK_TIERS,
   "deepseek-v4-flash-vision-exp": DEEPSEEK_TIERS,
   "deepseek-v4-pro": DEEPSEEK_TIERS,
   "deepseek-v4.1-flash": DEEPSEEK_TIERS,
   "glm-5.3-flash": GLM_TIERS,
   "glm-5.3-flashx": GLM_TIERS,
-  "gpt-6-luna": FIVE_TIERS,
-  "hy4-preview": FIVE_TIERS,
-  "kimi-k2.7-code": KIMI_TIERS,
-  "mimo-v2.6-flash": FIVE_TIERS,
-  "mimo-v2.6-pro": FIVE_TIERS,
+  "gpt-6-luna": GPT_TIERS,
+  "hy4-preview": GENERIC_TIERS,
+  // 官方不支持 `reasoning_effort`（思考强制开启）—— 显式空数组 = 不声明档位。
+  "kimi-k2.7-code": [],
+  "mimo-v2.6-flash": GENERIC_TIERS,
+  "mimo-v2.6-pro": GENERIC_TIERS,
 };
 
 /** 模型族 → 档位。顺序即优先级，命中即停（只对**表里没有**的模型生效）。 */
 const FAMILIES: readonly { readonly pattern: RegExp; readonly efforts: readonly string[] }[] = [
   // Claude（Opus / Sonnet / Haiku）与 anthropic 前缀。
-  { pattern: /(?:^|[/_-])(?:claude|anthropic)(?:[/_-]|$)/i, efforts: FIVE_TIERS },
-  // DeepSeek：官方四档（`off / low / high / max`）。
+  { pattern: /(?:^|[/_-])(?:claude|anthropic)(?:[/_-]|$)/i, efforts: CLAUDE_TIERS },
+  // DeepSeek：官方三档（`low / high / max`）。
   { pattern: /(?:^|[/_-])deepseek(?:[/_-]|$)/i, efforts: DEEPSEEK_TIERS },
   // GLM / Z.ai：只认三档。
   { pattern: /(?:^|[/_-])(?:glm|z-ai|zai)(?:[/_-]|$)/i, efforts: GLM_TIERS },
-  // Kimi / Moonshot：网关不接受 `max`。
+  // Kimi / Moonshot：k3.1 起三档。
   { pattern: /(?:^|[/_-])(?:kimi|moonshot)(?:[/_-]|$)/i, efforts: KIMI_TIERS },
   // GPT-5 及以后、o 系列推理模型。
-  { pattern: /(?:^|[/_-])(?:gpt-?[5-9]|o[1-9](?:$|[/_-]))/i, efforts: FIVE_TIERS },
-  // 未实测的族：给一组带 `max` 的保守集，真被拒时适配器会按网关白名单降一档重发。
+  { pattern: /(?:^|[/_-])(?:gpt-?[5-9]|o[1-9](?:$|[/_-]))/i, efforts: GPT_TIERS },
+  // 未实测的族：只给各家官方都认的三档，真被拒时适配器会按网关白名单降一档重发。
   { pattern: /(?:^|[/_-])gemini(?:[/_-]|$)/i, efforts: GENERIC_TIERS },
   { pattern: /(?:^|[/_-])grok(?:[/_-]|$)/i, efforts: GENERIC_TIERS },
   { pattern: /(?:^|[/_-])qwen(?:[/_-]|\d)/i, efforts: GENERIC_TIERS },
@@ -104,7 +132,12 @@ export function effortsFor(model: string, declared?: readonly string[]): readonl
   return familyEfforts(model);
 }
 
-/** 档位强弱顺序（用于「网关拒绝时降一档」）。`off` 是 `none` 的别名，排在它前面。 */
+/**
+ * 档位强弱顺序（用于「网关拒绝时降一档」）。
+ *
+ * `off` **不是任何一家的官方取值**，只在 2026-11-06 之前被本插件写进过设置。它留在这里
+ * 的唯一用途是让那种旧值还能被算出「最弱」从而降档，绝不参与声明（见 `DEEPSEEK_TIERS`）。
+ */
 const STRENGTH_ORDER: readonly string[] = ["off", "none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"];
 
 /**

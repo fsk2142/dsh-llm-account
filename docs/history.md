@@ -545,3 +545,61 @@ opencode 的 `toPiContext()` 同样只产出 `{ type: "text" }` 的 part。也�
 
 工作量与风险都不小（要动三个协议的请求构造 + 附件服务注入 + 一整套预算逻辑），
 建议单独立项，而不是塞进这一轮 UI 修整里。
+
+---
+
+## 思考档位对齐官方文档 + `tools[]` 计入条目上限（2026-11-06）
+
+日期：2026-11-06。两个独立问题，都是用户现场报来的。
+
+### 一、`off` 这个档位是我们自己编的
+
+用户问：「deepseek 的模型应该只有 default/low/high/max 吧，好像没有 off」—— 他是对的。
+
+逐家核对官方文档：
+
+| 厂商 | 官方档位 | 关闭思考的方式 | 来源 |
+| --- | --- | --- | --- |
+| DeepSeek | `low` / `high` / `max` | OpenAI 格式 `thinking.type: "disabled"`；Anthropic 格式 `reasoning.effort: "none"` | api-docs.deepseek.com 思考模式 |
+| GLM-5.3 | `low` / `high` / `max`（默认 `max`） | 不支持关闭（`thinking.type` 只收 `enabled`） | docs.bigmodel.cn |
+| Kimi k3.1 | `low` / `high` / `max`（默认 `max`） | 不支持关闭 | platform.kimi.ai 推理强度 |
+| Kimi k2.7-code | **不支持 `reasoning_effort`** | 思考强制开启 | platform.kimi.ai 思考模型 |
+| OpenAI | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`（按模型而异） | `none` | OpenAI SDK `ReasoningEffort` |
+| Claude | `low` / `medium` / `high` / `max` | — | Anthropic effort 文档 |
+
+**五家里没有一家把 `off` 写进文档。** 它出现在 `DEEPSEEK_TIERS` 和 commandcode 的
+`KNOWN_EFFORTS` 里，属于本插件自造。
+
+代价是实打实的：Open Design 适配器有一条「网关拒绝档位就按它念出的白名单降一档重发」的
+兜底，所以用户每次选 `off` 都会**先吃一个 400、再降成 `none` 重发** —— 功能上能用，
+白多一轮往返，日志里还多一条错。这个兜底本来是给「推断错了」用的，不该被一个自己编的值
+常态化触发。
+
+顺带修正的两处：
+
+- `CLAUDE_TIERS` 原来用 `FIVE_TIERS`（含 `xhigh`）。`xhigh` 是 OpenAI 的值，Anthropic 没有。
+- `kimi-k2.7-code` 官方根本不收 `reasoning_effort`，改为**显式空数组**（不摆选择器），
+  而不是给一个发出去会被拒的列表。
+- 未实测族（gemini/grok/qwen/mimo/hy）从 `low/medium/xhigh/max` 收到 `low/medium/high`：
+  这三档是各家官方文档的公共交集，而 `xhigh`/`ultra` 谁都没写在官方文档里。
+
+`STRENGTH_ORDER` 里**保留**了 `off` —— 它现在只服务于「解析旧设置里的历史值并按最弱档
+降级」，不再参与声明。删掉它反而会让老用户的 `off` 被当成「未知 → 取最高可用档」，
+那是一次静默升档。
+
+### 二、`tools[]` 也占网关的 "input items"
+
+第一次修复（2026-11-05）把 `messages[]` 裁到 `maxRequestItems`（默认 1000）以内，
+解决了当时的 `1003 > 1000`。但同事那边又报出 **`1017 > 1000`**，而且装的是最新版。
+
+关键算术：我们裁完 `messages[]` 正好 **1000** 条，网关却数出 **1017**。差 17 —— 正好是
+那一轮的工具个数。也就是说网关的 "input items" = `messages[]` + `tools[]`，而我们只约束了前者，
+**零余量**。这个错误还会自我循环：消息裁到 1000、工具数不变，于是每一轮都 1017、每一轮都 400。
+
+修法：`messageLimit = maxRequestItems - tools.length`。工具多到占满上限时直接抛
+`INVALID_REQUEST` 并说清原因，而不是发一个必然被拒的请求（与 F16 同一条纪律）。
+
+> 这一条是**推断**，没能实测坐实：本机额度耗尽，网关先返回 402
+> `insufficient_balance` 才轮到条数校验，探针打不进去。但变异测试给出的数字与现场完全一致 ——
+> 把预算改回「不扣工具」，新测试立刻报 `expected 1017 to be less than or equal to 1000`。
+> 即便网关其实不数工具，代价也只是少裁十几条历史，不会误伤。

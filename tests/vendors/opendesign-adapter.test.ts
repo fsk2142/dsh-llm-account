@@ -443,12 +443,11 @@ it("resolveModel：目录不声明档位时按模型族兜底（宿主的思考�
 
   const resolved = await adapter.resolveModel("opendesign", "claude-sonnet-4-5-20250929");
 
-  // Claude 族五档（含 `max` —— 以前只声明三档，用户看不到最高档）。
+  // Claude 族官方四档（`xhigh` 是 OpenAI 的值，Anthropic 官方没有 —— 2026-11-06 去掉）。
   expect(resolved.reasoning?.efforts.map((effort) => effort.id)).toEqual([
     ReasoningEffortId("low"),
     ReasoningEffortId("medium"),
     ReasoningEffortId("high"),
-    ReasoningEffortId("xhigh"),
     ReasoningEffortId("max"),
   ]);
   // 同一份目录里展示名也统一成官方名。

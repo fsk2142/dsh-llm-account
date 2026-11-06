@@ -361,10 +361,10 @@ it("resolveModel 声明静态档位表里的档位；表外的模型不声明（
     fetchImpl: (async () => new Response("{}")) as typeof fetch,
   });
 
-  // 表内模型：档位与顺序都来自官方 CLI 的表。
+  // 表内模型：档位与顺序都来自官方 CLI 的表（DeepSeek 官方没有 `off`，2026-11-06 删）。
   const resolved = await adapter.resolveModel("commandcode", "deepseek/deepseek-v4.1-flash");
-  expect(resolved.reasoning?.efforts.map((effort) => effort.id)).toEqual(["off", "low", "high", "max"]);
-  expect(resolved.reasoning?.efforts.map((effort) => effort.name)).toEqual(["off", "low", "high", "max"]);
+  expect(resolved.reasoning?.efforts.map((effort) => effort.id)).toEqual(["low", "high", "max"]);
+  expect(resolved.reasoning?.efforts.map((effort) => effort.name)).toEqual(["low", "high", "max"]);
   // 目录拿不到也不影响身份解析（档位来自静态表）。
   expect(resolved).toMatchObject({ provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" });
 
