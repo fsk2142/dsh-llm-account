@@ -8,7 +8,8 @@
  *    与流空闲看门狗；
  * 4. 失败时用 `classifyGatewayFailure` 分类、`markRejected` 记入轮换引擎，
  *    **只在 `rotation.fallbackAllowed({ emitted, totalTokens, aborted })` 为真时**才换下一个账号；
- * 5. `tried.size` 达到 `MAX_TRIED` 时停止轮换，并把最后一次失败抛给宿主。
+ * 5. 试用上限与「用尽时抛哪一条」由 `core/attempt-ledger` 统一决定（2026-11-07 抽出；
+ *    此前三家各写一份，同一个 bug 要修三次且总会漏）。
  *
  * 与 commandcode 适配器的两处刻意差别（都来自旧插件 `streamAccounts` 第 7511-7607 行）：
  * - **usage chunk 不计入 `emitted`**：已消耗 token 由 `totalTokens` 单独表达，于是
@@ -29,7 +30,7 @@ import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
-import { pickExhaustedFailure } from "../../core/failures";
+import { AttemptLedger, type AttemptFailure } from "../../core/attempt-ledger";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
@@ -236,11 +237,7 @@ function usageTotal(usage: TokenUsage): number {
   return usage.totalTokens ?? usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
 }
 
-/** 分类出的一次失败：分类结果，以及轮换用尽时要抛给宿主的错误。 */
-interface AttemptFailure {
-  rejection: Rejection;
-  thrown: unknown;
-}
+/** 分类出的一次失败：分类结果，以及轮换用尽时要抛给宿主的错误（共享类型见 `core/attempt-ledger`）。 */
 
 /** opencode 适配器：宿主 `LlmAdapter` 的一个真实子类。 */
 class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
@@ -428,24 +425,16 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
     });
     const raw = this.#deps.config();
-    const tried = new Set<string>();
-    let lastFailure: AttemptFailure | undefined;
     /**
-     * 本请求内**按尝试顺序**记录的全部失败（2026-11-06 与 opendesign 同步）。
+     * 本请求的账号尝试记账（2026-11-07 抽成共享层，与另两家同一份实现）。
      *
-     * 用尽时不能直接抛最后一条：链条里有可自愈的瞬时失败、最后一条却是不可重试的
-     * 终态（`quota` / `invalid-credential`）时，宿主的自动继续不会重试，会把一个本来
-     * 能救回来的回合判死。选择逻辑见 `core/failures.ts` 的 `pickExhaustedFailure`。
+     * 抽走的是纯策略：`tried` 集合、失败链、`maxTried` 判断、「用尽时抛哪一条」。
+     * 抄三份的代价是同一个 bug 要修三次且总会漏（2026-11-06 的事项就是三家一起错的）。
+     * 这里只保留 OpenCode 特有的鉴权分类与提位逻辑。见 `core/attempt-ledger`。
      */
-    const failures: AttemptFailure[] = [];
-    /** 试完了：抛「最值得让宿主重试」的那一条，而不是碰巧最后失败的那一条。 */
-    const throwExhausted = (): never => {
-      const picked = pickExhaustedFailure(failures) ?? lastFailure;
-      if (picked === undefined) {
-        throw new LlmError(`llm-opencode-go: all OpenCode Go accounts are unavailable for model "${options.model}"`, "MISSING_CREDENTIAL");
-      }
-      throw picked.thrown;
-    };
+    const ledger = new AttemptLedger(() => this.#maxTried());
+    const noAccount = (): LlmError =>
+      new LlmError(`llm-opencode-go: all OpenCode Go accounts are unavailable for model "${options.model}"`, "MISSING_CREDENTIAL");
     /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
   /**
    * 本次请求是否**已经换过模型**。
@@ -465,15 +454,15 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       const aborted = options.signal?.aborted === true;
       if (aborted) throw this.#abortError(options.signal);
 
-      const ref = this.#deps.rotation.pick({ model: options.model, tried });
+      const ref = this.#deps.rotation.pick({ model: options.model, tried: ledger.tried });
       if (ref === undefined) {
         // 换模型的机会：所有账号都被**拒绝**了（继续换账号已无意义，换同名模型往往还能服务）。
         //
         // 只在「确实有账号被拒绝」时才尝试 —— `lastFailure === undefined` 意味着一条凭据都
         // 没解析到（`MISSING_CREDENTIAL`），那种情况换模型毫无意义，而且查候选要读各家目录
         // （会发额外请求）。先抛确定性的失败，别为一次注定失败的请求去打网络。
-        if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
-          const swapped = await this.#fallbackModel(options, lastFailure.rejection.kind);
+        if (!swappedOnce && ledger.last !== undefined && ledger.last.rejection.kind !== "invalid-credential") {
+          const swapped = await this.#fallbackModel(options, ledger.last.rejection.kind);
           if (swapped !== undefined && (swapped.provider !== options.provider || swapped.model !== options.model)) {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
@@ -490,19 +479,19 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
               }
             } else {
               options = { ...options, model: swapped.model };
-              tried.clear();
+              ledger.tried.clear();
               firstPick = undefined;
               continue;
             }
           }
         }
-        if (lastFailure !== undefined) throwExhausted();
+        if (ledger.last !== undefined) ledger.throwExhausted(noAccount);
         throw new LlmError(
           `llm-opencode-go: no OpenCode Go account is available for model "${options.model}"; add an account or store its API key`,
           "MISSING_CREDENTIAL",
         );
       }
-      tried.add(ref);
+      ledger.beginAttempt(ref);
       // 本轮第一个被选中的账号 = 这次的「首选」；后面成功的都是备用账号（晋升判定用）。
       if (firstPick === undefined) firstPick = ref;
 
@@ -518,9 +507,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
           message: error.message,
         };
         this.#deps.rotation.markRejected(ref, rejection);
-        lastFailure = { rejection, thrown: error };
-        failures.push(lastFailure);
-        if (tried.size >= this.#maxTried()) throwExhausted();
+        ledger.note({ rejection, thrown: error });
+        if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
         continue;
       }
       if (auth === undefined) {
@@ -531,15 +519,14 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
           message: `OpenCode Go account "${ref}" has no usable API key`,
         };
         this.#deps.rotation.markRejected(ref, rejection);
-        lastFailure = {
+        ledger.note({
           rejection,
           thrown: new LlmError(
             `llm-opencode-go: no API key for OpenCode Go account "${ref}"; store it through the credentials service or export it in the launching environment`,
             "MISSING_CREDENTIAL",
           ),
-        };
-        failures.push(lastFailure);
-        if (tried.size >= this.#maxTried()) throwExhausted();
+        });
+        if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
         continue;
       }
 
@@ -679,12 +666,11 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
           : failure;
       }
       this.#deps.rotation.markRejected(ref, classified.rejection);
-      lastFailure = classified;
-      failures.push(classified);
+      ledger.note(classified);
       this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
       // 唯一的换账号条件（Task 5 的判定）：已输出 / 已消耗 token / 已中止都不换。
       if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
-      if (tried.size >= this.#maxTried()) throwExhausted();
+      if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
     }
   }
 

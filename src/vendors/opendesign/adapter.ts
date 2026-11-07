@@ -12,7 +12,8 @@ import { collectImageBytes } from "../../core/image-projection";
  *    整请求 deadline 与流空闲看门狗；
  * 5. 失败时用 `classifyOpenDesignFailure` 分类、`markRejected` 记入轮换引擎，
  *    **只在 `rotation.fallbackAllowed({ emitted, totalTokens, aborted })` 为真时**才换下一个账号；
- * 6. `tried.size` 达到 `MAX_TRIED` 时停止轮换，并把最后一次失败抛给宿主。
+ * 6. 试用上限与「用尽时抛哪一条」由 `core/attempt-ledger` 统一决定（2026-11-07 抽出；
+ *    此前三家各写一份，同一个 bug 要修三次且总会漏）。
  *
  * **推理档位**：Open Design 的目录**不公布档位**（OpenAI 形状），所以声明与闸门都以
  * `./efforts` 的**逐模型实测表**（其次模型族）为准（目录哪天公布了就以目录为准）。宿主给了
@@ -39,7 +40,7 @@ import type { AccountPort, AccountView, FailureKind, CatalogEntry, CatalogModel,
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { createCatalogFlight, type CatalogFlight } from "../../core/catalog-flight";
 import { pickApiKey } from "../../core/credentials";
-import { pickExhaustedFailure } from "../../core/failures";
+import { AttemptLedger, type AttemptFailure } from "../../core/attempt-ledger";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
 import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
@@ -489,11 +490,7 @@ function mentionsEffortField(body: unknown): boolean {
   return /reasoning[_\s-]?effort|unsupported[_\s-]?effort|effort[_\s-]?not[_\s-]?supported/i.test(text);
 }
 
-/** 分类出的一次失败：分类结果，以及轮换用尽时要抛给宿主的错误。 */
-interface AttemptFailure {
-  rejection: Rejection;
-  thrown: unknown;
-}
+/** 分类出的一次失败：分类结果，以及轮换用尽时要抛给宿主的错误（共享类型见 `core/attempt-ledger`）。 */
 
 /**
  * 目录缓存的复合键：基地址 + 密钥。
@@ -687,23 +684,17 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
     });
     const config = resolveConfig(this.#deps.config());
-    const tried = new Set<string>();
-    let lastFailure: AttemptFailure | undefined;
     /**
-     * 本请求内**按尝试顺序**记录的全部失败（2026-11-06 修：「额度已用尽」误报）。
+     * 本请求的账号尝试记账（2026-11-07 抽成共享层）。
      *
-     * 用尽时不能直接抛最后一条：链条里有可自愈的瞬时失败、最后一条却是不可重试的
-     * 终态时，会把一个本来能救回来的回合判死。选择逻辑见 {@link pickExhaustedFailure}。
+     * 原来这段在 opendesign / opencode / commandcode 里各抄一份：`tried` 集合、失败链、
+     * `maxTried` 判断、「用尽时抛哪一条」。抄三份的代价不是行数，而是**同一个 bug 要修
+     * 三次且总会漏**（2026-11-06 的「额度已用尽」误报三家一起错；条数上限只修了这家）。
+     * 纯策略抽到 `core/attempt-ledger`，这里只保留 Open Design 特有的凭据与协议。
      */
-    const failures: AttemptFailure[] = [];
-    /** 试完了：抛「最值得让宿主重试」的那一条，而不是碰巧最后失败的那一条。 */
-    const throwExhausted = (): never => {
-      const picked = pickExhaustedFailure(failures) ?? lastFailure;
-      if (picked === undefined) {
-        throw new LlmError(`llm-opendesign: 模型 "${options.model}" 的所有 Open Design 账号都不可用`, "MISSING_CREDENTIAL");
-      }
-      throw picked.thrown;
-    };
+    const ledger = new AttemptLedger(() => this.#maxTried());
+    const noAccount = (): LlmError =>
+      new LlmError(`llm-opendesign: 模型 "${options.model}" 的所有 Open Design 账号都不可用`, "MISSING_CREDENTIAL");
     /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
   /**
    * 本次请求是否**已经换过模型**。
@@ -719,7 +710,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       const aborted = options.signal?.aborted === true;
       if (aborted) throw this.#abortError(options.signal);
 
-      const ref = this.#deps.rotation.pick({ model: options.model, tried });
+      const ref = this.#deps.rotation.pick({ model: options.model, tried: ledger.tried });
       if (ref === undefined) {
         // 换模型的机会：所有账号都被**拒绝**了（继续换账号已无意义，换同名模型往往还能服务）。
         //
@@ -729,8 +720,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         //
         // 只在「确实有账号被拒绝」时才尝试 —— `lastFailure === undefined` 意味着一条凭据都
         // 没解析到，那种情况换模型毫无意义，而且查候选要读各家目录（会发额外请求）。
-        if (!swappedOnce && lastFailure !== undefined && lastFailure.rejection.kind !== "invalid-credential") {
-          const swapped = await this.#fallbackModel(options, lastFailure.rejection.kind);
+        if (!swappedOnce && ledger.last !== undefined && ledger.last.rejection.kind !== "invalid-credential") {
+          const swapped = await this.#fallbackModel(options, ledger.last.rejection.kind);
           if (swapped !== undefined && (swapped.provider !== options.provider || swapped.model !== options.model)) {
             swappedOnce = true;
             // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
@@ -747,18 +738,18 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
               }
             } else {
               options = { ...options, model: swapped.model };
-              tried.clear();
+              ledger.tried.clear();
               continue;
             }
           }
         }
-        if (lastFailure !== undefined) throwExhausted();
+        if (ledger.last !== undefined) ledger.throwExhausted(noAccount);
         throw new LlmError(
           `llm-opendesign: 没有可用于模型 "${options.model}" 的 Open Design 账号；请先在账号页添加账号，或把密钥写入凭据库`,
           "MISSING_CREDENTIAL",
         );
       }
-      tried.add(ref);
+      ledger.beginAttempt(ref);
 
       const key = await this.#resolveKey(ref);
       if (key === undefined) {
@@ -769,15 +760,14 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
           message: `Open Design 账号 "${ref}" 没有可用的推理密钥`,
         };
         this.#deps.rotation.markRejected(ref, rejection);
-        lastFailure = {
+        ledger.note({
           rejection,
           thrown: new LlmError(
             `llm-opendesign: Open Design 账号 "${ref}" 没有可用的推理密钥；请在账号页重新登录，或把密钥写入凭据库、在启动环境里导出它`,
             "MISSING_CREDENTIAL",
           ),
-        };
-        failures.push(lastFailure);
-        if (tried.size >= this.#maxTried()) throwExhausted();
+        });
+        if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
         continue;
       }
 
@@ -839,12 +829,11 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         throw failure; // 请求级拒绝：换账号没有意义
       }
       this.#deps.rotation.markRejected(ref, classified.rejection);
-      lastFailure = classified;
-      failures.push(classified);
+      ledger.note(classified);
       this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
       // 唯一的换账号条件：已输出 / 已消耗 token / 已中止都不换。
       if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
-      if (tried.size >= this.#maxTried()) throwExhausted();
+      if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
     }
   }
 
