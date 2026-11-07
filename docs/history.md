@@ -964,3 +964,48 @@ turn 357  turn/end        error: ... (1002 > 1000 items)      ← 主请求也�
 - 端到端用例改成「配置写 `0` / `-1` / `NaN` 时**仍然裁剪**」，并走过真实的适配器
   出口（`outboundBody`），断言出站条数 ≤ 1000 且带省略提示；
 - 全量 **200 文件 / 2084 用例**通过；类型检查干净。
+
+## 2.1.8：DSML 工具调用被当成文本吞掉（2026-11-07 真机）
+
+用户报「用 opencode 时输出一点就被截断、任务中断」，而且连续发生好几次。
+
+### 现场
+
+`dsh-opencode-go` 上的 `deepseek-v4.1-flash` 偶尔不返回结构化 `tool_calls`，而是把工具调用
+按 DeepSeek 的 DSML 语法**写进推理通道**，`finish` 还是 `stop`：
+
+```text
+<｜DSML｜ calls>
+<｜DSML｜ invoke name="terminal_send">
+<｜DSML｜ parameter name="sessionId" string="true">pty-9</｜DSML｜ parameter>
+<｜DSML｜ parameter name="text" string="true">Get-Content _r7_top.log | Select-String Warning</｜DSML｜ parameter>
+</｜DSML｜ invoke>
+</｜DSML｜ calls>
+```
+
+网关没有把它解析成 `tool_calls`，插件照原样透传。后果很隐蔽：
+
+- 正文**一个字都没有**，整段都在 reasoning 里；
+- `finish` 是 `stop`，宿主看到「没有工具调用 + 模型自己停了」→ 这一轮**空着结束**；
+- 用户看到的就是「输出一点就被截断、任务莫名中断」。
+
+实测 2026-11-07 11:08–11:37 连着 4 次（session-c0aacab8 的 seq 88150 / 88192 / 88234 / 88268），
+每次都是「正文为空 + stop + reasoning 里带 DSML」。
+
+### 修法
+
+`src/vendors/opencode/dsml.ts`：把 DSML 文本解析成工具调用（真机样本当用例）。
+
+`adapter.ts` 的流循环里加一道**抢救**：一边流一边累计正文与 reasoning 的文本，到 `finish`
+时如果**一个工具调用都没出现过**、而文本里有 DSML 块，就把它们补发成真正的工具调用块，
+并把 finish 改成 `tool-calls`。只在「本来就没有工具调用」时才做 —— 网关已经给了结构化
+`tool_calls` 时不重复执行。
+
+### 验证
+
+- 新增 `tests/vendors/opencode-dsml.test.ts` 7 条（真机样本、多调用、半角变体、数值参数、
+  无标记不误判、重复调用幂等）；
+- `opencode.test.ts` 加 2 条端到端：DSML 流必须补发出 `terminal_send` 且 finish 变
+  `tool-calls`；普通文本回复不受影响；
+- 变异测试：把抢救条件改成 `false`，端到端用例立刻红；
+- 全量 **201 文件 / 2095 用例**通过。

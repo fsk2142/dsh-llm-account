@@ -552,3 +552,63 @@ it("length 终态一个字都没产出时给出可执行建议，而不是伪装
   expect(String((settled.error as Error).message)).toContain("/compact");
   expect(String((settled.error as Error).message)).toContain("max output");
 });
+
+/**
+ * ## DSML 抢救（2026-11-07 真机故障）
+ *
+ * `deepseek-v4.1-flash` 偶尔不返回结构化 `tool_calls`，而是把工具调用写成 DSML 文本，
+ * 而且 `finish` 还是 `stop`。旧行为是原样透传 —— 宿主只看到「没有工具调用 + 模型自己
+ * 停了」，这一轮空着结束，用户看到的就是「输出一点就被截断、任务莫名中断」。
+ *
+ * 实测 2026-11-07 11:08–11:37 连发 4 次。这里固定住「必须补发成真正的工具调用」。
+ */
+const DSML_TEXT = [
+  "需要确认这些告警是否影响功能。",
+  "",
+  "<｜DSML｜ calls>",
+  '<｜DSML｜ invoke name="terminal_send">',
+  '<｜DSML｜ parameter name="sessionId" string="true">pty-9</｜DSML｜ parameter>',
+  '<｜DSML｜ parameter name="text" string="true">Get-Content _r7_top.log | Select-String Warning</｜DSML｜ parameter>',
+  "</｜DSML｜ invoke>",
+  "</｜DSML｜ calls>",
+].join("\n");
+
+/** 一次「正文里带 DSML、stop_reason 是 end_turn」的回复。 */
+const DSML_FRAMES: readonly (readonly [string, unknown])[] = [
+  ...opener(),
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: DSML_TEXT } }],
+  ["content_block_stop", { type: "content_block_stop", index: 0 }],
+  ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 60 } }],
+  ["message_stop", { type: "message_stop" }],
+];
+
+it("**DSML 文本必须补发成工具调用**（否则这一轮会空着结束）", async () => {
+  const h = harness(() => sseResponse(DSML_FRAMES));
+  const chunks = await collect(h.adapter.stream(request()));
+
+  const calls = chunks.filter(
+    (chunk): chunk is Extract<StreamChunk, { type: "block-end" }> =>
+      chunk.type === "block-end" && chunk.block.type === "tool-call",
+  );
+  expect(calls, "应该补发出一次工具调用").toHaveLength(1);
+  const block = calls[0]!.block as Extract<typeof calls[0]["block"], { type: "tool-call" }>;
+  expect(block.name).toBe("terminal_send");
+  const args = JSON.parse(block.arguments) as Record<string, unknown>;
+  expect(args.sessionId).toBe("pty-9");
+  expect(String(args.text)).toContain("Select-String");
+
+  const finish = chunks.filter(
+    (chunk): chunk is Extract<StreamChunk, { type: "finish" }> => chunk.type === "finish",
+  );
+  expect(finish, "只能有一个 finish").toHaveLength(1);
+  expect(finish[0]!.reason.kind, "有工具调用就不能再报 stop").toBe("tool-calls");
+});
+
+it("普通文本回复不受影响（没有 DSML 时 finish 仍是 stop、不补工具调用）", async () => {
+  const h = harness(() => sseResponse(TEXT_FRAMES));
+  const chunks = await collect(h.adapter.stream(request()));
+  expect(textOf(chunks)).toBe("hello");
+  expect(chunks.some((chunk) => chunk.type === "block-end" && chunk.block.type === "tool-call")).toBe(false);
+  const finish = chunks.filter((chunk): chunk is Extract<StreamChunk, { type: "finish" }> => chunk.type === "finish");
+  expect(finish[0]!.reason.kind).toBe("stop");
+});

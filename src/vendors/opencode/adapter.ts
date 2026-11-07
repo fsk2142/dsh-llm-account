@@ -19,7 +19,7 @@
  * 代理与协议覆盖（第 3 期）、客户端页面（计划 1b）、诊断导出（第 3 期）。
  * @module dsh-llm-account/src/vendors/opencode/adapter
  */
-import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter, LlmError, ReasoningEffortId, ToolCallId, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, TokenUsage } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
@@ -56,6 +56,7 @@ import {
 } from "./protocol";
 import type { ThinkingLevel } from "./protocol";
 import type { GatewayEvidence, GatewayRecorder } from "./protocol";
+import { parseDsmlCalls } from "./dsml";
 
 /**
  * 调用方中止的错误码。宿主 `LlmRuntime` 用同一个字符串判定「这次请求是被取消的」；
@@ -556,6 +557,21 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
       const iterator = this.#attempt(raw, options, auth, gateway)[Symbol.asyncIterator]();
       let failure: unknown;
       let exhausted = false;
+      /**
+       * DSML 抢救状态（2026-11-07）。
+       *
+       * `deepseek-v4.1-flash` 在这个网关上偶尔把工具调用写成 DeepSeek 的 DSML 文本，
+       * 而且是写进 **reasoning 通道**、`finish` 还是 `stop`。网关没解析，插件照原样
+       * 透传 —— 宿主只看到「没有工具调用 + 模型自己停了」，这一轮**空着结束**，
+       * 用户看到的就是「输出一点就被截断」。
+       *
+       * 所以这里一边流一边把正文与 reasoning 的文本累起来，到 `finish` 时如果
+       * **一个工具调用都没出现过**、而文本里有 DSML 块，就把它们解析成真正的工具调用补发。
+       * 详见 `./dsml`。
+       */
+      let salvageText = "";
+      let sawToolCall = false;
+      let lastBlockIndex = -1;
       try {
         for (;;) {
           let step: IteratorResult<StreamChunk>;
@@ -570,6 +586,15 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
             break;
           }
           const chunk = step.value;
+          // 抢救状态：文本/推理累计 + 是否已经出现过工具调用 + 最大块序号（补发要用下一个）。
+          if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") salvageText += chunk.text;
+          if (chunk.type === "tool-call-delta" || (chunk.type === "block-start" && chunk.blockType === "tool-call")) {
+            sawToolCall = true;
+          }
+          if (chunk.type === "block-start" || chunk.type === "block-end" || chunk.type === "tool-call-delta") {
+            if (chunk.index > lastBlockIndex) lastBlockIndex = chunk.index;
+          }
+          if (chunk.type === "block-end" && chunk.block.type === "tool-call") sawToolCall = true;
           if (chunk.type === "usage") {
             // usage 不算「已输出」：它只说明这个账号已经产生了计费，由 totalTokens 表达。
             totalTokens += usageTotal(chunk.usage);
@@ -590,6 +615,33 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
           if (pendingUsage !== undefined) {
             yield pendingUsage;
             pendingUsage = undefined;
+          }
+          if (chunk.type === "finish" && !sawToolCall) {
+            /**
+             * DSML 抢救（2026-11-07）：模型把工具调用写成了文本，网关没解析。
+             *
+             * 补发成真正的工具调用块，并把 finish 改成 `tool-calls` —— 否则宿主会当成
+             * 「模型自己停了」而结束这一轮（用户看到的就是任务莫名中断）。
+             *
+             * 只在**一个工具调用都没出现过**时才做：网关已经给了结构化 `tool_calls`
+             * 时不重复执行。
+             */
+            const salvaged = parseDsmlCalls(salvageText);
+            if (salvaged.length > 0) {
+              let index = lastBlockIndex + 1;
+              let ordinal = 0;
+              for (const call of salvaged) {
+                const id = ToolCallId(`dsml_${index}_${ordinal}`);
+                yield { type: "block-start", index, blockType: "tool-call" };
+                yield { type: "tool-call-delta", index, id, name: call.name, argumentsDelta: call.arguments };
+                yield { type: "block-end", index, block: { type: "tool-call", id, name: call.name, arguments: call.arguments } };
+                index += 1;
+                ordinal += 1;
+              }
+              emitted = true;
+              yield { type: "finish", reason: { kind: "tool-calls" } };
+              continue;
+            }
           }
           emitted = true;
           yield chunk;
