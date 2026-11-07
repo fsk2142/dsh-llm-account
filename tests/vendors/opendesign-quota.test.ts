@@ -336,10 +336,10 @@ it("套餐字段宽容读取：tier/plan/status 与 subscription 子对象都认
 
 it("工作区可以是异步发现的（网页登录产物不带 workspaceId）：解析出来后照常查 vela", async () => {
   const preflight = vi.fn(async () => ({
-    codingPlan: { windows: [{ usedCredits: 906, limitCredits: 90_000, durationSeconds: 18_000, resetsAt: 1_800_000_000_000 }] },
+    codingPlan: { windows: [{ usedCredits: 906, limitCredits: 50_000, durationSeconds: 18_000, resetsAt: 1_800_000_000_000 }] },
   }));
   // 摘要里的 10000 是**接口自己的说法**，已确认与官方文档不符：Go 的 5 小时窗口
-  // 官方 2026-11-07 调价后是 $18，而 90000 credits ÷ 10000 只有 $9。上限以官方表为准。
+  // 官方 2026-11-07 调价后是 $18，而 50000 credits ÷ 10000 只有 $5。上限以官方表为准。
   const fetchImpl = scriptedFetch([() => json({ creditsPerUsd: 10_000, membershipTier: "go" })]);
   const quota = createOpenDesignQuota(
     deps(fetchImpl, {
@@ -352,10 +352,10 @@ it("工作区可以是异步发现的（网页登录产物不带 workspaceId）�
   const snapshot = await quota.snapshot();
   expect(preflight).toHaveBeenCalledWith("ws-discovered");
   // 厂商只发 5 小时/7 天两个窗口 —— **只发布这两个**（2026-10-23 起不再补月度）。
-  // 5 小时窗口的上限取**官方 $18**（不是 90000 ÷ 10000 = $9）；已用按官方口径折算
-  // （90000 / $18 = 5000，所以 906/5000 = 0.1812）。
+  // 5 小时窗口的上限取**官方 $18**（不是 50000 ÷ 10000 = $5）；已用按官方口径折算
+  // （50000 / $18 = 2777.8，所以 906/2777.8 = 0.3262）。
   expect(snapshot.windows).toEqual([
-    { key: "fiveHour", unit: "usd", used: 0.1812, cap: 18, resetAt: 1_800_000_000_000 },
+    { key: "fiveHour", unit: "usd", used: 0.32616, cap: 18, resetAt: 1_800_000_000_000 },
   ]);
   expect(snapshot.failures).toEqual([]);
 });
@@ -371,16 +371,16 @@ it("preflight 的数字是字符串（\"906\"/\"50000\"）：照样折算成美�
     preflight: {
       codingPlan: {
         windows: [
-          { usedCredits: "906", limitCredits: "90000", durationSeconds: 18_000, resetsAt: "2026-10-18T15:21:12.000Z" },
-          { usedCredits: "906", limitCredits: "275000", durationSeconds: 604_800, resetsAt: "2026-10-25T10:21:12.000Z" },
+          { usedCredits: "906", limitCredits: "50000", durationSeconds: 18_000, resetsAt: "2026-10-18T15:21:12.000Z" },
+          { usedCredits: "906", limitCredits: "150000", durationSeconds: 604_800, resetsAt: "2026-10-25T10:21:12.000Z" },
         ],
       },
     },
     failures: [],
   });
-  // 已用按「官方上限 ÷ limitCredits」折：5 小时 906/5000 = 0.1812、周 906/5000 = 0.1812。
-  expect(snapshot.windows[0]).toMatchObject({ key: "fiveHour", unit: "usd", used: 0.1812, cap: 18 });
-  expect(snapshot.windows[1]).toMatchObject({ key: "weekly", unit: "usd", used: 0.1812, cap: 55 });
+  // 已用按「官方上限 ÷ limitCredits」**逐窗口**折：906×18/50000 = 0.3262、906×55/150000 = 0.3322。
+  expect(snapshot.windows[0]).toMatchObject({ key: "fiveHour", unit: "usd", used: 0.32616, cap: 18 });
+  expect(snapshot.windows[1]).toMatchObject({ key: "weekly", unit: "usd", used: 0.3322, cap: 55 });
 });
 
 // —— 2026-10-23：**不再合成月度窗口** ——
@@ -401,22 +401,22 @@ it("**不再合成月度窗口**：厂商只给两档，就只发布这两档", 
       json({
         codingPlan: {
           windows: [
-            { usedCredits: 3298, limitCredits: 90_000, durationSeconds: 18_000 },
-            { usedCredits: 91_437, limitCredits: 275_000, durationSeconds: 604_800 },
+            { usedCredits: 3298, limitCredits: 50_000, durationSeconds: 18_000 },
+            { usedCredits: 91_437, limitCredits: 150_000, durationSeconds: 604_800 },
           ],
         },
       }),
   ]);
   const snapshot = await createOpenDesignQuota(deps(fetchImpl, { workspaceIdOf: () => "ws-1", preflight: async () => ({ codingPlan: { windows: [
-    { usedCredits: 3298, limitCredits: 90_000, durationSeconds: 18_000 },
-    { usedCredits: 91_437, limitCredits: 275_000, durationSeconds: 604_800 },
+    { usedCredits: 3298, limitCredits: 50_000, durationSeconds: 18_000 },
+    { usedCredits: 91_437, limitCredits: 150_000, durationSeconds: 604_800 },
   ] } }) })).snapshot();
 
   expect(snapshot.windows.map((window) => window.key)).toEqual(["fiveHour", "weekly"]);
   expect(snapshot.windows.some((window) => window.key === "monthly"), "**不该再有月度窗口**").toBe(false);
-  // 厂商真实数字照旧发布（换算率仍是 5000：90000/$18、275000/$55）。
-  expect(snapshot.windows[0]?.used).toBeCloseTo(0.6596, 4);
-  expect(snapshot.windows[1]?.used).toBeCloseTo(18.2874, 4);
+  // 厂商真实数字照旧发布（逐窗口折算：3298×18/50000、91437×55/150000）。
+  expect(snapshot.windows[0]?.used).toBeCloseTo(1.18728, 4);
+  expect(snapshot.windows[1]?.used).toBeCloseTo(33.5269, 4);
 });
 
 it("即便只拿到账单摘要（无 preflight），也不补月度窗口", async () => {

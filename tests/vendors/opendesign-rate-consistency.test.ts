@@ -33,12 +33,12 @@ function capOf(tier: string, windows: { duration: number; limit: number; used: n
 }
 
 describe("换算率一致性排查", () => {
-  it("**Go**：周 275000→$55、5小时 90000→$18（2026-11-07 调价后的官方值）", () => {
-    // 调价前是 150000→$30 / 50000→$10。2026-11-07 官方把 Go 的月度总额从 $120 提到 $220，
-    // 周窗口 $30→$55、5 小时 $10→$18。这里的 limitCredits 按同一换算率（5000）相应放大。
+  it("**Go**：周 150000→$55、5小时 50000→$18（2026-11-07 调价，credits 未变）", () => {
+    // 2026-11-08 用真机 preflight 确认过：官方涨的是**美元额度**（周 $30→$55、5 小时 $10→$18），
+    // 接口的 limitCredits 一个没动（仍是 150000 / 50000）。所以换算率从 5000 变成 ~2727。
     const windows = [
-      { duration: 18_000, limit: 90_000, used: 0 },
-      { duration: 604_800, limit: 275_000, used: 0 },
+      { duration: 18_000, limit: 50_000, used: 0 },
+      { duration: 604_800, limit: 150_000, used: 0 },
     ];
     expect(capOf("go", windows, "fiveHour")).toBe(18);
     expect(capOf("go", windows, "weekly")).toBe(55);
@@ -51,21 +51,23 @@ describe("换算率一致性排查", () => {
     expect(cap).toBe(74);
   });
 
-  it("**多个窗口时只用一个反推，其余自动对齐**", () => {
-    // 这才是真正有价值的检查：同一份 preflight 里两个窗口的 credits 若成比例，
-    // 用任意一个反推得到的换算率会让另一个也算对。
+  it("**换算逐窗口做**：两档的美元比与 credits 比不成比例也不串味", () => {
+    // 官方美元上限 18:55 ≈ 1:3.06，而 credits 是 50000:150000 = 1:3 —— 严格比例对不上。
+    // 如果用一个全局比率，另一档的美元值就会偏 2%。这里逐窗口反推，于是
+    // 「已用 ÷ 上限」恒等于「真实 credits ÷ limit」，永远自洽。
     const windows = [
-      { duration: 18_000, limit: 90_000, used: 45_000 },
-      { duration: 604_800, limit: 275_000, used: 137_500 },
+      { duration: 18_000, limit: 50_000, used: 25_000 },
+      { duration: 604_800, limit: 150_000, used: 75_000 },
     ];
     const snap = toQuotaSnapshot({ summary: undefined, preflight: preflightOf("go", windows), failures: [] });
     const fiveHour = snap.windows.find((w) => w.key === "fiveHour");
     const weekly = snap.windows.find((w) => w.key === "weekly");
-    // 90000/5000 = $18（官方 5 小时上限），275000/5000 = $55（官方周上限）。
     expect(fiveHour?.cap).toBe(18);
     expect(weekly?.cap).toBe(55);
-    expect(fiveHour?.used).toBe(9);
-    expect(weekly?.used).toBe(27.5);
+    // 25000/50000 = 50% × $18 = $9；75000/150000 = 50% × $55 = $27.5
+    // 用 toBeCloseTo：75000 × 55 / 150000 在双精度下是 27.499999999999996。
+    expect(fiveHour?.used).toBeCloseTo(9, 6);
+    expect(weekly?.used).toBeCloseTo(27.5, 6);
   });
 
   it("**Pro**：周窗口按官方 $90 折算", () => {

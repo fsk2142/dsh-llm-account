@@ -121,13 +121,35 @@ describe("Open Design：官方逐模型额度", () => {
     expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go", "gpt-6-luna")).toEqual({ kind: "usd", amount: 15 });
   });
 
-  it("换套餐数字跟着变（Pro 下同一模型是 $360）", () => {
+  it("换套餐数字跟着变（Pro 下同一模型是 $360，Max 下是 $600）", () => {
     expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Pro", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 360 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Max", "DeepSeek V4.1 Flash")).toEqual({ kind: "usd", amount: 600 });
   });
 
-  it("**Max 档官方没给美元列**：不猜，返回 undefined", () => {
-    // 官方页面的 Max 列是空的。照着 Go/Plus/Pro 的比例去推会编出一个假数字。
-    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Max", "DeepSeek V4.1 Flash")).toBeUndefined();
+  it("**Max 档有官方数字**（2026-11-08 更正：这条用例以前断言 undefined）", () => {
+    // 以前的断言基于一句错误的前提：「官方页面的 Max 列是空的」。
+    // 实际上官方 `Design Plan usage` 表一直是四列 Go / Go Plus / Go Pro / Go Max，
+    // 只是当时抓表的人漏了第四列 —— 于是 Max 档用户的**每个模型**都显示「未知」。
+    // 现在四列齐全：Go Max 下 GLM-5.3 Flash-X 是 $150，GPT-6 Luna 是 $75。
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Max", "glm-5.3-flashx")).toEqual({ kind: "usd", amount: 150 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go Max", "gpt-6-luna")).toEqual({ kind: "usd", amount: 75 });
+  });
+
+  it("**官方在 Pro/Max 两格留空时不外推**（Eco 只有 Go/Plus 有数）", () => {
+    // 官方 Eco 那行只写了两列（$220 / $290）。按 Go→Plus 的增幅去推 Pro/Max 会编出假数字。
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go", "deepseek-v4.1-flash-eco")).toEqual({ kind: "usd", amount: 220 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Plus", "deepseek-v4.1-flash-eco")).toEqual({ kind: "usd", amount: 290 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Pro", "deepseek-v4.1-flash-eco")).toBeUndefined();
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Max", "deepseek-v4.1-flash-eco")).toBeUndefined();
+  });
+
+  it("**`Go Plus` / `Go Pro` 也能查**（官方列头写法，与裸 `Plus`/`Pro` 同义）", () => {
+    // 修前：`planKeyOf("Go Plus")` 给 `goplus`，而 Open Design 表里的桶叫 `plus` ——
+    // 于是 Plus / Pro 档用户的**每个模型**都显示「未知」。
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go Plus", "deepseek-v4.1-flash")).toEqual({ kind: "usd", amount: 160 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go Pro", "deepseek-v4.1-flash")).toEqual({ kind: "usd", amount: 360 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Plus", "deepseek-v4.1-flash")).toEqual({ kind: "usd", amount: 160 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Pro", "deepseek-v4.1-flash")).toEqual({ kind: "usd", amount: 360 });
   });
 
   it("不在表里的模型给 undefined", () => {
@@ -306,5 +328,45 @@ describe("planKeyOf：Open Design 的 Max 档（2026-11-07 修）", () => {
   it("Command Code 的两档不被误认成同一个", () => {
     expect(planKeyOf("Max 10×")).toBe("max10x");
     expect(planKeyOf("Max 20×")).toBe("max20x");
+  });
+});
+
+/**
+ * ## 档位写法的健壮性（2026-11-08 第 3 轮自检）
+ *
+ * `planKeyOf` 的输入是**厂商原样给的字符串**（`billing/summary` 的 `membershipTier`
+ * 或 `vela preflight` 的 `codingPlan.tier`），我们无法规定它的格式。而 Open Design
+ * 官方页面的列头是 `Go` / `Go Plus` / `Go Pro` / `Go Max` —— 「Go X」这种写法一旦
+ * 认不出，该档位用户的**每一个模型**都会显示「未知」。
+ *
+ * 修前的真实状况：`Go Plus` 被归成 `goplus`，而 Open Design 表里的桶叫 `plus`；
+ * `Go Pro` 直接归成 `undefined`。两种都让整列数据消失。
+ *
+ * 这组用例把所有合理的写法都钉住，避免以后有人「顺手统一一下命名」时又弄丢一档。
+ */
+describe("Open Design：档位写法的健壮性（Go / Plus / Pro / Max 的各种写法）", () => {
+  /** 以 DeepSeek V4.1 Flash 为探针：四档的数字各不相同（120/160/360/600）。 */
+  const PROBE = "deepseek-v4.1-flash";
+
+  const CASES: readonly { plan: string; expected: number; spellings: readonly string[] }[] = [
+    { plan: "go", expected: 120, spellings: ["go", "Go", "GO", "go ", " go"] },
+    { plan: "plus", expected: 160, spellings: ["plus", "Plus", "PLUS", "Go Plus", "go plus", "go_plus", "go-plus", "goplus", "GOPLUS"] },
+    { plan: "pro", expected: 360, spellings: ["pro", "Pro", "Go Pro", "go pro", "go_pro", "go-pro", "gopro"] },
+    { plan: "max", expected: 600, spellings: ["max", "Max", "Go Max", "go max", "go_max", "go-max", "gomax"] },
+  ];
+
+  for (const { plan, expected, spellings } of CASES) {
+    for (const spelling of spellings) {
+      it(`\`${spelling}\` → ${plan} 档 $${expected}`, () => {
+        expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, spelling, PROBE)).toEqual({ kind: "usd", amount: expected });
+      });
+    }
+  }
+
+  it("认不出的档位仍然给 undefined（不猜成 Go）", () => {
+    // 有回退链不等于「什么都能查」：认不出的档位必须留空，否则会给用户看别人档位的数字。
+    for (const nonsense of ["Enterprise", "Trial", "", "  ", "Free"]) {
+      expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, nonsense, PROBE), `"${nonsense}" 不该查出数字`).toBeUndefined();
+    }
   });
 });

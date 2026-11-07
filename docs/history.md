@@ -1105,3 +1105,64 @@ turn 357  turn/end        error: ... (1002 > 1000 items)      ← 主请求也�
   Eco 的 Pro/Max 不猜、Max 档认得出来都固定住；
 - 一处**本机验证不了的假设**写进了测试文件头：官方调价后 `limitCredits` 是否同比例放大。
   本机 `vela billing preflight` 回 403，没有真实样本，所以只固定机制、写下假设。
+
+## 2.1.13：五轮自检修掉的 5 个问题（2026-11-08）
+
+用户要求「先自检至少 5 次，确认没有 BUG 再提交推送」。2.1.12 已发布，这一版是自检产物。
+
+### 第 1 轮（数据源复核）——3 个问题
+
+1. **Open Design 的 `Go Max` 列一直有数字，上一版却没抓**。
+   官方 `Design Plan usage` 表是**四列**（Go / Go Plus / Go Pro / Go Max），2.1.12 只写了三列，
+   注释还写着「Max 列官方页面是空的」——那句当时就是错的。后果：Max 档用户的**每一个模型**
+   都显示「未知」。
+2. **`Go Plus` / `Go Pro` 查不到任何模型**。`planKeyOf("Go Plus")` 给 `goplus`，而 Open Design
+   表里的桶叫 `plus`；`Go Pro` 更是直接归成 `undefined`。同样是「整列数据消失」级别的问题。
+3. **官方已把 `Hunyuan H4 Preview` 改写成 `Hy4 Preview`**，表名与注释都过期了。
+
+### 第 2 轮（逐行审查 diff）——2 个问题
+
+4. `aliased()` 会**静默覆写**已存在的键。若哪天官方同时列出 `GLM-5.3 FlashX` 与
+   `GLM-5.3 Flash-X` 两个不同价位的模型，别名就会把官方数据盖掉。改成「官方数据优先」。
+5. `PLAN_KEY_FALLBACK` 里的 `gomax` 是**永远走不到的死映射**（`planKeyOf` 已把 `Go Max` 归成 `max`）。
+
+### 第 3 轮（消费端路径）
+
+照 `client/seams.ts` 的取数链（`quotaTableOf` → `planKeyOf` → `modelQuotaOf`）走了一遍，
+确认「未知」只由 `models.quotaUnknown` 产生。补了 **28 种档位写法**的回归矩阵
+（`Go Plus` / `go_plus` / `GOPLUS` / `Go Max` / `gomax` …），并把「认不出的档位仍给 undefined
+（不猜成 Go）」也钉住。
+
+### 第 4 轮（边界 + 跨厂商）
+
+6. **三处注释还在说「`deepseek-v4.1-flash` 硬上限 1000 条」**，而实测早已放宽、1000 现在属于
+   `glm-5.3-flash`。这类注释是「为什么是 1000」的唯一记录，写错会让下一个人把值改大而踩坑。
+   `adapter.ts` ×3、`index.ts` ×1、`protocol.ts` ×3 全部更正。
+   `DEFAULT_MAX_REQUEST_ITEMS = 1000` 的理由改成「取最严模型的上限」，并写明真正的钳制在
+   `min(配置, 该模型实测上限)`。
+7. 顺带确认 `minimax-m3.1-flash` 缺 `output_budget` 是安全的（有 `context_limit`，输出走默认）；
+   opendesign 全部模型都不声明 `efforts`（按设计只信 payload），eco 不需要额外登记。
+
+### 第 5 轮（真数据端到端）——发现一条重要事实，推翻上一版的假设
+
+**拿到了真机 preflight**：用账号自己的控制器密钥直连
+`{walletBase}/workspaces/{id}/billing/preflight`（`vela` CLI 那条路要本机登录态，所以一直 403）。
+三个账号实测：
+
+```
+tier = "go"
+5 小时：usedCredits=4568  limitCredits=50000
+每周  ：usedCredits=10175 limitCredits=150000
+```
+
+8. **`limitCredits` 根本没变** —— 2.1.12 的测试夹具假设它「随调价同比例放大」（写成 90000/275000），
+   是错的。现在全部换回真实值 50000/150000，断言值改成真机算出来的
+   **$1.64 / $18** 与 **$3.73 / $55**，并额外加了一条「占比必须等于真实 credits 占比」的用例。
+9. 换算率随之从 **5000** 变成约 **2727/2777**（同一批 credits 现在值更多美元）。文档里所有
+   「换算率 5000」「周 $30」「每月 $120」的当前口径说法全部更正（历史记录保留）。
+
+### 验证
+
+- 全量 **204 文件 / 2168 用例**通过；`tsc --noEmit` 干净；产物重编并核对含新数据；
+- 端到端用真实 preflight + 真实网关模型清单跑账号卡片取数链：套餐 `go`、
+  窗口 `$1.64/$18` 与 `$3.73/$55`、**14 个模型全部有额度、0 个「未知」**（含 eco $220）。

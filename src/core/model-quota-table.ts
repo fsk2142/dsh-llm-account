@@ -578,55 +578,69 @@ const OPENCODE_RAW: Readonly<Record<string, readonly [string, string]>> = {
 const OPENCODE_PLAN_ORDER: readonly string[] = ["go", "goplus"];
 
 /**
- * Open Design 的逐模型额度（官方 `Design Plan usage` 表，抓于 2026-10-21）。
+ * Open Design 的逐模型额度（官方 `pricing` 页的 `Design Plan usage` 表，2026-11-08 重新抓取）。
  *
- * 表头的「每月使用额度」是**该套餐额度池里分给这个模型的份额**（不是套餐价格）：
- * 官网 zh/model-credits 页把套餐构成写得很清楚 ——
- * Go 原价 $10/月、每月最高总额度 $120、7 天窗口 $30、5 小时窗口 $10。
- * 所以 `go` 这一列的数字（如 DeepSeek V4.1 Flash = $120）与套餐总额度同量级是对的。
+ * 表头的「Monthly usage」是**该套餐额度池里分给这个模型的份额**（不是套餐价格）：
+ * 官网 `model-credits` 页把套餐构成写得很清楚 —— Go 原价 $10/月、每月最高总额度
+ * **$220**、7 天窗口 **$55**、5 小时窗口 **$18**（2026-10-21 时这三项还是 120/30/10，
+ * 官方调价后一起变了，见 `quota.ts` 的 `WINDOW_CAP_USD`）。
+ * 所以 `go` 这一列的数字（如 DeepSeek V4.1 Flash = $120、Eco = $220）与套餐总额度同量级是对的。
  *
- * 三列 = Go / Plus / Pro。**Max 列官方页面是空的**，所以这里也没有 —— 不猜。
+ * 四列 = Go / **Go Plus** / **Go Pro** / **Go Max**。
+ *
+ * **2026-11-08 修正**：上一版只有三列，注释写着「Max 列官方页面是空的，所以这里也没有」——
+ * 这句话当时就不准（官方 `Go Max` 列一直有数字），后果是 Max 档用户的**每一个模型**
+ * 都显示「未知」。现在四列齐全。
+ *
+ * 每行就是官方那张表的 `Monthly usage` 那一排数字，顺序与 {@link OPENDESIGN_PLAN_ORDER} 一致。
  */
 const OPENDESIGN_RAW: Readonly<Record<string, readonly string[]>> = {
-  "GLM-5.3 Flash-X": ["$30", "$40", "$90"],
-  "DeepSeek V4 Pro": ["$60", "$80", "$180"],
-  "Kimi K2.7 Code": ["$60", "$80", "$180"],
-  "Hunyuan H4 Preview": ["$60", "$80", "$180"],
-  "Claude Haiku 5.5": ["$30", "$40", "$90"],
-  "GPT-6 Luna": ["$15", "$20", "$45"],
-  "GLM-5.3 Flash": ["$60", "$80", "$180"],
-  "DeepSeek V4 Flash Vision Exp": ["$60", "$80", "$180"],
-  "MiMo V2.6 Pro": ["$60", "$80", "$180"],
-  "DeepSeek V4 Flash": ["$60", "$80", "$180"],
-  "MiMo V2.6 Flash": ["$60", "$80", "$180"],
-  "DeepSeek V4.1 Flash": ["$120", "$160", "$360"],
+  "GLM-5.3 Flash-X": ["$30", "$40", "$90", "$150"],
+  "DeepSeek V4 Pro": ["$60", "$80", "$180", "$300"],
+  "Kimi K2.7 Code": ["$60", "$80", "$180", "$300"],
+  // 官方 2026-11-08 的表格里这一行写作 `Hy4 Preview`（不再是 `Hunyuan H4 Preview`），
+  // 与网关 id `hy4-preview` 归一化后正好同名，不再需要别名。
+  "Hy4 Preview": ["$60", "$80", "$180", "$300"],
+  "Claude Haiku 5.5": ["$30", "$40", "$90", "$150"],
+  "GPT-6 Luna": ["$15", "$20", "$45", "$75"],
+  "GLM-5.3 Flash": ["$60", "$80", "$180", "$300"],
+  "DeepSeek V4 Flash Vision Exp": ["$60", "$80", "$180", "$300"],
+  "MiMo V2.6 Pro": ["$60", "$80", "$180", "$300"],
+  "DeepSeek V4 Flash": ["$60", "$80", "$180", "$300"],
+  "MiMo V2.6 Flash": ["$60", "$80", "$180", "$300"],
+  "DeepSeek V4.1 Flash": ["$120", "$160", "$360", "$600"],
   // 2026-11-07 官方新增：**DeepSeek V4.1 Flash Eco**（Go $220 / Plus $290）。
-  // 官方只公布了 Go 与 Plus 两列，Pro / Max 没有数字 —— 这里也只写两列。
+  // 官方这张表在 Pro / Max 两格是**空的**（页面原文只到 `$290`），所以这里也只写两列 ——
+  // 不拿 Go/Plus 的比例去外推一个 Pro/Max 的数字。
   "DeepSeek V4.1 Flash Eco": ["$220", "$290"],
-  // 补上抓取时漏掉的两行（官方 pricing 页一直在列，之前只是没进表）。
-  // `minimax-m3.1-flash` 在官方页写作 `MiniMax M3.1 Flash`，归一化后同名。
-  "MiniMax M3.1 Flash": ["$60", "$80", "$180"],
+  // 官方一直在列的 `MiniMax M3.1 Flash`，上一版抓漏了。
+  "MiniMax M3.1 Flash": ["$60", "$80", "$180", "$300"],
 };
 
 /**
- * **网关模型 id 的别名**（2026-11-07 修：三个模型的额度一直是「未知」）。
+ * **网关模型 id 的别名**（`目录/网关侧归一化键 → 官方表里的归一化键`）。
  *
- * 归一化解决不了「简称 vs 全称」的差异：官方表写 `GLM-5.3 Flash-X` / `Hunyuan H4 Preview`，
- * 而网关的模型 id 是 `glm-5.3-flashx` / `hy4-preview`。归一化只做小写与分隔符替换，
- * `flash x` 与 `flashx`、`hunyuan h4` 与 `hy4` 仍然对不上，结果这三个模型在账号卡片上
- * 永远显示「未知」。
+ * 归一化只做大小写、分隔符与标注后缀处理，解决不了「写法不同」：
+ * 官方写 `GLM-5.3 Flash-X`（归一化 `glm 5.3 flash x`），网关 id 是 `glm-5.3-flashx`
+ * （归一化 `glm 5.3 flashx`）—— 差一个空格，查不到，账号卡片上就是「未知」。
  *
- * 用**显式别名**而不是模糊匹配：模糊匹配（比如忽略空格）会把
- * `glm-5.3-flash` 与 `glm-5.3-flashx` 这类**两个不同的模型**合并，显示成对方的额度 ——
- * 错数字比没有数字更糟。
+ * 用**显式别名**而不是模糊匹配（比如忽略所有空格）：模糊匹配会把
+ * `glm-5.3-flash`（$60）与 `glm-5.3-flashx`（$30）这类**两个不同的模型**合并成同一个键，
+ * 于是其中一个显示出**对方的**额度。错数字比没有数字更糟。
  */
 const OPENDESIGN_ID_ALIASES: Readonly<Record<string, string>> = {
   "glm 5.3 flashx": "glm 5.3 flash x",
-  "hy4 preview": "hunyuan h4 preview",
+  // 旧写法（历史目录里带过 `Hunyuan H4 Preview` 这个全称）也指向同一行，避免回退。
+  "hunyuan h4 preview": "hy4 preview",
 };
 
-/** Open Design 在表里的套餐键。 */
-const OPENDESIGN_PLAN_ORDER: readonly string[] = ["go", "plus", "pro"];
+/**
+ * Open Design 在表里的套餐键，**顺序必须与官方表格的列顺序一致**。
+ *
+ * 官方列头是 `Go | Go Plus | Go Pro | Go Max`，对应
+ * {@link planKeyOf} 输出的 `go | plus | pro | max`。
+ */
+const OPENDESIGN_PLAN_ORDER: readonly string[] = ["go", "plus", "pro", "max"];
 
 /**
  * 把「模型 → 各套餐原始字符串」的紧凑表展开成按套餐索引的查表结构。
@@ -675,8 +689,17 @@ function aliased(
     const copy: Record<string, ModelQuotaAmount> = { ...bucket };
     for (const [from, to] of Object.entries(aliases)) {
       const amount = copy[to];
-      // 官方表里没有这个键时**不建**：不做「猜一个」的别名。
-      if (amount !== undefined) copy[from] = amount;
+      /**
+       * 官方表里没有这个键时**不建**：不做「猜一个」的别名。
+       *
+       * 反过来也要保护：**不复写已存在的键**。若哪天官方真的同时列出
+       * `GLM-5.3 FlashX` 与 `GLM-5.3 Flash-X` 两个不同价位的模型，别名键就会和
+       * 官方键撞名 —— 那就必须让官方数据赢，否则界面显示的是别名指向的另一个模型的额度。
+       * 这类错误不会报错，只会显示错数字，所以在这里挡住。
+       */
+      if (amount === undefined) continue;
+      if (copy[from] !== undefined) continue;
+      copy[from] = amount;
     }
     result[plan] = copy;
   }
@@ -901,9 +924,51 @@ export function planKeyOf(planName: string): string | undefined {
   // OpenCode 的两档：`Go` / `Go Plus`。注意它和 Open Design 的 `Plus` 是两家的不同档位，
   // 但两家各用各的表，所以键同名不冲突。
   if (key === "goplus") return "goplus";
+  /**
+   * **Open Design 的 `Go Pro`**（2026-11-08 修）。
+   *
+   * 官方列头写 `Go Pro`，而这张表里的桶叫 `pro`（Command Code 的 Pro 用的是同名键）。
+   * 原来 `gopro` 直接落到 `undefined` → Open Design 的 Pro 用户每个模型都显示「未知」。
+   */
+  if (key === "gopro") return "gopro";
   if (key === "max10x" || key === "max20x") return key;
   return undefined;
 }
+
+/**
+ * 套餐键查不到时的**同名档位回退链**。
+ *
+ * 为什么需要：两家厂商对"同一个档位"的命名习惯不同 —— Open Design 的官方列头是
+ * `Go Plus` / `Go Pro` / `Go Max`，而它自己表里的桶是按后缀起的（`plus`/`pro`/`max`）；
+ * OpenCode 的表里桶就叫 `goplus`。于是同一个 `planKeyOf` 输出，在一张表里对得上、
+ * 在另一张表里对不上。
+ *
+ * 回退是**先按原键查，查不到才回退**，所以不会有歧义：某张表里真有 `goplus` 桶时
+ * 永远用那个桶（OpenCode 就是这种情形），回退只在「这张表里没有该键」时生效。
+ * @param table - 该厂商的表。
+ * @param plan - {@link planKeyOf} 给出的套餐键。
+ * @returns 该表里实际存在的桶；都没有时 `undefined`。
+ */
+function bucketOf(table: PlanModelQuotaTable, plan: string): Record<string, ModelQuotaAmount> | undefined {
+  const direct = table[plan];
+  if (direct !== undefined) return direct;
+  const fallback = PLAN_KEY_FALLBACK[plan];
+  return fallback === undefined ? undefined : table[fallback];
+}
+
+/**
+ * `planKeyOf` 的输出 → 该厂商表里另一个可能存在的桶名。
+ *
+ * 只有这三对：官方列头的 `Go X` 写法在一张表里是独立键（OpenCode 的 `goplus`），
+ * 在另一张表里则是裸后缀（Open Design 的 `plus`/`pro`/`max`）。
+ *
+ * **`gomax` 不在这里**：`planKeyOf` 把 `Go Max` 直接归成 `max`（不像 Plus/Pro 那样
+ * 保留 `go` 前缀），所以不存在 `gomax` 键 —— 写进来只会是一条永远走不到的死映射。
+ */
+const PLAN_KEY_FALLBACK: Readonly<Record<string, string>> = {
+  goplus: "plus",
+  gopro: "pro",
+};
 
 /**
  * 查一个模型在某个套餐下的额度。
@@ -923,7 +988,7 @@ export function modelQuotaOf(
   if (planName === undefined) return undefined;
   const plan = planKeyOf(planName);
   if (plan === undefined) return undefined;
-  const bucket = table[plan];
+  const bucket = bucketOf(table, plan);
   if (bucket === undefined) return undefined;
   return bucket[normalizeModelKey(modelName)];
 }

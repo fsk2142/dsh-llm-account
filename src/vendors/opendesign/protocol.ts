@@ -42,8 +42,12 @@ export const DEFAULT_BASE_URL = "https://amr-link.open-design.ai/v1";
  * 适配器那份的职责是「配置缺省时给一个合理默认」。
  *
  * 为什么需要两份：2026-11-06 的事故里，配置链路只要有一环把上限落成
- * `0`/`undefined`，这一层就静默停止裁剪，而网关的 1000 条硬上限照旧生效 ——
+ * `0`/`undefined`，这一层就静默停止裁剪，而网关的条数上限照旧生效 ——
  * 结果是整轮失败，连压缩自救的请求也一起被拒。
+ *
+ * **取值为什么是 1000**：它是目前已知最严的模型（`glm-5.3-flash`，第 1001 条即 400）
+ * 的实测上限。这一层拿不到模型 id 之外的上下文，所以只能取「对所有模型都安全」的值；
+ * 想放宽请走适配器的逐模型上限（`min(配置, 该模型上限)`），别动这里。
  */
 const WIRE_ITEM_CAP = 1_000;
 
@@ -150,10 +154,13 @@ export interface BodyFacts {
   /**
    * 出站 `messages[]` 的条数上限；缺省表示不限制。
    *
-   * 网关（`amr-link.open-design.ai/v1`）对 `deepseek-v4.1-flash` 的条数硬上限是
-   * **1000 条**，超一条就 400 `context_length_exceeded`。这是条数而不是 token 限制，
-   * 宿主只按 token 判断压缩时机，所以**永远不会提前触发** —— 只能在这一层兜住。
-   * 见 `core/wire-limit.ts` 的完整说明。
+   * 网关（`amr-link.open-design.ai/v1`）对条数有硬上限，超一条就 400
+   * `context_length_exceeded`。**上限按模型不同、且厂商会调**：2026-11-06 记录里
+   * `deepseek-v4.1-flash` 是 1000 条，2026-11-07 复测已放宽到 ≥200000，
+   * 而现在最严的是 `glm-5.3-flash`（仍是 1000 条）。
+   *
+   * 这是条数而不是 token 限制，宿主只按 token 判断压缩时机，所以**永远不会提前触发**
+   * —— 只能在这一层兜住。见 `core/wire-limit.ts` 的完整说明。
    */
   maxRequestItems?: number;
 }
@@ -350,7 +357,8 @@ export function buildRequestBody(
   /**
    * **出站条数兜底**（2026-11-05 修「1003 > 1000」，2026-11-06 改正结论）。
    *
-   * 网关对 `messages[]` 有 1000 条硬上限，而宿主只有 token 概念 —— 条数超限不会被
+   * 网关对 `messages[]` 有条数硬上限（按模型不同，2026-11-07 复测 `glm-5.3-flash`
+   * 仍是 1000 条、其余多数已放宽到 ≥200000），而宿主只有 token 概念 —— 条数超限不会被
    * 提前纳入压缩判定（见 `core/wire-limit.ts` 的模块注释）。
    *
    * 这里在**投影之后**裁：投影可能把一条输入展开成多条（工具图片会补一条 user），
@@ -368,8 +376,9 @@ export function buildRequestBody(
    *
    * 曾经一度以为网关把工具也数进 items（依据是同事那条 `1017 > 1000`）。复核
    * `docs/HANDOVER-2.0.0.md` 的实测记录：**`tools` 不计入、`system` 计入**
-   * （1000 条 → 200，1001 条 → 400）。所以 `1017` 的真实含义是「那一版根本没在裁剪」
-   * —— 对方装的是旧产物。这里不做 `- tools.length` 的扣减：那会白丢几十条历史。
+   * （当时逐条测过：1000 条 → 200，1001 条 → 400）。所以 `1017` 的真实含义是
+   * 「那一版根本没在裁剪」—— 对方装的是旧产物。这里不做 `- tools.length` 的扣减：
+   * 那会白丢几十条历史。
    */
   const projected = openAiMessages(options.messages, images);
   let trimmed: ReturnType<typeof trimWireMessages<WireMessage>>;
@@ -381,7 +390,7 @@ export function buildRequestBody(
        *
        * 之前这一位直接传 `facts.maxRequestItems`：只要上游（设置文档 → `adapterConfigOf`
        * → `resolveConfig`）有任何一环把它落成 `0`/`undefined`，`trimWireMessages` 就
-       * 拿着 `undefined` 原样返回 —— 裁剪**静默失效**，而网关的 1000 条硬上限不会因此消失。
+       * 拿着 `undefined` 原样返回 —— 裁剪**静默失效**，而网关的条数上限不会因此消失。
        * 实测代价是整轮失败，而且连「压缩自救」的那次请求也一起 400（turn 357）。
        *
        * 现在这里自带兜底：拿不到上限就按 {@link WIRE_ITEM_CAP} 裁。少留几条历史，

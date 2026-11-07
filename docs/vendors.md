@@ -177,13 +177,13 @@ cd <WORKTREE>
 需求：每个模型上显示额度信息，且按订阅套餐获取，不要把不是
 本套餐可用的模型也放到模型中」。实现落在 `src/core/model-quota-table.ts`。
 
-**数据全部来自官网 HTML（没有 API），抓取日期 2026-10-21**：
+**数据全部来自官网 HTML（没有 API）；opendesign 那一行于 2026-11-08 重新抓取**：
 
 | 厂商 | 页面 | 覆盖 |
 |---|---|---|
 | commandcode | `commandcode.ai/docs/plans/goat` 的 `Monthly credits` 列 | 60 个模型（GOAT） |
 | commandcode | `commandcode.ai/pricing` 的 `Usage` 表 | 7 个模型 × 5 档 |
-| opendesign | `open-design.ai/pricing` 的 `Design Plan usage` 表 | 12 个模型 × Go/Plus/Pro |
+| opendesign | `open-design.ai/pricing` 的 `Design Plan usage` 表 | 14 个模型 × Go/Go Plus/Go Pro/Go Max |
 | opencode | `opencode.ai/go` 的 `Monthly usage` 列 | 15 个模型 × Go/Go Plus |
 
 **为什么不能用「套餐总额 × 百分比」算**：GOAT（$70/月）里 Ling 3.1 Flash 的额度是
@@ -252,8 +252,8 @@ $100（比总额还高）、Claude Sonnet 5.5 只有 $10 —— 官方按模型�
 | Command Code | `billing/credits` 的 `monthlyCredits` 余额派生（真实） |
 | Open Design | **不存在，不再合成** |
 
-套餐行仍显示「每月 $120」—— 那来自 `/billing/summary` 的 `subscriptionCreditsUsd`，
-是厂商真实数据，与本地产的窗口不同。
+套餐行还会显示一个「每月 $X」—— 那来自 `/billing/summary` 的 `subscriptionCreditsUsd`，
+是厂商真实数据（**会随厂商调价自动变**，所以本文档不写死这个数字），与本地产的窗口不同。
 
 **厂商 → 表的映射**改用显式枚举（`quotaTableOf` / `planModelsOf`），
 不再用 `vendor.includes(...)` 的子串匹配 —— `opendesign` 与 `opencode` 共享
@@ -300,3 +300,23 @@ $100（比总额还高）、Claude Sonnet 5.5 只有 $10 —— 官方按模型�
 里的源码契约断言守着（`adapter.ts` 里不得出现 `.amr/config.json`）。
 
 否则 vela 覆盖固定槽位后，两个账号会退化成「都用最后一个登录的」。
+
+### 模型键别名与档位回退（2026-11-08 补记）
+
+这两处都是「归一化解决不了、只能显式登记」的地方。**看起来像冗余代码，实际删了就有模型显示「未知」**，所以写在这里。
+
+**1. 模型键别名**（`OPENDESIGN_ID_ALIASES`）：官方表写 `GLM-5.3 Flash-X`，网关模型 id 是
+`glm-5.3-flashx` —— 归一化后是 `glm 5.3 flash x` 与 `glm 5.3 flashx`，差一个空格，查不到。
+别名表只登记**确实指同一个模型**的写法，**不做模糊匹配**：忽略空格会把
+`glm-5.3-flash`（$60）与 `glm-5.3-flashx`（$30）合并，于是其中一个显示对方的额度。
+错数字比没有数字更糟，这是这张表的一贯纪律。
+
+同时 `aliased()` **不复写已存在的键**：哪天官方真的同时列出这两个模型，必须让官方数据赢。
+
+**2. 档位回退**（`PLAN_KEY_FALLBACK`）：`planKeyOf` 的输入是厂商原样给的字符串
+（`membershipTier` 或 `codingPlan.tier`），我们规定不了它的格式。官方列头是
+`Go Plus` / `Go Pro` / `Go Max`，而 Open Design 表里的桶叫 `plus` / `pro` / `max`，
+OpenCode 的桶却叫 `goplus`。所以同一个 `planKeyOf` 输出在一张表里对得上、在另一张里对不上。
+回退是**先按原键查、查不到才回退**，所以表里真有同名桶时永远用那个桶（OpenCode 不受影响）。
+
+两条都是「整列数据消失」级别的问题：认不出档位 → 该档用户的**每一个模型**都显示「未知」。
