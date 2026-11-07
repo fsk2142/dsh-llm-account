@@ -662,13 +662,18 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * @returns 与线上同序的 chunk 流。
    */
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const config = resolveConfig(this.#deps.config());
+    /**
+     * 配置在**选号之后**才读（与抽取前同一顺序）：`beforeRequest` 可能改设置，
+     * 先读会拿到旧值。用惰性 + 记忆化，一个请求内只解析一次。
+     */
+    let resolved: ResolvedConfig | undefined;
+    const config = (): ResolvedConfig => (resolved ??= resolveConfig(this.#deps.config()));
     return runAttemptLoop<ResolvedConfig, string, undefined>(
       {
         label: "llm-opendesign",
         rotation: this.#deps.rotation,
         maxTried: () => this.#maxTried(),
-        resolveConfig: () => config,
+        resolveConfig: config,
         isAbort: (error) => this.#isAbort(error),
         abortError: (signal) => this.#abortError(signal),
         beforeRequest: (input) => this.#deps.beforeRequest?.(input),
@@ -696,8 +701,12 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         classify: (error) => this.#classify(error),
         recordUsage: (ref, model, outcome, counts, kind) => this.#recordUsage(ref, model, outcome, counts, kind),
         noteSettled: (ref) => this.#deps.rotation.noteSettled(ref),
+        // 「一个账号都没有」与「全试过了」是两种处境，给的建议不同（抽取前就是两条文案）。
         noAccount: (model) =>
-          new LlmError(`llm-opendesign: 模型 "${model}" 的所有 Open Design 账号都不可用`, "MISSING_CREDENTIAL"),
+          new LlmError(
+            `llm-opendesign: 没有可用于模型 "${model}" 的 Open Design 账号；请先在账号页添加账号，或把密钥写入凭据库`,
+            "MISSING_CREDENTIAL",
+          ),
       },
       options,
     );

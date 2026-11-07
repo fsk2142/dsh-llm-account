@@ -409,13 +409,18 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @returns 与线上同序的 chunk 流。
    */
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const raw = this.#deps.config();
-    return runAttemptLoop<typeof raw, { key: string; headers?: Record<string, string> }, GatewayRecorder>(
+    /**
+     * 配置在**选号之后**才读（与抽取前同一顺序）：`beforeRequest` 可能改设置，
+     * 先读会拿到旧值。用惰性 + 记忆化，一个请求内只解析一次。
+     */
+    let snapshot: OpencodeConfig | undefined;
+    const raw = (): OpencodeConfig => (snapshot ??= this.#deps.config());
+    return runAttemptLoop<OpencodeConfig, { key: string; headers?: Record<string, string> }, GatewayRecorder>(
       {
         label: "llm-opencode-go",
         rotation: this.#deps.rotation,
         maxTried: () => this.#maxTried(),
-        resolveConfig: () => raw,
+        resolveConfig: raw,
         isAbort: (error) => this.#isAbort(error),
         abortError: (signal) => this.#abortError(signal),
         beforeRequest: (input) => this.#deps.beforeRequest?.(input),
@@ -467,8 +472,12 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
          */
         wrapRequestLevelError: (error) =>
           error instanceof OpencodeStreamFailure ? new LlmError(error.message, PI_AI_ERROR_CODE, { cause: error }) : error,
+        // 「一个账号都没有」与「全试过了」是两种处境，给的建议不同（抽取前就是两条文案）。
         noAccount: (model) =>
-          new LlmError(`llm-opencode-go: all OpenCode Go accounts are unavailable for model "${model}"`, "MISSING_CREDENTIAL"),
+          new LlmError(
+            `llm-opencode-go: no OpenCode Go account is available for model "${model}"; add an account or store its API key`,
+            "MISSING_CREDENTIAL",
+          ),
         /**
          * pi-ai 把「空响应 / 上下文溢出」这类终态包成 finish：它是**宿主**的错误码
          * （EMPTY_RESPONSE / CONTEXT_WINDOW_EXCEEDED 都在重试白名单里），交给宿主，

@@ -405,20 +405,25 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @returns 与线上同序的 chunk 流。
    */
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const config = resolveConfig(this.#deps.config());
+    /**
+     * 配置在**选号之后**才读（与抽取前同一顺序）：`beforeRequest` 可能改设置，
+     * 先读会拿到旧值。用惰性 + 记忆化，一个请求内只解析一次。
+     */
+    let resolved: ResolvedConfig | undefined;
+    const config = (): ResolvedConfig => (resolved ??= resolveConfig(this.#deps.config()));
     return runAttemptLoop<ResolvedConfig, string, undefined>(
       {
         label: "llm-commandcode",
         rotation: this.#deps.rotation,
         maxTried: () => this.#maxTried(),
-        resolveConfig: () => config,
+        resolveConfig: config,
         isAbort: (error) => this.#isAbort(error),
         abortError: (signal) => this.#abortError(signal),
         beforeRequest: (input) => this.#deps.beforeRequest?.(input),
         fallbackModel: (current, kind) => this.#fallbackModel(current, kind),
         delegate: (target, current) =>
           delegateStream(target, current as unknown as Record<string, unknown>) as AsyncIterable<StreamChunk> | undefined,
-        resolveCredential: (ref) => this.#resolveKey(config, ref),
+        resolveCredential: (ref) => this.#resolveKey(config(), ref),
         missingCredential: (ref) => {
           // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
           // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
@@ -439,8 +444,12 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
         classify: (error) => this.#classify(error),
         recordUsage: (ref, model, outcome, counts, kind) => this.#recordUsage(ref, model, outcome, counts, kind),
         noteSettled: (ref) => this.#deps.rotation.noteSettled(ref),
+        // 「一个账号都没有」与「全试过了」是两种处境，给的建议不同（抽取前就是两条文案）。
         noAccount: (model) =>
-          new LlmError(`llm-commandcode: all Command Code accounts are unavailable for model "${model}"`, "MISSING_CREDENTIAL"),
+          new LlmError(
+            `llm-commandcode: no Command Code account is available for model "${model}"; add an account or store its API key`,
+            "MISSING_CREDENTIAL",
+          ),
       },
       options,
     );

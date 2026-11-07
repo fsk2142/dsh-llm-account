@@ -38,6 +38,8 @@ function harness(input: {
   deferUsage?: boolean;
   usageCountsAsEmitted?: boolean;
   onChunk?: AttemptLoopHost<unknown, string, undefined>["onChunk"];
+  /** 自定义「没有可用账号」文案（用于固定提示语回归）。 */
+  noAccountText?: string;
 }) {
   const events: string[] = [];
   const usage: { ref: string; outcome: string; kind?: string; counts: AttemptCounts }[] = [];
@@ -82,7 +84,7 @@ function harness(input: {
     recordUsage: (ref, _model, outcome, counts, kind) => usage.push({ ref, outcome, ...(kind === undefined ? {} : { kind }), counts }),
     noteSettled: (ref) => settled.push(ref),
     promoteServed: (ref) => promoted.push(ref),
-    noAccount: (model) => new LlmError(`no account for ${model}`, "MISSING_CREDENTIAL"),
+    noAccount: (model) => new LlmError(input.noAccountText ?? `no account for ${model}`, "MISSING_CREDENTIAL"),
     fallbackModel: async () => input.fallback,
     delegate: () => undefined,
     ...(input.onChunk === undefined ? {} : { onChunk: input.onChunk }),
@@ -271,5 +273,16 @@ describe("用量与 chunk 处理", () => {
     const { chunks } = await h.run();
     expect(chunks).toHaveLength(1);
     expect((chunks[0] as Extract<StreamChunk, { type: "finish" }>).reason.kind).toBe("tool-calls");
+  });
+});
+
+describe("「没有可用账号」的提示（自检发现的文案回归）", () => {
+  it("**一个账号都没有**时给的是可行动的提示，不是「都不可用」", async () => {
+    // 抽取循环时把两条文案合并成了一条，结果新用户（一个账号都没有）看到的是
+    // 「所有账号都不可用」——那句话对没加过账号的人毫无指引。这条用例固定住。
+    const h = harness({ order: [], scripts: {}, noAccountText: "请先在账号页添加账号" });
+    const { error } = await h.run();
+    expect((error as LlmError).code).toBe("MISSING_CREDENTIAL");
+    expect(String((error as Error).message)).toContain("请先在账号页添加账号");
   });
 });

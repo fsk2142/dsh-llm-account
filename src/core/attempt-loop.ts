@@ -142,7 +142,14 @@ export interface AttemptLoopHost<Config, Credential, AttemptContext> {
   noteSettled(ref: string): void;
   /** 备用账号服务成功后的提位。 */
   promoteServed?(ref: string): void;
-  /** 一个账号都没有时的错误。 */
+  /**
+   * 「一个可用账号都没有」时的错误。
+   *
+   * **只在第一次选号就选不到时出现**（一条失败都没有）：这时候用户需要的是
+   * 「去账号页加一个」这种可行动的话，不是「都不可用」。
+   * 抽完所有账号的那条路不会走到这里 —— 那条路上 {@link AttemptLedger.throwExhausted}
+   * 一定有失败可抛（取不到候选本身就意味着已有失败），所以不需要另一条文案。
+   */
   noAccount(model: string): LlmError;
   /** chunk 改写/补发（DSML 抢救）；抛出即终止本次尝试（不参与换号分类）。 */
   onChunk?(state: StreamPumpState, chunk: StreamChunk): void | StreamChunk[];
@@ -317,7 +324,6 @@ export async function* runAttemptLoop<Config, Credential, AttemptContext>(
         }
         if (!(chunk.type === "usage" && host.usageCountsAsEmitted === false)) emitted = true;
         yield chunk;
-        chunk = chunk;
       }
     } finally {
       if (!exhausted) {
