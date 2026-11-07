@@ -40,6 +40,8 @@ function harness(input: {
   onChunk?: AttemptLoopHost<unknown, string, undefined>["onChunk"];
   /** 自定义「没有可用账号」文案（用于固定提示语回归）。 */
   noAccountText?: string;
+  /** 跨厂商委托时目标家交回来的流（`undefined` = 不能委托）。 */
+  delegateChunks?: StreamChunk[];
 }) {
   const events: string[] = [];
   const usage: { ref: string; outcome: string; kind?: string; counts: AttemptCounts }[] = [];
@@ -86,7 +88,12 @@ function harness(input: {
     promoteServed: (ref) => promoted.push(ref),
     noAccount: (model) => new LlmError(input.noAccountText ?? `no account for ${model}`, "MISSING_CREDENTIAL"),
     fallbackModel: async () => input.fallback,
-    delegate: () => undefined,
+    delegate: () =>
+      input.delegateChunks === undefined
+        ? undefined
+        : (async function* () {
+            for (const chunk of input.delegateChunks ?? []) yield chunk;
+          })(),
     ...(input.onChunk === undefined ? {} : { onChunk: input.onChunk }),
     ...(input.deferUsage === undefined ? {} : { deferUsage: input.deferUsage }),
     ...(input.usageCountsAsEmitted === undefined ? {} : { usageCountsAsEmitted: input.usageCountsAsEmitted }),
@@ -231,6 +238,22 @@ describe("取消与换模型", () => {
     // 换模型后仍只有 a 可用、仍失败、且只换一次 → 最终抛错而不是无限循环。
     expect(error).toBeDefined();
     expect(h.triedSeen.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("跨厂商委托", () => {
+  it("\u6362\u5230\u540c\u540d\u6a21\u578b\u4f46\u5c5e\u4e8e\u53e6\u4e00\u5bb6 \u2192 \u8f6c\u4ea4\u59d4\u6258\u6d41\u5e76\u7ed3\u675f\uff08\u4e0d\u518d\u81ea\u5df1\u53d1\u8bf7\u6c42\uff09", async () => {
+    const h = harness({
+      order: ["a"],
+      scripts: { "key-a": { fail: new Error("quota") } },
+      fallback: { provider: "other", model: "m2" },
+      delegateChunks: [{ type: "text-delta", index: 0, text: "from-other" }],
+    });
+    const { chunks, error } = await h.run();
+    expect(error).toBeUndefined();
+    expect(chunks, "\u59d4\u6258\u5bb6\u7684 chunk \u5e94\u539f\u6837\u900f\u7ed9\u5bbf\u4e3b").toHaveLength(1);
+    expect((chunks[0] as Extract<StreamChunk, { type: "text-delta" }>).text).toBe("from-other");
+    expect(h.triedSeen, "\u59d4\u6258\u540e\u4e0d\u8be5\u518d\u5c1d\u8bd5\u672c\u5bb6\u8d26\u53f7").toEqual(["a"]);
   });
 });
 
