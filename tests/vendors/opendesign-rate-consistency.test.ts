@@ -33,37 +33,39 @@ function capOf(tier: string, windows: { duration: number; limit: number; used: n
 }
 
 describe("换算率一致性排查", () => {
-  it("**Go**：周 150000→$30、5小时 50000→$10（换算率 5000）", () => {
+  it("**Go**：周 275000→$55、5小时 90000→$18（2026-11-07 调价后的官方值）", () => {
+    // 调价前是 150000→$30 / 50000→$10。2026-11-07 官方把 Go 的月度总额从 $120 提到 $220，
+    // 周窗口 $30→$55、5 小时 $10→$18。这里的 limitCredits 按同一换算率（5000）相应放大。
     const windows = [
-      { duration: 18_000, limit: 50_000, used: 0 },
-      { duration: 604_800, limit: 150_000, used: 0 },
+      { duration: 18_000, limit: 90_000, used: 0 },
+      { duration: 604_800, limit: 275_000, used: 0 },
     ];
-    expect(capOf("go", windows, "fiveHour")).toBe(10);
-    expect(capOf("go", windows, "weekly")).toBe(30);
+    expect(capOf("go", windows, "fiveHour")).toBe(18);
+    expect(capOf("go", windows, "weekly")).toBe(55);
   });
 
-  it("**Plus**：周窗口按官方 $40 折算", () => {
+  it("**Plus**：周窗口按官方 $74 折算（2026-11-07 调价：$40→$74）", () => {
     // 单窗口反推时，cap 必然等于官方上限（换算率就是由它算出来的）——
     // 这条测的是「反推逻辑对每个档位都跑得通」，不是校验 credits 配比。
-    const cap = capOf("plus", [{ duration: 604_800, limit: 200_000, used: 0 }], "weekly");
-    expect(cap).toBe(40);
+    const cap = capOf("plus", [{ duration: 604_800, limit: 370_000, used: 0 }], "weekly");
+    expect(cap).toBe(74);
   });
 
   it("**多个窗口时只用一个反推，其余自动对齐**", () => {
     // 这才是真正有价值的检查：同一份 preflight 里两个窗口的 credits 若成比例，
     // 用任意一个反推得到的换算率会让另一个也算对。
     const windows = [
-      { duration: 18_000, limit: 50_000, used: 25_000 },
-      { duration: 604_800, limit: 150_000, used: 75_000 },
+      { duration: 18_000, limit: 90_000, used: 45_000 },
+      { duration: 604_800, limit: 275_000, used: 137_500 },
     ];
     const snap = toQuotaSnapshot({ summary: undefined, preflight: preflightOf("go", windows), failures: [] });
     const fiveHour = snap.windows.find((w) => w.key === "fiveHour");
     const weekly = snap.windows.find((w) => w.key === "weekly");
-    // 50000/5000 = $10（官方 5 小时上限），150000/5000 = $30（官方周上限）。
-    expect(fiveHour?.cap).toBe(10);
-    expect(weekly?.cap).toBe(30);
-    expect(fiveHour?.used).toBe(5);
-    expect(weekly?.used).toBe(15);
+    // 90000/5000 = $18（官方 5 小时上限），275000/5000 = $55（官方周上限）。
+    expect(fiveHour?.cap).toBe(18);
+    expect(weekly?.cap).toBe(55);
+    expect(fiveHour?.used).toBe(9);
+    expect(weekly?.used).toBe(27.5);
   });
 
   it("**Pro**：周窗口按官方 $90 折算", () => {
@@ -77,10 +79,10 @@ describe("换算率一致性排查", () => {
   });
 
   it("月度窗口（30 天）也用同一换算率", () => {
-    const windows = [{ duration: 2_592_000, limit: 600_000, used: 0 }];
+    // Go 月度官方现在是 $220（2026-11-07 从 $120 调价）。
+    const windows = [{ duration: 2_592_000, limit: 1_100_000, used: 0 }];
     const cap = capOf("go", windows, "monthly");
-    // Go 月度官方 $120。600000 / (150000/30) = 600000/5000 = 120。
-    expect(cap).toBe(120);
+    expect(cap).toBe(220);
   });
 
   it("**窗口时长认不出时不反推**（比如 15 分钟的自定义窗口）", () => {
@@ -97,7 +99,7 @@ describe("换算率一致性排查", () => {
       failures: [],
     });
     const weekly = snap.windows.find((window) => window.key === "weekly");
-    expect(weekly?.cap).toBe(30);
+    expect(weekly?.cap).toBe(55);
     expect(weekly?.used).toBeUndefined();
   });
 });
@@ -111,17 +113,17 @@ describe("异常窗口处理", () => {
         eligible: true,
         tier: "plus",
         windows: [
-          { durationSeconds: 18_000, usedCredits: "100", limitCredits: "50000" },
-          { durationSeconds: 604_800, usedCredits: "1000", limitCredits: "200000" },
+          { durationSeconds: 18_000, usedCredits: "100", limitCredits: "90000" },
+          { durationSeconds: 604_800, usedCredits: "1000", limitCredits: "370000" },
         ],
       },
     };
     const snap = toQuotaSnapshot({ summary: undefined, preflight: p, failures: [] });
     const weekly = snap.windows.find((w) => w.key === "weekly");
-    // 用周窗口反推：200000 / 40 = 5000，所以 5 小时窗口也按 5000 折算 = $10。
-    expect(weekly?.cap).toBe(40);
+    // 用周窗口反推：370000 / 74 = 5000，所以 5 小时窗口也按 5000 折算 = $18。
+    expect(weekly?.cap).toBe(74);
     const fiveHour = snap.windows.find((w) => w.key === "fiveHour");
-    expect(fiveHour?.cap).toBe(10);
+    expect(fiveHour?.cap).toBe(18);
   });
 
   it("**没有 limitCredits 时上限仍显示官方值，已用留空**", () => {
@@ -135,7 +137,7 @@ describe("异常窗口处理", () => {
     };
     const snap = toQuotaSnapshot({ summary: undefined, preflight: p, failures: [] });
     const weekly = snap.windows.find((w) => w.key === "weekly");
-    expect(weekly?.cap).toBe(30);
+    expect(weekly?.cap).toBe(55);
     expect(weekly?.used).toBeUndefined();
   });
 });

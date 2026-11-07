@@ -67,6 +67,8 @@ async function outboundBody(
   config: OpenDesignAdapterDeps["config"],
   history: number,
   tools?: readonly { name: string; description: string; parameters: Record<string, unknown> }[],
+  /** 目标模型（不同模型的条数上限不同，默认用没有硬上限的那个）。 */
+  model = "deepseek-v4.1-flash",
 ): Promise<{ messages: { role: string }[]; tools?: unknown[] }> {
   let body: { messages: { role: string }[]; tools?: unknown[] } | undefined;
   const fetchImpl = (async (url: string, init?: RequestInit) => {
@@ -81,7 +83,7 @@ async function outboundBody(
   const adapter = createOpenDesignAdapter(deps(config, fetchImpl));
   const options = {
     provider: "opendesign",
-    model: "deepseek-v4.1-flash",
+    model,
     messages: longHistory(history),
     ...(tools === undefined ? {} : { tools }),
   } as unknown as GenerateOptions;
@@ -137,20 +139,28 @@ it("未超限的请求不被改动（不给正常请求加噪音）", async () =
 });
 
 it("**配置再大也被该模型的实测上限钳住**（全局旋钮 vs 各模型上限不一致）", async () => {
-  // 设置里只有一个全局旋钮，而同一网关不同模型的上限并不一样：deepseek-v4.1-flash 是
-  // 1000，其余模型实测接受 3000。用户为别的模型把旋钮调到 3000 之后，
-  // deepseek-v4.1-flash 上的 1002 条就会被原样放行 —— 正是 turn 357 那次失败的样子。
-  expect(itemCapOf("deepseek-v4.1-flash"), "这个模型实测只收 1000 条").toBe(1_000);
-  expect(itemCapOf("glm-5.3-flash"), "其余模型实测 3000").toBe(3_000);
+  // 设置里只有一个全局旋钮，而同一网关不同模型的上限并不一样。
+  //
+  // **2026-11-07 深夜复测后这张表变了**：`deepseek-v4.1-flash` 不再是 1000
+  // （1000 / 5000 / 20000 / 30000 / 200000 条都 200，且 prompt_tokens 随条数线性增长，
+  // 藏针也确认首条消息能送达）。现在只剩 `glm-5.3-flash` 还是 1000。
+  // 这条用例的价值不在于「记住某个数字」，而在于固定「按模型取小」这道机制。
+  expect(itemCapOf("glm-5.3-flash"), "实测第 1001 条即 400").toBe(1_000);
+  expect(itemCapOf("deepseek-v4.1-flash"), "已放宽，按兜底值走").toBe(3_000);
   expect(itemCapOf("没量过的模型"), "没量过就按 3000 兜底").toBe(3_000);
 
-  expect(effectiveItemLimit(3_000, "deepseek-v4.1-flash"), "配置 3000 也要压到 1000").toBe(1_000);
-  expect(effectiveItemLimit(3_000, "glm-5.3-flash"), "别的模型不压").toBe(3_000);
+  expect(effectiveItemLimit(3_000, "glm-5.3-flash"), "配置 3000 也要压到 1000").toBe(1_000);
+  expect(effectiveItemLimit(9_000, "glm-5.3-flash"), "配置再大也压到 1000").toBe(1_000);
   expect(effectiveItemLimit(200, "glm-5.3-flash"), "配置更小时听配置的").toBe(200);
-  expect(effectiveItemLimit(1_000, "deepseek-v4.1-flash"), "恰好等于上限时保持").toBe(1_000);
+  expect(effectiveItemLimit(3_000, "deepseek-v4.1-flash"), "该模型已不受 1000 限制").toBe(3_000);
 
-  // 端到端：配置写 3000、请求 1003 条，出站仍必须 ≤1000。
-  const body = await outboundBody(() => ({ maxRequestItems: 3_000 }), 1_003);
+  /**
+   * 端到端：配置写 9000、请求 5000 条 —— 对 `glm-5.3-flash` 出站仍必须 ≤1000。
+   *
+   * 用这个模型跑，是因为它是**目前唯一**还有硬上限的那个；拿 flash 跑会得到
+   * 5000 条原样发出，看不出钳制有没有生效。
+   */
+  const body = await outboundBody(() => ({ maxRequestItems: 9_000 }), 5_000, undefined, "glm-5.3-flash");
   expect(body.messages.length).toBeLessThanOrEqual(1_000);
   expect(JSON.stringify(body.messages)).toContain("省略");
 });

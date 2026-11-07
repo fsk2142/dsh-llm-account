@@ -587,7 +587,7 @@ const OPENCODE_PLAN_ORDER: readonly string[] = ["go", "goplus"];
  *
  * 三列 = Go / Plus / Pro。**Max 列官方页面是空的**，所以这里也没有 —— 不猜。
  */
-const OPENDESIGN_RAW: Readonly<Record<string, readonly [string, string, string]>> = {
+const OPENDESIGN_RAW: Readonly<Record<string, readonly string[]>> = {
   "GLM-5.3 Flash-X": ["$30", "$40", "$90"],
   "DeepSeek V4 Pro": ["$60", "$80", "$180"],
   "Kimi K2.7 Code": ["$60", "$80", "$180"],
@@ -600,6 +600,29 @@ const OPENDESIGN_RAW: Readonly<Record<string, readonly [string, string, string]>
   "DeepSeek V4 Flash": ["$60", "$80", "$180"],
   "MiMo V2.6 Flash": ["$60", "$80", "$180"],
   "DeepSeek V4.1 Flash": ["$120", "$160", "$360"],
+  // 2026-11-07 官方新增：**DeepSeek V4.1 Flash Eco**（Go $220 / Plus $290）。
+  // 官方只公布了 Go 与 Plus 两列，Pro / Max 没有数字 —— 这里也只写两列。
+  "DeepSeek V4.1 Flash Eco": ["$220", "$290"],
+  // 补上抓取时漏掉的两行（官方 pricing 页一直在列，之前只是没进表）。
+  // `minimax-m3.1-flash` 在官方页写作 `MiniMax M3.1 Flash`，归一化后同名。
+  "MiniMax M3.1 Flash": ["$60", "$80", "$180"],
+};
+
+/**
+ * **网关模型 id 的别名**（2026-11-07 修：三个模型的额度一直是「未知」）。
+ *
+ * 归一化解决不了「简称 vs 全称」的差异：官方表写 `GLM-5.3 Flash-X` / `Hunyuan H4 Preview`，
+ * 而网关的模型 id 是 `glm-5.3-flashx` / `hy4-preview`。归一化只做小写与分隔符替换，
+ * `flash x` 与 `flashx`、`hunyuan h4` 与 `hy4` 仍然对不上，结果这三个模型在账号卡片上
+ * 永远显示「未知」。
+ *
+ * 用**显式别名**而不是模糊匹配：模糊匹配（比如忽略空格）会把
+ * `glm-5.3-flash` 与 `glm-5.3-flashx` 这类**两个不同的模型**合并，显示成对方的额度 ——
+ * 错数字比没有数字更糟。
+ */
+const OPENDESIGN_ID_ALIASES: Readonly<Record<string, string>> = {
+  "glm 5.3 flashx": "glm 5.3 flash x",
+  "hy4 preview": "hunyuan h4 preview",
 };
 
 /** Open Design 在表里的套餐键。 */
@@ -629,6 +652,35 @@ function expand(
     });
   }
   return table;
+}
+
+/**
+ * 给查表结构套一层**模型键别名**。
+ *
+ * 为什么不在 `normalizeModelKey` 里做模糊匹配：归一化只负责大小写与分隔符，
+ * 一旦让它「差不多就算同一个」，`glm-5.3-flash` 与 `glm-5.3-flashx` 这类
+ * **两个不同的模型**会被合并，界面显示成对方的额度。错数字比没有数字更糟。
+ *
+ * 所以别名是一张显式表：只有确实指同一个模型、只是官方写简称的地方才登记。
+ * @param table - 原始查表结构。
+ * @param aliases - `目录侧归一化键 → 官方表归一化键`。
+ * @returns 套了别名的新表（每个套餐桶里补齐别名键）。
+ */
+function aliased(
+  table: Record<string, Record<string, ModelQuotaAmount>>,
+  aliases: Readonly<Record<string, string>>,
+): PlanModelQuotaTable {
+  const result: Record<string, Record<string, ModelQuotaAmount>> = {};
+  for (const [plan, bucket] of Object.entries(table)) {
+    const copy: Record<string, ModelQuotaAmount> = { ...bucket };
+    for (const [from, to] of Object.entries(aliases)) {
+      const amount = copy[to];
+      // 官方表里没有这个键时**不建**：不做「猜一个」的别名。
+      if (amount !== undefined) copy[from] = amount;
+    }
+    result[plan] = copy;
+  }
+  return result;
 }
 
 /** 把「模型 → 单个额度字符串」的单档表展开（只有一列数字的表用）。 */
@@ -675,8 +727,11 @@ export const COMMANDCODE_MODEL_QUOTA: PlanModelQuotaTable = (() => {
   };
 })();
 
-/** Open Design 的查表结构。 */
-export const OPENDESIGN_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENDESIGN_RAW, OPENDESIGN_PLAN_ORDER);
+/** Open Design 的查表结构（模型键额外套一层别名，见 {@link OPENDESIGN_ID_ALIASES}）。 */
+export const OPENDESIGN_MODEL_QUOTA: PlanModelQuotaTable = aliased(
+  expand(OPENDESIGN_RAW, OPENDESIGN_PLAN_ORDER),
+  OPENDESIGN_ID_ALIASES,
+);
 
 /** OpenCode 的查表结构（只能区分 Go / Go Plus 两档）。 */
 export const OPENCODE_MODEL_QUOTA: PlanModelQuotaTable = expand(OPENCODE_RAW, OPENCODE_PLAN_ORDER);
@@ -832,6 +887,17 @@ export function planKeyOf(planName: string): string | undefined {
     .trim();
   if (key === "") return undefined;
   if (key === "go" || key === "goat" || key === "pro" || key === "plus") return key;
+  /**
+   * **Open Design 的 Max 档**（2026-11-07 修：原本认不出，Max 用户的每个模型都显示「未知」）。
+   *
+   * 官方 `model-credits` 页把它写成 `Max`，套餐卡片写 `Go Max`，`vela preflight` 的
+   * `tier` 是小写 `max` —— 这些都指同一档。原来只认 `max10x` / `max20x`（Command Code
+   * 的两档），于是 `max` 落到「认不出」，{@link modelQuotaOf} 直接返回 undefined。
+   *
+   * 为什么不与 Command Code 冲突：两家各用各的表，`max` 只在 Open Design 的表里有桶
+   * （Command Code 用的是 `max10x` / `max20x`）。同键不同表，不会查错数字。
+   */
+  if (key === "gomax" || key === "max") return "max";
   // OpenCode 的两档：`Go` / `Go Plus`。注意它和 Open Design 的 `Plus` 是两家的不同档位，
   // 但两家各用各的表，所以键同名不冲突。
   if (key === "goplus") return "goplus";

@@ -244,3 +244,67 @@ describe("厂商 → 额度表的显式映射（防子串误配）", () => {
     expect(planModelsOf("dsh-opencode-go")).toBeUndefined();
   });
 });
+
+/**
+ * 2026-11-07 官方调价 + 新增 Eco 档后的**真实模型 id 覆盖**。
+ *
+ * 这里的模型 id **逐条取自网关 `/v1/models` 的真实返回**，不是手写的展示名。
+ * 为什么值得单独一组用例：账号卡片显示「未知」的真正原因，是
+ * 「官方展示名」与「网关模型 id」在归一化后仍然不同（`GLM-5.3 Flash-X` vs
+ * `glm-5.3-flashx`、`Hunyuan H4 Preview` vs `hy4-preview`）—— 归一化不解决简称，
+ * 只能靠显式别名。没有这组用例，任何人重跑一次抓取脚本都会把别名丢掉。
+ */
+describe("Open Design：网关真实模型 id 都能查到额度（2026-11-07）", () => {
+  /** 网关 `/v1/models` 返回的全部 14 个 id。 */
+  const GATEWAY_IDS = [
+    "claude-haiku-5.5",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp",
+    "deepseek-v4-pro",
+    "deepseek-v4.1-flash",
+    "deepseek-v4.1-flash-eco",
+    "glm-5.3-flash",
+    "glm-5.3-flashx",
+    "gpt-6-luna",
+    "hy4-preview",
+    "kimi-k2.7-code",
+    "mimo-v2.6-flash",
+    "mimo-v2.6-pro",
+    "minimax-m3.1-flash",
+  ] as const;
+
+  it("**每个 id 在 Go 档都查得到**（有一个查不到，卡片上就显示「未知」）", () => {
+    const missing = GATEWAY_IDS.filter((id) => modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go", id) === undefined);
+    expect(missing, `查不到额度的模型：${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("新增的 **DeepSeek V4.1 Flash Eco** 是 $220（用户报的这条数据）", () => {
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go", "deepseek-v4.1-flash-eco")).toEqual({ kind: "usd", amount: 220 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Plus", "deepseek-v4.1-flash-eco")).toEqual({ kind: "usd", amount: 290 });
+  });
+
+  it("Eco 的 Pro / Max 官方没给数字 → 不猜", () => {
+    // 官方 usage 表只列了 Go 与 Go Plus 两列。
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Pro", "deepseek-v4.1-flash-eco")).toBeUndefined();
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Max", "deepseek-v4.1-flash-eco")).toBeUndefined();
+  });
+
+  it("**别名不许串味**：`glm-5.3-flash` 仍是 $60，不会被 flashx 的 $30 覆盖", () => {
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go", "glm-5.3-flash")).toEqual({ kind: "usd", amount: 60 });
+    expect(modelQuotaOf(OPENDESIGN_MODEL_QUOTA, "Go", "glm-5.3-flashx")).toEqual({ kind: "usd", amount: 30 });
+  });
+});
+
+describe("planKeyOf：Open Design 的 Max 档（2026-11-07 修）", () => {
+  it("`Max` / `Go Max` / 小写 `max` 都认得出", () => {
+    // 修前：这三个都返回 undefined → Max 用户的每个模型都显示「未知」。
+    expect(planKeyOf("Max")).toBe("max");
+    expect(planKeyOf("Go Max")).toBe("max");
+    expect(planKeyOf("max")).toBe("max");
+  });
+
+  it("Command Code 的两档不被误认成同一个", () => {
+    expect(planKeyOf("Max 10×")).toBe("max10x");
+    expect(planKeyOf("Max 20×")).toBe("max20x");
+  });
+});

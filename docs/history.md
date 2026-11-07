@@ -1067,3 +1067,41 @@ turn 357  turn/end        error: ... (1002 > 1000 items)      ← 主请求也�
 - 变异测试：把「已输出就不换号」那道闸门改成恒真，对应用例立刻红；
 - 契约用例同步升级为「三家必须走 `runAttemptLoop`、不许自己调 `rotation.pick` /
   `fallbackAllowed`」。
+
+## 2.1.12：Eco 模型 + 官方调价同步（2026-11-07）
+
+用户报「opendesign 多了 eco 模型，额度每月 220 美元，但账号里显示未知」。
+
+### 现场核对（都是打真网关 / 抓官网量出来的）
+
+- 网关 `/v1/models` 现在有 **14 个模型**，新增 `deepseek-v4.1-flash-eco`；
+- 官方 `pricing` 页的 Design Plan usage 表新增一行：
+  `DeepSeek V4.1 Flash Eco` → **Go $220 / Go Plus $290**（只公布两列）；
+- 官方 `model-credits` 页的套餐构成表**整体调价**：
+  Go 月度 $120→**$220**、周 $30→**$55**、5 小时 $10→**$18**；
+  Plus 月度 $180→**$310**、周 $40→**$74**。Pro / Max 未变。
+
+### 修掉的问题
+
+1. **eco 不在额度表** → 补 `DeepSeek V4.1 Flash Eco`（两列，Pro/Max 不猜）。
+2. **两个模型一直显示「未知」**：官方写 `GLM-5.3 Flash-X` / `Hunyuan H4 Preview`，
+   网关 id 是 `glm-5.3-flashx` / `hy4-preview`。归一化只做大小写与分隔符，
+   `flash x` vs `flashx`、`hunyuan h4` vs `hy4` 对不上 → 加**显式别名表**
+   （不用模糊匹配：那会把 `glm-5.3-flash` 与 `glm-5.3-flashx` 合并，显示成对方的额度）。
+3. **`MiniMax M3.1 Flash` 漏行**（官方一直在列） → 补 `$60/$80/$180`。
+4. **`planKeyOf("Max")` 认不出** → Open Design 的 Max 档用户，**每个模型**都显示「未知」。
+   补 `max` / `Go Max` 两个写法（Command Code 的 `max10x`/`max20x` 不受影响）。
+5. **`WINDOW_CAP_USD` 全部过期** → 更新为调价后的官方值。
+   影响具体：Go 用户周额度会显示成「$30 / $55」，即永远只有真实值一半多一点；
+   而换算率正是从这张表反推的，「已用多少」也跟着整体偏小。
+6. **条数上限表过期**：2026-11-07 深夜逐模型复测，`deepseek-v4.1-flash` 已不再是 1000
+   （1000 / 5000 / 20000 / 30000 / 200000 条全部 200，且 `prompt_tokens` 随条数线性增长、
+   藏针复测确认首条消息能送达）。现在**只剩 `glm-5.3-flash` 还是 1000**。
+
+### 验证
+
+- 全量 **204 文件 / 2138 用例**通过；
+- 新增用例用**网关真实 id** 逐条断言「Go 档都查得到额度」，并把别名不许串味、
+  Eco 的 Pro/Max 不猜、Max 档认得出来都固定住；
+- 一处**本机验证不了的假设**写进了测试文件头：官方调价后 `limitCredits` 是否同比例放大。
+  本机 `vela billing preflight` 回 403，没有真实样本，所以只固定机制、写下假设。

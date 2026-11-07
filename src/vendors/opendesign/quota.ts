@@ -436,27 +436,41 @@ function creditsPerUsdOf(summary: unknown): number | undefined {
 }
 
 /**
- * 官方公布的**窗口上限（美元）**：`open-design.ai/zh/model-credits` 的套餐构成表
- * （抓于 2026-10-21）。
+ * 官方公布的**窗口上限（美元）**：`open-design.ai/model-credits` 的套餐构成表
+ * （2026-11-07 重新抓取并更新；上一版抓于 2026-10-21，已全部过期）。
  *
  * | 套餐 | 月度总额 | 7 天窗口 | 5 小时窗口 |
  * | --- | --- | --- | --- |
- * | Go | $120 | $30 | $10 |
- * | Plus | $180 | $40 | 不设此窗口 |
+ * | Go | $220 | $55 | $18 |
+ * | Plus | $310 | $74 | 不设此窗口 |
  * | Pro | $480 | $90 | 不设此窗口 |
  * | Max | $900 | $150 | 不设此窗口 |
+ *
+ * **2026-11-07 的调价**：Go 的月度总额从 $120 涨到 **$220**（周 $30→$55、5 小时 $10→$18），
+ * Plus 从 $180 涨到 **$310**（周 $40→$74）。Pro / Max 没变。
+ * 不更新这张表的后果很具体：Go 用户看到的周额度会是「$30 / $55」，即永远只有真实值的
+ * 一半多一点 —— 而换算率又是从这张表反推的，所以「已用多少」也会跟着整体偏小。
+ * 这比显示「未知」更危险：数字看着正常，只是错的。
+ *
+ * 财务角度补充（官方同页）：Plus/Pro/Max 的额度由「Design Plan 奖励额度 + plan model
+ * credits」两部分组成，只有 Design Plan 那部分受 7 天/5 小时窗口限制 —— 所以这里的
+ * `monthly` 取的是该档 **Design Plan 的月度上限**，与窗口口径一致。
  *
  * **为什么需要它**：`billing/summary` 回 403（拿不到 `creditsPerUsd`），于是窗口只能
  * 退回百分比口径 —— 用户看不到「还剩多少美元」。而官方这张表给了每个窗口的美元上限，
  * 拿它除以接口给的 `limitCredits` 就能**反推出换算率**，把美元口径补回来。
  *
- * 2026-10-21 的实际影响：Go 套餐的周窗口 `limitCredits = 150000`，官方说是 $30，
+ * 2026-10-21 的实际影响：Go 套餐的周窗口 `limitCredits = 150000`，官方当时说是 $30，
  * 所以换算率是 **5000**；而仓库文档里早期记的 `creditsPerUsd: 10000` 会让同一窗口
  * 显示成 $15 —— 用户看到「共 $15.00」就是这个原因（他实际是 $30）。
+ *
+ * 注意：`limitCredits` 是否会随这次调价一起变，**本机无法验证** —— `vela billing
+ * preflight` 在这台机器上回 403 `workspace_forbidden`，没有真实的 `limitCredits` 样本。
+ * 如果用户的周额度显示成「$55 里用了 $X」，但 X 明显偏大，就是换算率需要重推的信号。
  */
 const WINDOW_CAP_USD: Readonly<Record<string, { monthly: number; weekly: number; fiveHour?: number }>> = {
-  go: { monthly: 120, weekly: 30, fiveHour: 10 },
-  plus: { monthly: 180, weekly: 40 },
+  go: { monthly: 220, weekly: 55, fiveHour: 18 },
+  plus: { monthly: 310, weekly: 74 },
   pro: { monthly: 480, weekly: 90 },
   max: { monthly: 900, weekly: 150 },
 };
