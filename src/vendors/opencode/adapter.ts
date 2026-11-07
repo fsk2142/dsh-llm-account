@@ -2,26 +2,14 @@
  * opencode 的宿主适配器：把共享内核串成一次真实请求。
  *
  * 一次 `stream()` 的固定顺序（设计 §9.1）：
- * 1. `rotation.pick({ model, tried })` 选账号 —— 决策顺序在轮换引擎里，这里不另写规则；
- * 2. 收集凭据来源（凭据库 / 环境变量）交给 `pickApiKey`；
- * 3. 经 **pi-ai SDK** 发出请求（见 `./protocol`），用 `runStream` 套上整请求 deadline
- *    与流空闲看门狗；
- * 4. 失败时用 `classifyGatewayFailure` 分类、`markRejected` 记入轮换引擎，
- *    **只在 `rotation.fallbackAllowed({ emitted, totalTokens, aborted })` 为真时**才换下一个账号；
- * 5. 试用上限与「用尽时抛哪一条」由 `core/attempt-ledger` 统一决定（2026-11-07 抽出；
- *    此前三家各写一份，同一个 bug 要修三次且总会漏）。
- *
- * 与 commandcode 适配器的两处刻意差别（都来自旧插件 `streamAccounts` 第 7511-7607 行）：
- * - **usage chunk 不计入 `emitted`**：已消耗 token 由 `totalTokens` 单独表达，于是
- *   「零用量的失败」仍然允许换账号，而「报过用量的失败」不允许；
- * - **usage chunk 先缓冲**：失败尝试的用量不交给宿主，成功收尾时才随 finish 一起交出。
- *
- * 本任务**不**做：网页登录（opencode 没有）、额度读取（Task 13）、账号增删改（Task 13）、
- * 代理与协议覆盖（第 3 期）、客户端页面（计划 1b）、诊断导出（第 3 期）。
- * @module dsh-llm-account/src/vendors/opencode/adapter
+ * **回合循环本身不在本文件**：选账号、换号闸门（`rotation.fallbackAllowed`）、试用上限、
+ * 「用尽时抛哪一条」、换模型与跨厂商委托，全部由 `core/attempt-loop` 统一实现
+ * （2026-11-07 抽出；此前三家各写一份，同一个 bug 要修三次且总会漏）。
+ * 本文件只提供本家特有的东西：凭据怎么取、请求怎么发、失败怎么分类、chunk 要不要改写。
  */
+
 import { LlmAdapter, LlmError, ReasoningEffortId, ToolCallId, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
-import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, TokenUsage } from "@deepseek-ai/dsh-llm";
+import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
@@ -30,7 +18,8 @@ import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
-import { AttemptLedger, type AttemptFailure } from "../../core/attempt-ledger";
+import type { AttemptFailure } from "../../core/attempt-ledger";
+import { runAttemptLoop } from "../../core/attempt-loop";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, runStream } from "../../core/transport";
 import { createOpencodeCatalog } from "./catalog";
@@ -232,10 +221,6 @@ function resolveConfig(raw: OpencodeConfig): ResolvedConfig {
   };
 }
 
-/** 一次 usage chunk 计入的 token 总数（缺 `totalTokens` 时按分项相加）。 */
-function usageTotal(usage: TokenUsage): number {
-  return usage.totalTokens ?? usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
-}
 
 /** 分类出的一次失败：分类结果，以及轮换用尽时要抛给宿主的错误（共享类型见 `core/attempt-ledger`）。 */
 
@@ -414,267 +399,118 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param options - 宿主的完整请求；实现必须遵守 `options.signal`。
    * @returns 与线上同序的 chunk 流。
    */
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    if (options.stop !== undefined && options.stop.length > 0) {
-      // 宿主契约：不支持的 stop 序列由适配器拒绝（旧插件第 7465-7467 行的同一条）。
-      throw new LlmError("OpenCode Go adapter does not support stop sequences", "UNSUPPORTED_OPTION");
-    }
-    // 账号切换策略：在选号之前决定要不要换当前账号（辅助调用直接跳过）。
-    await this.#deps.beforeRequest?.({
-      ...(options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) }),
-      ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
-    });
-    const raw = this.#deps.config();
-    /**
-     * 本请求的账号尝试记账（2026-11-07 抽成共享层，与另两家同一份实现）。
-     *
-     * 抽走的是纯策略：`tried` 集合、失败链、`maxTried` 判断、「用尽时抛哪一条」。
-     * 抄三份的代价是同一个 bug 要修三次且总会漏（2026-11-06 的事项就是三家一起错的）。
-     * 这里只保留 OpenCode 特有的鉴权分类与提位逻辑。见 `core/attempt-ledger`。
-     */
-    const ledger = new AttemptLedger(() => this.#maxTried());
-    const noAccount = (): LlmError =>
-      new LlmError(`llm-opencode-go: all OpenCode Go accounts are unavailable for model "${options.model}"`, "MISSING_CREDENTIAL");
-    /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
   /**
-   * 本次请求是否**已经换过模型**。
+   * 流式请求：账号轮换、失败分类、有条件的账号回退，**全部交给共享的回合循环**
+   * （`core/attempt-loop`，2026-11-07 抽出；此前三家各写一份，同一个 bug 要修三次且总会漏）。
    *
-   * 从 `options` 里读初值（2026-11-01 修 R01）：跨网关委托时
-   * `delegateStream` 会把 options 透传给目标家的 adapter，如果每家都用自己实例
-   * 上的 `false` 重新开始，就会出现 **A→B→A** 的无限往返 —— 每家都觉得自己
-   * "还没换过"。把标记放进 options，整条委托链共享同一个值。
+   * 这里只提供 OpenCode 特有的五件事：配置解析、鉴权（可能抛可重试错误）、一次尝试、
+   * 失败分类（要读网关证据）、chunk 改写（DSML 抢救 + pi-ai 终态转换）。
+   * @param options - 宿主的完整请求；实现必须遵守 `options.signal`。
+   * @returns 与线上同序的 chunk 流。
    */
-  let swappedOnce = (options as { swappedOnce?: boolean }).swappedOnce === true;
-    /** 本轮第一个被选中的账号；`undefined` 表示还没选过（见下面的晋升判定）。 */
-    let firstPick: string | undefined;
-
-    for (;;) {
-      // 取成局部布尔量：`options.signal` 是只读参数对象上的属性，直接比较会让
-      // TypeScript 把下面的同名比较收窄成「恒假」。
-      const aborted = options.signal?.aborted === true;
-      if (aborted) throw this.#abortError(options.signal);
-
-      const ref = this.#deps.rotation.pick({ model: options.model, tried: ledger.tried });
-      if (ref === undefined) {
-        // 换模型的机会：所有账号都被**拒绝**了（继续换账号已无意义，换同名模型往往还能服务）。
-        //
-        // 只在「确实有账号被拒绝」时才尝试 —— `lastFailure === undefined` 意味着一条凭据都
-        // 没解析到（`MISSING_CREDENTIAL`），那种情况换模型毫无意义，而且查候选要读各家目录
-        // （会发额外请求）。先抛确定性的失败，别为一次注定失败的请求去打网络。
-        if (!swappedOnce && ledger.last !== undefined && ledger.last.rejection.kind !== "invalid-credential") {
-          const swapped = await this.#fallbackModel(options, ledger.last.rejection.kind);
-          if (swapped !== undefined && (swapped.provider !== options.provider || swapped.model !== options.model)) {
-            swappedOnce = true;
-            // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
-            if (swapped.provider !== options.provider) {
-              const delegated = delegateStream(swapped, {
-                ...options,
-                // **把「已换过模型」传给下一家**（2026-11-01 修 R01）。
-                // 不传的话每家 adapter 都从 false 开始，A→B→A 可以无限往返。
-                swappedOnce: true,
-              } as unknown as Record<string, unknown>);
-              if (delegated !== undefined) {
-                yield* delegated as AsyncIterable<StreamChunk>;
-                return;
-              }
-            } else {
-              options = { ...options, model: swapped.model };
-              ledger.tried.clear();
-              firstPick = undefined;
-              continue;
-            }
+  override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const raw = this.#deps.config();
+    return runAttemptLoop<typeof raw, { key: string; headers?: Record<string, string> }, GatewayRecorder>(
+      {
+        label: "llm-opencode-go",
+        rotation: this.#deps.rotation,
+        maxTried: () => this.#maxTried(),
+        resolveConfig: () => raw,
+        isAbort: (error) => this.#isAbort(error),
+        abortError: (signal) => this.#abortError(signal),
+        beforeRequest: (input) => this.#deps.beforeRequest?.(input),
+        fallbackModel: (current, kind) => this.#fallbackModel(current, kind),
+        delegate: (target, current) =>
+          delegateStream(target, current as unknown as Record<string, unknown>) as AsyncIterable<StreamChunk> | undefined,
+        // 每次尝试一套「网关证据」记录：失败时用它还原（HTTP 状态，正文），否则 pi-ai 的
+        // 错误事件只剩一句文案，`classifyGatewayFailure` 无从下手。
+        beginAttempt: () => recordGatewayFetch(this.#deps.fetchImpl, options.signal),
+        resolveCredential: (ref, signal) => this.resolveAccountAuth(ref, signal),
+        classifyCredentialError: (error) => {
+          // 只有**暂时性**的鉴权失败才允许换账号（配额/密钥失效换号也一样，交给下面的分类）。
+          if (!(error instanceof LlmError) || !["SERVER", "TRANSPORT", "RATE_LIMIT", LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT].includes(error.code)) {
+            return undefined;
           }
-        }
-        if (ledger.last !== undefined) ledger.throwExhausted(noAccount);
-        throw new LlmError(
-          `llm-opencode-go: no OpenCode Go account is available for model "${options.model}"; add an account or store its API key`,
-          "MISSING_CREDENTIAL",
-        );
-      }
-      ledger.beginAttempt(ref);
-      // 本轮第一个被选中的账号 = 这次的「首选」；后面成功的都是备用账号（晋升判定用）。
-      if (firstPick === undefined) firstPick = ref;
-
-      let auth: { key: string; headers?: Record<string, string> } | undefined;
-      try {
-        auth = await this.resolveAccountAuth(ref, options.signal);
-      } catch (error) {
-        if (options.signal?.aborted) throw this.#abortError(options.signal);
-        // Only temporary authentication failures may advance to a different account.
-        if (!(error instanceof LlmError) || !["SERVER", "TRANSPORT", "RATE_LIMIT", LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT].includes(error.code)) throw error;
-        const rejection: Rejection = {
-          kind: error.code === "RATE_LIMIT" ? "rate-limit" : error.code === "SERVER" ? "server" : "network",
-          message: error.message,
-        };
-        this.#deps.rotation.markRejected(ref, rejection);
-        ledger.note({ rejection, thrown: error });
-        if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
-        continue;
-      }
-      if (auth === undefined) {
-        // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
-        // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
-        const rejection: Rejection = {
-          kind: "invalid-credential",
-          message: `OpenCode Go account "${ref}" has no usable API key`,
-        };
-        this.#deps.rotation.markRejected(ref, rejection);
-        ledger.note({
-          rejection,
-          thrown: new LlmError(
-            `llm-opencode-go: no API key for OpenCode Go account "${ref}"; store it through the credentials service or export it in the launching environment`,
-            "MISSING_CREDENTIAL",
-          ),
-        });
-        if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
-        continue;
-      }
-
-      let emitted = false;
-      let totalTokens = 0;
-      let pendingUsage: StreamChunk | undefined;
-      /** 用量采集：把本次尝试的 usage 逐块累加（厂商可能发多次）。 */
-      const counts = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-      // 每次尝试一套「网关证据」记录：失败时用它还原（HTTP 状态，正文），
-      // 否则 pi-ai 的错误事件只剩一句文案，`classifyGatewayFailure` 无从下手。
-      // 调用方信号一并传入：取消时要能放弃读那条诊断正文（正文读取自带 1s 期限）。
-      const gateway = recordGatewayFetch(this.#deps.fetchImpl, options.signal);
-      // 逐次索取上游：**只有** `iterator.next()` 的失败算本次尝试的失败；
-      // 消费方在 `yield` 处的中断/抛错原样冒泡，不会被当成厂商失败而重放。
-      const iterator = this.#attempt(raw, options, auth, gateway)[Symbol.asyncIterator]();
-      let failure: unknown;
-      let exhausted = false;
-      /**
-       * DSML 抢救状态（2026-11-07）。
-       *
-       * `deepseek-v4.1-flash` 在这个网关上偶尔把工具调用写成 DeepSeek 的 DSML 文本，
-       * 而且是写进 **reasoning 通道**、`finish` 还是 `stop`。网关没解析，插件照原样
-       * 透传 —— 宿主只看到「没有工具调用 + 模型自己停了」，这一轮**空着结束**，
-       * 用户看到的就是「输出一点就被截断」。
-       *
-       * 所以这里一边流一边把正文与 reasoning 的文本累起来，到 `finish` 时如果
-       * **一个工具调用都没出现过**、而文本里有 DSML 块，就把它们解析成真正的工具调用补发。
-       * 详见 `./dsml`。
-       */
-      let salvageText = "";
-      let sawToolCall = false;
-      let lastBlockIndex = -1;
-      try {
-        for (;;) {
-          let step: IteratorResult<StreamChunk>;
-          try {
-            step = await iterator.next();
-          } catch (error) {
-            failure = error;
-            break;
-          }
-          if (step.done === true) {
-            exhausted = true;
-            break;
-          }
-          const chunk = step.value;
-          // 抢救状态：文本/推理累计 + 是否已经出现过工具调用 + 最大块序号（补发要用下一个）。
-          if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") salvageText += chunk.text;
-          if (chunk.type === "tool-call-delta" || (chunk.type === "block-start" && chunk.blockType === "tool-call")) {
-            sawToolCall = true;
-          }
-          if (chunk.type === "block-start" || chunk.type === "block-end" || chunk.type === "tool-call-delta") {
-            if (chunk.index > lastBlockIndex) lastBlockIndex = chunk.index;
-          }
-          if (chunk.type === "block-end" && chunk.block.type === "tool-call") sawToolCall = true;
-          if (chunk.type === "usage") {
-            // usage 不算「已输出」：它只说明这个账号已经产生了计费，由 totalTokens 表达。
-            totalTokens += usageTotal(chunk.usage);
-            counts.inputTokens += chunk.usage.inputTokens ?? 0;
-            counts.outputTokens += chunk.usage.outputTokens ?? 0;
-            counts.cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
-            counts.cacheWriteTokens += chunk.usage.cacheWriteTokens ?? 0;
-            pendingUsage = chunk;
-            continue;
-          }
+          return {
+            rejection: {
+              kind: error.code === "RATE_LIMIT" ? "rate-limit" : error.code === "SERVER" ? "server" : "network",
+              message: error.message,
+            },
+            thrown: error,
+          };
+        },
+        missingCredential: (ref) => {
+          // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
+          // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
+          const rejection: Rejection = {
+            kind: "invalid-credential",
+            message: `OpenCode Go account "${ref}" has no usable API key`,
+          };
+          this.#deps.rotation.markRejected(ref, rejection);
+          return {
+            rejection,
+            thrown: new LlmError(
+              `llm-opencode-go: no API key for OpenCode Go account "${ref}"; store it through the credentials service or export it in the launching environment`,
+              "MISSING_CREDENTIAL",
+            ),
+          };
+        },
+        attempt: (config, current, auth, gateway) =>
+          this.#attempt(config, current, auth, gateway as GatewayRecorder),
+        classify: async (error, gateway) => this.#classify(error, await (gateway as GatewayRecorder).evidence()),
+        recordUsage: (ref, model, outcome, counts, kind) => this.#recordUsage(ref, model, outcome, counts, kind),
+        noteSettled: (ref) => this.#deps.rotation.noteSettled(ref),
+        promoteServed: (ref) => this.#deps.promoteServed?.(ref),
+        /**
+         * 请求级拒绝：换账号没有意义。pi-ai 的证据载体换成宿主认识的稳定终态码
+         * （`PI_AI_ERROR`），否则宿主会把它当未知错误处理。
+         */
+        wrapRequestLevelError: (error) =>
+          error instanceof OpencodeStreamFailure ? new LlmError(error.message, PI_AI_ERROR_CODE, { cause: error }) : error,
+        noAccount: (model) =>
+          new LlmError(`llm-opencode-go: all OpenCode Go accounts are unavailable for model "${model}"`, "MISSING_CREDENTIAL"),
+        /**
+         * pi-ai 把「空响应 / 上下文溢出」这类终态包成 finish：它是**宿主**的错误码
+         * （EMPTY_RESPONSE / CONTEXT_WINDOW_EXCEEDED 都在重试白名单里），交给宿主，
+         * 不在这里当成账号级失败重放。抛出即终止本次尝试，不参与换号分类。
+         */
+        onChunk: (state, chunk) => {
           if (chunk.type === "finish" && chunk.reason.kind === "error") {
-            // pi-ai 把「空响应 / 上下文溢出」这类终态包成 finish：它是**宿主**的错误码
-            // （EMPTY_RESPONSE / CONTEXT_WINDOW_EXCEEDED 都在重试白名单里），交给宿主，
-            // 不在这里当成账号级失败重放（旧插件 `accountFallback` 第 6968-6980 行同样
-            // 只对 QUOTA / 凭据失败换账号）。
             throw new LlmError(chunk.reason.failure.message, chunk.reason.failure.code);
           }
-          if (pendingUsage !== undefined) {
-            yield pendingUsage;
-            pendingUsage = undefined;
+          if (chunk.type !== "finish" || state.sawToolCall) return undefined;
+          /**
+           * DSML 抢救（2026-11-07）：模型把工具调用写成文本，网关没解析。
+           *
+           * 补发成真正的工具调用块，并把 finish 改成 `tool-calls` —— 否则宿主会当成
+           * 「模型自己停了」而结束这一轮（用户看到的就是任务莫名中断）。只在**一个工具
+           * 调用都没出现过**时才做：网关已经给了结构化 `tool_calls` 时不重复执行。
+           */
+          const salvaged = parseDsmlCalls(state.text);
+          if (salvaged.length === 0) return undefined;
+          let index = state.lastBlockIndex + 1;
+          let ordinal = 0;
+          const chunks: StreamChunk[] = [];
+          for (const call of salvaged) {
+            const id = ToolCallId(`dsml_${index}_${ordinal}`);
+            chunks.push({ type: "block-start", index, blockType: "tool-call" });
+            chunks.push({ type: "tool-call-delta", index, id, name: call.name, argumentsDelta: call.arguments });
+            chunks.push({ type: "block-end", index, block: { type: "tool-call", id, name: call.name, arguments: call.arguments } });
+            index += 1;
+            ordinal += 1;
           }
-          if (chunk.type === "finish" && !sawToolCall) {
-            /**
-             * DSML 抢救（2026-11-07）：模型把工具调用写成了文本，网关没解析。
-             *
-             * 补发成真正的工具调用块，并把 finish 改成 `tool-calls` —— 否则宿主会当成
-             * 「模型自己停了」而结束这一轮（用户看到的就是任务莫名中断）。
-             *
-             * 只在**一个工具调用都没出现过**时才做：网关已经给了结构化 `tool_calls`
-             * 时不重复执行。
-             */
-            const salvaged = parseDsmlCalls(salvageText);
-            if (salvaged.length > 0) {
-              let index = lastBlockIndex + 1;
-              let ordinal = 0;
-              for (const call of salvaged) {
-                const id = ToolCallId(`dsml_${index}_${ordinal}`);
-                yield { type: "block-start", index, blockType: "tool-call" };
-                yield { type: "tool-call-delta", index, id, name: call.name, argumentsDelta: call.arguments };
-                yield { type: "block-end", index, block: { type: "tool-call", id, name: call.name, arguments: call.arguments } };
-                index += 1;
-                ordinal += 1;
-              }
-              emitted = true;
-              yield { type: "finish", reason: { kind: "tool-calls" } };
-              continue;
-            }
-          }
-          emitted = true;
-          yield chunk;
-        }
-      } finally {
-        if (!exhausted) {
-          // 与 `runStream` 同一条纪律：只发关闭请求，不等它完成。
-          const closing = iterator.return?.(undefined);
-          if (closing !== undefined) void closing.catch(() => {});
-        }
-      }
-      if (exhausted) {
-        if (pendingUsage !== undefined) yield pendingUsage;
-        // 请求由这个账号**服务完了**：规格 §8.1 第 1 条的「最近成功者」（卡片跟随真实账号）。
-        this.#deps.rotation.noteSettled(ref);
-        this.#recordUsage(ref, options.model, "success", counts);
-        // 服务成功的不是本轮首选 → 它是备用账号：报告给装配层提位（旧插件
-        // `GoAccountSelection.adopt` 的同一后果）。提位失败不影响这次请求的结果。
-        if (firstPick !== undefined && ref !== firstPick) this.#deps.promoteServed?.(ref);
-        return;
-      }
-
-      if (options.signal?.aborted === true || this.#isAbort(failure)) {
-        // 用户主动取消：不算厂商失败，但 token 已经花掉了 —— 仍然记一条。
-        this.#recordUsage(ref, options.model, "failure", counts, "aborted");
-        throw failure;
-      }
-      const classified = this.#classify(failure, await gateway.evidence());
-      // 请求级拒绝：换账号没有意义。pi-ai 的证据载体换成宿主认识的稳定终态码
-      // （`PI_AI_ERROR`，旧插件第 1710 行）：它不在重试白名单里，宿主不会把它当瞬时故障重试。
-      if (classified === undefined) {
-        this.#recordUsage(ref, options.model, "failure", counts, "request");
-        throw failure instanceof OpencodeStreamFailure
-          ? new LlmError(failure.message, PI_AI_ERROR_CODE, { cause: failure })
-          : failure;
-      }
-      this.#deps.rotation.markRejected(ref, classified.rejection);
-      ledger.note(classified);
-      this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
-      // 唯一的换账号条件（Task 5 的判定）：已输出 / 已消耗 token / 已中止都不换。
-      if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
-      if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
-    }
+          chunks.push({ type: "finish", reason: { kind: "tool-calls" } });
+          return chunks;
+        },
+        // 两家行为差异（抽取前就是如此）：usage 延后发，且不算「已输出」。
+        deferUsage: true,
+        usageCountsAsEmitted: false,
+      },
+      options,
+    );
   }
 
-  /**
+/**
    * 把一次尝试的结果交给用量端口（旁路：绝不因为统计失败而改变请求结果）。
    * @param account - 服务这次请求的账号 ref。
    * @param model - 模型 id。

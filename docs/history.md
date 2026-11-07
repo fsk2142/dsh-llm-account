@@ -1037,3 +1037,33 @@ turn 357  turn/end        error: ... (1002 > 1000 items)      ← 主请求也�
 
 - 全量 **203 文件 / 2112 用例**通过（新增 7 条记账层用例 + 10 条契约用例）；
 - 类型检查干净；三家各自的用例（opendesign 74 / commandcode 86 / opencode 19）逐一复跑通过。
+
+## 2.1.10：整个回合循环收进共享层（2026-11-07 重构第二步）
+
+2.1.9 只抽了「记账层」（`tried`、失败链、上限、抛哪一条）。这一步把**整个控制流**也收进去：
+
+新增 `src/core/attempt-loop.ts`（`runAttemptLoop`）持有全部回合控制流 —— 选账号、换号闸门
+（`fallbackAllowed`）、试用上限、换模型（只换一次）、跨厂商委托、chunk 透传、用量累加、
+成功/取消/失败三条出口。三家适配器的 `stream()` 从 90 行循环缩成「一组钩子 + 一次调用」。
+
+净效果：三家共删掉 406 行重复代码（652 删 / 246 增）。各家只剩真正的差异：凭据怎么取、
+请求怎么发、失败怎么分类、chunk 要不要改写。
+
+### 三个行为开关（默认值与抽取前完全一致）
+
+| 开关 | 作用 | 谁用 |
+| --- | --- | --- |
+| `deferUsage` | usage 块延后到下一个内容块再发 | opencode |
+| `usageCountsAsEmitted` | usage 块算不算「已输出」 | opencode（不算） |
+| `onChunk` | chunk 改写/补发（DSML 抢救）与 pi-ai 终态转换 | opencode |
+
+另外 `wrapRequestLevelError` 保留 opencode 的「请求级拒绝要换成 `PI_AI_ERROR`」行为。
+
+### 验证
+
+- 全部 **204 文件 / 2130 用例**通过（含新增 `tests/core/attempt-loop.test.ts` 15 条，覆盖
+  成功 / 换号 / 已输出不换号 / 用尽抛可重试那条 / 上限现读 / 缺凭据 / 取消 / 换模型 /
+  usage 累加与延后 / chunk 改写）；
+- 变异测试：把「已输出就不换号」那道闸门改成恒真，对应用例立刻红；
+- 契约用例同步升级为「三家必须走 `runAttemptLoop`、不许自己调 `rotation.pick` /
+  `fallbackAllowed`」。

@@ -2,18 +2,12 @@
  * Command Code 的宿主适配器：把共享内核串成一次真实请求。
  *
  * 一次 `stream()` 的固定顺序（设计 §9.1）：
- * 1. `rotation.pick({ model, tried })` 选账号 —— 决策顺序在轮换引擎里，这里不另写规则；
- * 2. 收集凭据来源（字面量 / 凭据库 / 环境变量 / auth.json 兜底）交给 `pickApiKey`；
- * 3. 按模型选线协议、构造请求体、发出请求，用 `runStream` 套上整请求 deadline 与流空闲看门狗；
- * 4. 失败时用 `classifyCommandCodeFailure` 分类、`markRejected` 记入轮换引擎，
- *    **只在 `rotation.fallbackAllowed({ emitted, totalTokens, aborted })` 为真时**才换下一个账号；
- * 5. 试用上限与「用尽时抛哪一条」由 `core/attempt-ledger` 统一决定（2026-11-07 抽出；
- *    此前三家各写一份，同一个 bug 要修三次且总会漏）。
- *
- * 本任务**不**做：网页登录（Task 11）、额度读取（Task 10）、账号增删改（Task 10）、
- * 客户端代码（计划 1b）、套餐过滤与费用估算（第 2 期）。
- * @module dsh-llm-account/src/vendors/commandcode/adapter
+ * **回合循环本身不在本文件**：选账号、换号闸门（`rotation.fallbackAllowed`）、试用上限、
+ * 「用尽时抛哪一条」、换模型与跨厂商委托，全部由 `core/attempt-loop` 统一实现
+ * （2026-11-07 抽出；此前三家各写一份，同一个 bug 要修三次且总会漏）。
+ * 本文件只提供本家特有的东西：凭据怎么取、请求怎么发、失败怎么分类、chunk 要不要改写。
  */
+
 import { LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import type {
   GenerateOptions,
@@ -22,7 +16,6 @@ import type {
   LlmResolvedModelInfo,
   ResolvedRetryPolicy,
   StreamChunk,
-  TokenUsage,
 } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
@@ -33,7 +26,8 @@ import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { createCatalogFlight, type CatalogFlight } from "../../core/catalog-flight";
 import { pickApiKey } from "../../core/credentials";
-import { AttemptLedger, type AttemptFailure } from "../../core/attempt-ledger";
+import type { AttemptFailure } from "../../core/attempt-ledger";
+import { runAttemptLoop } from "../../core/attempt-loop";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
 import {
@@ -235,11 +229,6 @@ function systemTextOf(options: GenerateOptions): string {
   return parts.join("\n\n");
 }
 
-/** 一次 usage chunk 计入的 token 总数（缺 `totalTokens` 时按分项相加）。 */
-function usageTotal(usage: TokenUsage): number {
-  if (usage.totalTokens !== undefined) return usage.totalTokens;
-  return usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
-}
 
 /** 读一份错误正文：最多读 {@link ERROR_BODY_LIMIT}，能解析成 JSON 就解析。 */
 async function readErrorBody(response: Response): Promise<unknown> {
@@ -407,167 +396,54 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param options - 宿主的完整请求；实现必须遵守 `options.signal`。
    * @returns 与线上同序的 chunk 流。
    */
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    // **停止序列已支持**（2026-10-20 对齐官方）：两种 HTTP 传输各自映射到自己的字段 ——
-    // OpenAI 传输 `stop`、Messages 传输 `stop_sequences`（见 `protocol.ts` 的
-    // `buildRequestBody`）。旧实现在这里抛 `UNSUPPORTED_OPTION`，是因为当时没实现；
-    // 现在实现了，那个拒绝必须去掉，否则宿主传下来的 stop 依然被自己挡掉。
-    // 账号切换策略：在选号之前决定要不要换当前账号（辅助调用直接跳过）。
-    await this.#deps.beforeRequest?.({
-      ...(options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) }),
-      ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
-    });
-    const config = resolveConfig(this.#deps.config());
-    /**
-     * 本请求的账号尝试记账（2026-11-07 抽成共享层，与另两家同一份实现）。
-     *
-     * 抽走的是纯策略：`tried` 集合、失败链、`maxTried` 判断、「用尽时抛哪一条」。
-     * 抄三份的代价是同一个 bug 要修三次且总会漏（2026-11-06 的事项就是三家一起错的）。
-     * 这里只保留 Command Code 特有的凭据与协议。见 `core/attempt-ledger`。
-     */
-    const ledger = new AttemptLedger(() => this.#maxTried());
-    const noAccount = (): LlmError =>
-      new LlmError(`llm-commandcode: all Command Code accounts are unavailable for model "${options.model}"`, "MISSING_CREDENTIAL");
-    /** 已经换过一次模型了吗（只换一次：替代也限额就停手，不再套娃）。 */
   /**
-   * 本次请求是否**已经换过模型**。
+   * 流式请求：账号轮换、失败分类、有条件的账号回退，**全部交给共享的回合循环**
+   * （`core/attempt-loop`，2026-11-07 抽出；此前三家各写一份，同一个 bug 要修三次且总会漏）。
    *
-   * 从 `options` 里读初值（2026-11-01 修 R01）：跨网关委托时
-   * `delegateStream` 会把 options 透传给目标家的 adapter，如果每家都用自己实例
-   * 上的 `false` 重新开始，就会出现 **A→B→A** 的无限往返 —— 每家都觉得自己
-   * "还没换过"。把标记放进 options，整条委托链共享同一个值。
+   * 这里只提供 Command Code 特有的四件事：配置解析、凭据读取、一次尝试、失败分类表。
+   * @param options - 宿主的完整请求；实现必须遵守 `options.signal`。
+   * @returns 与线上同序的 chunk 流。
    */
-  let swappedOnce = (options as { swappedOnce?: boolean }).swappedOnce === true;
-
-    for (;;) {
-      const aborted = options.signal?.aborted === true;
-      if (aborted) throw this.#abortError(options.signal);
-
-      const ref = this.#deps.rotation.pick({ model: options.model, tried: ledger.tried });
-      if (ref === undefined) {
-        // 换模型的机会：所有账号都被**拒绝**了（继续换账号已无意义，换同名模型往往还能服务）。
-        //
-        // 只在「确实有账号被拒绝」时才尝试 —— `lastFailure === undefined` 意味着一条凭据都
-        // 没解析到（`MISSING_CREDENTIAL`），那种情况换模型毫无意义，而且查候选要读各家目录
-        // （会发额外请求）。先抛确定性的失败，别为一次注定失败的请求去打网络。
-        if (!swappedOnce && ledger.last !== undefined && ledger.last.rejection.kind !== "invalid-credential") {
-          const swapped = await this.#fallbackModel(options, ledger.last.rejection.kind);
-          if (swapped !== undefined && (swapped.provider !== options.provider || swapped.model !== options.model)) {
-            swappedOnce = true;
-            // **跨厂商**：本 adapter 不能以别家身份发请求，转给目标家的 adapter。
-            if (swapped.provider !== options.provider) {
-              const delegated = delegateStream(swapped, {
-                ...options,
-                // **把「已换过模型」传给下一家**（2026-11-01 修 R01）。
-                // 不传的话每家 adapter 都从 false 开始，A→B→A 可以无限往返。
-                swappedOnce: true,
-              } as unknown as Record<string, unknown>);
-              if (delegated !== undefined) {
-                yield* delegated as AsyncIterable<StreamChunk>;
-                return;
-              }
-              // 目标家不能委托（没登记 / 没提供 stream）：当作换不了，继续走下面的抛出。
-            } else {
-              options = { ...options, model: swapped.model };
-              ledger.tried.clear();
-              continue;
-            }
-          }
-        }
-        if (ledger.last !== undefined) ledger.throwExhausted(noAccount);
-        throw new LlmError(
-          `llm-commandcode: no Command Code account is available for model "${options.model}"; add an account or store its API key`,
-          "MISSING_CREDENTIAL",
-        );
-      }
-      ledger.beginAttempt(ref);
-
-      const key = await this.#resolveKey(config, ref);
-      if (key === undefined) {
-        // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
-        // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
-        const rejection: Rejection = {
-          kind: "invalid-credential",
-          message: `Command Code account "${ref}" has no usable API key`,
-        };
-        this.#deps.rotation.markRejected(ref, rejection);
-        ledger.note({
-          rejection,
-          thrown: new LlmError(
-            `llm-commandcode: no API key for Command Code account "${ref}"; store it through the credentials service, export it in the launching environment, set config.apiKey, or run \`command-code login\` to write ~/.commandcode/auth.json`,
-            "MISSING_CREDENTIAL",
-          ),
-        });
-        if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
-        continue;
-      }
-
-      let emitted = false;
-      let totalTokens = 0;
-      // 用量采集：把这次尝试的 usage 逐块累加成四个计数。厂商可能在流里发多次
-      // usage（`message_start` 的输入计数 + `message_delta` 的输出计数），
-      // 所以必须**累加而不是覆盖**。
-      const counts = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-      // 逐次索取上游：**只有** `iterator.next()` 的失败算本次尝试的失败；
-      // 消费方在 `yield` 处的中断/抛错原样冒泡，不会被当成厂商失败而重放。
-      const iterator = this.#attempt(config, options, key)[Symbol.asyncIterator]();
-      let failure: unknown;
-      let exhausted = false;
-      try {
-        for (;;) {
-          let step: IteratorResult<StreamChunk>;
-          try {
-            step = await iterator.next();
-          } catch (error) {
-            failure = error;
-            break;
-          }
-          if (step.done === true) {
-            exhausted = true;
-            break;
-          }
-          const chunk = step.value;
-          if (chunk.type === "usage") {
-            totalTokens += usageTotal(chunk.usage);
-            counts.inputTokens += chunk.usage.inputTokens ?? 0;
-            counts.outputTokens += chunk.usage.outputTokens ?? 0;
-            counts.cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
-            counts.cacheWriteTokens += chunk.usage.cacheWriteTokens ?? 0;
-          }
-          emitted = true;
-          yield chunk;
-        }
-      } finally {
-        if (!exhausted) {
-          // 与 `runStream` 同一条纪律：只发关闭请求，不等它完成。
-          const closing = iterator.return?.(undefined);
-          if (closing !== undefined) void closing.catch(() => {});
-        }
-      }
-      if (exhausted) {
-        // 请求由这个账号**服务完了**：规格 §8.1 第 1 条的「最近成功者」（卡片跟随真实账号）。
-        this.#deps.rotation.noteSettled(ref);
-        this.#recordUsage(ref, options.model, "success", counts);
-        return;
-      }
-
-      if (options.signal?.aborted === true || this.#isAbort(failure)) {
-        // 用户主动取消：不算厂商失败，也不算成功。仍记一条（token 已经花掉了）。
-        this.#recordUsage(ref, options.model, "failure", counts, "aborted");
-        throw failure;
-      }
-      const classified = this.#classify(failure);
-      if (classified === undefined) {
-        this.#recordUsage(ref, options.model, "failure", counts, "request");
-        throw failure; // 请求级拒绝：换账号没有意义
-      }
-      this.#deps.rotation.markRejected(ref, classified.rejection);
-      ledger.note(classified);
-      this.#recordUsage(ref, options.model, "failure", counts, classified.rejection.kind);
-      // 唯一的换账号条件（Task 5 的判定）：已输出 / 已消耗 token / 已中止都不换。
-      if (!this.#deps.rotation.fallbackAllowed({ emitted, totalTokens, aborted: false })) throw classified.thrown;
-      if (ledger.reachedMax()) ledger.throwExhausted(noAccount);
-    }
+  override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const config = resolveConfig(this.#deps.config());
+    return runAttemptLoop<ResolvedConfig, string, undefined>(
+      {
+        label: "llm-commandcode",
+        rotation: this.#deps.rotation,
+        maxTried: () => this.#maxTried(),
+        resolveConfig: () => config,
+        isAbort: (error) => this.#isAbort(error),
+        abortError: (signal) => this.#abortError(signal),
+        beforeRequest: (input) => this.#deps.beforeRequest?.(input),
+        fallbackModel: (current, kind) => this.#fallbackModel(current, kind),
+        delegate: (target, current) =>
+          delegateStream(target, current as unknown as Record<string, unknown>) as AsyncIterable<StreamChunk> | undefined,
+        resolveCredential: (ref) => this.#resolveKey(config, ref),
+        missingCredential: (ref) => {
+          // 没有可用密钥的账号不可能自行恢复：立刻记入拒绝表（`invalid-credential`
+          // 只能被显式清除），否则每次请求都会重新选中它并再次失败。
+          const rejection: Rejection = {
+            kind: "invalid-credential",
+            message: `Command Code account "${ref}" has no usable API key`,
+          };
+          this.#deps.rotation.markRejected(ref, rejection);
+          return {
+            rejection,
+            thrown: new LlmError(
+              `llm-commandcode: no API key for Command Code account "${ref}"; store it through the credentials service, export it in the launching environment, set config.apiKey, or run \`command-code login\` to write ~/.commandcode/auth.json`,
+              "MISSING_CREDENTIAL",
+            ),
+          };
+        },
+        attempt: (resolved, current, key) => this.#attempt(resolved, current, key),
+        classify: (error) => this.#classify(error),
+        recordUsage: (ref, model, outcome, counts, kind) => this.#recordUsage(ref, model, outcome, counts, kind),
+        noteSettled: (ref) => this.#deps.rotation.noteSettled(ref),
+        noAccount: (model) =>
+          new LlmError(`llm-commandcode: all Command Code accounts are unavailable for model "${model}"`, "MISSING_CREDENTIAL"),
+      },
+      options,
+    );
   }
 
   /** 一次尝试：选协议 → 发请求 → （必要时）回退 CLI 传输 → 解码并套上时间预算。 */
