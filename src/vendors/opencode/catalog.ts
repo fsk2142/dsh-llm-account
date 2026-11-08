@@ -67,10 +67,27 @@ function positiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-/** 读出一行声明的输入模态；未声明就是未知，不猜。 */
+/**
+ * 读出一行声明的输入模态；未声明就是未知，不猜。
+ *
+ * **两种形状都要认**（2026-11-08）：models.dev 的元数据把模态放在 `modalities.input`
+ * 下，而网关 `/models` 的行同样用 `modalities.input`（实测
+ * `deepseek-v4.1-flash` 是 `["text","image/jpeg","image/png","image/gif","image/webp"]`）。
+ * 以前这里只读裸 `input` —— 那两种形状都不匹配，于是网关明确声明支持图片的模型
+ * 被记成「只支持文本」，图片附件直接被拒。
+ *
+ * 判断按**前缀**而不是全等：网关照 MIME 写（`image/jpeg`），元数据写类别（`image`）。
+ * @param value - 一行模型数据。
+ * @returns 支持的输入模态（缺省只有文本）。
+ */
 function inputModalitiesOf(value: unknown): readonly ModelModality[] {
-  const declared = isRecord(value) ? value.input : undefined;
-  if (Array.isArray(declared) && declared.includes("image")) return ["text", "image"];
+  if (!isRecord(value)) return ["text"];
+  // 网关行：`modalities.input`；元数据行：`modalities.input`；兼容旧写法裸 `input`。
+  const container = isRecord(value.modalities) ? value.modalities : value;
+  const declared = isRecord(container) ? container.input : undefined;
+  if (Array.isArray(declared) && declared.some((item) => typeof item === "string" && item.startsWith("image"))) {
+    return ["text", "image"];
+  }
   return ["text"];
 }
 
@@ -102,8 +119,28 @@ export function parseModels(payload: unknown): CatalogParseResult {
       ignored += 1;
       continue;
     }
-    const contextWindow = positiveNumber(raw.context_length ?? raw.contextWindow);
-    const maxTokens = positiveNumber(raw.max_output_tokens ?? raw.maxTokens);
+    /**
+     * **网关自己公布的上下文/输出上限**（2026-11-08 修「opencode 不显示模型上下文」）。
+     *
+     * 这个网关的行里带 `limit: { context, output }` —— 实测
+     * `deepseek-v4.1-flash` 是 `context 1000000 / output 384000`。但这里以前**只**认
+     * `context_length` / `contextWindow`（那是别的厂商的字段名），于是网关给的这个值
+     * 被整行忽略，`contextWindow` 只能靠 models.dev 元数据补。
+     *
+     * 后果就是用户看到的现象：models.dev 是**第三方站点**，超时/改结构/漏字段都正常
+     * （模块注释里记过实测 2.8s、18.5s 失败、甚至 197s），而它的预算只有 4 秒 ——
+     * 一旦那次抓取没赶上，模型上下文就直接显示不出来，尽管**网关刚刚亲口说过**。
+     *
+     * 与档位那次修复（`capabilities.reasoning.effort`）是同一条道理：
+     * `/models` 是目录本身的必需请求，它公布的容量永远拿得到，优先级应当高于第三方元数据。
+     */
+    const limit = isRecord(raw.limit) ? raw.limit : undefined;
+    const contextWindow = positiveNumber(
+      raw.context_length ?? raw.contextWindow ?? limit?.context,
+    );
+    const maxTokens = positiveNumber(
+      raw.max_output_tokens ?? raw.maxTokens ?? limit?.output,
+    );
     /**
      * 网关自己公布的档位：`capabilities.reasoning.effort`。
      *

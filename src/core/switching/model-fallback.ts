@@ -29,8 +29,43 @@
  *
  * 本包托管的三个网关（commandcode / dsh-opencode-go / opendesign）都**不是**这里的前缀，
  * 所以「排除官方」= 只在这些网关之间互切。
+ *
+ * **2026-11-08 起这不再是唯一的闸门**：只有黑名单意味着「任何没被点名的 provider 都能
+ * 被切过去」（例如同装的 `pi-ai` / `anthropic` 等插件，或将来新装的一家）。需求明确要求
+ * 「只准在 opendesign / commandcode / opencode 三个网关之间切换」，所以真正的判据改成了
+ * 白名单 {@link SWITCHABLE_PROVIDERS}；这个黑名单保留作为**纵深防御**（万一白名单被
+ * 误放宽，官方直连仍然进不来）。
  */
 const OFFICIAL_PROVIDER_PREFIXES: readonly string[] = ["deepseek", "deepseek-account"];
+
+/**
+ * **允许被自动切换过去的 provider**（白名单，2026-11-08 加）。
+ *
+ * 需求：「自动切换不要切换到 deepseek 的 API 上边去，只准在 opendesign / commandcode /
+ * opencode 三个网关之间切换」。
+ *
+ * 为什么必须用白名单而不是黑名单：黑名单只能挡住**已经知道名字**的那几家。这台机器上同时
+ * 装着 `pi-ai`、`anthropic` 等别的 LLM 插件，任何一家只要进了候选清单，黑名单就漏了 ——
+ * 而用户要的是「绝对不出这三个」。白名单是**闭集合**，新厂商默认进不来。
+ *
+ * 别名说明：opencode 这一行在宿主的行 id 是 `opencode-go`，而它自己登记的 provider 是
+ * `dsh-opencode-go`（插件前缀），历史上还用过裸 `opencode`。三种写法都算同一家。
+ */
+const SWITCHABLE_PROVIDERS: readonly string[] = ["commandcode", "opendesign", "dsh-opencode-go", "opencode", "opencode-go"];
+
+/**
+ * 这个 provider 是否允许被自动切换（换模型 / 跨网关委托）过去。
+ *
+ * 判据是**白名单**（见 {@link SWITCHABLE_PROVIDERS}），不是「不是官方」。两者的区别在
+ * 一台装了多家 LLM 插件的机器上是实打实的：黑名单会把请求切给 `pi-ai`，白名单不会。
+ * @param provider - provider 路由 id。
+ * @returns 是否允许。
+ */
+export function isSwitchableProvider(provider: string): boolean {
+  const id = provider.trim().toLowerCase();
+  if (id === "") return false;
+  return SWITCHABLE_PROVIDERS.includes(id);
+}
 
 /**
  * 判定一个 provider id 是不是**官方直连**（要排除）。
@@ -163,10 +198,15 @@ export function pickFallbackModel(
    */
   const sameGatewayOnly = options.sameGatewayOnly === true;
 
-  // 1) 过滤掉不合格的：官方直连、自己、空 id；`sameGatewayOnly` 时再排除跨网关的。
+  // 1) 过滤掉不合格的：**不在白名单**（含官方直连，见 `SWITCHABLE_PROVIDERS`）、自己、空 id；
+  //    `sameGatewayOnly` 时再排除跨网关的。
   const usable = candidates.filter((candidate) => {
     if (typeof candidate.model !== "string" || candidate.model.trim() === "") return false;
     if (typeof candidate.provider !== "string" || candidate.provider.trim() === "") return false;
+    // **白名单闸门**（2026-11-08）：不在三家网关里的一律不考虑 —— 包括官方直连与任何
+    // 同装的其它 LLM 插件。`excludeOfficial: false` 也**不能**放它进来（那是历史开关，
+    // 只影响「要不要额外跑一遍官方黑名单」，不该成为越狱后门）。
+    if (!isSwitchableProvider(candidate.provider)) return false;
     if (excludeOfficial && isOfficialProvider(candidate.provider)) return false;
     if (sameGatewayOnly && candidate.provider !== current.provider) return false;
     // 「自己」：同网关 + 同 id（同名但不同写法的算合格 —— 那正是第 1 级要找的）。

@@ -12,6 +12,7 @@ import {
   fallbackEffort,
   fallbackTierOf,
   isOfficialProvider,
+  isSwitchableProvider,
   modelKeyOf,
   pickFallbackModel,
   type FallbackCandidate,
@@ -215,5 +216,79 @@ describe("pickFallbackModel 的 sameGatewayOnly（2026-10-28）", () => {
     const picked = pickFallbackModel(current, [crossGateway], { random: () => 0 });
 
     expect(picked, "额度/鉴权类失败换一家真可能绕过").toEqual(crossGateway);
+  });
+});
+
+/**
+ * ## 自动切换只准在三家网关之间（2026-11-08 需求）
+ *
+ * 用户原话：「自动切换不要切换到 deepseek 的 API 上边去，只准在 opendesign /
+ * commandcode / opencode 三个网关之间切换」。
+ *
+ * 原来的实现是**黑名单**（`isOfficialProvider`：`deepseek` / `deepseek-account` 前缀）。
+ * 它挡住了官方直连，但挡不住任何**没被点名**的 provider —— 而这台机器上同时装着
+ * `pi-ai`、`anthropic` 等别的 LLM 插件。也就是说「不切到官方」当时实现对了，
+ * 但「只在这三家之间」从来没有真正保证过。
+ *
+ * 现在改成**白名单**（`isSwitchableProvider`），并在四个入口都拦：
+ * 1. `pickFallbackModel` 挑候选；
+ * 2. `delegateStream` 执行委托；
+ * 3. `registerCatalogSource` 登记；
+ * 4. `noteCatalogModels` 写缓存。
+ *
+ * 为什么四处都要拦而不是只拦一处：这条链路上有缓存（60 秒 TTL）、有跨插件登记、
+ * 有「先缓存后禁用」这类时序。只在一处拦，其余三处都会成为将来的漏洞来源。
+ */
+describe("自动切换的白名单（只准三家网关）", () => {
+  it("三家都允许（含 opencode 的三种历史写法）", () => {
+    for (const provider of ["commandcode", "opendesign", "dsh-opencode-go", "opencode", "opencode-go"]) {
+      expect(isSwitchableProvider(provider), `${provider} 应当允许`).toBe(true);
+    }
+  });
+
+  it("**官方直连与任何第三方都不允许**（黑名单挡不住的那一半）", () => {
+    for (const provider of ["deepseek", "deepseek-account", "deepseek-official", "pi-ai", "anthropic", "some-other-gateway", ""]) {
+      expect(isSwitchableProvider(provider), `${provider} 不该被允许`).toBe(false);
+    }
+  });
+
+  it("大小写与空格不影响判定", () => {
+    expect(isSwitchableProvider("  OpenDesign  ")).toBe(true);
+    expect(isSwitchableProvider("DeepSeek")).toBe(false);
+  });
+
+  describe("用真实候选走一遍挑选", () => {
+    const current = { provider: "opendesign", model: "deepseek-v4.1-flash" };
+    const first = () => 0;
+
+    it("只有第三方候选时**停手**（不会退而求其次切出去）", () => {
+      const candidates = [
+        { provider: "deepseek", model: "deepseek-v4.1-flash" },
+        { provider: "pi-ai", model: "kimi-k3" },
+        { provider: "anthropic", model: "claude-opus-5" },
+      ];
+      expect(pickFallbackModel(current, candidates, { random: first })).toBeUndefined();
+    });
+
+    it("三家混在候选里时只从三家挑", () => {
+      const candidates = [
+        { provider: "deepseek", model: "deepseek-v4.1-flash" },
+        { provider: "commandcode", model: "deepseek-v4.1-flash" },
+        { provider: "pi-ai", model: "kimi-k3" },
+      ];
+      expect(pickFallbackModel(current, candidates, { random: first })).toEqual({
+        provider: "commandcode",
+        model: "deepseek-v4.1-flash",
+      });
+    });
+
+    it("**`excludeOfficial: false` 也不能放第三方进来**（那不是越狱开关）", () => {
+      // 这个参数历史上是「要不要跑一遍官方黑名单」，只该影响官方那一条判据。
+      const picked = pickFallbackModel(current, [{ provider: "pi-ai", model: "kimi-k3" }], {
+        random: first,
+        excludeOfficial: false,
+      });
+      expect(picked).toBeUndefined();
+    });
   });
 });

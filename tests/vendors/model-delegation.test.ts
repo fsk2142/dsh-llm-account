@@ -78,13 +78,27 @@ describe("委托给另一家", () => {
     expect(delegateStream({ provider: "opendesign", model: "x" }, {})).toBeUndefined();
   });
 
-  it("官方直连永不被委托（即使被登记了）", () => {
+  it("官方直连**根本登记不进来**（2026-11-08 收紧：白名单在登记处就拦）", () => {
     const spy = vi.fn(fakeStream([]));
     registerCatalogSource({ provider: "deepseek", models: async () => ["deepseek-v4.1-flash"].map((id) => ({ id })), stream: spy as never });
-    expect(canDelegate("deepseek")).toBe(true);
-    // 纵深防御：挑候选时已用 `isOfficialProvider` 排除，这里再挡一次。
+    // 以前这里断言 `canDelegate("deepseek") === true` —— 即「登记成功、只在委托时挡」。
+    // 现在登记处就是闸门（白名单），所以它**压根没进表**，自然也不能被委托。
+    // 两道判据（登记 + 委托）都留着：登记处挡的是「别的插件把 stream 塞进我们的表」，
+    // 委托处挡的是「表里万一已经有脏数据」。
+    expect(canDelegate("deepseek")).toBe(false);
     expect(delegateStream({ provider: "deepseek", model: "deepseek-v4.1-flash" }, {})).toBeUndefined();
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("**三家之外的任何 provider 都登记不进来**（需求：只准三个网关互切）", () => {
+    // 这条才是需求本身：这台机器同时装着 pi-ai / anthropic 等别的 LLM 插件，
+    // 黑名单只挡得住已知名字，白名单才保证「绝对不出这三个」。
+    for (const provider of ["pi-ai", "anthropic", "some-other-gateway", "deepseek-account"]) {
+      const spy = vi.fn(fakeStream([]));
+      registerCatalogSource({ provider, models: async () => [{ id: "x" }], stream: spy as never });
+      expect(delegateStream({ provider, model: "x" }, {}), `${provider} 不该被委托`).toBeUndefined();
+      expect(spy, `${provider} 的 stream 不该被调用`).not.toHaveBeenCalled();
+    }
   });
 
   it("没有 stream 的家不参与委托，别家照旧可用", () => {

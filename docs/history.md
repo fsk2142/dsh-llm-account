@@ -1228,3 +1228,63 @@ tier = "go"
 - 一处**刻意接受的代价**已写进注释：`quota.ts` 现在 import `core/model-quota-table`，
   打包时把静态额度表一并内联进 opendesign 产物（+17KB，180→198KB）。
   换来的是三处档位解析共用一份 —— 另写一份省 17KB，但回退链迟早分叉。
+
+## 2.1.15：opencode 不显示上下文 + 自动切换白名单（2026-11-08）
+
+用户报两件事：
+1. 「新版本有问题，opencode 不显示模型上下文」；
+2. 「自动切换不要切换到 deepseek 的 API 上边去，只准在 opendesign / commandcode / opencode
+   三个网关之间切换」。
+
+### 一、opencode 上下文消失：不是最近几次改动引入的，是**从第一版起就存在**
+
+先排除嫌疑：`git diff --stat v2.1.11..HEAD -- src/vendors/opencode/` 是**空**，
+`lib/opencode-*.js` 的 blob 哈希在 2.1.11 与 HEAD 完全相同。最近三次改动只碰了
+`model-quota-table` 与 opendesign。
+
+真正的原因在 `parseModels`（`src/vendors/opencode/catalog.ts`）：它只认
+`context_length` / `contextWindow` 两个字段名（别家网关的写法），而这条网关的行里用的是
+`limit: { context, output }`：
+
+```json
+{"id":"deepseek-v4.1-flash","limit":{"context":1000000,"output":384000}, ...}
+```
+
+于是网关亲口给的 100 万上下文被整行丢掉，`contextWindow` 只剩 models.dev 这一路来源。
+而 models.dev 是**第三方站点**、预算只有 4 秒（模块注释里就记着实测 2.8s / 18.5s 失败 /
+197s），它一超时，上下文就不显示 —— 用户看到的现象正是这个。
+
+这与 2026-11-03 那次「档位只从 models.dev 来」是同一种错误：把建议性的第三方数据当成
+唯一来源，而无视必需请求里已经写着的事实。顺带修了同一处的模态判定：网关用 MIME 写法
+（`image/jpeg`），原来只认全等 `image`，于是**网关明确声明支持图片**的模型被记成只支持
+文本。
+
+复测（真实网关 + 真实 models.dev）：修复前 `resolveModel` 返回 `context=undefined`，
+修复后 `deepseek-v4.1-flash` 是 `context=1000000 / maxTokens=384000 /
+modalities=["text","image"]`。
+
+### 二、自动切换白名单
+
+原来是**黑名单**（`isOfficialProvider`：`deepseek` / `deepseek-account` 前缀）。
+它挡住了官方直连，但挡不住**任何没被点名**的 provider —— 这台机器同时装着 `pi-ai`、
+`anthropic` 等别的 LLM 插件。实测：`pi-ai` / `anthropic` / 任意第三方都会被切过去。
+
+改成**白名单** `isSwitchableProvider`（`commandcode` / `opendesign` / `dsh-opencode-go`
+及其历史别名 `opencode` / `opencode-go`），并在**四个入口**都拦：
+
+| 入口 | 挡的是什么 |
+| --- | --- |
+| `pickFallbackModel` | 挑候选时（主闸门） |
+| `delegateStream` | 执行委托时（表里万一已有脏数据） |
+| `registerCatalogSource` | 登记时（别的插件把 stream 塞进我们的表） |
+| `noteCatalogModels` | 写缓存时（60 秒 TTL 内的脏数据） |
+
+只拦一处不够：这条链路上有缓存、有跨插件登记、有「先缓存后禁用」的时序。
+另外 `excludeOfficial: false` 也**不能**放第三方进来 —— 那个参数历史上只是
+「要不要额外跑一遍官方黑名单」，不该成为越狱后门。
+
+### 验证
+
+- `tsc --noEmit` 干净；**205 文件 / 2193 用例**全绿（新增 12 条）；
+- 端到端用真实网关验证 opencode 三个模型的 context/maxTokens/modalities 都有值；
+- 换模型白名单实测：三家放行，`deepseek` / `pi-ai` / `anthropic` / 任意第三方全部挡住。

@@ -13,7 +13,7 @@
  * @module dsh-llm-account/src/vendors/model-catalog-registry
  */
 
-import { isOfficialProvider } from "../core/switching/model-fallback";
+import { isOfficialProvider, isSwitchableProvider } from "../core/switching/model-fallback";
 
 /** 一家的目录读口 **+ 流式委托**。 */
 export interface CatalogSource {
@@ -84,6 +84,14 @@ let cached: { at: number; value: ModelCandidate[] } | undefined;
  * @param source - 该家的读口。
  */
 export function registerCatalogSource(source: CatalogSource): void {
+  /**
+   * **只接受三家网关的登记**（2026-11-08）。
+   *
+   * 白名单在挑选与委托两处已经拦过，这里再拦一次的理由不同：如果哪天有别的插件
+   * 误把我们这份注册表当成公共设施、把自己的 `stream` 塞进来，那么候选清单里就会出现
+   * 一个「看起来是我们三家之一」的目标。拒绝登记比事后过滤更早、更清楚。
+   */
+  if (!isSwitchableProvider(source.provider)) return;
   sources.set(source.provider, source);
   // 目录可能变了，缓存作废。
   cached = undefined;
@@ -158,6 +166,13 @@ export function noteCatalogModels(
   models: readonly CatalogRow[],
   now: number = Date.now(),
 ): void {
+  /**
+   * **白名单闸门**（2026-11-08）：这是缓存真正的填充入口，不是三家之一就不写。
+   *
+   * 少了这一行，白名单只在「挑选」时生效，而缓存里仍可能躺着别家的模型 ——
+   * 一旦将来有人放宽了挑选那处（比如调研某个功能），脏数据就会立刻变成真实切换。
+   */
+  if (!isSwitchableProvider(provider)) return;
   const value = cached === undefined ? [] : [...cached.value];
   // 先摘掉这一家的旧条目，再追加新的（同一家重复调用不会累积）。
   const kept = value.filter((candidate) => candidate.provider !== provider);
@@ -233,6 +248,14 @@ export function delegateStream(
   target: ModelCandidate,
   options: Record<string, unknown>,
 ): AsyncIterable<unknown> | undefined {
+  /**
+   * **白名单闸门**（2026-11-08，需求「只准在三个网关之间切换」）。
+   *
+   * 放在 `sources.get` **之前**：即使有别的插件把自己的 `stream` 登记进来，
+   * 也不该从我们这条路径被当成切换目标。判据与 `pickFallbackModel` 是同一个函数，
+   * 两处不会分叉。
+   */
+  if (!isSwitchableProvider(target.provider)) return undefined;
   const source = sources.get(target.provider);
   if (source === undefined || source.stream === undefined) return undefined;
   /**
