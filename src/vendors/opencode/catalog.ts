@@ -410,6 +410,17 @@ export function createOpencodeCatalog(input: {
    * 所以它慢不该拖住切模型（2026-11-04 报障「切模型反应好半天」）。
    */
   metadataBudgetMs?: number;
+  /**
+   * 目录请求要带的推理密钥（2026-11-08 加）。
+   *
+   * **必须是函数而不是字符串**：密钥会随用户换号 / OAuth 刷新而变，而这个目录对象
+   * 按 `baseUrl` 长期缓存（{@link DEFAULT_CATALOG_TTL_MS}）。传字符串就把创建那一刻的
+   * 密钥冻进了缓存，用户换号后目录仍然用旧号的身份读。
+   *
+   * 缺省（或返回 `undefined`）时退回**无鉴权**请求 —— 端点会回公开的 30 个模型。
+   * 那种情况不该让整个目录失败：少几个模型总比「这个厂商没有模型」好。
+   */
+  resolveKey?: () => Promise<string | undefined> | string | undefined;
 }): OpencodeCatalog {
   const now = input.now ?? Date.now;
   const ttlMs = input.ttlMs !== undefined && Number.isFinite(input.ttlMs) && input.ttlMs >= 0 ? input.ttlMs : DEFAULT_CATALOG_TTL_MS;
@@ -431,9 +442,33 @@ export function createOpencodeCatalog(input: {
   const requestSignal = (signal: AbortSignal | undefined, budgetMs: number): AbortSignal =>
     signal === undefined ? AbortSignal.timeout(budgetMs) : AbortSignal.any([signal, AbortSignal.timeout(budgetMs)]);
 
+  /**
+   * 现取一次目录请求用的密钥。
+   *
+   * 读失败一律降级成 `undefined`（无鉴权请求）：目录读不到会让整个厂商的模型列表消失，
+   * 而「少几个模型」远好过「这个厂商没有模型」。凭据问题会在真正发推理请求时暴露，
+   * 那时用户看到的是准确的错误。
+   * @returns 密钥；取不到时 `undefined`。
+   */
+  const keyOf = async (): Promise<string | undefined> => {
+    if (input.resolveKey === undefined) return undefined;
+    try {
+      const key = await input.resolveKey();
+      return typeof key === "string" && key !== "" ? key : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const listing = async (signal: AbortSignal | undefined): Promise<CatalogEntry[]> => {
     assertOpencodeBase(input.baseUrl);
-    const { url, headers } = catalogRequest(input.baseUrl);
+    /**
+     * 凭据每次现取（见 `resolveKey` 的说明）；没装注入点时不 `await` ——
+     * `await undefined` 也会让出一轮微任务，那会让「调用 `list()` 之后立刻就有
+     * 在途请求」这个既有性质失效（并发去重的测试直接观察它）。
+     */
+    const key = input.resolveKey === undefined ? undefined : await keyOf();
+    const { url, headers } = catalogRequest(input.baseUrl, key);
     const response = await input.fetchImpl(url, { headers, signal: requestSignal(signal, MODELS_FETCH_TIMEOUT_MS) });
     if (!response.ok) {
       throw new LlmError(`opencode models endpoint returned ${response.status}`, "DISCOVERY_FAILED", {

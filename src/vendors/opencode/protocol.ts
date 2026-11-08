@@ -163,12 +163,28 @@ export function trimBase(baseUrl: string): string {
 }
 
 /**
- * 目录请求（旧插件 `fetchLiveModelIds` 第 6462-6472 行）：不带 Authorization，
- * 只带 `accept`、身份编码与 attribution 头。
+ * 目录请求（旧插件 `fetchLiveModelIds` 第 6462-6472 行）。
+ *
+ * ## 为什么现在带 Authorization（2026-11-08）
+ *
+ * 旧插件与第一版实现都**不带** Bearer，理由是「目录是公开信息」。实测确实如此 ——
+ * 但不带凭据拿到的是**全部 30 个模型**，而这个账号实际订阅的只有 **6 个**：
+ *
+ * ```
+ * 无凭据：30 个（含 claude-haiku-5-5 / gpt-6-luna / kimi-k3 … 这些用不了的）
+ * 带凭据： 6 个（真正可用的那批）
+ * ```
+ *
+ * 后果是设置页的勾选列表里躺着一堆**选中也发不出去**的模型。用户报障原话是
+ * 「连天界面那里，现在好像又出来了」 —— 上下文本身是另一处的问题，但这条清单
+ * 一直在误导「哪些模型能用」。
+ *
+ * 少给凭据 ≠ 更安全：这条请求与推理走**同一个网关、同一把 key**，而推理请求本来就要带它。
  * @param baseUrl - 网关基地址。
+ * @param key - 推理密钥；缺省时退回无鉴权（端点会回公开清单，不至于整个目录读不到）。
  * @returns URL 与请求头。
  */
-export function catalogRequest(baseUrl: string): { url: string; headers: Record<string, string> } {
+export function catalogRequest(baseUrl: string, key?: string): { url: string; headers: Record<string, string> } {
   return {
     url: `${trimBase(baseUrl)}${MODELS_PATH}`,
     headers: {
@@ -176,6 +192,7 @@ export function catalogRequest(baseUrl: string): { url: string; headers: Record<
       "accept-encoding": "identity",
       // 同一网关：缺会话头会被 400（2026-11-02）。
       ...opencodeSessionHeaders(),
+      ...(key === undefined || key === "" ? {} : { Authorization: `Bearer ${key}` }),
       ...attributionHeaders(),
     },
   };
