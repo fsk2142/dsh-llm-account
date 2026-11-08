@@ -27,6 +27,13 @@ import { LlmError } from "@deepseek-ai/dsh-llm";
 
 import type { QuotaPlan, QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
+// 档位名的解析**必须**复用 core 这一份：窗口上限表与逐模型额度表必须用同一套写法识别，
+// 否则会出现「同一个档位，模型查得到额度、窗口却算错」（这类 bug 曾真实存在，见 windowCapsOf）。
+//
+// 代价是打包时会把 `model-quota-table` 里的静态额度表一起内联进本产物（实测 +17KB，
+// 约 180KB → 198KB）。这是刻意接受的开销：另写一份解析只在仓库里少 17KB，
+// 但两处回退链迟早会分叉 —— 分叉时的症状是「数字看着合理、其实是错的」。
+import { planKeyCandidates } from "../../core/model-quota-table";
 import { IDENTITY_ENCODING_HEADER } from "./protocol";
 
 /** 额度/账单链路的默认基地址（计划 §1：`amr-api` 是控制面入口）。 */
@@ -358,10 +365,10 @@ function windowsOf(preflight: unknown, creditsPerUsd: number | undefined, tier?:
   const record = payloadRecord(preflight);
   const codingPlan = record !== undefined && isRecord(record.codingPlan) ? record.codingPlan : undefined;
   const rows = codingPlan !== undefined && Array.isArray(codingPlan.windows) ? codingPlan.windows : [];
-  const caps = tier === undefined ? undefined : WINDOW_CAP_USD[tier.trim().toLowerCase()];
+  const caps = windowCapsOf(tier);
   const windows: QuotaWindow[] = [];
   for (const row of rows) {
-    // 官方上限：按时长查表（Go 的周窗口 = $30 等）。
+    // 官方上限：按时长查表（Go 的周窗口 = $55 等）。
     const duration = isRecord(row) ? numberValue(row.durationSeconds) : undefined;
     const field = duration === undefined ? undefined : DURATION_TO_CAP[duration];
     const officialCap = field === undefined ? undefined : caps?.[field];
@@ -480,12 +487,43 @@ function creditsPerUsdOf(summary: unknown): number | undefined {
  * 注意那段历史：早期仓库文档记的是 `creditsPerUsd: 10000`，会让周窗口显示成 $15
  * （而当时实际是 $30）—— 用户看到「共 $15.00」就是这个原因。
  */
-const WINDOW_CAP_USD: Readonly<Record<string, { monthly: number; weekly: number; fiveHour?: number }>> = {
+/** 一个套餐的窗口美元上限（`fiveHour` 缺席 = 该档不设 5 小时窗口）。 */
+interface WindowCaps {
+  monthly: number;
+  weekly: number;
+  fiveHour?: number;
+}
+
+const WINDOW_CAP_USD: Readonly<Record<string, WindowCaps>> = {
   go: { monthly: 220, weekly: 55, fiveHour: 18 },
   plus: { monthly: 310, weekly: 74 },
   pro: { monthly: 480, weekly: 90 },
   max: { monthly: 900, weekly: 150 },
 };
+
+/**
+ * 按档位名取**窗口上限表**，档位写法宽松（`Go Plus` / `go_plus` / `goplus` / `Plus` 都认）。
+ *
+ * 为什么要经 `planKeyCandidates` 而不是直接 `toLowerCase()`（2026-11-08 修）：
+ * 窗口上限表里的键是 `go` / `plus` / `pro` / `max`，而官方页面的列头写的是
+ * `Go Plus` / `Go Max`，`vela preflight` 的 `tier` 又可能给 `go_plus` 这种下划线形式。
+ * 以前这里是裸 `toLowerCase()` 查表 —— 只有 `go` 恰好能对上，其它写法**整张表都查不到**，
+ * 于是窗口的美元上限凭空消失、回落成「credits ÷ 接口换算率」的推算值：
+ * 数字看着合理，其实是错的（而且与逐模型额度那条路径的口径不一致 ——
+ * 那一侧一直用 `planKeyOf`，同一个档位模型能查到、窗口查不到）。
+ *
+ * 现在两侧共用同一套候选键，不会再分叉。
+ * @param tier - `codingPlan.tier`（厂商原样给的字符串）。
+ * @returns 该档位的窗口上限；档位认不出时 `undefined`（不猜）。
+ */
+function windowCapsOf(tier: string | undefined): WindowCaps | undefined {
+  if (tier === undefined) return undefined;
+  for (const key of planKeyCandidates(tier)) {
+    const caps = WINDOW_CAP_USD[key];
+    if (caps !== undefined) return caps;
+  }
+  return undefined;
+}
 
 /** 窗口时长（秒）→ 官方上限表里的字段。 */
 const DURATION_TO_CAP: Readonly<Record<number, "monthly" | "weekly" | "fiveHour">> = {
@@ -508,7 +546,7 @@ const DURATION_TO_CAP: Readonly<Record<number, "monthly" | "weekly" | "fiveHour"
  */
 function creditsPerUsdFromCaps(preflight: unknown, tier: string | undefined): number | undefined {
   if (tier === undefined || tier === "") return undefined;
-  const caps = WINDOW_CAP_USD[tier.trim().toLowerCase()];
+  const caps = windowCapsOf(tier);
   if (caps === undefined) return undefined;
   const record = payloadRecord(preflight);
   if (record === undefined || !isRecord(record.codingPlan)) return undefined;

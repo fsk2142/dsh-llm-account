@@ -332,17 +332,17 @@ describe("planKeyOf：Open Design 的 Max 档（2026-11-07 修）", () => {
 });
 
 /**
- * ## 档位写法的健壮性（2026-11-08 第 3 轮自检）
+ * ## 为什么必须钉住档位写法
  *
  * `planKeyOf` 的输入是**厂商原样给的字符串**（`billing/summary` 的 `membershipTier`
- * 或 `vela preflight` 的 `codingPlan.tier`），我们无法规定它的格式。而 Open Design
+ * 或 `vela preflight` 的 `codingPlan.tier`），我们规定不了它的格式。而 Open Design
  * 官方页面的列头是 `Go` / `Go Plus` / `Go Pro` / `Go Max` —— 「Go X」这种写法一旦
- * 认不出，该档位用户的**每一个模型**都会显示「未知」。
+ * 认不出，该档位用户的**每一个模型**都会显示「未知」（不是某一个模型，是整列）。
  *
- * 修前的真实状况：`Go Plus` 被归成 `goplus`，而 Open Design 表里的桶叫 `plus`；
- * `Go Pro` 直接归成 `undefined`。两种都让整列数据消失。
+ * 具体的两种坏法：`Go Plus` 若被归成 `goplus`，而 Open Design 表里的桶叫 `plus`，
+ * 就查不到；`Go Pro` 若没有对应键，直接落到 `undefined`。两种都是整列数据消失。
  *
- * 这组用例把所有合理的写法都钉住，避免以后有人「顺手统一一下命名」时又弄丢一档。
+ * 所以这里把**所有合理写法**都钉住，避免以后有人「顺手统一一下命名」时又弄丢一档。
  */
 describe("Open Design：档位写法的健壮性（Go / Plus / Pro / Max 的各种写法）", () => {
   /** 以 DeepSeek V4.1 Flash 为探针：四档的数字各不相同（120/160/360/600）。 */

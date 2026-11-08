@@ -437,7 +437,7 @@ function loginNotes(props: AccountsPanelProps, vendor: string): ReactNode[] {
     );
     // 诊断原文（`vela` 的实际输出）：只有它能区分「命令没启动 / 崩了 / 没有任何输出」。
     // 挂在**这里**（`loginNotes`）而不是 `AccountCard` 的 `loginSection` —— 账户面板走的是
-    // `accountRows` + 本函数这条路，`AccountCard` 整组件不参与渲染（本轮实测踩过一次）。
+    // `accountRows` + 本函数这条路，`AccountCard` 整组件不参与渲染，挂那边等于永不显示。
     if (login.detail !== undefined && login.detail !== "") {
       notes.push(
         createElement(
@@ -451,7 +451,7 @@ function loginNotes(props: AccountsPanelProps, vendor: string): ReactNode[] {
     //
     // 必须挂在这里（`loginNotes`）而不是 `AccountCard` 的 `loginSection`：账户面板走的是
     // `accountRows` + 本函数这条路，`AccountCard` 整组件并不参与渲染 —— 挂错了地方，
-    // 代码能通过全部单测，但用户永远看不到（本轮实测踩到）。
+    // 单测照样全绿，但用户永远看不到这条安装指引。
     const guide = velaInstallGuide(props.t, login.reason, () => props.onLoginBegin?.(vendor));
     if (guide !== null) notes.push(guide);
   }

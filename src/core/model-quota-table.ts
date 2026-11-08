@@ -582,17 +582,17 @@ const OPENCODE_PLAN_ORDER: readonly string[] = ["go", "goplus"];
  *
  * 表头的「Monthly usage」是**该套餐额度池里分给这个模型的份额**（不是套餐价格）：
  * 官网 `model-credits` 页把套餐构成写得很清楚 —— Go 原价 $10/月、每月最高总额度
- * **$220**、7 天窗口 **$55**、5 小时窗口 **$18**（2026-10-21 时这三项还是 120/30/10，
- * 官方调价后一起变了，见 `quota.ts` 的 `WINDOW_CAP_USD`）。
+ * **$220**、7 天窗口 **$55**、5 小时窗口 **$18**（这几项会随官方调价变化，见
+ * `quota.ts` 的 `WINDOW_CAP_USD`）。
  * 所以 `go` 这一列的数字（如 DeepSeek V4.1 Flash = $120、Eco = $220）与套餐总额度同量级是对的。
  *
- * 四列 = Go / **Go Plus** / **Go Pro** / **Go Max**。
+ * **四列必须齐全**：Go / Go Plus / Go Pro / Go Max，顺序与 {@link OPENDESIGN_PLAN_ORDER} 一致。
+ * 少一列不是「少个数字」—— 该档位用户的**每一个模型**都会显示「未知」，因为
+ * {@link modelQuotaOf} 拿不到桶就返回 undefined。官方 `Go Max` 列一直有数字，
+ * 不能假定它是空的。
  *
- * **2026-11-08 修正**：上一版只有三列，注释写着「Max 列官方页面是空的，所以这里也没有」——
- * 这句话当时就不准（官方 `Go Max` 列一直有数字），后果是 Max 档用户的**每一个模型**
- * 都显示「未知」。现在四列齐全。
- *
- * 每行就是官方那张表的 `Monthly usage` 那一排数字，顺序与 {@link OPENDESIGN_PLAN_ORDER} 一致。
+ * 每行就是官方那张表的 `Monthly usage` 那一排数字。官方在某些格子里留空
+ * （例如 Eco 只给了 Go / Go Plus），那就**少写几列**，不按比例外推。
  */
 const OPENDESIGN_RAW: Readonly<Record<string, readonly string[]>> = {
   "GLM-5.3 Flash-X": ["$30", "$40", "$90", "$150"],
@@ -613,7 +613,6 @@ const OPENDESIGN_RAW: Readonly<Record<string, readonly string[]>> = {
   // 官方这张表在 Pro / Max 两格是**空的**（页面原文只到 `$290`），所以这里也只写两列 ——
   // 不拿 Go/Plus 的比例去外推一个 Pro/Max 的数字。
   "DeepSeek V4.1 Flash Eco": ["$220", "$290"],
-  // 官方一直在列的 `MiniMax M3.1 Flash`，上一版抓漏了。
   "MiniMax M3.1 Flash": ["$60", "$80", "$180", "$300"],
 };
 
@@ -887,11 +886,13 @@ export function modelAvailableIn(
   modelName: string,
 ): boolean | undefined {
   if (planName === undefined) return undefined;
-  const plan = planKeyOf(planName);
-  if (plan === undefined) return undefined;
-  const set = table[plan];
-  if (set === undefined) return undefined;
-  return set.has(normalizeModelKey(modelName));
+  // 与 {@link modelQuotaOf} 走**同一套候选键**：两处若各用各的解析，会出现
+  // 「额度查得到、可用性查不到」这种自相矛盾的组合。
+  for (const key of planKeyCandidates(planName)) {
+    const set = table[key];
+    if (set !== undefined) return set.has(normalizeModelKey(modelName));
+  }
+  return undefined;
 }
 
 /**
@@ -950,10 +951,11 @@ export function planKeyOf(planName: string): string | undefined {
  * @returns 该表里实际存在的桶；都没有时 `undefined`。
  */
 function bucketOf(table: PlanModelQuotaTable, plan: string): Record<string, ModelQuotaAmount> | undefined {
-  const direct = table[plan];
-  if (direct !== undefined) return direct;
-  const fallback = PLAN_KEY_FALLBACK[plan];
-  return fallback === undefined ? undefined : table[fallback];
+  for (const key of planKeyCandidates(plan)) {
+    const bucket = table[key];
+    if (bucket !== undefined) return bucket;
+  }
+  return undefined;
 }
 
 /**
@@ -969,6 +971,25 @@ const PLAN_KEY_FALLBACK: Readonly<Record<string, string>> = {
   goplus: "plus",
   gopro: "pro",
 };
+
+/**
+ * 把档位名解析成**该去表里找的键序列**（原键优先，其次回退键）。
+ *
+ * 为什么要导出：档位命名这一套不止一个消费方 —— 逐模型额度表用它、窗口上限表
+ * （`vendors/opendesign/quota.ts` 的 `WINDOW_CAP_USD`）也用它。两边各写一份回退链
+ * 迟早会不一致，而不一致的后果很隐蔽：模型额度显示正常、窗口的美元上限却凭空消失
+ * （回落成推算值，数字看着合理其实是错的）。
+ *
+ * 输入同样是**厂商原样给的字符串**，所以 `Go Plus` / `go_plus` / `GOPLUS` 都要认。
+ * @param planName - 套餐展示名（可以是 `Go`、`Go Plus`、`goplus`、`Plus`…）。
+ * @returns 候选键（至少 1 个；认不出档位时为空数组）。
+ */
+export function planKeyCandidates(planName: string): readonly string[] {
+  const key = planKeyOf(planName);
+  if (key === undefined) return [];
+  const fallback = PLAN_KEY_FALLBACK[key];
+  return fallback === undefined ? [key] : [key, fallback];
+}
 
 /**
  * 查一个模型在某个套餐下的额度。
