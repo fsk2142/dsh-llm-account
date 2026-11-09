@@ -11,7 +11,7 @@
  * 4. 固定账号与生效账号不同时两个都标注（§8.1 第 4 条）；
  * 5. 登录失败原因可读（含 `credential-slot-taken`）。
  */
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AccountCard, type AccountCardProps } from "../../src/client/account-card";
 import { dictionaryOf } from "../../src/client/copy";
@@ -655,4 +655,88 @@ it("一家账号都没有时提示添加账户，而不是显示成额度故障"
   expect(textsOf(tree)).not.toContain(dictionaryOf("zh")("account.quotaMissing"));
   // 「添加账户」的入口照旧在（空态正是为了引导用户去用它）。
   expect(elementsOf(tree).filter((element) => element.props["data-action"] === "add")).toHaveLength(1);
+});
+
+/**
+ * ## 自动切换之后，「生效中」的账号必须还能手动选中（2026-11-09 修）
+ *
+ * 用户报障原话：「额度用尽切换后，正在生效的账号就没有显示使用的那个按钮，无法手动选过去了」。
+ *
+ * 根因是**两个语义被混成了一个**：
+ *
+ * | 字段 | 含义 | 由谁决定 |
+ * | --- | --- | --- |
+ * | `effective` | 这个账号刚才**真的在服务请求** | 宿主记录的真实服务者 |
+ * | `active` / `pinned` | **用户选的是它** | 用户的固定选择 |
+ *
+ * 自动切换之后这两者必然分叉：
+ *
+ * ```
+ * A 额度耗尽 → 系统自动切到 B（A 的额度拒绝表生效）
+ * → B 变成 effective，但 pinned 仍是 null
+ * → 旧条件 `effective || …` 让 B 不显示「使用」按钮
+ * → 用户想把 B 固定下来，无从下手
+ * ```
+ *
+ * 修法：按钮只在**这一行就是当前选中项**（与徽标同一个 `selected` 判据）时隐藏。
+ */
+describe("「使用」按钮的显隐", () => {
+  /** 收集渲染树里所有 `data-account-use` 的值。 */
+  function useButtons(tree: unknown): string[] {
+    const found: string[] = [];
+    const walk = (node: unknown): void => {
+      if (node === null || node === undefined || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child);
+        return;
+      }
+      const element = node as { props?: Record<string, unknown> };
+      const value = element.props?.["data-account-use"];
+      if (typeof value === "string") found.push(value);
+      walk(element.props?.children);
+    };
+    walk(tree);
+    return found;
+  }
+
+  it("**额度用尽自动切到 B 之后，B 仍然有「使用」按钮**（这是用户报的那一项）", () => {
+    const { tree } = renderCard({
+      status: statusOf({
+        pinned: null, // 自动轮换：用户没固定任何一个
+        effective: "b", // 宿主记录：B 在服务
+        accounts: [row({ ref: "a", label: "A", active: false }), row({ ref: "b", label: "B", active: false, effective: true })],
+      }),
+    });
+    expect(useButtons(tree), "B 在服务 ≠ 用户选了 B；必须还能点").toContain("b");
+  });
+
+  it("两个账号都能点（切换后想切回去也一样）", () => {
+    const { tree } = renderCard({
+      status: statusOf({
+        pinned: null,
+        effective: "b",
+        accounts: [row({ ref: "a", active: false }), row({ ref: "b", active: false, effective: true })],
+      }),
+    });
+    expect(useButtons(tree).sort()).toEqual(["a", "b"]);
+  });
+
+  it("已经固定的那个**不显示**按钮（点它没有意义）", () => {
+    const { tree } = renderCard({
+      status: statusOf({
+        pinned: "a",
+        effective: "a",
+        accounts: [row({ ref: "a", active: true, effective: true }), row({ ref: "b", active: false })],
+      }),
+    });
+    expect(useButtons(tree), "固定的 A 不该再有『使用』").toEqual(["b"]);
+  });
+
+  it("厂商还没报过 effective 时，固定的那个也不显示", () => {
+    // 从未发过请求：`status.effective` 缺席，但 `active` 已经说明用户选了它。
+    const { tree } = renderCard({
+      status: statusOf({ pinned: "a", accounts: [row({ ref: "a", active: true }), row({ ref: "b", active: false })] }),
+    });
+    expect(useButtons(tree)).toEqual(["b"]);
+  });
 });

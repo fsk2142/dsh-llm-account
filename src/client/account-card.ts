@@ -361,7 +361,25 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
       createElement(
         "div",
         { className: CSS_CLASS.accountActions },
-        effective || (account.active === true && props.status?.effective === undefined)
+        /**
+         * 「使用」按钮：**只有当这一行就是当前选中项时才隐藏**（2026-11-09 修）。
+         *
+         * 原来的条件是 `effective || (active && 厂商没给 effective)`。第一项是错的：
+         * `effective` 表示「这个账号刚才**真的在服务请求**」（宿主记录），不是
+         * 「用户选的是它」（那个是 `active` / `pinned`）。两者在自动切换之后会分叉：
+         *
+         * ```
+         * A 额度耗尽 → 系统自动切到 B → B 变成 effective，但 pinned 仍是 null
+         * → B 显示「生效中」且没有「使用」按钮 → 用户想把 B 固定下来，无从下手
+         * ```
+         *
+         * 报障原话：「额度用尽切换后，正在生效的账号就没有显示使用的那个按钮，
+         * 无法手动选过去了」。现在改用 `selected`，与上面那个徽标的判据**同一套语义**。
+         *
+         * 第二项（`active && 厂商没给 effective`）保留其意图但已被 `selected` 覆盖：
+         * `active === true` 时 `selected` 本来就为真。
+         */
+        selected
           ? null
           : createElement(
               "button",

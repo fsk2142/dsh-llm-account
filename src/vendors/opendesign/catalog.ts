@@ -14,6 +14,7 @@ import type { ModelModality } from "@deepseek-ai/dsh-llm";
 
 import type { CatalogEntry } from "../../core/adapter";
 import { assignUniqueNames, officialModelName } from "../../core/model-names";
+import { measuredModalities } from "./vision";
 
 /** 一次目录解析的结果。 */
 export interface CatalogParseResult {
@@ -202,7 +203,15 @@ export function parseCatalog(payload: unknown): CatalogParseResult {
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
       ...(efforts.length === 0 ? {} : { efforts }),
-      inputModalities: inputModalitiesOf(raw),
+      /**
+       * **实测表修正目录声明**（2026-11-09）。
+       *
+       * 网关的 `architecture.input_modalities` 会过时：`deepseek-v4.1-flash-eco`
+       * 与 `deepseek-v4-flash` 都写着 `["text"]`，但真机实测能准确读出图里的数字
+       * （三张图全对，`prompt_tokens` 39 → 241 说明图片真的被编码进了上下文）。
+       * 见 `./vision` 的说明与判据。
+       */
+      inputModalities: measuredModalities(id, inputModalitiesOf(raw)),
     });
   }
 

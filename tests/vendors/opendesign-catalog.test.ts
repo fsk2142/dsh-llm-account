@@ -151,16 +151,41 @@ describe("输入模态：opendesign 放在 architecture.input_modalities（2026-
     // 线上真实形状：`architecture: { input_modalities: ["text","image"] }`，顶层没有
     // `modalities` / `image`。只认顶层的旧实现把**所有**模型读成「仅文本」，
     // 宿主的图片按钮因此永远不出现 —— 包括上游明确声明支持图片的 deepseek-v4.1-flash。
+    //
+    // 注意第二行：原来用的是 `deepseek-v4-flash`，但 2026-11-09 的真机实测证明那个模型
+    // **能读图**（见 `./vision` 的判据表），于是它现在被实测表覆盖成 `["text","image"]`。
+    // 这里换成一个既不在实测表、目录也确实声明仅文本的模型，继续守住「按声明读」这条路。
     const parsed = parseCatalog({
       data: [
         { id: "deepseek-v4.1-flash", architecture: { input_modalities: ["text", "image"] } },
-        { id: "deepseek-v4-flash", architecture: { input_modalities: ["text"] } },
+        { id: "deepseek-v4-pro", architecture: { input_modalities: ["text"] } },
         { id: "kimi-k2.7-code", architecture: { input_modalities: ["text", "image"] } },
       ],
     });
     expect(parsed.entries[0]!.inputModalities).toEqual(["text", "image"]);
     expect(parsed.entries[1]!.inputModalities).toEqual(["text"]);
     expect(parsed.entries[2]!.inputModalities).toEqual(["text", "image"]);
+  });
+
+  it("**实测表能推翻过时的声明**（eco / v4-flash 实测能读图）", () => {
+    // 用户报障「eco 不能发送图片」：网关写的是 `["text"]`，但真机实测能准确读出图里的
+    // 数字（三张全对）、且 `prompt_tokens` 39 → 241 证明图片真的进了上下文。
+    // 只看声明会让宿主的图片按钮永远不出现。
+    const parsed = parseCatalog({
+      data: [
+        { id: "deepseek-v4.1-flash-eco", architecture: { input_modalities: ["text"] } },
+        { id: "deepseek-v4-flash", architecture: { input_modalities: ["text"] } },
+      ],
+    });
+    expect(parsed.entries[0]!.inputModalities, "eco 实测能读图").toEqual(["text", "image"]);
+    expect(parsed.entries[1]!.inputModalities, "v4-flash 实测能读图").toEqual(["text", "image"]);
+  });
+
+  it("实测表**不碰**表外的模型（声明说不行就是不行）", () => {
+    // 反例守卫：`deepseek-v4-pro` 实测确实读不出图（三张全错、prompt_tokens 只涨 5），
+    // 它不在表里，声明说什么就是什么 —— 免得将来有人把覆盖放宽成整个族。
+    const parsed = parseCatalog({ data: [{ id: "deepseek-v4-pro", architecture: { input_modalities: ["text"] } }] });
+    expect(parsed.entries[0]!.inputModalities).toEqual(["text"]);
   });
 
   it("`file` / `video` / `audio` **不算**图片（宿主只有文本与图片两档）", () => {
