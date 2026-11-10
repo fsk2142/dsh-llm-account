@@ -1,5 +1,5 @@
 /**
- * **按键隔离**的目录读取：TTL 缓存 + 并发去重 + 独立取消 + 内部超时。
+ * **按键隔离**的目录读取：TTL 缓存 + 并发去重 + 独立取消 + 内部超时 + 失败降级。
  *
  * ## 为什么需要这个模块（2026-11-05 外部审查 F15 / F17）
  *
@@ -35,6 +35,7 @@
  * | 某个等待者取消 | 只有它自己 reject；共享请求活到最后一个等待者也走掉 |
  * | 全部等待者离开 | abort 共享请求 |
  * | 读超时（内部） | 每个请求都有 `timeoutMs` 的硬上限，**与调用方 signal 同时生效** |
+ * | **读失败但此前成功过** | `staleMs` 窗口内返回上一次成功的值（降级），否则抛错 |
  *
  * @module dsh-llm-account/src/core/catalog-flight
  */
@@ -61,6 +62,25 @@ export interface CatalogReadOptions {
   fresh?: boolean;
 }
 
+/**
+ * 失败降级窗口的默认值（6 小时）。
+ *
+ * ## 为什么默认开，而不是默认关（2026-11-10）
+ *
+ * 用户报「开 VPN 时连不上网关，就一个模型都没有、也选不了」。
+ *
+ * 机制是：目录请求有 10 秒硬超时，失败**不写缓存**，而且这里原本**没有**任何
+ * 「拿上一次成功值顶一下」的降级 —— 于是一次网络抖动 = 模型列表整体消失。
+ * 列表没了，模型自然不可选；用户连「换一个模型试试」这条路都没有。
+ *
+ * 这与本模块其它设计目标是同一件事：**读不到 ≠ 不存在**。缺失不等于 0，
+ * 一次失败也不该等于「这个厂商没有模型」。
+ *
+ * 窗口取 6 小时：长到足以熬过 VPN 抖动、DNS 抽风、网关短暂 5xx；短到不至于
+ * 拿一份隔夜的目录去骗人（厂商上下架模型的节奏是「天」级，不是「分钟」级）。
+ */
+const DEFAULT_STALE_MS = 6 * 60 * 60 * 1000;
+
 /** 构造参数。 */
 export interface CatalogFlightOptions<T> {
   /** 缓存有效期（毫秒）。 */
@@ -72,6 +92,20 @@ export interface CatalogFlightOptions<T> {
    * abort 时，这一层仍然会按时放弃，不会把 socket 挂到天荒地老。
    */
   timeoutMs: number;
+  /**
+   * 读失败后，上一次成功的值还能顶多久（毫秒）。缺省 {@link DEFAULT_STALE_MS}；
+   * 传 `0` 关闭降级（失败即抛错，旧行为）。
+   */
+  staleMs?: number;
+  /**
+   * 判断某个失败是否「可以拿旧值顶一下」。缺省见 {@link defaultIsRecoverable}。
+   *
+   * 为什么要可注入：失败分类是**厂商相关**的（`LlmError` 的 code / 上游 status）。
+   * 这一层只提供通用默认值，需要更细的判断时由调用方接管。
+   * @param error - 加载抛出的错误。
+   * @returns 是否允许降级。
+   */
+  isRecoverable?: (error: unknown) => boolean;
   /** 时钟注入（测试用）；缺省 `Date.now`。 */
   now?: () => number;
   /**
@@ -89,7 +123,7 @@ export interface CatalogFlight<T> {
    * 读一次。
    * @param key - 复合键；不同键**绝不共用**在途请求。
    * @param options - 取消信号与 `fresh`。
-   * @returns 取到的值。
+   * @returns 取到的值（可能是降级返回的上一次成功值）。
    */
   read(key: string, options?: CatalogReadOptions): Promise<T>;
 }
@@ -99,16 +133,32 @@ const ABORTED = "ABORTED";
 
 /**
  * 造一个按键隔离的目录读取器。
- * @param options - TTL、超时与加载函数。
+ * @param options - TTL、超时、降级窗口与加载函数。
  * @returns 读取端口。
  */
 export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): CatalogFlight<T> {
   const now = options.now ?? Date.now;
   const ttlMs = Number.isFinite(options.ttlMs) && options.ttlMs >= 0 ? options.ttlMs : 0;
   const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 0;
+  /** 降级窗口；`0` = 关闭。非有限值回落到默认值，而不是悄悄关掉。 */
+  const staleMs =
+    options.staleMs === undefined
+      ? DEFAULT_STALE_MS
+      : Number.isFinite(options.staleMs) && options.staleMs > 0
+        ? options.staleMs
+        : 0;
+  const isRecoverable = options.isRecoverable ?? defaultIsRecoverable;
 
   /** 键 → 缓存条目。**按键入**：不同网关/账号各有各的缓存。 */
   const cache = new Map<string, { at: number; value: T }>();
+  /**
+   * 键 → **最后一次成功**的值。
+   *
+   * 与 {@link cache} 刻意分开：`cache` 会因为 TTL 过期而不再被采用，而这里保留
+   * 的是「真正从网络读到过的最后一次结果」，专门用于失败降级。
+   * 只在**最新一代**成功时写入（与 `cache` 同一道守卫），避免旧请求晚到把它们覆盖。
+   */
+  const lastGood = new Map<string, { at: number; value: T }>();
   /** 键 → 在途请求。 */
   const flights = new Map<string, Flight<T>>();
   /** 全局代号：任何一次新加载都推进它，旧一代据此知道自己过期了。 */
@@ -135,9 +185,40 @@ export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): Catalo
       const existing = flights.get(key);
       const flight = existing ?? startFlight(key);
       if (existing !== undefined) existing.waiters += 1;
-      return waitFor(flight, signal);
+
+      try {
+        return await waitFor(flight, signal);
+      } catch (error: unknown) {
+        /*
+         * 失败降级（2026-11-10）：读不到时若有「上一次成功值」且仍在降级窗口内，
+         * 就用它顶上，而不是把整份目录变成空。
+         *
+         * 只有**允许降级**的失败才走这条路 —— 鉴权失败（401/403）必须原样抛出，
+         * 否则密钥错了会被一份旧目录盖住，用户永远看不到真正的原因。
+         */
+        const fallback = fallbackFor(key, error);
+        if (fallback !== undefined) return fallback;
+        throw error;
+      }
     },
   };
+
+  /**
+   * 取降级值。
+   * @param key - 复合键。
+   * @param error - 本次失败。
+   * @returns 可用的旧值；不该降级时为 `undefined`。
+   */
+  function fallbackFor(key: string, error: unknown): T | undefined {
+    if (staleMs <= 0) return undefined;
+    // 调用方自己取消的，不该被一份旧数据「满足」—— 它要的是停下。
+    if (isCallerAbort(error)) return undefined;
+    if (!isRecoverable(error)) return undefined;
+    const last = lastGood.get(key);
+    if (last === undefined) return undefined;
+    if (now() - last.at > staleMs) return undefined;
+    return last.value;
+  }
 
   /**
    * 起一次新加载。
@@ -161,7 +242,10 @@ export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): Catalo
     flight.promise = options.load(key, requestSignal).then((value) => {
       // **只有最新一代能写缓存**：旧请求晚到时不能覆盖刚刷新出来的结果。
       if (flight.generation === generationSeq) {
-        cache.set(key, { at: now(), value });
+        const at = now();
+        cache.set(key, { at, value });
+        // 降级用的是「最后一次真正读到的值」，所以它比 `cache` 活得更久。
+        lastGood.set(key, { at, value });
       }
       return value;
     });
@@ -214,6 +298,47 @@ export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): Catalo
     if (flights.get(flight.key) === flight) flights.delete(flight.key);
     if (!flight.controller.signal.aborted) flight.controller.abort();
   }
+}
+
+/**
+ * 这个错误是不是「调用方自己取消的」。
+ *
+ * 只认本模块自己产生的 `ABORTED`；内部超时不算 —— 超时是**故障**，正需要降级。
+ * @param error - 待判定的错误。
+ * @returns 是调用方取消时为 `true`。
+ */
+function isCallerAbort(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === ABORTED;
+}
+
+/**
+ * 默认的「能否降级」判断。
+ *
+ * | 情形 | 能否降级 | 理由 |
+ * | --- | --- | --- |
+ * | 没有 status（网络断开 / DNS / 超时 / 正文不是 JSON） | **能** | 典型的环境抖动，正是用户要熬过去的那种 |
+ * | `5xx` | **能** | 网关自己出问题，与我们的配置无关 |
+ * | `401` / `403` / `404` 等 4xx | **不能** | 密钥错了、地址写错了 —— 拿旧值盖住会让用户永远查不出原因 |
+ *
+ * @param error - 加载抛出的错误。
+ * @returns 允许降级时为 `true`。
+ */
+function defaultIsRecoverable(error: unknown): boolean {
+  if (isCallerAbort(error)) return false;
+  const status = statusOf(error);
+  if (status === undefined) return true;
+  return status >= 500;
+}
+
+/**
+ * 从错误对象上读 HTTP 状态码（各家适配器放在 `status` 上）。
+ * @param error - 待读取的错误。
+ * @returns 状态码；没有则 `undefined`。
+ */
+function statusOf(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && Number.isFinite(status) ? status : undefined;
 }
 
 /**

@@ -330,3 +330,104 @@ describe("F15/F17 · 端到端（从 adapter.catalogModels 进入）", () => {
     await first;
   });
 });
+
+/**
+ * ## 失败降级（2026-11-10）
+ *
+ * 用户报：开 VPN 时连不上网关 → 「一个模型都没有、也选不了」。
+ *
+ * 机制：目录请求有 10 秒硬超时，失败不写缓存，而且原来**没有**任何降级 ——
+ * 一次网络抖动就等于「这个厂商没有模型」。而**读不到 ≠ 不存在**，与项目
+ * 「缺失不等于 0」是同一条纪律。
+ *
+ * 这里同时钉住反面：**鉴权失败不许被旧值盖住**，否则密钥错了用户永远查不出原因。
+ */
+describe("失败降级：读不到时用上一次成功值顶上", () => {
+  /** 造一个「可切换成功/失败」的读取器与可控时钟。 */
+  function harness(
+    options: {
+      staleMs?: number;
+      /** 失败时抛什么（缺省是不带 status 的网络类错误）。 */
+      error?: () => unknown;
+    } = {},
+  ) {
+    const state = { clock: 0, fail: false, calls: 0 };
+    const flight = createCatalogFlight<string[]>({
+      ttlMs: 60_000,
+      timeoutMs: 0,
+      now: () => state.clock,
+      ...(options.staleMs === undefined ? {} : { staleMs: options.staleMs }),
+      load: async () => {
+        state.calls += 1;
+        if (state.fail) throw (options.error ?? ((): unknown => new Error("ECONNRESET")))();
+        return ["m1"];
+      },
+    });
+    return { flight, state };
+  }
+
+  it("**读失败 + 此前成功过 → 返回上一次的值**（模型列表不会变空）", async () => {
+    const { flight, state } = harness();
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+
+    // 前进到 TTL 之外，逼出一次真实重读；此时网络坏了。
+    state.clock += 61_000;
+    state.fail = true;
+
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+    expect(state.calls, "确实尝试过重读，不是直接吃 TTL").toBe(2);
+  });
+
+  it("**5xx 也降级**：网关自己抖动，与我们的配置无关", async () => {
+    const { flight, state } = harness({
+      error: () => Object.assign(new Error("502 from gateway"), { status: 502 }),
+    });
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+    state.clock += 61_000;
+    state.fail = true;
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+  });
+
+  it("**401 不降级**：密钥错了必须原样抛出，不能被旧目录盖住", async () => {
+    const unauthorized = Object.assign(new Error("401 missing_api_key"), { status: 401 });
+    const { flight, state } = harness({ error: () => unauthorized });
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+    state.clock += 61_000;
+    state.fail = true;
+
+    await expect(flight.read("k")).rejects.toBe(unauthorized);
+  });
+
+  it("超出降级窗口 → 抛错（旧值不能无限期冒充事实）", async () => {
+    const { flight, state } = harness({ staleMs: 1_000 });
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+
+    state.fail = true;
+    state.clock += 61_000 + 1_001; // 既过 TTL，也过降级窗口
+    await expect(flight.read("k")).rejects.toThrow(/ECONNRESET/);
+  });
+
+  it("`staleMs: 0` → 关闭降级（回到旧行为）", async () => {
+    const { flight, state } = harness({ staleMs: 0 });
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+    state.clock += 61_000;
+    state.fail = true;
+    await expect(flight.read("k")).rejects.toThrow(/ECONNRESET/);
+  });
+
+  it("**从没成功过 → 抛错**（降级不能凭空造出一份目录）", async () => {
+    const { flight, state } = harness();
+    state.fail = true;
+    await expect(flight.read("k")).rejects.toThrow(/ECONNRESET/);
+  });
+
+  it("**调用方自己取消的不降级** —— 它要的是停下，不是一份旧数据", async () => {
+    const { flight } = harness();
+    await expect(flight.read("k")).resolves.toEqual(["m1"]);
+
+    const controller = new AbortController();
+    const pending = flight.read("k9", { signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "ABORTED" });
+  });
+});
