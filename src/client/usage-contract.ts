@@ -285,6 +285,24 @@ export interface VendorUsageStatus {
   modelRules?: ModelRule[];
   accounts: AccountUsageStatus[];
   failures: string[];
+  /**
+   * **额度整体没读到的账号** ref（超时、端口抛错）。
+   *
+   * ## 为什么需要它（2026-11-10 修问题 ③）
+   *
+   * `failures` 只说明「哪个端点/账号出了问题」，它把两种完全不同的处境混在一起：
+   *
+   * - **整家挂了**（网关拒绝、密钥失效）→ 这份读数一个账号都不可信；
+   * - **某个账号超时**（另一个账号读到了）→ 读到的那些仍然可信。
+   *
+   * 客户端的 `completeReading` 原来只能看 `failures`，于是两种都判成「不完整」，
+   * 一家只要有一个账号抖动，**整家**的缓存就不更新 —— 两个账号里一个网络抖一下，
+   * 另一个本来正常的额度也跟着不再刷新。
+   *
+   * 有了这个字段，客户端能只看「真正读到的那些账号」。老宿主不带它时按空数组处理
+   * （= 祖先行为），不会因此变严。
+   */
+  quotaUnread?: string[];
 }
 
 /** 一个强类型调用描述符（字段名取自 typert 协议的 `InvocationDescriptor`）。 */

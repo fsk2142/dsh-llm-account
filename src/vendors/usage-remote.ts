@@ -396,6 +396,14 @@ export class LlmAccountUsageService extends TypertRemoteService {
     // 2026-10-17 就不再显示 ref，这条路径漏掉了）。
     const quotas = new Map<string, QuotaSummary>();
     /**
+     * **额度整体没读到的账号**（超时、端口抛错）。
+     *
+     * 与厂商级 `failures` 分开记：`failures` 是「界面要显示的那行原因」，而这个是
+     * 「这份数据缺了哪个账号」—— 客户端据它把「一个账号坏了」与「整家坏了」区分开
+     * （见 2026-11-10 修的问题 ③）。
+     */
+    const unread = new Set<string>();
+    /**
      * **并发上限**（第七轮复审 PERF-01）。
      *
      * 原来是无限制 `Promise.all` —— 10 个账号就是 10 个额度读取同时在途，
@@ -418,7 +426,21 @@ export class LlmAccountUsageService extends TypertRemoteService {
         try {
           quotas.set(view.ref, quotaSummaryOf(await quotaWithTimeout(deps.quota, view.ref)));
         } catch (error) {
+          /*
+           * **这个账号的额度整体没读到**（超时、端口抛错）。
+           *
+           * 2026-11-10 修（问题 ③，缓存粒度）：单个账号失败**只影响它自己**。
+           *
+           * 旧行为只有厂商级的 `failures`，于是「A 账号读到了、B 账号超时」和
+           * 「整家挂了」在数据上无法区分 —— 客户端的 `completeReading` 于是把这两
+           * 种都判为「不完整」，一家的缓存整体不更新。结果：两个账号里一个网络抖动，
+           * 另一个本来好好的额度也跟着不再刷新。
+           *
+           * 现在**同时**记进厂商级（保持既有契约，界面那一行原因照旧显示）与
+           * 「这个账号读不到」的标记 —— 后者让客户端能只看真正读到的那些账号。
+           */
           failures.push(`quota: ${vendor} "${view.label}" read failed (${messageOf(error)})`);
+          unread.add(view.ref);
         }
       }
     });
@@ -453,6 +475,13 @@ export class LlmAccountUsageService extends TypertRemoteService {
       ...(deps.modelRules === undefined ? {} : { modelRules: deps.modelRules().map((rule) => ({ ...rule, models: [...rule.models] })) }),
       accounts,
       failures,
+      /*
+       * 「哪些账号的额度整体没读到」（2026-11-10 修问题 ③）。
+       *
+       * 只有在**确实有账号读失败**时才带这个字段 —— 空数组与「没带」在客户端是同义的，
+       * 但少一个字段能让正常路径的载荷不变大，也让跨版本兼容更省心。
+       */
+      ...(unread.size === 0 ? {} : { quotaUnread: [...unread] }),
     };
   }
 

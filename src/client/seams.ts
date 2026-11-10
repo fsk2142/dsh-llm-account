@@ -3427,13 +3427,30 @@ function noteUpdateState(state: UpdateState | undefined): void {
  *
  * 2026-10-18 实际情况「重新点开设置后原来显示的额度信息又不见了」的根因：缓存本意是省一次
  * 网络，但它把**部分失败**的读数也当成功存了下来 —— 一次瞬时故障（端点超时、某个端点坏了）
- * 就此在 60 秒 TTL 里变成「事实」，重开设置吃缓存，额度数字看起来凭空消失。判据：
- * 1. 厂商级没有任何失败项；
- * 2. 每个**已配置**的账号都拿到了非空额度读数（额度缺席、额度自己报失败、一个窗口都没有，
- *    三种都说明这次读得不完整）。
+ * 就此在 60 秒 TTL 里变成「事实」，重开设置吃缓存，额度数字看起来凭空消失。
  *
- * 不完整照旧每次重读：下一次要么完整（进缓存），要么还是失败（界面显示那一行中文原因，下次
- * 打开再试）。未配置的账号不参与判定 —— 它没有密钥，本来就没有额度可读。
+ * ## 2026-11-10 改：以**账号**为粒度判定（问题 ③）
+ *
+ * 这一版的关键放宽：**「某个账号的额度没读到」不等于「这份读数不可信」**。
+ *
+ * 旧判据的漏洞正好落在用户报的那个场景上：opendesign 的账单接口
+ * （`amr-api.open-design.ai`）连不上时，`getSummary` 把失败记进**这一家**的
+ * `failures`，于是整家三个账号的读数全部被判成「不完整」而不能进缓存 —— 其中两个
+ * 账号的额度其实**读到了**（截图里 35% / 33% 都在）。结果就是「刷新时读不到就
+ * 整个不显示」。
+ *
+ * 新判据分两层：
+ *
+ * 1. **厂商级**拒绝仍然算全盘不完整（网关拒绝 = 这份读数整体不可信）；
+ * 2. **账号级**只看「这个账号自己」：额度缺席 / 自己报失败 / 窗口为空才算它不完整。
+ *    厂商级 `failures` 里那条**其他端点**的报错（账单摘要、whoami…）不再连坐。
+ *
+ * 仍然拦住的：
+ *
+ * - 一个账号都没读到（`quotaUnread` 覆盖了所有已配置账号）→ 不完整；
+ * - 所有已配置账号都没有窗口 → 不完整（那是「整家没数据」，不是「个别失败」）。
+ *
+ * 未配置的账号不参与判定 —— 它没有密钥，本来就没有额度可读。
  * @param status - 一次厂商状态读数。
  * @returns 够格进缓存时为 `true`。
  */
@@ -3442,19 +3459,38 @@ export function completeReading(status: VendorUsageStatus): boolean {
   // 调用方（`read()` / 建清单的 effect）没有 catch，于是那次刷新静默中断：界面停在
   // 旧读数的状态，看起来就是「刷新时额度消失」（2026-10-20 报障）。
   // 线上真见过 `quota` 存在但 `failures`/`windows` 缺失的形状，所以每一项都单独判定。
-  const failures = status.failures;
-  if (Array.isArray(failures) && failures.length > 0) return false;
+  //
+  // 厂商级 `failures` **不再**直接判死（见上面的 2026-11-10 说明）：它记的是
+  // 「哪个端点坏了」，而端点坏了通常只影响某一个字段（账单摘要→套餐名，不影响周期额度）。
+  // 真正该拦住的是「一个账号都没读到」——那由下面的账号级判定表达。
   const accounts = Array.isArray(status.accounts) ? status.accounts : [];
+  const unread = Array.isArray(status.quotaUnread) ? status.quotaUnread : [];
+  /** 已配置、且**额度整体没读到**的账号数。 */
+  let configured = 0;
+  /** 已配置、且拿到可用额度的账号数。 */
+  let readable = 0;
   for (const account of accounts) {
     // 与账户行同一条纪律：线上 `accounts` 可能混进渲染不了的行（null / 非对象）。
     if (typeof account !== "object" || account === null) continue;
     if (account.configured !== true) continue;
+    configured += 1;
+    // 端口整体失败（超时/抛错）：这个账号确实没有读数，不算它够格。
+    if (typeof account.ref === "string" && unread.includes(account.ref)) continue;
     const quota = account.quota;
-    // 额度缺席、额度自己报失败、一个窗口都没有 —— 三种都说明这次读得不完整。
-    if (typeof quota !== "object" || quota === null) return false;
-    if (Array.isArray(quota.failures) && quota.failures.length > 0) return false;
-    if (!Array.isArray(quota.windows) || quota.windows.length === 0) return false;
+    // 额度缺席、额度自己报失败、一个窗口都没有 —— 三种都说明**这个账号**这次读得不完整。
+    if (typeof quota !== "object" || quota === null) continue;
+    if (Array.isArray(quota.failures) && quota.failures.length > 0) continue;
+    if (!Array.isArray(quota.windows) || quota.windows.length === 0) continue;
+    readable += 1;
   }
+  /*
+   * 一个可读的都没有 → 不完整（整家没数据）。
+   *
+   * 注意这一步**取代**了原来「`failures` 非空就返回 false」的写法：那个写法把
+   * 「账单摘要这一个端点坏了」也算成整家不可用，正是用户看到的
+   * 「刷新时读不到就整个不显示」。
+   */
+  if (configured > 0 && readable === 0) return false;
   return true;
 }
 

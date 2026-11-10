@@ -166,6 +166,60 @@ describe("读数形状不完备时不得抛错（真机崩溃的根因）", () =
     }
   });
 
+  /**
+   * ## 账号级缓存粒度（2026-11-10 修问题 ③）
+   *
+   * 用户报「刷新的时候如果读取不到就不显示了」。根因在旧判据：厂商级 `failures`
+   * 非空就判整家不完整 —— 而 opendesign 的账单接口一挂，`failures` 里就有东西，
+   * 于是**三个账号里两个明明读到了**，整家缓存照样不更新。
+   *
+   * 新判据按账号看：只要有账号拿到窗口，就够格进缓存。
+   */
+  it("**账单端点失败但账号额度读到了 → 仍然进缓存**（旧判据会全体作废）", async () => {
+    const { completeReading } = await import("../../src/client/seams");
+    const status = {
+      vendor: "opendesign",
+      capabilities: {},
+      // 厂商级失败：账单摘要端点连不上（就是截图里那一行）。
+      failures: ["账单摘要读取失败（账单接口不可达（fetch failed））：套餐信息与额度换算单位暂时缺失"],
+      accounts: [
+        { ref: "a", configured: true, quota: { windows: [{ key: "5h", used: 1, cap: 10 }], failures: [] } },
+        { ref: "b", configured: true, quota: { windows: [{ key: "5h", used: 2, cap: 10 }], failures: [] } },
+      ],
+    };
+    expect(completeReading(status as never), "读到的额度不该被另一个端点的失败连坐").toBe(true);
+  });
+
+  it("**一个账号读不到、另一个读到 → 仍然进缓存**", async () => {
+    const { completeReading } = await import("../../src/client/seams");
+    const status = {
+      vendor: "opendesign",
+      capabilities: {},
+      failures: ['quota: opendesign "B" read failed (timeout after 30000ms)'],
+      quotaUnread: ["b"],
+      accounts: [
+        { ref: "a", configured: true, quota: { windows: [{ key: "5h", used: 1, cap: 10 }] } },
+        { ref: "b", configured: true },
+      ],
+    };
+    expect(completeReading(status as never), "一个账号抖动不该拖累另一个").toBe(true);
+  });
+
+  it("**一个账号都没读到 → 不进缓存**（这条是旧判据真正该管的情形）", async () => {
+    const { completeReading } = await import("../../src/client/seams");
+    const status = {
+      vendor: "opendesign",
+      capabilities: {},
+      failures: ['quota: opendesign "A" read failed (timeout)', 'quota: opendesign "B" read failed (timeout)'],
+      quotaUnread: ["a", "b"],
+      accounts: [
+        { ref: "a", configured: true },
+        { ref: "b", configured: true },
+      ],
+    };
+    expect(completeReading(status as never)).toBe(false);
+  });
+
   it("形状不完备的一次读数不会打断刷新（卡片仍有额度）", async () => {
     const mini = await runtime();
     await freshSeams();

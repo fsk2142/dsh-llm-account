@@ -293,6 +293,46 @@ it("额度失败项写账号名称，不写内部 ref（这一行直接显示在
   expect(status.failures.some((item) => /commandcode [ab] read/.test(item))).toBe(false);
 });
 
+/**
+ * ## 账号级失败粒度（2026-11-10 修问题 ③）
+ *
+ * 旧数据形状只有厂商级的 `failures`，客户端无法区分：
+ *
+ * - **整家挂了** → 这份读数一个账号都不可信；
+ * - **只是某个账号超时** → 读到的那些仍然可信。
+ *
+ * 于是 `completeReading` 把两种都判成「不完整」，一家只要有一个账号抖动，整家的
+ * 缓存就不更新。用户看到的正是「刷新时读不到就整个不显示」。
+ *
+ * 现在每个**读失败的账号**会进 `quotaUnread`，客户端据此按账号粒度判定。
+ */
+it("**只失败的账号进 `quotaUnread`**，读到的账号不受连坐", async () => {
+  const { service } = await mount([
+    vendorDeps({
+      vendor: "commandcode",
+      // Account A 正常、Account B 抛错 —— 模拟「两个账号里一个网络抖了一下」。
+      snapshot: async (ref?: string) => {
+        if (ref === "b") throw new Error("fetch failed");
+        return { ...SNAPSHOT, windows: [...SNAPSHOT.windows] };
+      },
+    }),
+  ]);
+
+  const status = await service.status("commandcode");
+  expect(status.quotaUnread, "只有读不到的那个账号被标出来").toEqual(["b"]);
+  // 读到的那一个照常有额度。
+  expect(status.accounts.find((row) => row.ref === "a")?.quota?.windows).toHaveLength(1);
+  expect(status.accounts.find((row) => row.ref === "b")?.quota).toBeUndefined();
+  // 厂商级的提示照旧保留（界面那一行原因不变）。
+  expect(status.failures).toContain('quota: commandcode "Account B" read failed (fetch failed)');
+});
+
+it("全部账号都读到时**不带** `quotaUnread`（正常路径的载荷不变）", async () => {
+  const { service } = await mount([vendorDeps({ vendor: "commandcode" })]);
+  const status = await service.status("commandcode");
+  expect(status.quotaUnread).toBeUndefined();
+});
+
 it("**额度读取超时后不重试**（2026-10-22 改，见 bug 审查 MEDIUM-1）", async () => {
   /**
    * 旧行为：超时后重试一次，第二次成功就不记失败。
