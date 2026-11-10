@@ -1605,4 +1605,87 @@ opendesign 那边的 `whoami` 是**本机 `vela` 命令**（`spawn(vela, ["whoam
 `epochOf` / `epochs.set(key, epochOf(key) + 1)`、`offered.has(call.name)`、
 `if (chunk.type === "text-delta") pump.text += chunk.text`。
 
+---
+
+## 2.1.21：两路搜索都加内部硬超时与有界读取（A08）（2026-11-10）
+
+审查 A08（P2）：网关搜索与 Search API 只在调用方给了 `signal` 时透传它，缺省没有
+内部 deadline；`response.json()` 也没有字节上限。
+
+后果两层：
+
+1. 调用方不传 signal 或传了永不 abort 的 signal 时，握手卡住的连接会挂到天荒地老；
+2. 更糟的是**路由语义** —— `gateway-first` 的设计前提是「网关失败就回退 API」，
+   而「卡住」不是失败，它永远不返回，回退分支根本没机会跑。用户看到搜索一直转圈，
+   而本来可用的 API 路就在那儿闲着。
+
+修法：
+
+- `search-provider.ts`：新增 `GATEWAY_SEARCH_TIMEOUT_MS = 15s`，`withDeadline`
+  合并调用方 signal 与内部超时（任一成立都停下，不是二选一）；正文改用
+  `readBoundedJsonResult`，上限 1 MiB。空正文 / 非法 JSON / 超限都记
+  `gatewayFailure` 并继续走 API 回退。
+- `search-api.ts`：新增 `API_SEARCH_TIMEOUT_MS = 15s` 与 `API_SEARCH_BODY_LIMIT = 1 MiB`，
+  同样合并 signal、有界读取；非 ok 分支读 message 也改成有界。
+
+15 秒的取值理由：正常网关响应 1~3 秒，搜索是交互式操作，15 秒已算久；两路同一口径。
+
+验证：`tsc` 干净；206 文件 / 2217 用例全绿；构建成功；产物核实到两处 `15e3` 与
+`withDeadline(signal, GATEWAY_SEARCH_TIMEOUT_MS)`。
+
+---
+
+## 2.1.22：侧边栏账号名与厂商名错配（2026-11-10 报障）
+
+### 用户报的现象
+
+截图里侧边栏显示 `Default` + `[OpenCode]` 徽标，厂商名却是 `Open Design`。
+原话：「侧边栏账号显示有时候账号显示信息对应不上，default 应该是 opencode
+网关的账号，这里显示是错误的」。
+
+### 根因：两个字段来源不同
+
+| 字段 | 取处 | 来源 |
+| --- | --- | --- |
+| 账号名 | `sidebar-card.ts` 的 `currentRow` | `props.status`（**每拍只装一家**）里按 `accountRef` 找 |
+| 厂商名 | `seams.ts` 的 `vendorLabelKeyOf(...)` | `target.vendor`（轮播器认为该显示的那家） |
+
+`read()` 每拍只读一家：`readVendor = vendor ?? vendors[0]`。当 `target` 已经变成
+opencode、而**这一拍的读数还是 commandcode**（刚切换还没回来 / 那次读失败 /
+`inFlight` 挡住）时：
+
+```
+rows.find(ref === 目标账号) → undefined（这份读数里根本没这个账号）
+  → 退到 rows.find(configured === true) → 上一家的第一个账号
+  → 标题显示旧家的账号名，厂商名却是新家的
+```
+
+这不是渲染抖动，是**两个数据源没有对齐**的结构性问题。
+
+### 修法
+
+让卡片自己校验「这份读数是不是目标那家的」：
+
+1. `SidebarCardProps` 新增 `accountVendor`（目标账号所属的 providerId）；
+2. 校验 `props.accountVendor === status.vendor`，不一致时**不再**走那几级
+   「退到某个账号」的兜底 —— 那些兜底值全来自不相干的读数，猜出来必然是别家的；
+3. `seams.ts` 组装时把 `accountVendor: target.vendor` 一并传下去。
+
+**兼容**：调用方没传 `accountVendor`（旧宿主、旧测试）时视为「不知道」，保持旧行为 ——
+不能因为新增一个字段就让整张卡片消失。
+
+**取舍**：读数对不上时显示「读取中」而不是某个账号。两者都不完美，但「读不到就说
+读不到」符合本项目「缺失不等于 0」的纪律；拿别家的账号顶上去是**给出一个错误的事实**。
+
+### 验证
+
+`tsc` 干净；**206 文件 / 2220 用例**全绿（新增 3 条：错配时不显示别家账号名、
+一致时照常显示、未传新字段时保持旧行为）。
+
+### 未做的
+
+`seams.ts` 那一侧「切换目标后没有立刻重读新家」的时序问题**仍然存在** —— 修完之后
+表现是「短暂显示读取中」，而不是「显示错误的账号」。要彻底消除这个窗口，需要在
+`vendor` 变化时主动触发一次 `read()`；那是另一个改动，留给下一版。
+
 

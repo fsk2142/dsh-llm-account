@@ -3026,6 +3026,14 @@ export function createSidebarCardView(options: {
         ? {}
         : { vendorLabelKey: vendorLabelKeyOf(entries, target?.vendor ?? view.status?.vendor) }),
       ...(target === undefined ? {} : { accountRef: target.ref }),
+      /**
+       * 目标账号**所属厂商**也一并交给卡片（2026-11-10 修账号/厂商错配）。
+       *
+       * `view.status` 每拍只装一家（`readVendor = vendor ?? vendors[0]`），刚切目标或
+       * 那一拍读失败时它还是上一家的。卡片据此校验「这份读数是不是目标那家的」——
+       * 不是就不猜账号，避免出现「A 家的账号名 + B 家的厂商名」。
+       */
+      ...(target === undefined ? {} : { accountVendor: target.vendor }),
       ...(view.failure === undefined ? {} : { failure: view.failure }),
       ...(view.stale ? { stale: true } : {}),
       // 整张卡片点下去就打开用量面板（需求：去掉卡片上那个「打开用量面板」

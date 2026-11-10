@@ -65,6 +65,61 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * ## 账号与厂商名错配（2026-11-10 报障）
+ *
+ * 现象：侧边栏显示「Default `[OpenCode]`」，厂商名却是 `Open Design`。
+ *
+ * 根因是两个字段来源不同：账号名从 `status`（**每拍只装一家**）里按 `accountRef` 找，
+ * 找不到就退到 `configured` 的第一个；厂商名从 `target.vendor`。刚切换目标、或那一拍
+ * 读失败时 `status` 还是上一家的 —— 账号名退回上一家的账号，厂商名却是新的。
+ *
+ * 修法：把目标厂商一并传进来，读数**不是那家**就不猜账号。宁可显示「读取中」，
+ * 也不显示错的。
+ */
+it("**读数来自别家时不拿它的账号顶上去**（账号/厂商错配）", () => {
+  // 轮播已切到 opencode 的账号，但这一拍的读数还是 commandcode 的。
+  const stale = statusOf({
+    vendor: "commandcode",
+    accounts: [row("cmd-first", { label: "别家账号" })],
+  });
+  const tree = SidebarCard({
+    t: dictionaryOf("zh"),
+    status: stale,
+    accountRef: "oc-first",
+    accountVendor: "dsh-opencode-go",
+    vendorLabelKey: "vendor.opencodeGo",
+    onOpen: vi.fn(),
+  });
+
+  const text = textsOf(tree).join(" ");
+  expect(text, "不得把别家的账号名当成本账号").not.toContain("别家账号");
+  // 厂商名仍然是目标那家（它来自 target，本来就正确）。
+  expect(text).toContain("OpenCode");
+});
+
+it("读数与目标厂商一致时照常显示该账号（不因为新校验而变空）", () => {
+  const fresh = statusOf({
+    vendor: "dsh-opencode-go",
+    accounts: [row("oc-first", { label: "我的 OpenCode 账号" })],
+  });
+  const tree = SidebarCard({
+    t: dictionaryOf("zh"),
+    status: fresh,
+    accountRef: "oc-first",
+    accountVendor: "dsh-opencode-go",
+    vendorLabelKey: "vendor.opencodeGo",
+    onOpen: vi.fn(),
+  });
+  expect(textsOf(tree).join(" ")).toContain("我的 OpenCode 账号");
+});
+
+it("没传 `accountVendor` 时保持旧行为（不因新增字段让整张卡消失）", () => {
+  const status = statusOf({ vendor: "commandcode", accounts: [row("a", { label: "账号 A" })] });
+  const tree = SidebarCard({ t: dictionaryOf("zh"), status, accountRef: "a", onOpen: vi.fn() });
+  expect(textsOf(tree).join(" ")).toContain("账号 A");
+});
+
 // —— 卡片渲染 ——
 
 it("远程面把可省略字段序列化成 null 时也不崩（渲染路径抛错会整块面板变空白）", () => {

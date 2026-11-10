@@ -45,6 +45,29 @@ export interface SidebarCardProps {
    * 账号」—— 那样多账号的厂商永远只显示一个。
    */
   accountRef?: string | undefined;
+  /**
+   * `accountRef` 所属**厂商**的 providerId（`commandcode` / `opendesign` / `dsh-opencode-go`）。
+   *
+   * ## 为什么必须显式传（2026-11-10 报障：账号与厂商名错配）
+   *
+   * 症状：侧边栏显示「Default `[OpenCode]`」却把厂商标成 `Open Design`，用户看到
+   * 「账号信息对应不上」。
+   *
+   * 根因是两个字段来源不同：
+   *
+   * | 字段 | 来源 |
+   * | --- | --- |
+   * | 账号名 | `status` 里按 `accountRef` 找，找不到就退到 `configured` 的**第一个** |
+   * | 厂商名 | `target.vendor`（轮播器认为该显示的那家） |
+   *
+   * 而 `status` 每拍只装**一家**（`readVendor = vendor ?? vendors[0]`）。刚切换目标、
+   * 或那一拍读失败时，`status` 还是上一家的 —— 于是 `accountRef` 在这份读数里找不到，
+   * 账号名退回上一家的第一个账号，厂商名却是新的。缝合结果就是这么来的。
+   *
+   * 修法：把目标厂商一并传进来，由卡片**自己校验**「这份读数是不是那家的」。
+   * 不是那家就不渲染账号细节（不猜），而不是拿别家的账号顶上去。
+   */
+  accountVendor?: string | undefined;
   /** 打开中栏仪表盘。**整张卡片**点下去就是这个动作。 */
   onOpen: () => void;
   /**
@@ -106,17 +129,42 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
   // `accounts` 是跨边界传输的数组：存在但**不是数组**时 `.find` 一样会抛（旧宿主、
   // 半成品载荷），而这是侧边栏的渲染路径 —— 抛了整块卡片变空白。收敛成空数组。
   const rows: readonly AccountUsageStatus[] = Array.isArray(status?.accounts) ? status.accounts : [];
+  /*
+   * **这份读数是不是目标厂商的**（2026-11-10 修账号/厂商错配）。
+   *
+   * `accountVendor` 是轮播器认为该显示的那家；`status.vendor` 是**这份读数实际来自**
+   * 那家。两者不一致时，`rows` 里根本没有目标账号 —— 旧实现会在这里退到
+   * `rows.find(configured)`（= 上一家的第一个账号），于是标题显示 A 家的账号名、
+   * 厂商名却是 B 家。现在：不是那家就不猜。
+   *
+   * 兼容：调用方没传 `accountVendor`（旧宿主/旧测试）时视为「不知道」，保持旧行为 ——
+   * 不能因为新增字段就让整张卡片消失。
+   */
+  const vendorMatches =
+    props.accountVendor === undefined || status?.vendor === undefined
+      ? true
+      : props.accountVendor === status.vendor;
   // 轮播到的那一个账号优先（账号级轮播 2026-10-19）；没指定才退回「这家的当前账号」。
   const wantedRow =
-    props.accountRef === undefined ? undefined : rows.find((account) => account.ref === props.accountRef);
-  const effectiveRow = effective === undefined ? undefined : rows.find((account) => account.ref === effective.ref);
+    props.accountRef === undefined || !vendorMatches
+      ? undefined
+      : rows.find((account) => account.ref === props.accountRef);
+  const effectiveRow =
+    effective === undefined || !vendorMatches
+      ? undefined
+      : rows.find((account) => account.ref === effective.ref);
   // 还没有请求时 effective 可能为空，但用户已经指定/自动选中了当前账号：优先显示它。
-  const currentRow =
-    wantedRow ??
-    effectiveRow ??
-    rows.find((account) => account.active === true) ??
-    rows.find((account) => account.effective === true) ??
-    rows.find((account) => account.configured === true);
+  /*
+   * 读数与目标厂商不一致时**不再**做那几级「退到某个账号」的猜测 —— 那些兜底值全都
+   * 来自这份不相干的读数，猜出来的必然是别家的账号。宁可显示「读取中」，也不显示错的。
+   */
+  const currentRow = vendorMatches
+    ? wantedRow ??
+      effectiveRow ??
+      rows.find((account) => account.active === true) ??
+      rows.find((account) => account.effective === true) ??
+      rows.find((account) => account.configured === true)
+    : undefined;
   const hasData = status !== undefined && currentRow !== undefined;
 
   return createElement(
