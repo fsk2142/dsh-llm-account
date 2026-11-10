@@ -161,8 +161,30 @@ export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): Catalo
   const lastGood = new Map<string, { at: number; value: T }>();
   /** 键 → 在途请求。 */
   const flights = new Map<string, Flight<T>>();
-  /** 全局代号：任何一次新加载都推进它，旧一代据此知道自己过期了。 */
-  let generationSeq = 0;
+  /**
+   * 键 → 该键自己的代号（epoch）。
+   *
+   * ## 为什么**不能**用全局标量（2026-11-10 审查 A01）
+   *
+   * 原来是一个 `let generationSeq = 0`，任何键执行 `fresh` 都 `+= 1`。于是：
+   *
+   * 1. A 键的请求还在途中；
+   * 2. B 键点了刷新（`fresh`），全局代号 +1；
+   * 3. A 键的请求成功返回，却因为 `flight.generation !== generationSeq` 而
+   *    **写不进自己的 `cache`，也写不进 `lastGood`**；
+   * 4. 下次读 A：缓存没有 → 又发一次请求（白花一次网络）；
+   *    若那一次恰好失败 → **连降级值都没有**（A01 里最实际的损失）。
+   *
+   * 代际的作用本来只是「同一个键的旧请求别覆盖新结果」，跨键毫无关系。
+   * 改成按 key 保存之后，刷 B 不再影响 A。
+   */
+  const epochs = new Map<string, number>();
+  /**
+   * 读某个键当前的代号。
+   * @param key - 复合键。
+   * @returns 该键的代号（从未刷新过则为 0）。
+   */
+  const epochOf = (key: string): number => epochs.get(key) ?? 0;
 
   return {
     async read(key: string, readOptions: CatalogReadOptions = {}): Promise<T> {
@@ -177,8 +199,9 @@ export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): Catalo
       if (signal?.aborted === true) throw abortedError(signal);
 
       // `fresh` = 旧一代作废，且**不复用同键的在途请求**（那是「点了没反应」的根因）。
+      // 只推进**当前键**的代号：刷 B 不该让 A 的在途结果作废（审查 A01）。
       if (fresh) {
-        generationSeq += 1;
+        epochs.set(key, epochOf(key) + 1);
         flights.delete(key);
       }
 
@@ -229,7 +252,7 @@ export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): Catalo
     const controller = new AbortController();
     const flight: Flight<T> = {
       key,
-      generation: generationSeq,
+      generation: epochOf(key),
       controller,
       promise: undefined as unknown as Promise<T>,
       waiters: 1,
@@ -240,8 +263,8 @@ export function createCatalogFlight<T>(options: CatalogFlightOptions<T>): Catalo
     const requestSignal = signals.length === 1 ? (signals[0] as AbortSignal) : AbortSignal.any(signals);
 
     flight.promise = options.load(key, requestSignal).then((value) => {
-      // **只有最新一代能写缓存**：旧请求晚到时不能覆盖刚刷新出来的结果。
-      if (flight.generation === generationSeq) {
+      // **只有本键的最新一代能写缓存**：同一键的旧请求晚到时不能覆盖刚刷新出来的结果。
+      if (flight.generation === epochOf(key)) {
         const at = now();
         cache.set(key, { at, value });
         // 降级用的是「最后一次真正读到的值」，所以它比 `cache` 活得更久。

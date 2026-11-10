@@ -431,3 +431,58 @@ describe("失败降级：读不到时用上一次成功值顶上", () => {
     await expect(pending).rejects.toMatchObject({ code: "ABORTED" });
   });
 });
+
+/**
+ * ## A01：代际必须按 key 隔离（2026-11-10 审查）
+ *
+ * 旧实现是一个全局 `generationSeq`：任何键执行 `fresh` 都会 `+= 1`。
+ * 于是 A 的在途请求成功后因为「代际不匹配」写不进 `cache`，也写不进 `lastGood` ——
+ * 后果是**多打一次网络**，更糟的是**降级值也没了**（恰好在需要它的时候）。
+ *
+ * 这条用例在旧实现上会红：再读 A 时会多出一次 `load`。
+ */
+describe("A01：刷 B 不该让 A 的在途结果作废", () => {
+  it("A 在途中遇到 B 刷新 → A 成功后仍然进缓存，且降级值可用", async () => {
+    const gates = new Map<string, ReturnType<typeof gate>>();
+    const loads: string[] = [];
+    const state = { clock: 0, fail: false };
+
+    const flight = createCatalogFlight<string[]>({
+      ttlMs: 60_000,
+      timeoutMs: 0,
+      now: () => state.clock,
+      load: async (key) => {
+        loads.push(key);
+        if (state.fail) throw new Error("ECONNRESET");
+        const g = gate();
+        gates.set(key, g);
+        await g.wait;
+        return [`v:${key}`];
+      },
+    });
+
+    // A 起一个在途请求并挂住。
+    const a = flight.read("A");
+    await settle();
+    expect(loads, "A 已发出").toEqual(["A"]);
+
+    // B 走 fresh：旧实现会在这里把**全局**代际推进，连累 A。
+    const b = flight.read("B", { fresh: true });
+    await settle();
+
+    gates.get("A")?.open();
+    gates.get("B")?.open();
+    await expect(a).resolves.toEqual(["v:A"]);
+    await expect(b).resolves.toEqual(["v:B"]);
+
+    // ① A 的成功结果必须已进缓存 → 再读不发请求。
+    const before = loads.length;
+    await expect(flight.read("A")).resolves.toEqual(["v:A"]);
+    expect(loads.length, "A 应命中缓存，不该为 B 的刷新买单").toBe(before);
+
+    // ② 关键时刻：A 之后失败时，必须还能拿到降级值。
+    state.fail = true;
+    state.clock += 61_000; // 过 TTL，逼出真实重读
+    await expect(flight.read("A"), "A 的 lastGood 不该因 B 刷新而丢失").resolves.toEqual(["v:A"]);
+  });
+});

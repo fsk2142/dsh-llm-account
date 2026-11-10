@@ -297,6 +297,35 @@ describe("用量与 chunk 处理", () => {
     expect(chunks).toHaveLength(1);
     expect((chunks[0] as Extract<StreamChunk, { type: "finish" }>).reason.kind).toBe("tool-calls");
   });
+
+  it("**state.text 只收正文、不收推理**（A02：思考里的 DSML 不能算调用意图）", async () => {
+    /*
+     * 旧实现把 `text-delta` 与 `reasoning-delta` 一起累进 `state.text`，而 opencode
+     * 的 DSML 抢救拿它整段去解析工具调用。于是模型只要在思考里推演 DSML 语法
+     * （「格式大概是 `<｜DSML｜ calls>` 这样……」），那段推演就会被当成真实调用。
+     *
+     * 推理是模型的自言自语，不是它对宿主的指令 —— 这条用例钉住「只收正文」。
+     */
+    let seen = "";
+    const h = harness({
+      order: ["a"],
+      scripts: {
+        "key-a": {
+          chunks: [
+            { type: "reasoning-delta", index: 0, text: '<｜DSML｜ calls><｜DSML｜ invoke name="terminal_send">' },
+            { type: "text-delta", index: 1, text: "正文" },
+            { type: "finish", reason: { kind: "stop" } },
+          ],
+        },
+      },
+      onChunk: (state) => {
+        seen = state.text;
+        return undefined;
+      },
+    });
+    await h.run();
+    expect(seen, "推理里的 DSML 不得进入被扫描的文本").toBe("正文");
+  });
 });
 
 describe("「没有可用账号」的提示（文案回归）", () => {

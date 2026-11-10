@@ -75,7 +75,19 @@ export interface SwappedTarget {
 
 /** chunk 透传过程中暴露给钩子的状态（DSML 抢救要读）。 */
 export interface StreamPumpState {
-  /** 正文与推理的累计文本。 */
+  /**
+   * **仅用户可见正文**的累计文本（**不含 reasoning**）。
+   *
+   * ## 为什么把推理排除在外（2026-11-10 审查 A02，P1）
+   *
+   * 原来这里累积的是「正文 + 推理」，而 opencode 的 DSML 抢救会拿它整段去
+   * `parseDsmlCalls()` 找工具调用。于是模型只要在**思考过程**里推演一遍 DSML 语法
+   * （「用户问这个格式怎么用，那大概是 `<｜DSML｜ calls>` 这样……」），那段推演就会
+   * 被当成真实的工具调用意图去执行。
+   *
+   * 推理是模型的自言自语，不是它对宿主的指令；把两者混成一块再「猜」调用，
+   * 判断依据本身就是错的。所以这里只收 `text-delta`。
+   */
   text: string;
   /** 是否已经出现过工具调用块。 */
   sawToolCall: boolean;
@@ -282,8 +294,9 @@ export async function* runAttemptLoop<Config, Credential, AttemptContext>(
         }
         let chunk = step.value;
 
-        // 累计状态：文本/推理原文、工具调用出现与否、最大块序号。
-        if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") pump.text += chunk.text;
+        // 累计状态：**只收正文**（推理不算判断工具调用的依据，见 StreamPumpState.text）、
+        // 工具调用出现与否、最大块序号。
+        if (chunk.type === "text-delta") pump.text += chunk.text;
         if (chunk.type === "tool-call-delta" || (chunk.type === "block-start" && chunk.blockType === "tool-call")) {
           pump.sawToolCall = true;
         }

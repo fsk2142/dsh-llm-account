@@ -499,9 +499,32 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
            * 补发成真正的工具调用块，并把 finish 改成 `tool-calls` —— 否则宿主会当成
            * 「模型自己停了」而结束这一轮（用户看到的就是任务莫名中断）。只在**一个工具
            * 调用都没出现过**时才做：网关已经给了结构化 `tool_calls` 时不重复执行。
+           *
+           * ## 只扫描用户可见正文（2026-11-10 审查 A02）
+           *
+           * `state.text` 现在**不含 reasoning**（见 `StreamPumpState.text`）。推理是
+           * 模型的自言自语：它完全可能一边思考一边把 DSML 语法写出来（「格式大概是
+           * `<｜DSML｜ calls>` 这样……」），把那段当调用意图执行就是在按错误依据行事。
+           *
+           * ## 工具名必须在**本轮真实提供**的清单里（审查 A02，P1）
+           *
+           * 原来这里解析出什么就补什么，完全不看 `options.tools`。后果：
+           *
+           * - 模型在普通回复里**举例**说明 DSML 怎么写时，这段示例会被执行成真实调用；
+           * - 名字根本不在本轮工具清单里的调用也会被补发，等于凭空扩大可用工具面。
+           *
+           * 现在要求**全部**解析结果都在清单内，否则整段放弃（退回普通文本）：
+           * 只要有一个名字不在清单里，就说明这段更可能是「示例/回显」而不是真调用，
+           * 此时宁可少救一次，也不能误执行一次。
+           *
+           * 剩余风险（如实记）：如果模型在正文里完整写出一段**引用了已授权工具**的
+           * DSML 示例，仍会被救成调用 —— 纯文本层面区分不了「引用」与「意图」。
+           * 这道白名单只保证「不会调用未提供的工具」。
            */
           const salvaged = parseDsmlCalls(state.text);
           if (salvaged.length === 0) return undefined;
+          const offered = new Set((options.tools ?? []).map((tool) => tool.name));
+          if (salvaged.some((call) => !offered.has(call.name))) return undefined;
           let index = state.lastBlockIndex + 1;
           let ordinal = 0;
           const chunks: StreamChunk[] = [];

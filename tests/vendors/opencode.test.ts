@@ -582,9 +582,25 @@ const DSML_FRAMES: readonly (readonly [string, unknown])[] = [
   ["message_stop", { type: "message_stop" }],
 ];
 
+/** 声明了若干工具的请求（DSML 白名单用例要它，见 A02）。 */
+function requestWithTools(names: readonly string[], model = "m1"): GenerateOptions {
+  return {
+    provider: "dsh-opencode-go",
+    model,
+    messages: [userMessage("hi")],
+    tools: names.map((name) => ({
+      name,
+      description: `${name} tool`,
+      parameters: { type: "object", properties: {} },
+    })),
+  } as unknown as GenerateOptions;
+}
+
 it("**DSML 文本必须补发成工具调用**（否则这一轮会空着结束）", async () => {
+  // 工具必须是**真的提供给模型**的：旧实现不校验这一点，所以这个夹具当年
+  // 连工具都没声明也能通过 —— 那正是 A02 要修的地方（见下一个用例）。
   const h = harness(() => sseResponse(DSML_FRAMES));
-  const chunks = await collect(h.adapter.stream(request()));
+  const chunks = await collect(h.adapter.stream(requestWithTools(["terminal_send"])));
 
   const calls = chunks.filter(
     (chunk): chunk is Extract<StreamChunk, { type: "block-end" }> =>
@@ -602,6 +618,38 @@ it("**DSML 文本必须补发成工具调用**（否则这一轮会空着结束�
   );
   expect(finish, "只能有一个 finish").toHaveLength(1);
   expect(finish[0]!.reason.kind, "有工具调用就不能再报 stop").toBe("tool-calls");
+});
+
+it("**没提供过的工具名绝不救成调用**（A02：P1）", async () => {
+  /*
+   * 旧实现解析出什么就补什么，完全不看 `options.tools`。后果有两层：
+   * 一是模型在正文里「举例」说明 DSML 写法时，那段示例会被真的执行；
+   * 二是名字根本不在本轮清单里的调用也会被补发，等于凭空扩大可用工具面。
+   *
+   * 现在要求**全部**解析结果都在清单内，否则整段退回普通文本。
+   */
+  const h = harness(() => sseResponse(DSML_FRAMES));
+  // 只提供了 safe_echo，而正文里写的是 terminal_send —— 必须不执行。
+  const chunks = await collect(h.adapter.stream(requestWithTools(["safe_echo"])));
+
+  expect(
+    chunks.some((chunk) => chunk.type === "block-end" && chunk.block.type === "tool-call"),
+    "未声明的工具不得被补发",
+  ).toBe(false);
+  const finish = chunks.filter((chunk): chunk is Extract<StreamChunk, { type: "finish" }> => chunk.type === "finish");
+  expect(finish, "仍然只有一条 finish").toHaveLength(1);
+  expect(finish[0]!.reason.kind, "没有工具调用就是普通收尾").toBe("stop");
+  // 正文照旧可见：不执行 ≠ 把模型的话吞掉。
+  expect(textOf(chunks)).toContain("terminal_send");
+});
+
+it("**一个工具都没声明时绝不救**（最保守的一侧）", async () => {
+  const h = harness(() => sseResponse(DSML_FRAMES));
+  const chunks = await collect(h.adapter.stream(request()));
+  expect(
+    chunks.some((chunk) => chunk.type === "block-end" && chunk.block.type === "tool-call"),
+    "没提供任何工具，任何 DSML 都只能是文本",
+  ).toBe(false);
 });
 
 it("普通文本回复不受影响（没有 DSML 时 finish 仍是 stop、不补工具调用）", async () => {
