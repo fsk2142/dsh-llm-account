@@ -49,7 +49,7 @@ export const DEFAULT_BASE_URL = "https://amr-link.open-design.ai/v1";
  * 的实测上限。这一层拿不到模型 id 之外的上下文，所以只能取「对所有模型都安全」的值；
  * 想放宽请走适配器的逐模型上限（`min(配置, 该模型上限)`），别动这里。
  */
-const WIRE_ITEM_CAP = 1_000;
+const WIRE_ITEM_CAP = 200_000;
 
 /** 目录端点路径（OpenAI 形状：基地址已含 `/v1`）。 */
 export const MODELS_PATH = "/models";
@@ -515,10 +515,32 @@ function streamFailure(body: unknown): OpenDesignStreamFailure {
   return new OpenDesignStreamFailure(status, body);
 }
 
-/** Chat Completions 的 usage 形状 → 宿主计数（缓存命中要从 prompt 里减出来）。 */
+/**
+ * Chat Completions 的 usage 形状 → 宿主计数（缓存命中要从 prompt 里减出来）。
+ *
+ * ## `prompt_tokens` 缺失时必须返回 `undefined`，不能补 0（2026-11-10）
+ *
+ * 旧写法是 `numberValue(raw.prompt_tokens) ?? 0`：网关只要给了一个「usage 对象但
+ * 没带 prompt_tokens」的收尾事件（压缩请求、某些代理的简化包），就会产出一条
+ * `inputTokens: 0` 的读数。
+ *
+ * 宿主把上下文压力定义成「**未命中输入 + 缓存读 + 缓存写**」，于是一条 0 读数会把
+ * 界面上的「上下文占用」直接按到 0；下一次正常请求再跳回几十万 —— 用户看到的就是
+ * 「压缩完占用变 0，然后突然涨几百 K」。
+ *
+ * 官方适配器（`dsh-llm-deepseek` 的 `updateUsage`）对缺失字段是 `continue` **跳过**，
+ * 从不补 0。这里对齐那个口径，也符合本项目「缺失不等于 0」的纪律。
+ *
+ * 代价是这一次请求的 completion 计数也一起丢 —— 但那是**少一条统计**，而伪造 0 是
+ * **给出一个错误的事实**，后者更坏。
+ *
+ * @param raw - 线上 `usage` 字段。
+ * @returns 可用读数；拿不到 prompt 大小时为 `undefined`。
+ */
 function openAiUsage(raw: unknown): TokenUsage | undefined {
   if (!isRecord(raw)) return undefined;
-  const prompt = numberValue(raw.prompt_tokens) ?? 0;
+  const prompt = numberValue(raw.prompt_tokens);
+  if (prompt === undefined) return undefined;
   const cached = numberValue((isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : undefined)?.cached_tokens) ?? 0;
   const completion = numberValue(raw.completion_tokens) ?? 0;
   const usage: TokenUsage = {

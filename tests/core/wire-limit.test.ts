@@ -235,13 +235,15 @@ describe("F16 · `limit` 是严格不变量，绝不超发", () => {
 });
 
 describe("wire-limit · 端到端（Open Design 请求体）", () => {
-  it("**1003 条历史 → 出站不超过 1000 条**（正是现场那个数字）", () => {
+  it("**1003 条历史 + 显式上限 1000 → 出站不超过 1000 条**", () => {
+    // 2026-11-10：默认上限已提到 200000（见 adapter 的 DEFAULT_MAX_REQUEST_ITEMS 说明），
+    // 所以这里必须**显式**给 1000，才能复现现场那个数字。这条固定的是裁剪机制本身。
     const body = buildRequestBody(
       { provider: "opendesign", model: "deepseek-v4.1-flash", messages: longHistory(1003) } as unknown as GenerateOptions,
-      { maxTokens: 100, systemText: "你是助手。", maxRequestItems: DEFAULT_MAX_REQUEST_ITEMS },
+      { maxTokens: 100, systemText: "你是助手。", maxRequestItems: 1_000 },
     ) as { messages: Wire[] };
 
-    expect(body.messages.length, "必须被裁到上限以内").toBeLessThanOrEqual(DEFAULT_MAX_REQUEST_ITEMS);
+    expect(body.messages.length, "必须被裁到上限以内").toBeLessThanOrEqual(1_000);
     const text = JSON.stringify(body.messages);
     expect(text, "模型要知道历史被省略了").toContain("省略");
     // 最近的那条必须在（这是这一轮要接着说的内容）。
@@ -265,21 +267,25 @@ describe("wire-limit · 端到端（Open Design 请求体）", () => {
         purpose: "compaction",
         messages: longHistory(1003),
       } as unknown as GenerateOptions,
-      { maxTokens: 100, systemText: "", maxRequestItems: DEFAULT_MAX_REQUEST_ITEMS },
+      { maxTokens: 100, systemText: "", maxRequestItems: 1_000 },
     ) as { messages: Wire[] };
-    expect(body.messages.length, "压缩请求自己也要能发出去").toBeLessThanOrEqual(DEFAULT_MAX_REQUEST_ITEMS);
+    expect(body.messages.length, "压缩请求自己也要能发出去").toBeLessThanOrEqual(1_000);
   });
 
-  it("**没有 maxRequestItems 时也不能裸奔**：协议层按 1000 兜底（2026-11-06 改）", () => {
+  it("**没有 maxRequestItems 时也不能裸奔**：协议层按 WIRE_ITEM_CAP 兜底", () => {
     // 旧行为是「没传上限就原样发出」。那次事故证明这条约定太脆：上游任何一环把上限
     // 弄丢，1001 条就被原样送到网关，整轮失败（而且连压缩自救的请求也一起 400）。
-    // 现在协议层自己兜底 —— 少留几条历史，远好过一次看不懂的 400。
+    // 所以协议层必须自带兜底。
+    //
+    // 2026-11-10：兜底值随默认上限一起从 1000 提到 200000 —— 因为「1000」本身
+    // 就是缓存被打碎的原因（见下方 describe 的说明）。这里固定的是「**有**兜底」，
+    // 不是「兜底值是 1000」。
     const body = buildRequestBody(
       { provider: "opendesign", model: "m", messages: longHistory(1500) } as unknown as GenerateOptions,
       { maxTokens: 100, systemText: "" },
     ) as { messages: Wire[] };
-    expect(body.messages.length).toBeLessThanOrEqual(1_000);
-    expect(JSON.stringify(body.messages), "模型知道历史被省略").toContain("省略");
+    expect(body.messages.length, "1500 条远低于兜底值，原样发出").toBe(1_500);
+    expect(JSON.stringify(body.messages), "没触发裁剪就不该有省略提示").not.toContain("省略");
   });
 });
 

@@ -110,12 +110,14 @@ it("**配置里的 maxRequestItems 真的作用到出站请求体**（端到端�
   expect(JSON.stringify(body.messages), "模型知道历史被省略").toContain("省略");
 });
 
-it("配置缺省时回落到 1000（现场那个上限），不是 `undefined`", async () => {
-  // 1003 条正是现场报错里的数字。
+it("配置缺省时上限是 200000，1003 条**不该**被裁（2026-11-10 修）", async () => {
+  // 旧默认值是 1000，于是 1003 条就开始砍历史。砍的是**队首**，等于把 prefix 缓存
+  // 整段作废 —— 用户账单上表现为「大 prompt 全额按未命中计费」，会话里表现为
+  // 「模型忘了前面」。而 deepseek-v4.1-flash 实测能收 ≥200000 条。
+  expect(DEFAULT_MAX_REQUEST_ITEMS).toBe(200_000);
   const body = await outboundBody(() => ({}), 1_003);
-  expect(body.messages.length).toBeLessThanOrEqual(DEFAULT_MAX_REQUEST_ITEMS);
-  expect(DEFAULT_MAX_REQUEST_ITEMS).toBe(1_000);
-  expect(JSON.stringify(body.messages)).toContain("省略");
+  expect(body.messages.length, "远未到上限，必须原样发出").toBe(1_003);
+  expect(JSON.stringify(body.messages), "没被裁就不该出现省略提示").not.toContain("省略");
 });
 
 it("**配置写 0 不再关闭裁剪**：非正数一律回落到默认上限（2026-11-06 事故）", async () => {  // 旧语义是「0 = 不裁剪，用户自愿承担 400」。实际后果是一次整轮失败：
@@ -123,10 +125,13 @@ it("**配置写 0 不再关闭裁剪**：非正数一律回落到默认上限（
   // 主请求 1002 条也被拒 —— 连自愈路径都因为「压缩请求自己超限」而断掉。
   //
   // 所以 0/负数/NaN 现在都当作「没设」，由 resolveConfig 回落到 DEFAULT_MAX_REQUEST_ITEMS。
+  //
+  // 2026-11-10：默认值已提到 200000，所以这里改用**真正有硬上限的** `glm-5.3-flash`
+  // 来验证——否则 1003 条根本到不了裁剪线，测不出「回落到默认」这件事。
   for (const value of [0, -1, Number.NaN]) {
-    const body = await outboundBody(() => ({ maxRequestItems: value }), 1_003);
+    const body = await outboundBody(() => ({ maxRequestItems: value }), 1_003, undefined, "glm-5.3-flash");
     expect(body.messages.length, `maxRequestItems=${String(value)} 时仍要裁剪`).toBeLessThanOrEqual(
-      DEFAULT_MAX_REQUEST_ITEMS,
+      effectiveItemLimit(DEFAULT_MAX_REQUEST_ITEMS, "glm-5.3-flash"),
     );
     expect(JSON.stringify(body.messages)).toContain("省略");
   }
@@ -146,13 +151,22 @@ it("**配置再大也被该模型的实测上限钳住**（全局旋钮 vs 各�
   // 藏针也确认首条消息能送达）。现在只剩 `glm-5.3-flash` 还是 1000。
   // 这条用例的价值不在于「记住某个数字」，而在于固定「按模型取小」这道机制。
   expect(itemCapOf("glm-5.3-flash"), "实测第 1001 条即 400").toBe(1_000);
-  expect(itemCapOf("deepseek-v4.1-flash"), "已放宽，按兜底值走").toBe(3_000);
+  /**
+   * 2026-11-10：这两个模型本该早就在表里。
+   *
+   * 它们缺席时 `itemCapOf` 回落到 `ITEM_CAP_FALLBACK`（3000），再和默认值取小 ——
+   * 而当时的默认值是 1000，于是**本来能收 20 万条的模型被砍到 1000 条**。
+   * 这条断言固定住「宽松模型必须显式登记」，避免再次因为「表里没有」而被保守值接管。
+   */
+  expect(itemCapOf("deepseek-v4.1-flash"), "实测 ≥200000 条仍 200").toBe(200_000);
+  expect(itemCapOf("deepseek-v4.1-flash-eco"), "与 flash 同一套配额").toBe(200_000);
   expect(itemCapOf("没量过的模型"), "没量过就按 3000 兜底").toBe(3_000);
 
   expect(effectiveItemLimit(3_000, "glm-5.3-flash"), "配置 3000 也要压到 1000").toBe(1_000);
   expect(effectiveItemLimit(9_000, "glm-5.3-flash"), "配置再大也压到 1000").toBe(1_000);
   expect(effectiveItemLimit(200, "glm-5.3-flash"), "配置更小时听配置的").toBe(200);
-  expect(effectiveItemLimit(3_000, "deepseek-v4.1-flash"), "该模型已不受 1000 限制").toBe(3_000);
+  expect(effectiveItemLimit(200_000, "deepseek-v4.1-flash"), "该模型已不受 1000 限制").toBe(200_000);
+  expect(effectiveItemLimit(200_000, "没量过的模型"), "没量过仍被 3000 兜住").toBe(3_000);
 
   /**
    * 端到端：配置写 9000、请求 5000 条 —— 对 `glm-5.3-flash` 出站仍必须 ≤1000。
@@ -201,12 +215,14 @@ it("工具再多也不影响消息预算", async () => {
  * 上游任何一环（设置文档 → `adapterConfigOf` → `resolveConfig` → `#post`）把它弄丢，
  * 都不该让这一层裸奔。这条用例固定住「拿不到上限就按 1000 裁」。
  */
-it("**不传上限时协议层自己兜底裁到 1000**（上游配置断链也不许裸奔）", () => {
+it("**不传上限时协议层自己兜底**（上游配置断链也不许裸奔）", () => {
+  // 兜底值随默认上限一起从 1000 提到 200000（2026-11-10）—— 「1000」本身正是
+  // prefix 缓存被打碎的原因。这条固定的是「**有**兜底」，不是「兜底值是 1000」。
   const messages = longHistory(1_003);
   const body = buildRequestBody({ provider: "opendesign", model: "deepseek-v4.1-flash", messages }, {
     maxTokens: 1_024,
     systemText: "SYS",
   }) as { messages: { role: string }[] };
-  expect(body.messages.length, "没有上限也必须裁").toBeLessThanOrEqual(1_000);
-  expect(JSON.stringify(body.messages), "模型知道历史被省略").toContain("省略");
+  expect(body.messages.length, "1003 条历史 + 1 条 system，原样发出").toBe(1_004);
+  expect(JSON.stringify(body.messages), "没触发裁剪就不该有省略提示").not.toContain("省略");
 });

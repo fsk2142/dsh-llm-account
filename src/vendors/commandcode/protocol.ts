@@ -689,10 +689,18 @@ function streamFailure(body: unknown): CommandCodeStreamFailure {
   return new CommandCodeStreamFailure(status, body);
 }
 
-/** Chat Completions 的 usage 形状 → 宿主计数（缓存命中要从 prompt 里减出来）。 */
+/**
+ * Chat Completions 的 usage 形状 → 宿主计数（缓存命中要从 prompt 里减出来）。
+ *
+ * `prompt_tokens` 缺失时返回 `undefined`，**不补 0**（2026-11-10，与 opendesign 同一修）：
+ * 宿主把上下文压力定义成「未命中输入 + 缓存读 + 缓存写」，一条伪造的 0 读数会把界面上
+ * 的「上下文占用」按到 0，下一次正常请求再跳回去 —— 用户看到的就是占用忽大忽小。
+ * 官方适配器对缺失字段是跳过不写，这里对齐那个口径。
+ */
 function openAiUsage(raw: unknown): TokenUsage | undefined {
   if (!isRecord(raw)) return undefined;
-  const prompt = numberValue(raw.prompt_tokens) ?? 0;
+  const prompt = numberValue(raw.prompt_tokens);
+  if (prompt === undefined) return undefined;
   const cached = numberValue((isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : undefined)?.cached_tokens) ?? 0;
   const completion = numberValue(raw.completion_tokens) ?? 0;
   const usage: TokenUsage = {

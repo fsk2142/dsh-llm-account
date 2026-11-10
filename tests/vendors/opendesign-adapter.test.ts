@@ -385,6 +385,52 @@ it("stream：请求发到 /chat/completions，带 Bearer 与 OpenAI 形状的请
   expect(chunks[5]).toMatchObject({ type: "finish", reason: { kind: "stop" } });
 });
 
+it("stream：usage 带 cached_tokens 时，未命中输入 = prompt − cached，缓存单列", async () => {
+  const fetchImpl = scriptedFetch([
+    () =>
+      sseResponse([
+        JSON.stringify({
+          choices: [{ delta: { content: "好" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1_000, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 900 } },
+        }),
+      ]),
+  ]);
+  const { chunks } = await runStream(request(), adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }));
+
+  // 宿主算上下文压力用的是「未命中输入 + 缓存读 + 缓存写」，两者相加必须还原 1000。
+  expect(chunks.find((chunk) => chunk.type === "usage")).toMatchObject({
+    type: "usage",
+    usage: { inputTokens: 100, outputTokens: 5, cacheReadTokens: 900 },
+  });
+});
+
+it("stream：usage 缺 prompt_tokens 时**不发 usage**，不伪造 0（2026-11-10 修）", async () => {
+  /*
+   * 现场症状：压缩完「上下文占用」显示 0，随后又突然涨几百 K。
+   *
+   * 根因是这里：旧实现 `numberValue(raw.prompt_tokens) ?? 0`，网关只要给了一个
+   * 「有 usage 但没 prompt_tokens」的收尾事件，就会上报 `inputTokens: 0`；
+   * 宿主把上下文压力定义成「未命中输入 + 缓存读 + 缓存写」，于是一条 0 读数把
+   * 界面占用按到 0，下一次正常请求再跳回来。
+   *
+   * 官方适配器（`dsh-llm-deepseek` 的 `updateUsage`）对缺失字段是 `continue` 跳过，
+   * 从不补 0。这里对齐那个口径：宁可不报，也不给宿主一个错误的事实。
+   */
+  for (const usage of [{ completion_tokens: 7 }, { total_tokens: 7 }, {}]) {
+    const fetchImpl = scriptedFetch([
+      () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }], usage })]),
+    ]);
+    const { chunks } = await runStream(request(), adapterDeps({ fetchImpl, resolveStored: keysOf({ a: "sk-a" }) }));
+    expect(
+      chunks.some((chunk) => chunk.type === "usage"),
+      `usage=${JSON.stringify(usage)} 时不该产出 usage chunk`,
+    ).toBe(false);
+    // 正文照常交付：丢的只是这一次的统计，不是这次回答。
+    expect(chunks.at(-1)).toMatchObject({ type: "finish", reason: { kind: "stop" } });
+  }
+});
+
+
 it("stream：system 提示折进 messages[0]，maxTokens 按配置封顶", async () => {
   const fetchImpl = scriptedFetch([
     () => sseResponse([JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })]),
