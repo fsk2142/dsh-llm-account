@@ -9,6 +9,8 @@
  * 账号条目的创建由装配层的 `storeKey` 决定（同标签已存在就换密钥，不存在就新增）。
  * @module dsh-llm-account/src/vendors/opencode/login
  */
+import { LlmError } from "@deepseek-ai/dsh-llm";
+import { LLM_REQUEST_TIMEOUT, withRequestDeadline } from "../../core/transport";
 import type { LoginPort, LoginStatus, VendorId } from "../../core/adapter";
 import { accountRef } from "../../core/accounts";
 import {
@@ -30,6 +32,7 @@ export const OPENCODE_LOGIN_VENDOR: VendorId = "dsh-opencode-go";
  * 这是**规范要求**，不是调参余地。
  */
 const SLOW_DOWN_STEP_MS = 5_000;
+const DEVICE_CODE_TIMEOUT_MS = 10_000;
 
 /** 登录依赖。 */
 export interface OpencodeLoginDeps extends OAuthHttpDeps {
@@ -114,14 +117,19 @@ class OpencodeLoginFlow implements OpencodeLogin {
     try {
       // **把本次尝试的 signal 交给设备码申请**（2026-11-05 外部审查 F02）：
       // 用户取消后这个 fetch 必须立刻结束，而不是继续挂在网络上。
-      device = await beginDeviceFlow(this.#deps, abort.signal);
+      device = await withRequestDeadline(
+        (signal) => beginDeviceFlow(this.#deps, signal),
+        { requestTimeoutMs: DEVICE_CODE_TIMEOUT_MS, streamIdleTimeoutMs: DEVICE_CODE_TIMEOUT_MS },
+        { signal: abort.signal },
+      );
     } catch (error: unknown) {
       if (this.#abort !== abort || abort.signal.aborted) return { state: "failed", reason: "cancelled" };
       // 端点回了 HTTP 4xx/5xx（服务端拒绝、路由变了）**不是**网络错误：两种原因对用户
       // 的含义完全不同（该等/该查网络 vs 该找厂商），界面上必须分开说。
       const message = error instanceof Error ? error.message : String(error);
+      const timeout = error instanceof LlmError && error.code === LLM_REQUEST_TIMEOUT;
       const httpRejected = /HTTP \d{3}/.test(message);
-      this.#status = { state: "failed", reason: httpRejected ? "unavailable" : "network" };
+      this.#status = { state: "failed", reason: timeout ? "timeout" : httpRejected ? "unavailable" : "network" };
       return { ...this.#status };
     }
     if (this.#abort !== abort) return { state: "failed", reason: "cancelled" };
@@ -135,7 +143,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
       userCode: device.userCode,
       expiresAt: device.expiresAt,
     };
-    void this.#run(device, abort.signal);
+    void this.#run(device, abort);
     return { ...this.#status };
   }
 
@@ -169,13 +177,32 @@ class OpencodeLoginFlow implements OpencodeLogin {
     this.#abort?.abort();
   }
 
-  /**
-   * 后台轮询：直到成功、失败、过期或取消。
-   * @param device - 设备码。
-   * @param signal - 本次尝试的取消信号。
-   */
-  async #run(device: DeviceCode, signal: AbortSignal): Promise<void> {
-    const now = this.#deps.now ?? (() => Date.now());
+  /** The deadline can close an in-flight poll or org request even if it has not returned. */
+  async #run(device: DeviceCode, abort: AbortController): Promise<void> {
+    const now = this.#deps.now ?? Date.now;
+    const delay = Math.min(2_147_483_647, Math.max(0, device.expiresAt - now()));
+    const deadline = setTimeout(() => {
+      this.#settle({ state: "failed", reason: "timeout" }, abort.signal);
+      abort.abort();
+    }, delay);
+    deadline.unref?.();
+    const clearDeadline = () => clearTimeout(deadline);
+    abort.signal.addEventListener("abort", clearDeadline, { once: true });
+    try {
+      await this.#poll(device, abort.signal, clearDeadline);
+    } finally {
+      clearDeadline();
+      abort.signal.removeEventListener("abort", clearDeadline);
+    }
+  }
+
+  async #poll(device: DeviceCode, signal: AbortSignal, clearDeadline: () => void): Promise<void> {
+    const now = this.#deps.now ?? Date.now;
+    const expired = () => {
+      if (now() < device.expiresAt) return false;
+      this.#settle({ state: "failed", reason: "timeout" }, signal);
+      return true;
+    };
     /**
      * **轮询间隔是可变的**（2026-11-05 外部审查 F03）。
      *
@@ -197,16 +224,13 @@ class OpencodeLoginFlow implements OpencodeLogin {
      */
     let emptyBodyStreak = 0;
     while (!signal.aborted) {
-      if (now() >= device.expiresAt) {
-        this.#settle({ state: "failed", reason: "timeout" }, signal);
-        return;
-      }
+      if (expired()) return;
       try {
         await this.#sleep(pollIntervalMs, signal);
       } catch {
         return;
       }
-      if (signal.aborted) return;
+      if (signal.aborted || expired()) return;
       let result: Awaited<ReturnType<typeof pollDeviceToken>>;
       try {
         result = await pollDeviceToken(this.#deps, device, signal, emptyBodyStreak);
@@ -216,7 +240,7 @@ class OpencodeLoginFlow implements OpencodeLogin {
         this.#settle({ state: "failed", reason: "network" }, signal);
         return;
       }
-      if (signal.aborted) return;
+      if (signal.aborted || expired()) return;
       if (result.status === "pending") {
         /**
          * 只有**空正文兜底**出来的 pending 才推进计数；服务端明确回
@@ -293,7 +317,9 @@ class OpencodeLoginFlow implements OpencodeLogin {
        * 于是：写入成功后若发现已取消，仍然落成 `success`，并在 `detail` 里说明
        * 这是取消前的写入。宁可诚实告知，也不要状态与持久化不一致。
        */
-      if (signal.aborted) return;
+      if (signal.aborted || expired()) return;
+      // The device flow is complete. Keep the existing committed-write semantics.
+      clearDeadline();
       try {
         await this.#deps.storeKey(accountRef(OPENCODE_LOGIN_VENDOR, name), blob, name);
       } catch {

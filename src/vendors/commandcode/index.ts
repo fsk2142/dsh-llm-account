@@ -72,6 +72,7 @@ import { probeSearchKey } from "../search-api";
 import { normalizeSearchKeyRefs } from "../../core/switching/search-keys";
 import { readImageBytes } from "../../core/image-projection";
 import { createUsagePort } from "../usage-store";
+import { isModelIdVisible, normalizeVisibility } from "../../core/catalog";
 import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
 
@@ -502,6 +503,7 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
    * 必须每次现读，不能是创建时的快照。
    */
   available: () => document().enabled !== false,
+  allowsModel: (model) => isModelIdVisible(model, normalizeVisibility(document())),
   });
 
   const login = createCommandCodeLogin({

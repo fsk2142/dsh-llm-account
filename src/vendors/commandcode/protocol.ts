@@ -29,6 +29,7 @@ import {
   dataUrlOf,
   fileBlockText,
   missingImagePlaceholder,
+  projectImageBudget,
   type RequestImageBytes,
 } from "../../core/image-projection";
 
@@ -568,6 +569,7 @@ export function buildRequestBody(
   images?: ReadonlyMap<string, RequestImageBytes>,
 ): unknown {
   assertProjectableContent(options.messages);
+  const messages = projectImageBudget(options.messages, images);
   // The adapter folds system text; raw files still need their explicit handles.
   const systemFiles = options.messages
     .filter((message) => message.role === "system" || message.role === "developer")
@@ -578,7 +580,7 @@ export function buildRequestBody(
   if (protocol === "openai") {
     return {
       model: options.model,
-      messages: [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...openAiMessages(options.messages, images)],
+      messages: [...(systemText === "" ? [] : [{ role: "system", content: systemText }]), ...openAiMessages(messages, images)],
       ...(tools.length === 0
         ? {}
         : {
@@ -605,7 +607,7 @@ export function buildRequestBody(
       // 这个端点只认 `{ type: "adaptive" }`（`enabled` / `disabled` 都会被拒，旧插件第
       // 6593-6597 行的线上实测），而档位（`output_config.effort`）只有开了它才起作用。
       ...(facts.selectableEffort === true ? { thinking: { type: "adaptive" } } : {}),
-      messages: anthropicMessages(options.messages, images),
+      messages: anthropicMessages(messages, images),
       ...(systemText === "" ? {} : { system: [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }] }),
       ...(facts.reasoningEffort === undefined ? {} : { output_config: { effort: facts.reasoningEffort } }),
       ...(tools.length === 0
@@ -638,7 +640,7 @@ export function buildRequestBody(
     permissionMode: "standard",
     params: {
       model: options.model,
-      messages: openAiMessages(options.messages, images),
+      messages: openAiMessages(messages, images),
       tools: tools.map((tool) => ({
         type: "function",
         name: tool.name,

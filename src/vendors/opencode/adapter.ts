@@ -8,13 +8,14 @@
  * 本文件只提供本家特有的东西：凭据怎么取、请求怎么发、失败怎么分类、chunk 要不要改写。
  */
 
+import { createHash } from "node:crypto";
 import { LlmAdapter, LlmError, ReasoningEffortId, ToolCallId, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, AccountView, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
-import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
+import { catalogCandidateRevision, delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { normalizeVisibility, selectVisible } from "../../core/catalog";
 import { pickApiKey } from "../../core/credentials";
@@ -28,7 +29,7 @@ import { collectImageBytes } from "../../core/image-projection";
 import type { ImageRefLike, RequestImageBytes } from "../../core/image-projection";
 import { opencodeSessionHeaders } from "./session";
 import { createCredentialGuard, type CredentialGuard } from "../../core/credential-guard";
-import { OAUTH_PREFIX, OAuthRefreshError, parseOAuthCredential, resolveOAuthCredential } from "./oauth";
+import { OAUTH_PREFIX, OAuthRefreshError, resolveOAuthCredential } from "./oauth";
 import type { OpencodeCatalog, OpencodeCatalogRecord } from "./catalog";
 import { classifyGatewayFailure, gatewayLlmError } from "./failures";
 import {
@@ -38,6 +39,7 @@ import {
   DEFAULT_GENERATE_MAX_TOKENS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  MODELS_FETCH_TIMEOUT_MS,
   OpencodeStreamFailure,
   buildPiModel,
   recordGatewayFetch,
@@ -47,6 +49,9 @@ import {
 import type { ThinkingLevel } from "./protocol";
 import type { GatewayEvidence, GatewayRecorder } from "./protocol";
 import { parseDsmlCalls } from "./dsml";
+
+type AccountAuth = { key: string; headers?: Record<string, string> };
+type AttemptAuth = AccountAuth & { ref: string; epoch: number };
 
 /**
  * 调用方中止的错误码。宿主 `LlmRuntime` 用同一个字符串判定「这次请求是被取消的」；
@@ -233,7 +238,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * **键里必须带令牌**（2026-11-08 起目录请求带 Bearer）：不同账号可能订阅不同模型，
    * 只按 `baseUrl` 做键会把 A 账号读到的清单当成 B 账号的。
    */
-  readonly #catalogs = new Map<string, OpencodeCatalog>();
+  readonly #catalogs = new Map<string, { identity: string; catalog: OpencodeCatalog }>();
   /**
    * 按账号 ref 合并并发的 OAuth 刷新（2026-10-22 修 bug 审查 LOW-1）。
    *
@@ -307,6 +312,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
      */
     const hasAccount = await this.#hasAnyAccount();
     if (!hasAccount) return [];
+    const revision = catalogCandidateRevision();
     const raw = this.#deps.config();
     const records = await this.#catalog(resolveConfig(raw), undefined);
     const visible = selectVisible(
@@ -322,6 +328,8 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
         ...(entry.efforts === undefined ? {} : { effortCount: entry.efforts.length }),
       })),
+      undefined,
+      revision,
     );
     return visible.map((entry) => ({
       provider,
@@ -420,7 +428,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
      */
     let snapshot: OpencodeConfig | undefined;
     const raw = (): OpencodeConfig => (snapshot ??= this.#deps.config());
-    return runAttemptLoop<OpencodeConfig, { key: string; headers?: Record<string, string> }, GatewayRecorder>(
+    return runAttemptLoop<OpencodeConfig, AttemptAuth, GatewayRecorder>(
       {
         label: "llm-opencode-go",
         rotation: this.#deps.rotation,
@@ -435,7 +443,11 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         // 每次尝试一套「网关证据」记录：失败时用它还原（HTTP 状态，正文），否则 pi-ai 的
         // 错误事件只剩一句文案，`classifyGatewayFailure` 无从下手。
         beginAttempt: () => recordGatewayFetch(this.#deps.fetchImpl, options.signal),
-        resolveCredential: (ref, signal) => this.resolveAccountAuth(ref, signal),
+        resolveCredential: async (ref, signal) => {
+          const epoch = this.#credentialGuard.epochOf(ref);
+          const auth = await this.resolveAccountAuth(ref, signal);
+          return auth === undefined ? undefined : { ...auth, ref, epoch };
+        },
         classifyCredentialError: (error) => {
           // 只有**暂时性**的鉴权失败才允许换账号（配额/密钥失效换号也一样，交给下面的分类）。
           if (!(error instanceof LlmError) || !["SERVER", "TRANSPORT", "RATE_LIMIT", LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT].includes(error.code)) {
@@ -581,7 +593,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   async *#attempt(
     raw: OpencodeConfig,
     options: GenerateOptions,
-    auth: { key: string; headers?: Record<string, string> },
+    auth: AttemptAuth,
     gateway: GatewayRecorder,
   ): AsyncGenerator<StreamChunk> {
     const config = resolveConfig(raw);
@@ -604,7 +616,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     /** 调方取消 **或** 本 attempt 的网络超时，任一成立都让底层请求停下。 */
     const attemptSignal =
       options.signal === undefined ? network.signal : AbortSignal.any([options.signal, network.signal]);
-    const record = await this.#recordFor(config, options.model, attemptSignal);
+    const record = await this.#recordFor(config, options.model, attemptSignal, auth);
     const entry = record?.entry;
     /**
      * 取本次请求需要的图片字节（2026-11-04 外部审查 U07）。
@@ -687,9 +699,10 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     config: ResolvedConfig,
     model: string,
     signal: AbortSignal | undefined,
+    auth: AttemptAuth,
   ): Promise<OpencodeCatalogRecord | undefined> {
     try {
-      return (await this.#catalog(config, signal)).find((candidate) => candidate.entry.id === model);
+      return (await this.#catalog(config, signal, false, auth)).find((candidate) => candidate.entry.id === model);
     } catch {
       return undefined;
     }
@@ -704,7 +717,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
    * @param ref - 账号 ref。
    * @returns 请求凭据；没有可用密钥或刷新失败时为 `undefined`。
    */
-  async #resolveAuth(ref: string, epochAtStart: number): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
+  async #resolveAuth(ref: string, epochAtStart: number): Promise<AccountAuth | undefined> {
     /**
      * **在首次异步读取之前**抓代际（2026-11-01 修 S01 第三版）。
      *
@@ -796,7 +809,7 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
   }
 
   /** Chat and quota share refresh AND persistence; each waiter owns its cancellation. */
-  async resolveAccountAuth(ref: string, signal?: AbortSignal): Promise<{ key: string; headers?: Record<string, string> } | undefined> {
+  async resolveAccountAuth(ref: string, signal?: AbortSignal): Promise<AccountAuth | undefined> {
     if (signal?.aborted) throw this.#abortError(signal);
     const timeoutMs = resolveConfig(this.#deps.config()).requestTimeoutMs;
     const epoch = this.#credentialGuard.epochOf(ref);
@@ -826,80 +839,43 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     }
   }
 
-  /**
-   * 拿（或建）该基地址的目录缓存，并把**目录请求要用的密钥**注入进去。
-   *
-   * 目录现在带 Bearer（见 `protocol.catalogRequest` 的说明）。密钥用 `resolveKey`
-   * 函数形式注入、每次请求现取，不在创建 `catalog` 时固化 —— 用户换号 / OAuth 刷新后
-   * 目录要跟着走新身份，而目录对象是按基地址长期缓存的（默认 5 分钟 TTL）。
-   *
-   * 缓存键是「基地址 + 目录令牌」而不是裸基地址：不同账号可能订阅不同模型，
-   * 只按 `baseUrl` 做键会把 A 账号的清单当 B 账号的。
-   * @param config - 已解析配置。
-   * @param signal - 调用方取消信号。
-   * @param fresh - 绕过 TTL 重读（刷新按钮）。
-   * @returns 目录记录。
-   */
-  async #catalog(config: ResolvedConfig, signal?: AbortSignal, fresh = false): Promise<OpencodeCatalogRecord[]> {
-    const resolveKey = async (): Promise<string | undefined> => this.#catalogKey();
-    /**
-     * 缓存键里的令牌：**不放进密钥本身**，只放「哪个账号」这一层身份。
-     *
-     * 用账号 ref 而不是密钥字面量：`#catalogs` 的键会留在内存里更久，没必要把密钥
-     * 拼进 Map 的键字符串。同一账号换 key 时目录不需要重建（同一个订阅）。
-     */
-    const token = await this.#catalogToken();
-    const key = `${config.apiBase}\u0000${token}`;
-    let catalog = this.#catalogs.get(key);
-    if (catalog === undefined) {
-      catalog = createOpencodeCatalog({
-        baseUrl: config.apiBase,
-        fetchImpl: this.#deps.fetchImpl,
-        ttlMs: config.catalogTtlMs,
-        resolveKey,
+  /** Freeze account and auth together, then cache only that credential's directory. */
+  async #catalog(config: ResolvedConfig, signal?: AbortSignal, fresh = false, attempt?: AttemptAuth): Promise<OpencodeCatalogRecord[]> {
+    const ref = attempt?.ref ?? await this.#catalogRef();
+    const epoch = attempt?.epoch ?? (ref === undefined ? 0 : this.#credentialGuard.epochOf(ref));
+    let auth: AccountAuth | undefined = attempt;
+    if (auth === undefined && ref !== undefined) {
+      const budget = AbortSignal.timeout(MODELS_FETCH_TIMEOUT_MS);
+      const authSignal = signal === undefined ? budget : AbortSignal.any([signal, budget]);
+      auth = await this.resolveAccountAuth(ref, authSignal).catch(() => {
+        signal?.throwIfAborted();
+        return undefined;
       });
-      this.#catalogs.set(key, catalog);
+    }
+    signal?.throwIfAborted();
+
+    const key = JSON.stringify([config.apiBase, ref]);
+    // Include host-side changes that do not pass through the plugin's write guard.
+    const identity = createHash("sha256").update(JSON.stringify([epoch, auth?.key, auth?.headers])).digest("hex");
+    const cached = this.#catalogs.get(key);
+    if (cached?.identity === identity) return cached.catalog.list(signal, fresh);
+
+    const snapshot = auth;
+    const catalog = createOpencodeCatalog({
+      baseUrl: config.apiBase,
+      fetchImpl: this.#deps.fetchImpl,
+      ttlMs: config.catalogTtlMs,
+      ...(snapshot === undefined ? {} : { resolveKey: () => snapshot.key }),
+      ...(snapshot?.headers === undefined ? {} : { authHeaders: snapshot.headers }),
+    });
+    // An older refresh may finish after a user write and must not evict the new generation.
+    if (ref === undefined || epoch === this.#credentialGuard.epochOf(ref)) {
+      this.#catalogs.set(key, { identity, catalog });
     }
     return catalog.list(signal, fresh);
   }
 
-  /**
-   * 目录请求要用的推理密钥：优先当前生效账号，其次第一个已配置账号。
-   *
-   * 与 Open Design 那一侧同一套策略（目录是厂商级资源，但网关要鉴权；任意一个可用
-   * 账号的密钥都能读到同一份订阅清单）。取不到时返回 `undefined`，`catalogRequest`
-   * 会退回无鉴权 —— 那条路仍然能列出公开模型，不至于整个厂商「没有模型」。
-   *
-   * ## 为什么**不**调 `resolveAccountAuth`（2026-11-08，写完第一版就改）
-   *
-   * 那个方法会顺手做两件有副作用的事：走 `#singleFlight` 去重、以及**刷新并回写**
-   * OAuth 凭据槽。读一次模型目录不该产生一次凭据写入 —— 用户看到的是「凭据被改了」，
-   * 而实际只是翻了下列表。所以这里只读**当前已存值**，不刷新、不回写：
-   * 目录请求失败时退回无鉴权（公开清单），代价远小于偷偷改用户的凭据。
-   * @returns 推理密钥，或 `undefined`。
-   */
-  async #catalogKey(): Promise<string | undefined> {
-    const ref = await this.#catalogRef();
-    if (ref === undefined) return undefined;
-    const stored = await this.#deps.resolveStored?.(ref).catch(() => undefined);
-    const environment = this.#deps.resolveEnvironment?.(ref);
-    const raw = pickApiKey({
-      ...(stored === undefined ? {} : { stored }),
-      ...(environment === undefined ? {} : { environment }),
-    }).key;
-    if (raw === undefined) return undefined;
-    // OAuth blob 不能当 Bearer 直接发：那串是本地序列化格式。过期的也不刷新（见上）。
-    const oauth = raw.startsWith(OAUTH_PREFIX) ? parseOAuthCredential(raw) : undefined;
-    if (oauth === undefined && raw.startsWith(OAUTH_PREFIX)) return undefined;
-    return oauth === undefined ? raw : oauth.access;
-  }
-
-  /**
-   * 挑一个用于读目录的账号 ref（只挑身份，不解析凭据）。
-   *
-   * 与 {@link #catalogKey} 分开是为了让缓存键能用「账号身份」而不是密钥字面量。
-   * @returns 账号 ref；一个可用账号都没有时 `undefined`。
-   */
+  /** Select the account once for both discovery and its cache identity. */
   async #catalogRef(): Promise<string | undefined> {
     let views: readonly AccountView[];
     try {
@@ -915,15 +891,6 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     const ref = preferred?.ref;
     return typeof ref === "string" && ref !== "" ? ref : undefined;
   }
-
-  /**
-   * 目录缓存的账号令牌（不触发凭据解析，读不到就是「匿名」）。
-   * @returns 账号 ref，或 `anonymous`。
-   */
-  async #catalogToken(): Promise<string> {
-    return (await this.#catalogRef()) ?? "anonymous";
-  }
-
 
   /**
    * 当前是否**至少有一个**可用的账号条目。

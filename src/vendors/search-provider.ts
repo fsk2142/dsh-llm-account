@@ -143,7 +143,7 @@ const API_VERSION = "2023-06-01";
  * 一条结果都没有。把那种文本当结果，等于让模型对着空气编答案。
  * @param payload - 已解析的响应正文（形状不可信）。
  * @returns 来源列表；截断标记。
- * @throws 当响应里没有任何搜索结果块时。
+ * @throws 当网关没有执行搜索，或只返回了工具错误时。
  */
 export function sourcesOf(payload: unknown): SearchResult {
   const content = typeof payload === "object" && payload !== null
@@ -154,13 +154,21 @@ export function sourcesOf(payload: unknown): SearchResult {
   }
   const sources: SearchSource[] = [];
   let sawResultBlock = false;
+  let toolError: string | undefined;
   for (const block of content) {
     if (typeof block !== "object" || block === null) continue;
     const record = block as Record<string, unknown>;
     if (record.type !== "web_search_tool_result") continue;
-    sawResultBlock = true;
     const items = record.content;
-    if (!Array.isArray(items)) continue;
+    if (!Array.isArray(items)) {
+      const failure = typeof items === "object" && items !== null ? items as Record<string, unknown> : undefined;
+      const code = failure?.error_code;
+      toolError = typeof code === "string" && /^[a-z_]{1,48}$/.test(code)
+        ? `网关搜索工具失败（${code}）`
+        : "网关搜索工具返回了无效结果";
+      continue;
+    }
+    sawResultBlock = true;
     for (const item of items) {
       if (typeof item !== "object" || item === null) continue;
       const entry = item as Record<string, unknown>;
@@ -169,6 +177,7 @@ export function sourcesOf(payload: unknown): SearchResult {
       sources.push({ url: entry.url, title });
     }
   }
+  if (sources.length === 0 && toolError !== undefined) throw new SearchUnavailableError(toolError);
   if (!sawResultBlock) {
     // 关键断言：200 但没有结果块 = 这次搜索**没有真的发生**。
     throw new SearchUnavailableError(

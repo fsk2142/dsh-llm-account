@@ -173,7 +173,7 @@ describe("读数形状不完备时不得抛错（真机崩溃的根因）", () =
    * 非空就判整家不完整 —— 而 opendesign 的账单接口一挂，`failures` 里就有东西，
    * 于是**三个账号里两个明明读到了**，整家缓存照样不更新。
    *
-   * 新判据按账号看：只要有账号拿到窗口，就够格进缓存。
+   * 新判据检查各账号的额度，厂商摘要失败不影响读到的额度。
    */
   it("**账单端点失败但账号额度读到了 → 仍然进缓存**（旧判据会全体作废）", async () => {
     const { completeReading } = await import("../../src/client/seams");
@@ -190,7 +190,7 @@ describe("读数形状不完备时不得抛错（真机崩溃的根因）", () =
     expect(completeReading(status as never), "读到的额度不该被另一个端点的失败连坐").toBe(true);
   });
 
-  it("**一个账号读不到、另一个读到 → 仍然进缓存**", async () => {
+  it("一个账号读不到、另一个读到 → 需要重读", async () => {
     const { completeReading } = await import("../../src/client/seams");
     const status = {
       vendor: "opendesign",
@@ -202,7 +202,7 @@ describe("读数形状不完备时不得抛错（真机崩溃的根因）", () =
         { ref: "b", configured: true },
       ],
     };
-    expect(completeReading(status as never), "一个账号抖动不该拖累另一个").toBe(true);
+    expect(completeReading(status as never)).toBe(false);
   });
 
   it("**一个账号都没读到 → 不进缓存**（这条是旧判据真正该管的情形）", async () => {

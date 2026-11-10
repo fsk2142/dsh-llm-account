@@ -421,6 +421,8 @@ export function createOpencodeCatalog(input: {
    * 那种情况不该让整个目录失败：少几个模型总比「这个厂商没有模型」好。
    */
   resolveKey?: () => Promise<string | undefined> | string | undefined;
+  /** Additional auth headers for the same credential snapshot, such as an OAuth org. */
+  authHeaders?: Readonly<Record<string, string>>;
 }): OpencodeCatalog {
   const now = input.now ?? Date.now;
   const ttlMs = input.ttlMs !== undefined && Number.isFinite(input.ttlMs) && input.ttlMs >= 0 ? input.ttlMs : DEFAULT_CATALOG_TTL_MS;
@@ -469,7 +471,7 @@ export function createOpencodeCatalog(input: {
      */
     const key = input.resolveKey === undefined ? undefined : await keyOf();
     const { url, headers } = catalogRequest(input.baseUrl, key);
-    const response = await input.fetchImpl(url, { headers, signal: requestSignal(signal, MODELS_FETCH_TIMEOUT_MS) });
+    const response = await input.fetchImpl(url, { headers: { ...headers, ...input.authHeaders }, signal: requestSignal(signal, MODELS_FETCH_TIMEOUT_MS) });
     if (!response.ok) {
       throw new LlmError(`opencode models endpoint returned ${response.status}`, "DISCOVERY_FAILED", {
         status: response.status,

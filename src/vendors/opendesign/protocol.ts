@@ -28,7 +28,7 @@ import type {
   ToolSchema,
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
-import { assertProjectableContent, assistantImageText, fileBlockText } from "../../core/image-projection";
+import { assertProjectableContent, assistantImageText, fileBlockText, projectImageBudget } from "../../core/image-projection";
 import { omittedHistoryNotice, trimWireMessages, WireLimitExceededError } from "../../core/wire-limit";
 
 /** 推理网关默认基地址（计划 §1：`amr-link` 是运行时链路的入口）。 */
@@ -292,8 +292,8 @@ function openAiMessages(
     toolImages = [];
   };
   for (const message of messages) {
-    if (message.role !== "tool") flushToolImages();
     if (message.role === "system" || message.role === "developer") continue;
+    if (message.role !== "tool") flushToolImages();
     if (message.role === "user") {
       // User image parts can be sent directly; tool image parts are batched below.
       out.push({ role: "user", content: openAiUserContent(message.content, images) });
@@ -380,7 +380,7 @@ export function buildRequestBody(
    * 「那一版根本没在裁剪」—— 对方装的是旧产物。这里不做 `- tools.length` 的扣减：
    * 那会白丢几十条历史。
    */
-  const projected = openAiMessages(options.messages, images);
+  const projected = openAiMessages(projectImageBudget(options.messages, images), images);
   let trimmed: ReturnType<typeof trimWireMessages<WireMessage>>;
   try {
     trimmed = trimWireMessages<WireMessage>(

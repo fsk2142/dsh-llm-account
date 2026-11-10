@@ -90,6 +90,7 @@ import { DEFAULT_BASE_URL } from "./protocol";
 import { createOpencodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort } from "../usage-store";
+import { isModelIdVisible, normalizeVisibility } from "../../core/catalog";
 import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
 import { createSearchSlotSync } from "../search-release";
@@ -532,6 +533,7 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
     stream: (options) => adapter.stream(options as Parameters<typeof adapter.stream>[0]),
   /** 现读该厂商是否启用（审查 U08）：禁用后不得再被跨网关委托。 */
   available: () => document().enabled !== false,
+  allowsModel: (model) => isModelIdVisible(model, normalizeVisibility(document())),
   });
 
   /**

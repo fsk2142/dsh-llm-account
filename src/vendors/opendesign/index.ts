@@ -75,6 +75,7 @@ import { DEFAULT_BASE_URL, IDENTITY_ENCODING_HEADER } from "./protocol";
 import { DEFAULT_WALLET_BASE_URL, createOpenDesignQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort } from "../usage-store";
+import { isModelIdVisible, normalizeVisibility } from "../../core/catalog";
 import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { registerGatewayAccess } from "../gateway-access";
 import { SwitchingController } from "../switching";
@@ -613,6 +614,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
    * 缺省（含非布尔值）读作启用，与 `enabled` 字段的既有语义一致。
    */
   available: () => document().enabled !== false,
+  allowsModel: (model) => isModelIdVisible(model, normalizeVisibility(document())),
   });
 
   // 登记本家的**网关访问**（搜索的网关路用）。与上面的目录读口同一形状：provider 只在

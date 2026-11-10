@@ -332,6 +332,71 @@ describe("设置页容器仿真", () => {
     expect(findSim(second.tree(), "data-account", "cc-1")).toBeDefined();
   });
 
+  it("部分额度刷新保留上次读数并在重开设置时重读失败的厂商", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    const account = (ref: string, percent?: number) => ({
+      ref, label: ref, configured: true, active: true, effective: ref === "a",
+      ...(percent === undefined ? {} : { quota: { windows: [{ key: "rolling", percent }], failures: [] } }),
+    });
+    const host = fakeHost(mini, { accounts: { commandcode: [account("a", 41), account("b", 67)] } });
+    const first = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    first.unmount();
+
+    host.accountsOverride = { commandcode: [account("a", 43), account("b")] };
+    const { createDashboardView } = await import("../../src/client/seams");
+    const { VENDORS } = await import("../../src/client/shell");
+    const { dictionaryOf } = await import("../../src/client/copy");
+    const dashboard = mini.mount(createDashboardView({
+      ctx: host.ctx as never, entries: VENDORS, t: dictionaryOf("zh"), onClose: () => undefined,
+    }));
+    await settleSim(mini);
+    expect(textsOfSim(findSim(dashboard.tree(), "data-dashboard-account", "b")).join(" ")).toContain("33%");
+    expect(findSim(dashboard.tree(), "data-quota-stale", "b")).toBeDefined();
+    dashboard.unmount();
+
+    host.accountsOverride = { commandcode: [account("a", 43), account("b", 70)] };
+    host.statusCalls.length = 0;
+    const reopened = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(host.statusCalls).toEqual(["commandcode"]);
+    expect(textsOfSim(findSim(reopened.tree(), "data-account", "b")).join(" ")).toContain("30%");
+    expect(findSim(reopened.tree(), "data-quota-stale", "b")).toBeUndefined();
+    reopened.unmount();
+  });
+
+  it("连续部分刷新分别保留各账号的额度，失败不会延长旧读数有效期", async () => {
+    const mini = await runtime();
+    await freshSeams();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const a = { ref: "a", label: "A", configured: true, active: true, effective: true };
+    const b = { ref: "b", label: "B", configured: true, active: false, effective: false };
+    const quota = (percent: number) => ({ windows: [{ key: "rolling", percent }], failures: [] });
+    const host = fakeHost(mini, { accounts: { commandcode: [{ ...a, quota: quota(41) }, b] } });
+    const first = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    first.unmount();
+
+    const { STATUS_READING_TTL_MS } = await import("../../src/client/seams");
+    vi.setSystemTime(STATUS_READING_TTL_MS / 2);
+    host.accountsOverride = { commandcode: [a, { ...b, quota: quota(67) }] };
+    const second = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(textsOfSim(findSim(second.tree(), "data-account", "a")).join(" ")).toContain("59%");
+    expect(findSim(second.tree(), "data-quota-stale", "a")).toBeDefined();
+    expect(findSim(second.tree(), "data-quota-stale", "b")).toBeUndefined();
+    second.unmount();
+
+    vi.setSystemTime(STATUS_READING_TTL_MS + 1);
+    const third = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    expect(textsOfSim(findSim(third.tree(), "data-account", "a")).join(" ")).not.toContain("59%");
+    expect(findSim(third.tree(), "data-quota-stale", "a")).toBeUndefined();
+    third.unmount();
+  });
+
   it("超过 TTL 后再打开会重新读取（缓存不是一次性的）", async () => {
     const mini = await runtime();
     await freshSeams();

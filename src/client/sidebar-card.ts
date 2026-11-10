@@ -240,6 +240,9 @@ export function SidebarCard(props: SidebarCardProps): ReactElement {
               ? createElement("p", { key: "empty", "data-sidebar-empty": "true", className: CSS_CLASS.empty }, t("sidebar.noRequest"))
               : failureNote(props),
           ]),
+      currentRow?.quotaStale === true
+        ? createElement("small", { "data-quota-stale": currentRow.ref, className: CSS_CLASS.note }, t("usage.stale"))
+        : null,
       ...(hasData && props.failure !== undefined ? [failureNote(props)] : []),
     ),
     // —— 收起态：只有这一个图标按钮（同一个动作） ——

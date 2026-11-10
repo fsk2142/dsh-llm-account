@@ -416,6 +416,9 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
       ),
     ),
     rejection,
+    account.quotaStale === true
+      ? createElement("small", { "data-quota-stale": account.ref, className: CSS_CLASS.note }, t("usage.stale"))
+      : null,
     // 额度读取里的**部分失败**（端点级）照样列出来：与仪表盘同一条纪律 —— 不列就等于把
     // 一次不完整的读数呈现成完整的（`billing/credits` 真读不到时只剩月度一条，看起来像
     // 「5 小时/每周额度被吞了」）。文案翻成人话（`whoami` → 「账号信息读取失败」），宿主原文

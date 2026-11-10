@@ -107,7 +107,7 @@ export class SwitchingController {
   /** session → 最近一次普通请求的时刻。 */
   readonly #lastRequests = new Map<string, number>();
   /** 回合末要应用的切换决定。 */
-  #pending: SwitchDecision | undefined;
+  #pending: { from: string; decision: SwitchDecision } | undefined;
   /** 防止并发请求同时评估（同一个插件只有一份控制器）。 */
   #busy = false;
 
@@ -136,9 +136,10 @@ export class SwitchingController {
         this.#pending = undefined;
         return;
       }
+      this.#discardStalePending();
       if (this.#pending !== undefined) {
         if (this.#atTurnBoundary(input)) {
-          const pending = this.#pending;
+          const pending = this.#pending.decision;
           this.#pending = undefined;
           await this.#apply(pending);
         }
@@ -210,6 +211,7 @@ export class SwitchingController {
     const document = this.#deps.document();
     const settings = switchSettingsOf(document);
     const now = this.#now();
+    const pending = this.#pending?.from === this.#deps.pinnedRef() ? this.#pending?.decision : undefined;
     const nextAt =
       (settings.strategy === "best-quota" || settings.strategy === "scheduled") && settings.intervalMinutes > 0
         ? this.#lastEvaluatedAt > 0
@@ -221,7 +223,7 @@ export class SwitchingController {
       autoSwitch: document.autoSwitch === undefined ? this.#deps.autoSwitchDefault !== false : document.autoSwitch !== false,
       evaluatedAt: this.#lastEvaluatedAt,
       ...(nextAt === undefined ? {} : { nextAt }),
-      ...(this.#pending === undefined ? {} : { pending: { ...this.#pending } }),
+      ...(pending === undefined ? {} : { pending: { ...pending } }),
     };
   }
 
@@ -233,8 +235,9 @@ export class SwitchingController {
     if (this.#busy) return undefined;
     this.#busy = true;
     try {
+      this.#discardStalePending();
       if (this.#pending !== undefined) {
-        const pending = this.#pending;
+        const pending = this.#pending.decision;
         this.#pending = undefined;
         await this.#apply(pending);
         return pending;
@@ -308,6 +311,7 @@ export class SwitchingController {
     }
     // Quota reads can await user settings changes; recheck before queuing or applying.
     if (!force && this.#deps.document().autoSwitch === false) return undefined;
+    if (this.#deps.pinnedRef() !== current) return undefined;
     let decision: SwitchDecision | undefined;
     if (force && settings.strategy !== "best-quota" && !currentExhausted) {
       // 「立即切换」在顺序/定时模式下就是：切到当前之后的第一个可用账号。
@@ -326,11 +330,16 @@ export class SwitchingController {
     if (decision === undefined) return undefined;
 
     if (!force && settings.atTurnEnd && input !== undefined && !this.#atTurnBoundary(input)) {
-      this.#pending = decision;
+      this.#pending = { from: current, decision };
       return undefined;
     }
     await this.#apply(decision);
     return decision;
+  }
+
+  /** A queued decision belongs to the account that triggered it. */
+  #discardStalePending(): void {
+    if (this.#pending !== undefined && this.#pending.from !== this.#deps.pinnedRef()) this.#pending = undefined;
   }
 
   /**

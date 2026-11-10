@@ -126,35 +126,20 @@ export const IMAGE_REQUEST_BUDGET_COUNT = 24;
 
 /** 图片收集的结论。 */
 export interface CollectedImages {
-  /** attachment id → 字节（只含真正内联的那些）。 */
+  /** attachment id → reusable bytes for selected occurrences. */
   images: Map<string, RequestImageBytes>;
-  /** 因超出预算而没内联的图片 id（协议层据此发占位文本）。 */
+  /** Attachment ids with at least one occurrence that could not be inlined. */
   skipped: Set<string>;
 }
 
+class BudgetedImages extends Map<string, RequestImageBytes> {
+  /** Input message index → content indexes omitted by the budget. */
+  readonly omitted = new Map<number, Set<number>>();
+}
+
 /**
- * 按**总预算**收集一次请求需要的图片字节（2026-11-05 外部审查 F06）。
- *
- * ## 与上一版的区别
- *
- * 三家适配器原来各写一个 `for (const [id, ref] of wantedImagesOf(...))` 循环：
- * 只受单张上限约束，没有总数/总字节上限，也没有并发控制。判断散落三处还会漏
- * （U13 就是这么漏掉两家的）。
- *
- * 现在统一在这里：
- *
- * 1. **串行读取**：`readImageBytes` 是解码 + 可能缩放的 CPU/IO 混合操作，
- *    `Promise.all` 同时加载多张大图只会把峰值叠起来；
- * 2. **总字节 / 总张数预算**：任一耗尽就**停止内联**，剩下的交给占位文本；
- * 3. **先来先得**：`wantedImagesOf` 按消息顺序产出，所以优先内联**较早**的图？
- *    —— 不，这里反过来：预算紧张时应当优先保留**最近**出现的图片，
- *    因此遍历前先反转成「最近的优先」，命中后按 id 放回 Map（Map 顺序不影响出站）。
- *
- * **绝不静默丢弃**：没内联的 id 会进 `skipped`，协议层照旧输出占位文本。
- * @param messages - 宿主的请求消息。
- * @param resolve - 单张图片的字节读取注入点；缺席时返回空结果（协议层全员占位）。
- * @param signal - 请求取消信号。
- * @returns 内联的字节与因预算跳过 id 集合。
+ * Read attachments serially, sharing decoded bytes for repeated references.
+ * Allocate the count and byte budgets per outbound occurrence, newest first.
  */
 export async function collectImageBytes(
   messages: readonly { role?: string; content: readonly ContentBlock[] }[],
@@ -162,43 +147,77 @@ export async function collectImageBytes(
   signal?: AbortSignal,
   budget: { maxBytes?: number; maxCount?: number } = {},
 ): Promise<CollectedImages> {
-  const images = new Map<string, RequestImageBytes>();
+  const images = new BudgetedImages();
   const skipped = new Set<string>();
   if (resolve === undefined) return { images, skipped };
 
   const maxBytes = budget.maxBytes ?? IMAGE_REQUEST_BUDGET_BYTES;
   const maxCount = budget.maxCount ?? IMAGE_REQUEST_BUDGET_COUNT;
-
-  // 最近出现的图片优先：预算紧张时保留对话尾部（那才是这一轮真正要看的图）。
-  const wanted = [...wantedImagesOf(messages).entries()].reverse();
+  const unavailable = new Map<string, "missing" | "budget">();
+  let usedCount = 0;
   let usedBytes = 0;
-  for (const [id, ref] of wanted) {
-    if (signal?.aborted === true) break;
-    if (images.size >= maxCount) {
-      skipped.add(id);
+  const omit = (id: string, messageIndex: number, contentIndex: number): void => {
+    skipped.add(id);
+    let positions = images.omitted.get(messageIndex);
+    if (positions === undefined) {
+      positions = new Set<number>();
+      images.omitted.set(messageIndex, positions);
+    }
+    positions.add(contentIndex);
+  };
+  for (const { id, ref, messageIndex, contentIndex } of [...imageOccurrencesOf(messages)].reverse()) {
+    if (signal?.aborted === true) {
+      if (images.has(id)) omit(id, messageIndex, contentIndex);
       continue;
     }
-    let bytes: RequestImageBytes | undefined;
-    try {
-      bytes = await resolve(ref, signal);
-    } catch {
-      // 单张读失败：交给占位文本，不打断整次请求。
-      bytes = undefined;
+    if (unavailable.get(id) === "missing") continue;
+    if (usedCount >= maxCount || usedBytes >= maxBytes || unavailable.get(id) === "budget") {
+      omit(id, messageIndex, contentIndex);
+      continue;
+    }
+    let bytes = images.get(id);
+    if (bytes === undefined) {
+      try {
+        bytes = await resolve(ref, signal);
+      } catch {
+        // A missing attachment has its own placeholder in the protocol.
+      }
     }
     if (bytes === undefined) {
+      unavailable.set(id, "missing");
       skipped.add(id);
       continue;
     }
     const size = bytes.data.byteLength;
     if (usedBytes + size > maxBytes) {
-      // 超预算：**这一张也不发**（发一半的图没有意义），交给占位文本。
-      skipped.add(id);
+      unavailable.set(id, "budget");
+      omit(id, messageIndex, contentIndex);
       continue;
     }
+    usedCount += 1;
     usedBytes += size;
     images.set(id, bytes);
   }
   return { images, skipped };
+}
+
+/** Replace only the over-budget occurrences before serializing a request. */
+export function projectImageBudget<T extends { content: readonly ContentBlock[] }>(
+  messages: readonly T[],
+  images: ReadonlyMap<string, RequestImageBytes> | undefined,
+): readonly T[] {
+  if (!(images instanceof BudgetedImages) || images.omitted.size === 0) return messages;
+  return messages.map((message, messageIndex) => {
+    const omitted = images.omitted.get(messageIndex);
+    if (omitted === undefined) return message;
+    return {
+      ...message,
+      content: message.content.map((block, contentIndex): ContentBlock => {
+        if (block.type !== "image" || !omitted.has(contentIndex)) return block;
+        return { type: "text", text: `[图片超出本次请求预算：${block.attachment?.attachmentId ?? "未知附件"}，原图未内联]` };
+      }),
+    };
+  });
 }
 
 /**
@@ -252,29 +271,28 @@ export async function readImageBytes(
 export function wantedImagesOf(
   messages: readonly { role?: string; content: readonly ContentBlock[] }[],
 ): Map<string, ImageRefLike> {
-  assertProjectableContent(messages);
   const wanted = new Map<string, ImageRefLike>();
-  for (const message of messages) {
+  for (const { id, ref } of imageOccurrencesOf(messages)) wanted.set(id, ref);
+  return wanted;
+}
+
+function* imageOccurrencesOf(messages: readonly { role?: string; content: readonly ContentBlock[] }[]): Generator<{
+  id: string;
+  ref: ImageRefLike;
+  messageIndex: number;
+  contentIndex: number;
+}> {
+  assertProjectableContent(messages);
+  for (const [messageIndex, message] of messages.entries()) {
     if (message.role === "assistant") continue;
-    for (const block of message.content) {
-      if (block.type !== "image") continue;
-      /**
-       * **已卸载的图片不收集**（2026-11-04 外部审查 U13）。
-       *
-       * `offloaded: true` 的含义是「这张图已从请求里卸载」—— 宿主要求各条路由只发
-       * 「命名图片及其只读路径」的占位文本。把它收进来读字节，等于把卸载又撤销了：
-       * 请求被撑回原大小，用户为长对话做的缩减全部失效。
-       *
-       * 放在这个**共享**函数里而不是各家的 adapter：三家都从这里取，
-       * 少写一家的判断就少一个漏洞（这一轮正是 commandcode 漏了）。
-       */
-      if (block.offloaded === true) continue;
-      const ref = block.attachment as ImageRefLike | undefined;
-      const id = ref?.attachmentId;
-      if (typeof id === "string" && id !== "") wanted.set(id, ref as ImageRefLike);
+    for (const [contentIndex, block] of message.content.entries()) {
+      if (block.type !== "image" || block.offloaded === true) continue;
+      const ref: ImageRefLike | undefined = block.attachment;
+      if (ref != null && typeof ref.attachmentId === "string" && ref.attachmentId !== "") {
+        yield { id: ref.attachmentId, ref, messageIndex, contentIndex };
+      }
     }
   }
-  return wanted;
 }
 
 /**

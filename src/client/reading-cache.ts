@@ -58,6 +58,11 @@ export class ReadingCache<T> {
     return entry.value;
   }
 
+  /** 下次必须重读该厂商。 */
+  delete(key: string): void {
+    this.entries.delete(key);
+  }
+
   /**
    * 记下一条读数（同键覆盖，重新计时）。
    * @param key - 读数的主体。

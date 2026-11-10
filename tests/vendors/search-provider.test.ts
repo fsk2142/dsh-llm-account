@@ -291,6 +291,24 @@ describe("取消（用户按了停止）", () => {
     expect(result.sources.map((s) => s.url)).toEqual(["https://api.example/x"]);
   });
 
+  it("falls back when HTTP 200 contains a server search error", async () => {
+    const impl: typeof fetch = async (url) =>
+      String(url).endsWith("/messages")
+        ? Response.json({
+          content: [{
+            type: "web_search_tool_result",
+            tool_use_id: "srvtoolu_fixture",
+            content: { type: "web_search_tool_result_error", error_code: "too_many_requests" },
+          }],
+        })
+        : Response.json({ results: [{ title: "Fallback result", url: "https://api.example/x" }] });
+    const provider = createSearchProvider(deps({ fetchImpl: impl }));
+
+    await expect(provider.search({ query: "hello" })).resolves.toMatchObject({
+      sources: [{ title: "Fallback result", url: "https://api.example/x" }],
+    });
+  });
+
   it("`gateway-only` 时网关失败**不回退**（`*-only` 边界不变）", async () => {
     const calls: string[] = [];
     const impl = (async (url: unknown) => {

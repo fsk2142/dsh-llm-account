@@ -308,6 +308,9 @@ function accountBlock(
     ...(rejectionOf === undefined
       ? []
       : [createElement("p", { key: "rejection", "data-dashboard-rejection-label": rejectionOf.kind, className: CSS_CLASS.rejection }, rejectionText(t, rejectionOf.kind))]),
+    account.quotaStale === true
+      ? createElement("small", { "data-quota-stale": account.ref, className: CSS_CLASS.note }, t("usage.stale"))
+      : null,
     // 该账号额度读取里的**部分失败**照样列出来：不列就等于把一次不完整的读数呈现成完整的。
     // 文案翻成人话（端点短名不再直接上屏），原文留在 data 属性里，与厂商级失败项同一条纪律。
     ...(quotaOf?.failures ?? []).map((item, index) =>

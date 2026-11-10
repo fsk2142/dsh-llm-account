@@ -30,6 +30,7 @@ import { opencodeSessionHeaders } from "./session";
 import {
   base64Of,
   fileBlockText,
+  projectImageBudget,
   assistantImageText,
   assertProjectableContent,
   missingImagePlaceholder,
@@ -556,7 +557,7 @@ export function toPiContext(
   assertProjectableContent(options.messages);
   const messages: PiMessage[] = [];
   const toolNames = new Map<string, string>();
-  for (const message of options.messages) {
+  for (const message of projectImageBudget(options.messages, images)) {
     if (message.role === "system" || message.role === "developer") continue;
     if (message.role === "tool") {
       const content = piInputContent(message.content, images);

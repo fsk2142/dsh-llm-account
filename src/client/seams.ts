@@ -1388,10 +1388,10 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           // 而不是只显示一句对任何病因都成立的「账号数据暂不可用」。
           void readStatusDetail(usage, entry.providerId).then(({ status, problem }) => {
             if (!alive) return;
-            // 只有**完整**的读数进缓存：部分失败（端点级失败、某个账号没读到额度）照旧每次
-            // 重读 —— 把一次瞬时故障缓存 60 秒，就是用户看到的「额度信息又不见了」。
-            if (status !== undefined && completeReading(status)) statusReadings.put(entry.providerId, status);
-            if (status !== undefined) setStatuses((current) => ({ ...current, [entry.providerId]: status }));
+            if (status !== undefined) {
+              const reading = noteStatusReading(entry.providerId, status);
+              setStatuses((current) => ({ ...current, [entry.providerId]: reading }));
+            }
             setStatusProblems((current) => ({ ...current, [entry.providerId]: problem }));
             setStatusLoading((current) => ({ ...current, [entry.providerId]: false }));
           });
@@ -2840,36 +2840,26 @@ export function createSidebarCardView(options: {
           setView((current) => ({ status: current.status, failure: problem ?? t("usage.failed"), stale: current.status !== undefined }));
           return;
         }
+        const reading = noteStatusReading(readVendor, next);
         // 这次读数同时刷新「该家的账号表」——清单据此重建（账号增减都能跟上）。
         setStatuses((current) => {
-          const merged = { ...current, [readVendor]: next };
+          const merged = { ...current, [readVendor]: reading };
           // 写穿缓存：下一次挂载的首帧要用它（见 sidebarStatuses）。
           noteSidebarStatuses(merged);
           return merged;
         });
-        if (next.failures.length > 0) {
+        if (Array.isArray(next.failures) && next.failures.length > 0) {
           failures.current += 1;
           // 原文直接交给卡片（`failureText` 在渲染处翻人话，原文留在 data 属性上）：
           // 端点短名（`whoami`）与超时包装在这里不该被压成一句泛泛的「读取失败」。
           const raw = next.failures[0] ?? "";
           // 单个账号的额度读取失败不应该把整张卡片的账号信息清空：状态仍然可用，
           // 失败只作为附加提示；否则侧边栏只剩一个「LLM 账号」标题。
-          setView({ status: next, failure: raw, stale: false });
+          setView({ status: reading, failure: raw, stale: false });
           return;
         }
         failures.current = 0;
-        // 写回设置页的读数缓存：同一份 `status()` 读数，让「侧边栏开着」时打开设置直接吃最新的那份。
-        // 与设置页同一条纪律：只有**完整**的读数进缓存（见 completeReading）。
-        //
-        // 这一段包在 try 里：缓存判定只是**优化**，它抛错不该把「已经拿到的读数」丢掉 ——
-        // 那会让一次刷新变成「额度消失」（2026-10-20 报障的真实形状：`completeReading`
-        // 对缺失字段没有防护，抛出的异常打断了刷新链）。
-        try {
-          if (completeReading(next)) statusReadings.put(readVendor, next);
-        } catch (error) {
-          console.warn("[dsh-llm-account] could not cache the usage reading:", error);
-        }
-        setView({ status: next, stale: false });
+        setView({ status: reading, stale: false });
       });
     };
 
@@ -2933,12 +2923,12 @@ export function createSidebarCardView(options: {
       for (const name of vendors) {
         void readStatusDetail(usage, name).then(({ status }) => {
           if (cancelled || status === undefined) return;
+          const reading = noteStatusReading(name, status);
           setStatuses((current) => {
-            const merged = { ...current, [name]: status };
+            const merged = { ...current, [name]: reading };
             noteSidebarStatuses(merged);
             return merged;
           });
-          if (completeReading(status)) statusReadings.put(name, status);
         });
       }
       return () => {
@@ -3195,12 +3185,9 @@ export function createDashboardView(options: {
           const nextStatuses: Record<string, VendorUsageStatus | undefined> = {};
           const problems: string[] = [];
           for (const result of results) {
-            nextStatuses[result.entry.providerId] = result.detail.status;
-            // 成功读数写回设置页缓存：从仪表盘「转到设置」时看到的是同一份（面板刷新也顺带暖缓存）。
-            // 与设置页、侧边栏同一条纪律：**不完整**的读数不进缓存（见 completeReading）。
-            if (result.detail.status !== undefined && completeReading(result.detail.status)) {
-              statusReadings.put(result.entry.providerId, result.detail.status);
-            }
+            const vendor = result.entry.providerId;
+            const status = result.detail.status;
+            nextStatuses[vendor] = status === undefined ? undefined : noteStatusReading(vendor, status);
             if (result.detail.problem !== undefined) problems.push(result.detail.problem);
           }
           setStatuses(nextStatuses);
@@ -3398,6 +3385,8 @@ export const CATALOG_READING_TTL_MS = 300_000;
 let statusReadingTtlMs = STATUS_READING_TTL_MS;
 /** 状态读数：只存**成功**的（读失败照旧每次重试 —— 缓存一次瞬时故障会把它假装成事实）。 */
 const statusReadings = new ReadingCache<VendorUsageStatus>(() => statusReadingTtlMs);
+/** 每个账号最近一次可读的额度及原始读取时刻。只用于部分失败时的展示。 */
+const quotaReadings = new Map<string, Map<string, { quota: NonNullable<AccountUsageStatus["quota"]>; at: number }>>();
 /** 模型目录：只存完整成功的（`failures` 为空）；部分失败与失败都留给下次重读。 */
 const catalogReadings = new ReadingCache<CatalogModelsResult>(CATALOG_READING_TTL_MS);
 
@@ -3422,76 +3411,48 @@ function noteUpdateState(state: UpdateState | undefined): void {
   updateCheckCache = state;
 }
 
-/**
- * 这份状态读数够格进缓存吗？—— **不完整就不缓存**。
- *
- * 2026-10-18 实际情况「重新点开设置后原来显示的额度信息又不见了」的根因：缓存本意是省一次
- * 网络，但它把**部分失败**的读数也当成功存了下来 —— 一次瞬时故障（端点超时、某个端点坏了）
- * 就此在 60 秒 TTL 里变成「事实」，重开设置吃缓存，额度数字看起来凭空消失。
- *
- * ## 2026-11-10 改：以**账号**为粒度判定（问题 ③）
- *
- * 这一版的关键放宽：**「某个账号的额度没读到」不等于「这份读数不可信」**。
- *
- * 旧判据的漏洞正好落在用户报的那个场景上：opendesign 的账单接口
- * （`amr-api.open-design.ai`）连不上时，`getSummary` 把失败记进**这一家**的
- * `failures`，于是整家三个账号的读数全部被判成「不完整」而不能进缓存 —— 其中两个
- * 账号的额度其实**读到了**（截图里 35% / 33% 都在）。结果就是「刷新时读不到就
- * 整个不显示」。
- *
- * 新判据分两层：
- *
- * 1. **厂商级**拒绝仍然算全盘不完整（网关拒绝 = 这份读数整体不可信）；
- * 2. **账号级**只看「这个账号自己」：额度缺席 / 自己报失败 / 窗口为空才算它不完整。
- *    厂商级 `failures` 里那条**其他端点**的报错（账单摘要、whoami…）不再连坐。
- *
- * 仍然拦住的：
- *
- * - 一个账号都没读到（`quotaUnread` 覆盖了所有已配置账号）→ 不完整；
- * - 所有已配置账号都没有窗口 → 不完整（那是「整家没数据」，不是「个别失败」）。
- *
- * 未配置的账号不参与判定 —— 它没有密钥，本来就没有额度可读。
- * @param status - 一次厂商状态读数。
- * @returns 够格进缓存时为 `true`。
- */
+/** 所有已配置账号都有额度时才允许跳过下次读取。厂商级摘要失败不影响这项判定。 */
 export function completeReading(status: VendorUsageStatus): boolean {
-  // **形状不可信**：这个函数跑在一次刷新的 promise 链里，抛出去的异常会打断整条链 ——
-  // 调用方（`read()` / 建清单的 effect）没有 catch，于是那次刷新静默中断：界面停在
-  // 旧读数的状态，看起来就是「刷新时额度消失」（2026-10-20 报障）。
-  // 线上真见过 `quota` 存在但 `failures`/`windows` 缺失的形状，所以每一项都单独判定。
-  //
-  // 厂商级 `failures` **不再**直接判死（见上面的 2026-11-10 说明）：它记的是
-  // 「哪个端点坏了」，而端点坏了通常只影响某一个字段（账单摘要→套餐名，不影响周期额度）。
-  // 真正该拦住的是「一个账号都没读到」——那由下面的账号级判定表达。
-  const accounts = Array.isArray(status.accounts) ? status.accounts : [];
+  if (!Array.isArray(status.accounts)) return false;
   const unread = Array.isArray(status.quotaUnread) ? status.quotaUnread : [];
-  /** 已配置、且**额度整体没读到**的账号数。 */
-  let configured = 0;
-  /** 已配置、且拿到可用额度的账号数。 */
-  let readable = 0;
-  for (const account of accounts) {
-    // 与账户行同一条纪律：线上 `accounts` 可能混进渲染不了的行（null / 非对象）。
-    if (typeof account !== "object" || account === null) continue;
-    if (account.configured !== true) continue;
-    configured += 1;
-    // 端口整体失败（超时/抛错）：这个账号确实没有读数，不算它够格。
-    if (typeof account.ref === "string" && unread.includes(account.ref)) continue;
-    const quota = account.quota;
-    // 额度缺席、额度自己报失败、一个窗口都没有 —— 三种都说明**这个账号**这次读得不完整。
-    if (typeof quota !== "object" || quota === null) continue;
-    if (Array.isArray(quota.failures) && quota.failures.length > 0) continue;
-    if (!Array.isArray(quota.windows) || quota.windows.length === 0) continue;
-    readable += 1;
+  return status.accounts.every((account) => {
+    if (typeof account !== "object" || account === null) return false;
+    if (account.configured !== true) return true;
+    return !unread.includes(account.ref) && readableQuota(account.quota);
+  });
+}
+
+function readableQuota(quota: AccountUsageStatus["quota"]): quota is NonNullable<AccountUsageStatus["quota"]> {
+  return Array.isArray(quota?.windows) && quota.windows.length > 0 &&
+    !(Array.isArray(quota.failures) && quota.failures.length > 0);
+}
+
+/** 部分读数照常展示。缺额度的账号可暂用自己的上次读数，其有效期保持原样。 */
+function noteStatusReading(vendor: string, status: VendorUsageStatus): VendorUsageStatus {
+  if (completeReading(status)) {
+    statusReadings.put(vendor, status);
+  } else {
+    statusReadings.delete(vendor);
   }
-  /*
-   * 一个可读的都没有 → 不完整（整家没数据）。
-   *
-   * 注意这一步**取代**了原来「`failures` 非空就返回 false」的写法：那个写法把
-   * 「账单摘要这一个端点坏了」也算成整家不可用，正是用户看到的
-   * 「刷新时读不到就整个不显示」。
-   */
-  if (configured > 0 && readable === 0) return false;
-  return true;
+  if (!Array.isArray(status.accounts)) return status;
+  const previous = quotaReadings.get(vendor);
+  const next = new Map<string, { quota: NonNullable<AccountUsageStatus["quota"]>; at: number }>();
+  const unread = Array.isArray(status.quotaUnread) ? status.quotaUnread : [];
+  const now = Date.now();
+  const accounts = status.accounts.map((account): AccountUsageStatus => {
+    if (account?.configured !== true || account.rejection?.kind === "invalid-credential") return account;
+    if (!unread.includes(account.ref) && readableQuota(account.quota)) {
+      next.set(account.ref, { quota: account.quota, at: now });
+      return account;
+    }
+    const last = previous?.get(account.ref);
+    if (last === undefined || now - last.at > statusReadingTtlMs) return account;
+    next.set(account.ref, last);
+    if (Array.isArray(account.quota?.windows) && account.quota.windows.length > 0) return account;
+    return { ...account, quota: last.quota, quotaStale: true };
+  });
+  quotaReadings.set(vendor, next);
+  return { ...status, accounts };
 }
 
 /** 共享的 usage 远程面（`$mount` 只发一次）。 */
@@ -3880,6 +3841,7 @@ function watchCredentialInvalidation(ctx: ClientSeamContext): void {
   credentialWatchStarted = true;
   subscribeCredentials(ctx, () => {
     statusReadings.clear();
+    quotaReadings.clear();
   });
 }
 
@@ -3910,6 +3872,7 @@ export function resetSeams(): void {
   sidebarMirrorStarted = false;
   credentialWatchStarted = false;
   statusReadings.clear();
+  quotaReadings.clear();
   catalogReadings.clear();
 }
 

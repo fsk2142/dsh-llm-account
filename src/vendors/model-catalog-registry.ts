@@ -50,6 +50,8 @@ export interface CatalogSource {
    * 缺省视为「可用」：与 `enabled` 的缺省语义一致（只有显式 `false` 才撤下）。
    */
   available?: () => boolean;
+  /** Current model visibility, rechecked immediately before delegation. */
+  allowsModel?: (model: string) => boolean;
 }
 
 /** 一个候选：provider + model。 */
@@ -76,154 +78,105 @@ const CACHE_TTL_MS = 60_000;
 /** 已登记的读口（provider → source）。 */
 const sources = new Map<string, CatalogSource>();
 
-/** 上次合并的结果与时刻。 */
-let cached: { at: number; value: ModelCandidate[] } | undefined;
+/** Store each gateway separately so a fresh list from one cannot mask another. */
+const cache = new Map<string, { at: number; value: ModelCandidate[] }>();
+let generation = 0;
 
-/**
- * 登记一家的目录读口（幂等：同一个 provider 再登记就覆盖）。
- * @param source - 该家的读口。
- */
+/** Capture before reading a picker catalog so it cannot publish across a settings change. */
+export function catalogCandidateRevision(): number {
+  return generation;
+}
+
 export function registerCatalogSource(source: CatalogSource): void {
-  /**
-   * **只接受三家网关的登记**（2026-11-08）。
-   *
-   * 白名单在挑选与委托两处已经拦过，这里再拦一次的理由不同：如果哪天有别的插件
-   * 误把我们这份注册表当成公共设施、把自己的 `stream` 塞进来，那么候选清单里就会出现
-   * 一个「看起来是我们三家之一」的目标。拒绝登记比事后过滤更早、更清楚。
-   */
   if (!isSwitchableProvider(source.provider)) return;
   sources.set(source.provider, source);
-  // 目录可能变了，缓存作废。
-  cached = undefined;
+  invalidateCatalogCandidates();
 }
 
-/**
- * 取合并后的候选清单（带一次短 TTL 缓存）。
- *
- * 读失败的那一家只是缺席，不影响别家 —— 换模型是尽力而为的补救，不该因为某家目录读不到
- * 就把整次补救也废掉。**只收已登记且读成功的**；一条都没有时返回空数组。
- * @param now - 时钟（测试注入）。
- * @returns 候选清单；同一份缓存在 TTL 内复用。
- */
-export async function modelCandidates(now: number = Date.now()): Promise<ModelCandidate[]> {
-  if (cached !== undefined && now - cached.at < CACHE_TTL_MS) return cached.value;
-  const listed = await Promise.all(
-    [...sources.values()].map(async (source) => {
-    try {
-      // **禁用的厂商不进候选**（2026-11-04 外部审查 U08）：
-      // `enabled: false` 只撤下宿主路由，注册表仍在；不收在这里，
-      // 换模型就会切到一家用户明确关掉的厂商。
-      if (source.available !== undefined && !source.available()) return [];
-        const rows = await source.models();
-        return rows
-          .filter((row) => typeof row.id === "string" && row.id.trim() !== "")
-          .map(
-            (row): ModelCandidate => ({
-              provider: source.provider,
-              model: row.id,
-              ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }),
-              ...(row.effortCount === undefined ? {} : { effortCount: row.effortCount }),
-            }),
-          );
-      } catch {
-        // 这一家的目录读不到：它这次没有候选。
-        return [];
-      }
-    }),
-  );
-  const value = listed.flat();
-  cached = { at: now, value };
-  return value;
+function fresh(provider: string, now: number): { at: number; value: ModelCandidate[] } | undefined {
+  const entry = cache.get(provider);
+  return entry !== undefined && now - entry.at < CACHE_TTL_MS ? entry : undefined;
 }
 
-/**
- * 取**已经缓存**的候选清单；没有缓存时返回 `undefined`（**不发起任何请求**）。
- *
- * 为什么需要这个变体：换模型是失败路径上的补救，而它前面可能已经有一次注定失败的原因
- * （一条凭据都没解析到）。那种情况下再去打三家的目录端点纯属浪费 —— 而「连密钥都没有」
- * 是实际情况里最需要保持安静的场景（不该为一次必然失败的请求产生额外网络流量）。
- * @param now - 时钟（测试注入）。
- * @returns 缓存中的候选；缓存过期或从未读过时为 `undefined`。
- */
-export function cachedModelCandidates(now: number = Date.now()): ModelCandidate[] | undefined {
-  if (cached === undefined) return undefined;
-  if (now - cached.at >= CACHE_TTL_MS) return undefined;
-  return cached.value;
+function allowsModel(provider: string, model: string): boolean {
+  const source = sources.get(provider);
+  return source?.available?.() !== false && source?.allowsModel?.(model) !== false;
 }
 
-/**
- * 直接写入某一家已知的模型清单（零额外请求）。
- *
- * 这是缓存**真正的填充路径**：各家的适配器本来就会为了「模型选择器」读目录（`listModels` /
- * `catalogModels`），读成功后把结果顺手交进来即可。这样换模型永远走缓存，既不预热、也不在
- * 失败路径上打网络。
- * @param provider - provider 路由 id。
- * @param models - 该家的模型 id 列表。
- * @param now - 时钟（测试注入）。
- */
-export function noteCatalogModels(
-  provider: string,
-  models: readonly CatalogRow[],
-  now: number = Date.now(),
-): void {
-  /**
-   * **白名单闸门**（2026-11-08）：这是缓存真正的填充入口，不是三家之一就不写。
-   *
-   * 少了这一行，白名单只在「挑选」时生效，而缓存里仍可能躺着别家的模型 ——
-   * 一旦将来有人放宽了挑选那处（比如调研某个功能），脏数据就会立刻变成真实切换。
-   */
-  if (!isSwitchableProvider(provider)) return;
-  const value = cached === undefined ? [] : [...cached.value];
-  // 先摘掉这一家的旧条目，再追加新的（同一家重复调用不会累积）。
-  const kept = value.filter((candidate) => candidate.provider !== provider);
-  /**
-   * **禁用的厂商不写进缓存**（2026-11-04 外部审查 U08 的补遗）。
-   *
-   * `noteCatalogModels` 是缓存**真正的填充路径**（各家的 `listModels` 成功后顺手交进来），
-   * 它原来不检查可用性 —— 于是「先 listModels、后禁用」这个顺序会留下一个 60 秒的
-   * 脏窗口：候选里还有这家，被选中后 `delegateStream` 的复核会拦住，
-   * 结果是**换模型莫名失败**（用户看到的是「没反应」而不是错误）。
-   *
-   * 这里直接不写，缓存里干脆没有它。
-   */
-  if (sources.get(provider)?.available?.() === false) {
-    cached = { at: now, value: kept };
-    return;
-  }
-  for (const row of models) {
-    if (typeof row.id !== "string" || row.id.trim() === "") continue;
-    kept.push({
+function store(provider: string, rows: readonly CatalogRow[], now: number): void {
+  const value = rows.flatMap((row): ModelCandidate[] => {
+    if (typeof row.id !== "string" || row.id.trim() === "" || !allowsModel(provider, row.id)) return [];
+    return [{
       provider,
       model: row.id,
       ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }),
       ...(row.effortCount === undefined ? {} : { effortCount: row.effortCount }),
-    });
+    }];
+  });
+  cache.set(provider, { at: now, value });
+}
+
+/** Read any registered gateway whose cached list is missing or expired. */
+export async function modelCandidates(now: number = Date.now()): Promise<ModelCandidate[]> {
+  const started = generation;
+  await Promise.all([...sources.values()].map(async (source) => {
+    if (fresh(source.provider, now) !== undefined) return;
+    try {
+      if (source.available?.() === false) return;
+      const rows = await source.models();
+      if (started === generation) store(source.provider, rows, now);
+    } catch {
+      // Cache this failed read independently without masking other gateways.
+      if (started === generation && fresh(source.provider, now) === undefined) store(source.provider, [], now);
+    }
+  }));
+  return cachedModelCandidates(now) ?? [];
+}
+
+/** Return only fresh cached candidates without contacting any gateway. */
+export function cachedModelCandidates(now: number = Date.now()): ModelCandidate[] | undefined {
+  const values: ModelCandidate[] = [];
+  let found = false;
+  for (const provider of cache.keys()) {
+    const entry = fresh(provider, now);
+    if (entry === undefined) continue;
+    found = true;
+    for (const candidate of entry.value) {
+      if (allowsModel(provider, candidate.model)) values.push(candidate);
+    }
   }
-  cached = { at: now, value: kept };
+  return found ? values : undefined;
 }
 
-/**
- * **丢弃候选缓存，让下一次换模型重新读目录**（2026-11-04 外部审查 U11）。
- *
- * ## 为什么要这个（与 `resetCatalogSources` 不同）
- *
- * 候选缓存有 60 秒 TTL。用户在这段窗口里做了任何「让某个模型不再可用」的操作 ——
- * 取消勾选、删掉最后一个账号、撤销凭据 —— 缓存里**仍然有那个模型**：
- * 自动切换把它选为目标，而目标家已经没法服务，用户看到的是「切换没反应」。
- *
- * `resetCatalogSources()` 会连**登记表**一起清空，那是测试隔离用的；生产里改设置
- * 只该作废缓存，不该把三条 provider 的 `stream` 入口也一起摘掉。
- *
- * 调用点：三家的 `loader/volatile-update`（用户改设置时触发）。
- */
+/** Reuse the visible models read by a gateway's normal model picker. */
+export function noteCatalogModels(
+  provider: string,
+  models: readonly CatalogRow[],
+  now: number = Date.now(),
+  revision = generation,
+): void {
+  if (revision !== generation || !isSwitchableProvider(provider)) return;
+  const source = sources.get(provider);
+  if (source?.available?.() === false) {
+    store(provider, [], now);
+    return;
+  }
+  // The picker may have started before a visibility change. Its old rows are
+  // evidence that this list is obsolete, so leave any newer list alone.
+  if (models.some((row) => source?.allowsModel?.(row.id) === false)) return;
+  store(provider, models, now);
+}
+
+/** Settings changed. Drop cached rows and prevent old in-flight reads from restoring them. */
 export function invalidateCatalogCandidates(): void {
-  cached = undefined;
+  generation += 1;
+  cache.clear();
 }
 
-/** 复位（测试隔离；生产不会调用）。 */
+/** Reset the registry for test isolation. */
 export function resetCatalogSources(): void {
   sources.clear();
-  cached = undefined;
+  invalidateCatalogCandidates();
 }
 
 /**
@@ -265,7 +218,7 @@ export function delegateStream(
    * 用户在这段时间里关掉厂商，缓存里的旧候选仍然会把请求转过去。
    * 这一行保证「禁用之后立刻不会再被调用」。
    */
-  if (source.available !== undefined && !source.available()) return undefined;
+  if (!allowsModel(target.provider, target.model)) return undefined;
   if (isOfficialProvider(target.provider)) return undefined;
   return source.stream({ ...options, provider: target.provider, model: target.model });
 }

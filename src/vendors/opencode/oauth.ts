@@ -316,6 +316,7 @@ function absoluteVerificationUri(authBase: string, uri: string, allowed: readonl
 /** 申请设备码。 */
 export async function beginDeviceFlow(deps: OAuthHttpDeps, signal?: AbortSignal): Promise<DeviceCode> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/auth/device/code`, {
+    redirect: "error",
     method: "POST",
     /**
      * **必须带 signal**（2026-11-05 外部审查 F02）。
@@ -415,6 +416,7 @@ export async function pollDeviceToken(
   emptyBodyStreak = 0,
 ): Promise<PollResult> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/auth/device/token`, {
+    redirect: "error",
     method: "POST",
     // 取消要能真正停掉在途轮询（F02）。网络层抛出的 abort 由调用方按取消处理。
     ...(signal === undefined ? {} : { signal }),
@@ -508,6 +510,7 @@ export async function refreshOAuthCredential(
   signal?: AbortSignal,
 ): Promise<OAuthCredential> {
   const response = await deps.fetchImpl(`${authBaseOf(deps, credential)}/console/auth/device/token`, {
+    redirect: "error",
     method: "POST",
     /**
      * **必须把 signal 传下去**（2026-11-04 外部审查 U03）。
@@ -541,6 +544,7 @@ export async function fetchOAuthOrg(
   signal?: AbortSignal,
 ): Promise<{ id: string; name?: string } | undefined> {
   const response = await deps.fetchImpl(`${authBaseOf(deps)}/console/api/orgs`, {
+    redirect: "error",
     // 同上：这是登录流程的第三个网络阶段，取消必须能打断它（F02）。
     ...(signal === undefined ? {} : { signal }),
     headers: { authorization: `Bearer ${access}`, accept: "application/json" },

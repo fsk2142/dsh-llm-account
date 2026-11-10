@@ -28,7 +28,7 @@ import type { AttemptFailure } from "../../core/attempt-ledger";
 import { runAttemptLoop } from "../../core/attempt-loop";
 import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
-import { delegateStream, noteCatalogModels } from "../model-catalog-registry";
+import { catalogCandidateRevision, delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
 import { MAX_TRIED, RotationEngine } from "../../core/switching/rotation";
 import { LLM_REQUEST_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, RequestDeadline, runStream } from "../../core/transport";
@@ -621,6 +621,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
      */
     const hasAccount = await this.#hasAnyAccount();
     if (!hasAccount) return [];
+    const revision = catalogCandidateRevision();
     const raw = this.#deps.config();
     const entries = await this.#catalog(resolveConfig(raw));
     const visible = selectVisible(entries, normalizeVisibility(raw));
@@ -633,6 +634,8 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
         ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
         ...(entry.efforts === undefined ? {} : { effortCount: entry.efforts.length }),
       })),
+      undefined,
+      revision,
     );
     return visible.map((entry) => ({
       provider,

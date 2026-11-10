@@ -54,7 +54,7 @@ function harness(options: {
     now: options.now,
     warn: vi.fn(),
   });
-  return { controller, engine, selects, pinned: () => pinned, quotaCalls };
+  return { controller, engine, selects, pinned: () => pinned, quotaCalls, select: accounts.select };
 }
 
 it("isTurnEndEvent：认 turn/end（含事件包一层），不认其它事件", () => {
@@ -248,5 +248,22 @@ it("读取额度期间关闭自动切换，读取完成后不会应用旧决定"
   release(quota(90));
   await pending;
   expect(selects).toEqual([]);
+  expect(controller.snapshot().pending).toBeUndefined();
+});
+
+it("pending automatic switching does not overwrite a later manual account selection", async () => {
+  let clock = 1_000;
+  const { controller, engine, selects, pinned, select } = harness({ now: () => clock });
+  await controller.beforeRequest({ sessionId: "s1" });
+  engine.markRejected("a", { kind: "quota", message: "exhausted" });
+  await controller.beforeRequest({ sessionId: "s1" });
+  expect(controller.snapshot().pending?.target).toBe("b");
+
+  await select("c");
+  clock = 2_000;
+  controller.noteSessionEvent("s1", { type: "turn/end" });
+  await controller.beforeRequest({ sessionId: "s1" });
+  expect(selects).toEqual(["c"]);
+  expect(pinned()).toBe("c");
   expect(controller.snapshot().pending).toBeUndefined();
 });
