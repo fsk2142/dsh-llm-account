@@ -31,9 +31,51 @@
 
 import { chooseSearchRoute, isSearchDisabled, type SearchRoute } from "../core/switching/search-route";
 import { SearchApiError, searchViaApi } from "./search-api";
+import { BodyTooLargeError, readBoundedJsonResult } from "../core/bounded-body";
 
 /** 本 provider 的稳定 id（宿主注册表的键）。 */
 export const SEARCH_PROVIDER_ID = "llm-account-deepseek";
+
+/**
+ * 网关搜索请求的硬超时（毫秒）。
+ *
+ * ## 为什么必须有（2026-11-10 审查 A08，P2）
+ *
+ * 原来只在调用方给了 `signal` 时透传它，**没有**自己的 deadline。于是：
+ *
+ * - 调用方（宿主）不传 signal 或传了一个永不 abort 的 signal 时，一个握手卡住的
+ *   连接会把这次搜索挂到天荒地老；
+ * - 更糟的是路由语义：`gateway-first` 的设计前提是「网关失败就回退到 Search API」，
+ *   而「卡住」不是失败 —— 它永远不返回，回退分支根本没机会执行。用户看到的是
+ *   搜索一直转圈，而本来可用的 API 路就在那儿闲着。
+ *
+ * 15 秒的取值理由：搜索是交互式操作，用户等 15 秒已经算久了；而正常网关响应在
+ * 1~3 秒内。比 LLM 的 10 秒目录超时略宽，因为搜索网关要跑一次真实的网页检索。
+ */
+export const GATEWAY_SEARCH_TIMEOUT_MS = 15_000;
+
+/**
+ * 网关搜索响应的正文上限（字节）。
+ *
+ * ## 为什么（同一份审查 A08）
+ *
+ * 原来直接 `await response.json()`：没有字节上限，一个被代理改写成超大 HTML/JSON 的
+ * 响应会把内存顶起来。搜索结果本身是小的（几条来源标题 + URL），1 MiB 已经宽裕。
+ */
+export const GATEWAY_SEARCH_BODY_LIMIT = 1_048_576;
+
+/**
+ * 把调用方 signal 与内部超时合并成一个。
+ *
+ * 与 `core/catalog-flight` 同一套做法：两者**任一成立**都要让请求停下，不是二选一。
+ * @param caller - 调用方 signal（可能没有）。
+ * @param timeoutMs - 内部硬超时。
+ * @returns 合并后的 signal。
+ */
+function withDeadline(caller: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timer = AbortSignal.timeout(timeoutMs);
+  return caller === undefined ? timer : AbortSignal.any([caller, timer]);
+}
 
 /** 一条搜索来源（与宿主的 `WebSource` 同形）。 */
 export interface SearchSource {
@@ -400,6 +442,11 @@ export function createSearchProvider(deps: SearchProviderDeps): {
         };
         let response: Response | undefined;
         try {
+          /*
+           * **内部硬超时**（2026-11-10 审查 A08）：`gateway-first` 的回退前提是「网关
+           * 失败」，而「卡住」永远不返回 —— 没有这层 deadline，回退分支根本没机会跑。
+           * 合并调用方 signal 而不是替换它：任一条件成立都要停下。
+           */
           response = await deps.fetchImpl(`${baseURL.replace(/\/$/, "")}/messages`, {
             method: "POST",
             headers: {
@@ -409,12 +456,16 @@ export function createSearchProvider(deps: SearchProviderDeps): {
               "anthropic-version": API_VERSION,
             },
             body: JSON.stringify(body),
-            ...(signal === undefined ? {} : { signal }),
+            signal: withDeadline(signal, GATEWAY_SEARCH_TIMEOUT_MS),
           });
         } catch (error) {
           // 取消可能发生在请求在途的那一刻（不是开始前）：同样给一句干净的话，
           // 别把一个 DOMException 原样抛给宿主。
           if (isAbortError(error)) throw new SearchUnavailableError("搜索已取消");
+          /*
+           * 超时与断网都落到这里。两条都记为 `gatewayFailure` 而不是直接抛出 ——
+           * 这正是「网关这条路不行，就走 API 那条」的落点。
+           */
           gatewayFailure = `搜索请求没能发出：${error instanceof Error ? error.message : String(error)}`;
         }
         if (response !== undefined && gatewayFailure === undefined) {
@@ -427,18 +478,29 @@ export function createSearchProvider(deps: SearchProviderDeps): {
              * 代理 / 边缘网关可能返回 200 的 HTML、空正文或损坏的 JSON —— 那会让
              * `json()` 抛 `SyntaxError`。原来它在这个 try **外面**，异常直接从
              * `search()` 逸出，`gateway-first` 后面的 API 回退永远执行不到。
+             *
+             * 2026-11-10（审查 A08）再加两道：正文**有界读取**（`readBoundedJsonResult`），
+             * 以及与 `json()` 同一条语义 —— 空正文 / 非法 JSON 都算网关路失败，继续回退。
              */
             try {
-              const payload: unknown = await response.json();
-              const result = sourcesOf(payload);
-              // 宿主自己也执行 maxResults：这里截一次以防 provider 侧超发。
-              const max = request.maxResults;
-              if (typeof max === "number" && max > 0 && result.sources.length > max) {
-                return { sources: result.sources.slice(0, max), truncated: true };
+              const read = await readBoundedJsonResult(response, GATEWAY_SEARCH_BODY_LIMIT);
+              if (read.kind !== "json") {
+                gatewayFailure =
+                  read.kind === "empty" ? "网关返回了空响应" : "网关响应不是合法 JSON";
+              } else {
+                const result = sourcesOf(read.value);
+                // 宿主自己也执行 maxResults：这里截一次以防 provider 侧超发。
+                const max = request.maxResults;
+                if (typeof max === "number" && max > 0 && result.sources.length > max) {
+                  return { sources: result.sources.slice(0, max), truncated: true };
+                }
+                return result;
               }
-              return result;
             } catch (error) {
-              gatewayFailure = `网关响应无效：${error instanceof Error ? error.message : String(error)}`;
+              gatewayFailure =
+                error instanceof BodyTooLargeError
+                  ? "网关响应体积超过上限"
+                  : `网关响应无效：${error instanceof Error ? error.message : String(error)}`;
             }
           }
         }

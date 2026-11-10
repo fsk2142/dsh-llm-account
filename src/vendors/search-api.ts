@@ -23,6 +23,8 @@
  * @module dsh-llm-account/src/vendors/search-api
  */
 
+import { readBoundedJsonResult } from "../core/bounded-body";
+
 /** Search API 的路径（基地址固定是 `https://api.deepseek.com`）。 */
 export const SEARCH_API_PATH = "/v1/tools/search";
 
@@ -32,6 +34,27 @@ const SEARCH_API_BASE = "https://api.deepseek.com";
 /** `count` 的官方范围。 */
 const MIN_COUNT = 1;
 const MAX_COUNT = 50;
+
+/**
+ * Search API 请求的硬超时（毫秒）。
+ *
+ * ## 为什么（2026-11-10 审查 A08）
+ *
+ * 与网关路同一个问题：原来只在调用方给了 `signal` 时透传，没有自己的 deadline。
+ * 调用方不传或永不 abort 时，一次握手卡住的请求会一直挂着 —— 而搜索是**交互式**
+ * 操作，挂住比报错更糟：用户只能干等，连「换个方式」的提示都得不到。
+ *
+ * 15 秒与网关路同档：两条路是同一个用户的同一个动作，超时口径不该一个有、一个没有。
+ */
+export const API_SEARCH_TIMEOUT_MS = 15_000;
+
+/**
+ * Search API 响应的正文上限（字节）。
+ *
+ * 搜索结果是小结构（标题 + URL + 摘要），1 MiB 已经宽裕；但 `need_content` 或
+ * 协议变更可能让单次响应变大，所以给一个上限而不是无限 `json()`。
+ */
+export const API_SEARCH_BODY_LIMIT = 1_048_576;
 
 /** 一条来源（与宿主 `WebSource` 同形）。 */
 export interface ApiSearchSource {
@@ -157,18 +180,26 @@ export async function searchViaApi(input: ApiSearchInput): Promise<ApiSearchResu
   }
   // `need_content` 保持缺省（false）：网页正文不进上下文，省 token 也省带宽。
 
+  /*
+   * **内部硬超时 + 合并调用方 signal**（2026-11-10 审查 A08）：
+   * 与网关路同一套 —— 任一条件成立都让请求停下，而不是「有 signal 就没上限」。
+   */
+  const deadline = AbortSignal.timeout(API_SEARCH_TIMEOUT_MS);
+  const signal = input.signal === undefined ? deadline : AbortSignal.any([input.signal, deadline]);
+
   const response = await input.fetchImpl(`${SEARCH_API_BASE}${SEARCH_API_PATH}`, {
     method: "POST",
     headers: { authorization: `Bearer ${input.key}`, "content-type": "application/json" },
     body: JSON.stringify(body),
-    ...(input.signal === undefined ? {} : { signal: input.signal }),
+    signal,
   });
 
   if (!response.ok) {
     // 尽力读出正文里的 message，但**不因为读不出来而改变失败语义**。
     let detail: string | undefined;
     try {
-      detail = messageOf(await response.json());
+      const read = await readBoundedJsonResult(response, API_SEARCH_BODY_LIMIT);
+      detail = read.kind === "json" ? messageOf(read.value) : undefined;
     } catch {
       detail = undefined;
     }
@@ -176,7 +207,26 @@ export async function searchViaApi(input: ApiSearchInput): Promise<ApiSearchResu
     throw new SearchApiError(detail === undefined ? reason : `${reason}：${detail}`, response.status);
   }
 
-  const payload: unknown = await response.json();
+  /*
+   * 有界读取（审查 A08）：原来直接 `await response.json()`，没有字节上限。
+   * `kind === "invalid"` 时按「形状不认识」报错 —— 不能把一次协议变更误读成
+   * 「今天没有热点」（空 results 才是合法空结果）。
+   */
+  let payload: unknown;
+  try {
+    const read = await readBoundedJsonResult(response, API_SEARCH_BODY_LIMIT);
+    if (read.kind !== "json") {
+      throw new SearchApiError(
+        read.kind === "empty" ? "Search API 返回了空正文" : "Search API 响应不是合法 JSON",
+      );
+    }
+    payload = read.value;
+  } catch (error) {
+    if (error instanceof SearchApiError) throw error;
+    throw new SearchApiError(
+      `Search API 响应读取失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const results = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).results : undefined;
   if (!Array.isArray(results)) {
     // 形状不认识 ≠ 没搜到：后者是 `results: []`（合法）。这里必须报错，
