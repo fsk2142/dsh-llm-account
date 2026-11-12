@@ -60,7 +60,7 @@ describe("开关判定：显式值优先，旧字段作回退", () => {
   });
 
   it("**显式 `false` 优先于旧字段**（用户关了就不该被旧字段重新打开）", () => {
-    expect(autoContinueEnabledOf({ autoContinue: false, autoContinueOnTruncate: true })).toBe(false);
+    expect(autoContinueEnabledOf({ autoContinue: false, autoContinueOnTruncate: true }, { authoritative: true })).toBe(false);
   });
 
   it("旧字段任一为 true → 开启（升级兼容）", () => {
