@@ -36,9 +36,51 @@
  * @module dsh-llm-account/src/client/tps-probe
  */
 
+import { pushLiveChunk, TpsPill } from "./tps-pill";
+
 /** 探针需要的客户端上下文面（只用 `inject`，不碰别的服务）。 */
 export interface TpsProbeContext {
   inject?(names: readonly string[], callback: (scoped: TpsProbeContext) => unknown): unknown;
+}
+
+/** 宿主 `ctx.slots` 的最小面（只认 `register`）。 */
+interface SlotsLike {
+  register?: (spec: Record<string, unknown>, component: unknown) => unknown;
+}
+
+/**
+ * 显示胶囊的注销句柄（**模块级**：它由嵌套注入的回调赋值，回调清理时需要看到它）。
+ *
+ * 单独存一份而不是塞进闭包，是因为同一个 `installTpsProbe` 可能被多次触发
+ * （槽位声明变化时宿主会重跑回调），每次都要先撤掉上一份。
+ */
+let pillDispose: (() => void) | undefined;
+
+/**
+ * 撤销显示胶囊。
+ *
+ * 只在**注册成功过**时才需要调；拿不到句柄时是空操作。
+ */
+function disposePill(): void {
+  const off = pillDispose;
+  pillDispose = undefined;
+  if (typeof off !== "function") return;
+  try {
+    off();
+  } catch (error: unknown) {
+    console.error("[dsh-llm-account] tps pill: dispose failed:", error);
+  }
+}
+
+/**
+ * 释放本次注册产生的一切（事件定义 + 显示胶囊）。
+ *
+ * 各个早退分支都返回它 —— 否则「事件拿到了但显示没挂上」那种半成品状态会留下
+ * 一个没有人喂数据的胶囊。
+ * @returns 注销函数（可重复调用）。
+ */
+function releaseAll(): void {
+  disposePill();
 }
 
 /** 一条 `assistant/live-chunk` 事件里我们关心的形状。 */
@@ -69,6 +111,18 @@ interface TpsProbeDefinition {
 /** 探针用的 Definition kind（必须全局唯一；与插件 id 同前缀，避免撞宿主内置的名字）。 */
 const PROBE_KIND = "llm-account-tps-probe";
 
+/**
+ * 取事件时刻（宿主时间戳优先）。
+ *
+ * 用事件自己的 	ime 而不是 `Date.now()`：同一条流的历史帧重放时也能落回正确的
+ * 相对位置；缺失时才退回当前时间。
+ * @param event - 流式事件。
+ * @returns 毫秒时间戳。
+ */
+function timeOf(event: LiveChunkEvent): number {
+  return typeof event.time === "number" && Number.isFinite(event.time) ? event.time : Date.now();
+}
+
 /** 两次 `console.debug` 之间至少隔多久（毫秒）：流式帧很密，逐帧打会淹没控制台。 */
 const LOG_INTERVAL_MS = 250;
 
@@ -85,18 +139,44 @@ export function installTpsProbe(ctx: TpsProbeContext): void {
     return;
   }
   try {
-    // 嵌套注入：`uiConversation` 不存在时回调不跑，其余注册不受影响。
-    inject(["uiConversation"], (scoped) => {
+    /*
+     * 嵌套注入两个服务：`uiConversation`（吃流式事件）与 `slots`（挂显示胶囊）。
+     *
+     * 两个都走**嵌套注入**而不是顶层 `inject` 数组 —— 服务缺失时只有这个回调不跑，
+     * 不会让整个客户端包激活失败（那会连带让设置页与侧边栏消失）。
+     */
+    inject(["uiConversation", "slots"], (scoped) => {
       try {
+        const slots = (scoped as { slots?: SlotsLike }).slots;
+        // 先挂显示（它不依赖事件是否可用）；失败半径仍只在这一个胶囊。
+        if (typeof slots === "object" && slots !== null && typeof slots.register === "function") {
+          try {
+            const off = slots.register(
+              {
+                name: "conversation.composer.dock",
+                id: "llm-account-tps",
+                // 负 order → 排在官方两个胶囊（轮次/步数 = 0、用量 = 1）的**左边**。
+                order: -1,
+              },
+              TpsPill,
+            );
+            pillDispose = typeof off === "function" ? (off as () => void) : undefined;
+            console.debug("[dsh-llm-account] tps pill: registered into conversation.composer.dock (order -1)");
+          } catch (error: unknown) {
+            console.error("[dsh-llm-account] tps pill: slot registration failed:", error);
+          }
+        } else {
+          console.debug("[dsh-llm-account] tps pill: slots.register is unavailable, skipped");
+        }
         const service = (scoped as { uiConversation?: unknown }).uiConversation;
         if (typeof service !== "object" || service === null) {
           console.debug("[dsh-llm-account] tps probe: uiConversation is not an object, skipped");
-          return () => undefined;
+          return releaseAll;
         }
         const events = (service as { events?: unknown }).events;
         if (typeof events !== "object" || events === null) {
           console.debug("[dsh-llm-account] tps probe: uiConversation.events is unavailable, skipped");
-          return () => undefined;
+          return releaseAll;
         }
         /*
          * **把方法挂在对象上调用，绝不先取出来再调**（2026-11-12 真机崩溃的根因）。
@@ -124,7 +204,7 @@ export function installTpsProbe(ctx: TpsProbeContext): void {
           console.debug(
             `[dsh-llm-account] tps probe: events.register is unavailable; available methods=[${methods.join(", ")}]`,
           );
-          return () => undefined;
+          return releaseAll;
         }
         const off = (target.register as (this: unknown, definition: TpsProbeDefinition) => unknown).call(
           target,
@@ -139,10 +219,12 @@ export function installTpsProbe(ctx: TpsProbeContext): void {
           } catch (error: unknown) {
             console.error("[dsh-llm-account] tps probe: dispose failed:", error);
           }
+          // 事件定义撤销后，显示胶囊也要撤（否则它会留在一个没人喂数据的槽位里）。
+          disposePill();
         };
       } catch (error: unknown) {
         console.error("[dsh-llm-account] tps probe: registration failed:", error);
-        return () => undefined;
+        return releaseAll;
       }
     });
   } catch (error: unknown) {
@@ -210,6 +292,16 @@ function definition(): TpsProbeDefinition {
         chars += add;
         frames += 1;
       }
+      /*
+       * **把这一帧喂给显示层**（2026-11-12 第 2 步）。
+       *
+       * 探针原本只打日志；现在同一次回调顺手推进速度计 —— 避免再注册第二个
+       * 事件定义（宿主要求 kind 全局唯一，多注册一份就多一份维护面）。
+       *
+       * 用事件自己的 `time`（宿主时间戳）而不是 `Date.now()`：同一条流的历史帧
+       * 重放时也能落回正确的相对位置。
+       */
+      pushLiveChunk(match.event.data?.chunk, { turn: match.event.data?.turn, step: match.event.data?.step }, timeOf(match.event));
       log(match.event, "start");
       return { chars, frames };
     },
@@ -219,6 +311,7 @@ function definition(): TpsProbeDefinition {
         chars += add;
         frames += 1;
       }
+      pushLiveChunk(match.event.data?.chunk, { turn: match.event.data?.turn, step: match.event.data?.step }, timeOf(match.event));
       log(match.event, "update");
       return { chars, frames };
     },
