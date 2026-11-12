@@ -4,38 +4,53 @@
  * ## 放在哪
  *
  * 注册进 `conversation.composer.dock`，`order: -1` —— 官方那两个胶囊
- * （轮次/步数 = order 0、用量 = order 1）会排在我们右边，所以它出现在输入框底部
- * 那一行「90 轮 3946 步 · …」的**左边**，正是用户指的位置。
+ * （轮次/步数 = order 0、用量 = order 1）排在右边，所以它出现在输入框底部
+ * 那一行「92 轮 4018 步 · …」的**左边**。
  *
- * ## 为什么是「会话级」而不是「按厂商」
+ * ## 样式为什么写成一串 CSS 变量的 calc（2026-11-12 用户实测反馈）
  *
- * 这个数字只跟当前会话正在流出的字有关，与厂商、账号、模型都无关 —— 所以它**不碰**
- * 任何 vendor schema，也不需要落进设置文档里的厂商字段。
+ * 用户第一版看到的效果：**「字体和官方的不一致」**。根因是我只写了
+ * `display/color/tabular-nums` 三个内联属性，**没有覆盖字号与行高** —— 于是它继承
+ * 容器默认值，和旁边官方胶囊差一档。
  *
- * ## 为什么组件里要跑定时器
+ * 官方胶囊的真实规则（`@deepseek-ai/dsh-client-ui-chat` 的 `StatsPills` 模块）：
  *
- * 用户要的是「像汽车速度表一样逐渐降低为 0」：模型停下后指针按指数衰减滑回。
- * 那意味着**即使没有新事件**显示值也在变，所以用 100ms 定时器驱动重读；
- * 归零（`undefined`）时组件返回 `null`，同时把定时器停掉（不给空闲界面留空转）。
+ * ```
+ * .anchor { min-width:0; font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);
+ *           line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px)); display:inline-flex }
+ * .pill   { border-radius:var(--dsw-radius-sm); color:var(--dsw-alias-label-tertiary);
+ *           font:inherit; font-variant-numeric:tabular-nums; white-space:nowrap;
+ *           background:0 0; border:none; align-items:center; gap:6px; padding:1px 8px; display:inline-flex }
+ * .pill svg { flex:none; width:14px; height:14px }
+ * ```
  *
- * ## 用 `react` 的方式和其他组件一致
+ * 这里逐条照抄成内联样式（不引它的 CSS Module —— 那是宿主私有类名，换版本会变）。
  *
- * 与 `sidebar-card.ts` 同一套：`import { createElement, useEffect, useState } from "react"`
- * —— `react` 由宿主加载器注入（`tsdown.config.ts` 的 `CLIENT_EXTERNALS` 已声明为 external）。
+ * ## 为什么空闲时显示 0 而不是消失（用户明确要求）
+ *
+ * 用户原话：「完全没有会话动作的时候直接显示 0 tok/s 吧，不要消失」。
+ *
+ * 上一版归零就 `return null`，于是模型一停组件就没了 —— 用户看到的正是「好像又没了」。
+ * 现在**始终渲染**：有速度显示速度，没有就显示 `0`。
+ *
+ * ## 为什么定时器要能停也能重启
+ *
+ * 「指针回落」需要即使没有新事件也重算（每 100ms 一次）。但值已经是 0 之后就没必要
+ * 再算了 —— 所以归零时**停表**，等下一帧到达（`notify()`）再重启。
+ * 这样空闲时不会留一个每秒唤醒 10 次的主线程定时器（上一版就是那样，还伴随
+ * 控制台的 `Forced reflow` 警告）。
  *
  * @module dsh-llm-account/src/client/tps-pill
  */
 
-import { createElement, useEffect, useState } from "react";
+import { createElement, useEffect, useState, type ReactElement } from "react";
 
 import { createTpsMeter } from "./tps-meter";
 
 /** 重渲染间隔（毫秒）：100ms 足够顺滑，又不至于像 60fps 那样白烧。 */
 const TICK_MS = 100;
 
-/**
- * 速度计的最小面（便于测试注入替身）。
- */
+/** 速度计的最小面（便于测试注入替身）。 */
 export interface TpsMeterLike {
   push(text: string, at: number): void;
   reading(at: number): number | undefined;
@@ -51,7 +66,7 @@ export interface TpsMeterLike {
 let meter: TpsMeterLike | undefined;
 
 /**
- * 注入/替换速度计（生产由 `installTpsPill` 创建；测试用它放替身）。
+ * 注入/替换速度计（生产由首次 `readingAt` 创建；测试用它放替身）。
  * @param next - 要使用的实例。
  */
 export function useTpsMeter(next: TpsMeterLike): void {
@@ -67,7 +82,7 @@ function ensureMeter(): TpsMeterLike {
   return meter;
 }
 
-/** 订阅者（组件挂载时登记；帧到达或衰减时被通知）。 */
+/** 订阅者（组件挂载时登记；帧到达时被通知）。 */
 const listeners = new Set<() => void>();
 
 /** 通知所有订阅者「数据变了」。 */
@@ -77,12 +92,8 @@ function notify(): void {
 
 /**
  * 推进一帧（由事件定义调用）。
- *
- * `meta`（turn/step）目前**不参与计算**：分组交给宿主的事件 id，重置语义由
- * "换了一轮就重新开始计数" 自然满足（旧的桶会被窗口滑出）。
- * 保留这个参数是为了语义清晰与将来需要时不必改签名。
  * @param chunk - 流式 chunk（含 `type` 与 `text`）。
- * @param meta - 该帧所属的 turn/step（当前未使用）。
+ * @param meta - 该帧所属的 turn/step（当前不参与计算，见下）。
  * @param at - 帧到达时刻（毫秒）。
  */
 export function pushLiveChunk(chunk: unknown, meta: { turn?: unknown; step?: unknown }, at: number): void {
@@ -109,12 +120,13 @@ export function settleLiveStream(at: number): void {
 }
 
 /**
- * 读当前速度（`undefined` = 已归零，组件应隐藏）。
+ * 读当前速度。**空闲时返回 0，而不是 `undefined`**（用户要求始终显示）。
  * @param at - 现在（毫秒）。
- * @returns 估算 tok/s。
+ * @returns 估算 tok/s（非负）。
  */
-export function readingAt(at: number): number | undefined {
-  return meter?.reading(at);
+export function readingAt(at: number): number {
+  const reading = meter?.reading(at);
+  return typeof reading === "number" && Number.isFinite(reading) && reading > 0 ? reading : 0;
 }
 
 /**
@@ -126,51 +138,124 @@ export function readingAt(at: number): number | undefined {
  */
 export function formatRate(value: number): string {
   const clamped = Math.max(0, value);
+  if (clamped === 0) return "0";
   return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10);
 }
 
+/** 与官方 `.pill` 逐条对齐的内联样式（理由见文件头）。 */
+const PILL_STYLE = {
+  boxSizing: "border-box",
+  borderRadius: "var(--dsw-radius-sm)",
+  maxWidth: "100%",
+  color: "var(--dsw-alias-label-tertiary)",
+  font: "inherit",
+  fontVariantNumeric: "tabular-nums",
+  lineHeight: "inherit",
+  whiteSpace: "nowrap",
+  background: "0 0",
+  border: "none",
+  alignItems: "center",
+  gap: "6px",
+  padding: "1px 8px",
+  display: "inline-flex",
+} as const;
+
+/** 与官方 `.anchor` 对齐的外壳样式（字号与行高在这里）。 */
+const ANCHOR_STYLE = {
+  minWidth: "0",
+  fontSize: "calc(var(--dsh-content-font-size-secondary, 13px) - 1px)",
+  lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))",
+  display: "inline-flex",
+} as const;
+
 /**
- * 实时速度胶囊。
+ * 仪表盘图标（16×16 描边，`currentColor`）。
  *
- * 返回 `null` 表示「不显示」—— 值已衰减到 0 时留一个 0 只是噪音。
- * @returns 元素或 `null`。
+ * 为什么自己画：宿主的 `IconGaugeOutlineRegular` 在 `@deepseek-ai/dsh-client-ui-primitives`
+ * 里，而那个包是本插件的 external —— 客户端产物不能直接 import 它的内部几何。
+ * 画一条上弧 + 一枚指针就够认，且不增加任何依赖。
+ * @returns SVG 元素。
+ */
+function GaugeIcon(): ReactElement {
+  return createElement(
+    "svg",
+    {
+      width: 14,
+      height: 14,
+      viewBox: "0 0 16 16",
+      fill: "none",
+      "aria-hidden": "true",
+      focusable: "false",
+      style: { flex: "none", width: "14px", height: "14px" },
+    },
+    createElement("path", {
+      d: "M2.75 11.25A5.25 5.25 0 1 1 13.25 11.25",
+      stroke: "currentColor",
+      strokeWidth: 1.4,
+      strokeLinecap: "round",
+    }),
+    createElement("path", {
+      d: "M8 11.25 10.35 7.4",
+      stroke: "currentColor",
+      strokeWidth: 1.4,
+      strokeLinecap: "round",
+    }),
+  );
+}
+
+/**
+ * 实时速度胶囊。**始终渲染**（空闲时显示 `0 tok/s`）。
+ * @returns 元素。
  */
 export function TpsPill(): unknown {
-  const [value, setValue] = useState<number | undefined>(() => readingAt(Date.now()));
+  const [value, setValue] = useState<number>(() => readingAt(Date.now()));
 
   useEffect(() => {
-    const listener = (): void => setValue(readingAt(Date.now()));
-    listeners.add(listener);
-    /*
-     * 定时器负责**衰减动画**：模型不产字时没有事件，但指针仍要往下滑。
-     * 归零后停表 —— 空闲界面不该留一个永远空转的 interval。
-     */
-    const timer = setInterval(() => {
+    /** 当前运行中的定时器（归零后停、新帧到达再启）。 */
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const stop = (): void => {
+      if (timer === undefined) return;
+      clearInterval(timer);
+      timer = undefined;
+    };
+    const start = (): void => {
+      if (timer !== undefined) return;
+      timer = setInterval(() => {
+        const next = readingAt(Date.now());
+        setValue(next);
+        // 到 0 就停表：没有需要动画的数字了，别继续唤醒主线程。
+        if (next === 0) stop();
+      }, TICK_MS);
+    };
+    const listener = (): void => {
       const next = readingAt(Date.now());
       setValue(next);
-      if (next === undefined) clearInterval(timer);
-    }, TICK_MS);
+      // 有了新数据：指针又要动起来，重启定时器。
+      if (next > 0) start();
+    };
+    listeners.add(listener);
+    if (readingAt(Date.now()) > 0) start();
     return () => {
       listeners.delete(listener);
-      clearInterval(timer);
+      stop();
     };
   }, []);
 
-  if (value === undefined) return null;
   return createElement(
     "span",
-    {
-      "data-composer-stat": "llm-account-tps",
-      "aria-label": `${formatRate(value)} tok/s`,
-      // 内联样式：不绑定宿主 CSS Module 的私有类名（那些会随版本变）。
-      style: {
-        display: "inline-flex",
-        alignItems: "center",
-        color: "var(--dsw-alias-label-tertiary)",
-        fontVariantNumeric: "tabular-nums",
-        whiteSpace: "nowrap",
+    { "data-composer-stat": "llm-account-tps", style: ANCHOR_STYLE },
+    createElement(
+      "span",
+      {
+        style: PILL_STYLE,
+        "aria-label": `实时输出速度（TPS）：${formatRate(value)} tok/s`,
       },
-    },
-    `${formatRate(value)} tok/s`,
+      GaugeIcon(),
+      createElement(
+        "span",
+        { style: { minWidth: "0", overflow: "hidden", textOverflow: "ellipsis" } },
+        `实时输出速度（TPS）：${formatRate(value)} tok/s`,
+      ),
+    ),
   );
 }
