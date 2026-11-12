@@ -169,11 +169,19 @@ const ANCHOR_STYLE = {
 } as const;
 
 /**
- * 仪表盘图标（16×16 描边，`currentColor`）。
+ * 仪表盘图标。
  *
- * 为什么自己画：宿主的 `IconGaugeOutlineRegular` 在 `@deepseek-ai/dsh-client-ui-primitives`
- * 里，而那个包是本插件的 external —— 客户端产物不能直接 import 它的内部几何。
- * 画一条上弧 + 一枚指针就够认，且不增加任何依赖。
+ * ## 为什么用官方的路径数据（2026-11-12 用户反馈「有点小、对比官方不太好看」）
+ *
+ * 第一版我自己画了「一条上弧 + 一枚指针」，但：
+ * - 缺了圆心那个**实心点**，少了辨识度；
+ * - `strokeWidth: 1.4` 比官方粗，小尺寸下糊成一团。
+ *
+ * 现在逐字采用宿主图标集里 `gauge-outline` 的几何（从 `dsh-web-frontend` 的
+ * 图标表读出）：`viewBox 0 0 16 16`、`stroke-width: 1`（官方 regular 档）、
+ * 三段 path（外弧 + 指针 + 圆心实心点）。
+ *
+ * 尺寸仍由外层样式决定（官方 `.pill svg { width:14px; height:14px }`）。
  * @returns SVG 元素。
  */
 function GaugeIcon(): ReactElement {
@@ -188,17 +196,22 @@ function GaugeIcon(): ReactElement {
       focusable: "false",
       style: { flex: "none", width: "14px", height: "14px" },
     },
+    // 外弧
     createElement("path", {
-      d: "M2.75 11.25A5.25 5.25 0 1 1 13.25 11.25",
+      d: "M3.4041 13.096C2.49514 12.187 1.87614 11.0288 1.62537 9.76798C1.37459 8.50716 1.50331 7.20028 1.99525 6.01261C2.48719 4.82494 3.32025 3.80981 4.3891 3.09557C5.45795 2.38134 6.71458 2.00008 8.0001 2C9.28563 2.00008 10.5423 2.38134 11.6111 3.09557C12.68 3.80981 13.513 4.82494 14.005 6.01261C14.4969 7.20028 14.6256 8.50716 14.3748 9.76798C14.1241 11.0288 13.5051 12.187 12.5961 13.096",
       stroke: "currentColor",
-      strokeWidth: 1.4,
-      strokeLinecap: "round",
+      strokeWidth: 1,
     }),
+    // 指针
     createElement("path", {
-      d: "M8 11.25 10.35 7.4",
+      d: "M8 8.49994L11.6114 4.88855",
       stroke: "currentColor",
-      strokeWidth: 1.4,
-      strokeLinecap: "round",
+      strokeWidth: 1,
+    }),
+    // 圆心（实心）
+    createElement("path", {
+      d: "M8 9.75C8.69036 9.75 9.25 9.19036 9.25 8.5C9.25 7.80964 8.69036 7.25 8 7.25C7.30964 7.25 6.75 7.80964 6.75 8.5C6.75 9.19036 7.30964 9.75 8 9.75Z",
+      fill: "currentColor",
     }),
   );
 }

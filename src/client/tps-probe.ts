@@ -112,16 +112,50 @@ interface TpsProbeDefinition {
 const PROBE_KIND = "llm-account-tps-probe";
 
 /**
- * 取事件时刻（宿主时间戳优先）。
+/**
+ * 帧到达时刻：**一律用本地墙钟**（2026-11-12 修「速度恒为 0」）。
  *
- * 用事件自己的 	ime 而不是 `Date.now()`：同一条流的历史帧重放时也能落回正确的
- * 相对位置；缺失时才退回当前时间。
- * @param event - 流式事件。
- * @returns 毫秒时间戳。
+ * ## 之前错在哪
+ *
+ * 第一版用 `event.time`（宿主事件的时刻）作为 `meter.push` 的时间轴，而读数时用
+ * `Date.now()`。**两个时钟互相比较**，只要基准不同，`at - latest` 就会算成一个
+ * 很大的值 —— 直接命中「空闲超过 800ms」那条分支，读数恒为 `undefined`（显示 0）。
+ *
+ * 症状正是用户报的两条：**数字一直是 0**，以及「运行一段时间后就不行了」
+ * （组件的「归零就停表」逻辑让它再也不会重启）。
+ *
+ * ## 为什么本地墙钟才是对的
+ *
+ * 这个仪表测的是「**字到达我这台机器的真实速率**」—— 本来就该用本地时钟。
+ * 当初选 `event.time` 的理由（历史重放能落回正确位置）属于回放/审计场景，
+ * 不属于一个实时速度表。
+ *
+ * @param event - 流式事件（仅用于时钟漂移诊断，不参与计时）。
+ * @returns 本地墙钟毫秒。
  */
-function timeOf(event: LiveChunkEvent): number {
-  return typeof event.time === "number" && Number.isFinite(event.time) ? event.time : Date.now();
+function arrivalTime(event: LiveChunkEvent): number {
+  const now = Date.now();
+  /*
+   * 诊断：宿主事件时间与本地时钟明显不一致时**只打一次**，下次换宿主版本
+   * 就能立刻看出「是不是又换了时间基准」。
+   */
+  if (typeof event.time === "number" && Number.isFinite(event.time)) {
+    const drift = now - event.time;
+    if (Math.abs(drift) > DIAGNOSTIC_DRIFT_MS && !driftLogged) {
+      driftLogged = true;
+      console.debug(
+        `[dsh-llm-account] tps probe: event.time differs from local clock by ${drift}ms; using the local clock`,
+      );
+    }
+  }
+  return now;
 }
+
+/** 超过这个差值才打一次时钟漂移诊断（避免每帧刷屏）。 */
+const DIAGNOSTIC_DRIFT_MS = 5_000;
+
+/** 时钟漂移诊断是否已经打过（只打一次，够定位就行）。 */
+let driftLogged = false;
 
 /** 两次 `console.debug` 之间至少隔多久（毫秒）：流式帧很密，逐帧打会淹没控制台。 */
 const LOG_INTERVAL_MS = 250;
@@ -262,7 +296,23 @@ function definition(): TpsProbeDefinition {
   /** 本次流累计收到的字符数。 */
   let chars = 0;
   /** 本次流累计的帧数。 */
+  /** 本次流累计的帧数。 */
   let frames = 0;
+  /**
+   * 最近一次见过的 turn/step 拼成的流 id。
+   *
+   * ## 为什么不能用 `chars === 0` 判 start（2026-11-12 修「运行一段时间后就不行了」）
+   *
+   * 第一版写的是 `role: chars === 0 ? "start" : "update"` —— 判据基于**可变计数器**。
+   * 一旦某一轮真正收到过文本，`chars` 就不再是 0；于是**下一轮的第一个帧**也会被
+   * 报成 `"update"`，而宿主对 `"update"` 要求已有对应 Context —— 没有就直接丢弃。
+   *
+   * 结果：之后每一轮的第一帧都被丢，计数再也起不来 —— 用户看到的正是
+   * 「运行一段时间后就不行了，速度始终 0」。
+   *
+   * 现在看 **id 有没有变**：id 由 turn/step 拼成，换了流就是 `start`。
+   */
+  let lastStreamId: string | undefined;
 
   /** 打一条节流后的日志。 */
   const log = (event: LiveChunkEvent, label: string): void => {
@@ -279,9 +329,15 @@ function definition(): TpsProbeDefinition {
     kind: PROBE_KIND,
     match: (event) => {
       if (event.type !== "assistant/live-chunk") return null;
-      // 首次匹配走 start，之后走 update。用 turn/step 做 id，让宿主能把同一流的更新归到一起。
       const id = `${PROBE_KIND}:${String(event.data?.turn)}:${String(event.data?.step)}`;
-      return { id, role: chars === 0 ? "start" : "update" };
+      /*
+       * **按 id 变化判 start**：第一帧建 Context，之后都是 update。
+       * 这是宿主的约定（`start` 会创建 state，`update` 只更新已存在的 state），
+       * 不能用「计数器是否为 0」这种业务状态来猜。
+       */
+      const isFirstForStream = id !== lastStreamId;
+      lastStreamId = id;
+      return { id, role: isFirstForStream ? "start" : "update" };
     },
     start: (_context, match) => {
       chars = 0;
@@ -293,15 +349,15 @@ function definition(): TpsProbeDefinition {
         frames += 1;
       }
       /*
-       * **把这一帧喂给显示层**（2026-11-12 第 2 步）。
+       * **把这一帧喂给显示层**。
        *
        * 探针原本只打日志；现在同一次回调顺手推进速度计 —— 避免再注册第二个
        * 事件定义（宿主要求 kind 全局唯一，多注册一份就多一份维护面）。
        *
-       * 用事件自己的 `time`（宿主时间戳）而不是 `Date.now()`：同一条流的历史帧
-       * 重放时也能落回正确的相对位置。
+       * 时间用 `arrivalTime`（**本地墙钟**），不用 `event.time`：读数时用的是
+       * `Date.now()`，两个时钟混用会让每次比较都落进「空闲」分支（详见那函数的说明）。
        */
-      pushLiveChunk(match.event.data?.chunk, { turn: match.event.data?.turn, step: match.event.data?.step }, timeOf(match.event));
+      pushLiveChunk(match.event.data?.chunk, { turn: match.event.data?.turn, step: match.event.data?.step }, arrivalTime(match.event));
       log(match.event, "start");
       return { chars, frames };
     },
@@ -311,7 +367,7 @@ function definition(): TpsProbeDefinition {
         chars += add;
         frames += 1;
       }
-      pushLiveChunk(match.event.data?.chunk, { turn: match.event.data?.turn, step: match.event.data?.step }, timeOf(match.event));
+      pushLiveChunk(match.event.data?.chunk, { turn: match.event.data?.turn, step: match.event.data?.step }, arrivalTime(match.event));
       log(match.event, "update");
       return { chars, frames };
     },
