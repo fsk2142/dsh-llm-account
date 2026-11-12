@@ -134,18 +134,15 @@ describe("client plugin skeleton", () => {
     // settings mirror (`remote.settings`, for the sidebar toggle store) and the
     // sidebar card's `layout` scope (legacy commandcode client:9331).
     //
-    // 2026-11-12 新增两条：实时 tok/s 的探针（`installTpsProbe`）用嵌套注入拿
-    // `uiConversation`（吃流式事件）与 `slots`（挂显示胶囊）。**必须是嵌套、不能进顶层
-    // `inject` 数组** —— 服务缺失时嵌套注入只会让那个回调不跑，进了顶层则整个客户端包
-    // 激活失败（设置页与侧边栏会一起消失）。这条断言正是钉住那个决定。
-    // 两次 `apply` 各注入一次，所以每项是两条。
+    // 2026-11-12：曾经这里还有一对 `["uiConversation", "slots"]`（实时 tok/s 的探针）。
+    // 那个功能已拆成独立插件 `dsh-token-tps-stats`，所以本包的嵌套注入回到四项。
+    // 这条断言的价值不变：它钉住「哪些服务走嵌套注入」，而嵌套的全部理由都是
+    // **不进顶层 `inject` 数组**（顶层缺失会让整个客户端包激活失败）。
     expect(harness.injectedServices).toEqual([
       ["remote.settings"],
       ["layout"],
       ["remote.credentials"],
-      ["uiConversation", "slots"],
       ["remote.credentials"],
-      ["uiConversation", "slots"],
     ]);
 
     // Page copy namespace registered once (only the first instance registers the page).
