@@ -1904,17 +1904,33 @@ network 失败时只记**本家**，换模型时只排除「最近 60 秒内失�
 
 现在三种信号都认，并且**默认行为不变**（`autoContinue` 仍是 `default(false)`，用户选的 A）。
 
-### 一个自己写错又改对的地方
+### 两个自己写错又改对的地方
 
-新增的 `autoContinueEnabledOf(document)` 第一版写成：
+**① `autoContinueEnabledOf` 用 `hasOwn` 判「用户写过没有」**
 
-```ts
-if (Object.hasOwn(document, "autoContinue") && document["autoContinue"] === true) return true;
-```
-
+第一版写成 `Object.hasOwn(document, "autoContinue") && document["autoContinue"] === true`。
 于是「显式 `false` + 旧字段 `true`」会错误地返回 `true` —— 用户在界面上**关掉**之后，
-残留的旧字段又把它重新打开了。测试立刻报红（`expected true to be false`），改成
-「`hasOwn` 存在就直接以它的值为准」。
+残留的旧字段又把它重新打开了。测试报红后改成「`hasOwn` 存在就直接以它的值为准」。
+
+**② 但「以它的值为准」在解析后的文档上同样是错的**（审计时才发现的）
+
+用探针实测 `schemastery` 的行为：`z.boolean().default(false)` 解析后**会把字段填成 `false`**，
+于是 `Object.hasOwn(parsed, "autoContinue")` **恒为 `true`** ——
+「用户没配过」与「用户显式关着」在解析后的文档里**长得一模一样**。
+
+后果：升级用户（只写过 `autoContinueOnTruncate: true`、`autoContinue` 被填成 `false`）
+会被**静默关掉自动继续** —— 而 opendesign / opencode 只有解析后的文档，
+这个 bug 在那两家上是**必然发生**的。
+
+现在按「有没有原始文档」分两种模式（`autoContinueEnabledOf(document, { authoritative })`）：
+
+| 传入的文档 | `authoritative` | 判据 |
+| --- | --- | --- |
+| 原始文档（未经 schema 解析，如 commandcode 的 `rawDocument`） | `true` | `hasOwn` —— 显式 `false` 优先 |
+| 解析后的文档（另两家目前只有这一份） | 缺省 | 只看值 —— 任一条 `true` 即开启（**宁开不关**） |
+
+非权威模式的代价如实记：**「显式关掉 + 旧字段残留 true」会被旧字段复活**。
+彻底解决需要另两家也读原始文档，留给下一版。
 
 ### 一个已知限制（如实记录）
 
