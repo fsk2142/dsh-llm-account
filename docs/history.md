@@ -1749,3 +1749,74 @@ rows.find(ref === 目标账号) → undefined（这份读数里根本没这个�
 
 
 
+
+---
+
+## 2.2.0：tok/s 拆成独立插件（2026-11-12）
+
+`dsh-llm-account` 曾短暂承载过「实时 tok/s」胶囊（2.1.25–2.1.31）。它跟账号、额度、
+厂商全都无关 —— 只跟「当前会话正在流出多少字」有关 —— 所以拆成了独立插件
+`dsh-token-tps-stats`（同目录，`C:\Work\dsh-plug-in\dsh-token-tps-stats`，带 HANDOVER）。
+
+本版删除：
+- `src/client/tps-meter.ts` / `tps-pill.ts` / `tps-probe.ts`
+- `src/client/index.ts` 的 import 与那句 `guarded(installTpsProbe)`
+- 两个对应测试文件
+
+两处为它放宽过的断言**恢复严格**：
+- `registry.test.ts` 的嵌套注入清单从 6 条回到 4 条；
+- `bundle-smoke.test.ts` 从「除 tok/s 胶囊外不重复」回到「数量必须完全相等」。
+  后者是临时放宽（假宿主不复刻嵌套注入的 disposer 语义），功能搬走后没有理由再宽。
+
+---
+
+## 2.3.0：审查报告剩下的三项（A06 / A07 / A10）（2026-11-12）
+
+### A06 换模型必须看模态能力
+
+`pickFallbackModel` 原来只比 provider / 模型名 / 窗口 / 档位数，**不看模态**。
+一轮带图的请求在限额后换模型，可能换到只吃 `text` 的模型 —— 图片被**静默丢掉**
+（不报错，模型只是「没看到图」）。
+
+- `FallbackCandidate` 新增 `inputModalities`；
+- `pickFallbackModel` 新增 `requiresImages`：为 `true` 时排除**明确声明**
+  不支持 image 的候选；
+- **未声明模态不排除** —— 缺 `inputModalities` 表示「我们不知道」，
+  一律排除会把「可能丢图」换成「必然换不成」，更糟；
+- 数据一路传上来：`CatalogRow` → `ModelCandidate` → `registry.store()` →
+  三家 `noteCatalogModels`；
+- 新增 `hasImageInput(messages)` 作为三家共用的判据
+  （避免三处各写一遍、必然漏一家）。
+
+### A07 按网关健康判断，替代一刀切
+
+旧写法 `sameGatewayOnly: failureKind === "network"` 把两件事混成一件：
+
+| 真实情况 | 旧行为 | 应该 |
+| --- | --- | --- |
+| 整台机器断网 | 同网关内换，白试 | 不跨网关（对） |
+| **只有 A 家域名挂了 / 被 VPN 分流拦住** | 同网关内换，A 家本来就不可达 | **跨到 B 家救援** |
+
+第二种正是用户实际场景。新增 `core/switching/gateway-health.ts`：
+network 失败时只记**本家**，换模型时只排除「最近 60 秒内失败过的那几家」。
+整网断时它们很快全被记进去（不会无限试），只有一家挂时别家仍可救援。
+
+### A10 台账权限
+
+台账里有 vendor、账号 ref、模型、token 数与时间戳 —— 不含 prompt / 密钥，
+但仍是**用量行为画像**。旧代码不设 `mode`，权限完全取决于进程 umask
+（umask 022 时目录 0755、文件 0644）。
+
+现在目录建 `0700`、日文件建 `0600`。Windows 忽略 `mode`（那一侧靠系统 ACL），
+传入无害、也不需要平台分支。
+
+### A03 仍未做
+
+「断流记成成功」要反转一个已定的产品取舍（现有注释写明「宿主 `FinishReason`
+没有『截断』这一类，故截断保持 `stop`」，且有一对回归测试钉着）。
+**这个需要用户定方向**：半截断流时显示「这一轮失败了」还是「正常结束」。
+
+### 验证
+
+`tsc` 干净；**213 文件 / 2270 用例通过（2 条按平台 skip）**；构建成功；
+产物核实到 `requiresImages` / `excludeProviders` / `gateway-health` / `mode: 384`。
