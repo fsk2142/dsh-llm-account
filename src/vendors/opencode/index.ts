@@ -59,6 +59,7 @@ declare module "@deepseek-ai/cordis" {
 import type { AccountPort, AccountState, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
 import { assignModelsToAccount, CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
+import { autoContinueEnabledOf, wireAutoContinue } from "../auto-continue-wiring";
 import type { IntentLog } from "../../core/recovery";
 import {
   createCredentialsPort,
@@ -626,6 +627,17 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
 
   // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
   disableSettingsAutoForm(ctx, OPENCODE_SETTINGS_NS);
+
+/* 自动继续：本家也要接（2026-11-12 此前只有 commandcode 接了，另两家开关形同虚设）。 */
+wireAutoContinue(
+  ctx,
+  () => ({
+    enabled: autoContinueEnabledOf(document()),
+    maxAttempts: typeof document()["autoContinueMaxAttempts"] === "number" ? (document()["autoContinueMaxAttempts"] as number) : 3,
+    intervalMs: typeof document()["autoContinueIntervalMs"] === "number" ? (document()["autoContinueIntervalMs"] as number) : 2000,
+  }),
+  "opencode",
+);
 
   return { providerId: PROVIDER_ID, settingsNs: OPENCODE_SETTINGS_NS, capabilities, adapter, rotation, intents, accounts, credentials, quota };
 }

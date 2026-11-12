@@ -113,8 +113,26 @@ export function shouldRetryFailure(
 /**
  * 回答被截断时该不该续写。
  *
- * 只认 `finish.reason === "length"`：那是「模型被输出上限截断」的唯一信号。
- * `stop`（正常结束）与 `tool-call`（交给工具）都是**正常**完成，续写它们会破坏对话。
+ * 认**三种**信号：
+ *
+ * - `"max-tokens"`：宿主 `dsh-agent-loop` 内部用的就是这个（`finish.kind ===
+ *   "max-tokens"` → `turnEnds = { kind: "max-tokens" }`）。本插件的三家适配器也把
+ *   厂商的 `length` / `max_tokens` 映射成 `{ kind: "max-tokens" }`；
+ * - `"length"`：厂商原始字面量。留着是为了**探针实现变了也不静默失效** ——
+ *   原来只认 `"length"`，而实际拿到的是 `max-tokens`，于是这条路径从未触发过；
+ * - `"PROVIDER_STREAM_TRUNCATED"`：**网关提前断流**（2026-11-12 审查 A03 后续）。
+ *   那一轮我改成报 `finish: error` + 这个码（不再伪装成 `stop`），于是它也成了
+ *   「回答没写完」的信号 —— 与 `max-tokens` 是同类（都该接着写），区别只在于
+ *   原因是「网关断了」而不是「打到输出上限」。
+ *
+ * `stop`（正常结束）与 `tool-calls`（交给工具）都是**正常**完成，绝不续写。
+ *
+ * ## 断流为什么可以续写，`error` 的其他情况却不行
+ *
+ * 这个函数只看结束原因，看不到「本轮有没有产生工具调用」。所以**调用方必须先
+ * 筛掉带工具调用的轮次** —— 工具调用跑了一半断开时重放，会让工具**重复执行**。
+ * 见 `wireAutoContinue` 与 `applyAutoContinue` 里的那条前置检查。
+ *
  * @param settings - 当前开关与次数。
  * @param finishReason - 本轮的结束原因（形状不可信）。
  * @param attempts - 本轮已自动继续次数。
@@ -127,16 +145,9 @@ export function shouldContinueOnTruncate(
 ): boolean {
   if (!settings.enabled) return false;
   if (attempts >= settings.maxAttempts) return false;
-  /**
-   * 认**两种**写法（2026-10-29）：
-   *
-   * - `"max-tokens"`：宿主 `dsh-agent-loop` 内部用的就是这个（`finish.kind ===
-   *   "max-tokens"` → `turnEnds = { kind: "max-tokens" }`）。本插件的三家适配器也把
-   *   厂商的 `length` / `max_tokens` 映射成 `{ kind: "max-tokens" }`；
-   * - `"length"`：厂商原始字面量。留着是为了**探针实现变了也不静默失效** ——
-   *   原来只认 `"length"`，而实际拿到的是 `max-tokens`，于是这条路径从未触发过。
-   *
-   * `stop`（正常结束）与 `tool-calls`（交给工具）都是**正常**完成，绝不续写。
-   */
-  return finishReason === "max-tokens" || finishReason === "length";
+  return (
+    finishReason === "max-tokens" ||
+    finishReason === "length" ||
+    finishReason === "PROVIDER_STREAM_TRUNCATED"
+  );
 }
