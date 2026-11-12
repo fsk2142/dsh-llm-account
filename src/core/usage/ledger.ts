@@ -258,8 +258,26 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
   /** 读盘 / 缓存命中计数（`stats()` 暴露给测试与审计）。 */
   const counters = { fileReads: 0, cacheHits: 0 };
 
+  /**
+   * 台账目录与文件的权限位（2026-11-12 审查 A10）。
+   *
+   * ## 为什么需要显式权位
+   *
+   * 台账里有 vendor、账号 ref、模型、token 数与时间戳 —— 不含 prompt、不含密钥，
+   * 但它仍然是**用量行为画像**。旧代码只写 `mkdir(dir, { recursive: true })` 与
+   * `appendFile(path, line, "utf8")`，权限完全取决于进程 umask：在 umask 022 的机器上
+   * 目录会是 0755（同机其他用户可读）、文件 0644。
+   *
+   * 显式设成 0700 / 0600 让「只有本用户能读」成为**代码里的契约**，而不是运气。
+   *
+   * ## 为什么在 Windows 上无害
+   *
+   * Windows 没有 POSIX 权限位；`mode` 会被 Node 忽略（目录仍走继承的 ACL）。
+   * 那一侧的隔离由系统 ACL 负责 —— 但传它不会报错，也不需要平台分支。
+   */
   const ensureDirectory = async (): Promise<void> => {
-    ready ??= mkdir(directory, { recursive: true }).then(() => undefined);
+    // `mode` 只在**创建**时生效；已存在的目录不会被改权限（那是用户的目录，不该我们动）。
+    ready ??= mkdir(directory, { recursive: true, mode: 0o700 }).then(() => undefined);
     await ready;
   };
 
@@ -285,7 +303,8 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
       writeChain = writeChain
         .then(async () => {
           await ensureDirectory();
-          await appendFile(pathOf(at), line, "utf8");
+          // `mode` 同样只在**创建**时生效；已存在的日文件保持原权限（不改用户已有的文件）。
+          await appendFile(pathOf(at), line, { encoding: "utf8", mode: 0o600 });
         })
         .catch((error: unknown) => {
           console.warn("[dsh-llm-account] could not append the usage ledger:", error);
@@ -321,11 +340,11 @@ export function createUsageLedger(directory: string, now: () => number = Date.no
         // 保留期内的每一个日文件都清空（`slice` 与读路径同一口径，避免读得到却清不掉）。
         const targets = files.sort().slice(-USAGE_RETENTION_DAYS);
         for (const name of targets) {
-          await writeFile(join(directory, name), "", "utf8");
+          await writeFile(join(directory, name), "", { encoding: "utf8", mode: 0o600 });
         }
         // 目录里一个日文件都没有（新装机器）时也写一个空的今天文件：让「清空」可被观察到，
         // 与以前的行为一致。
-        if (targets.length === 0) await writeFile(pathOf(now()), "", "utf8");
+        if (targets.length === 0) await writeFile(pathOf(now()), "", { encoding: "utf8", mode: 0o600 });
         // 清空改变了文件内容：缓存必须丢掉，否则再读会拿回清空前的记录。
         cache.clear();
       });

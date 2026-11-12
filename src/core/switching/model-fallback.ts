@@ -114,6 +114,19 @@ export interface FallbackCandidate {
   contextWindow?: number;
   /** 推理档位数量。档位越多通常能力越强，作为「接近度」的第二判据。 */
   effortCount?: number;
+  /**
+   * 该模型声明支持的输入模态（`["text"]` / `["text", "image"]` …）。
+   *
+   * ## 为什么换模型必须看它（2026-11-12 审查 A06）
+   *
+   * 这一层原来只比 provider、模型名、窗口与档位数 —— **不看模态**。于是：
+   * 一轮请求带了图片，原模型限额后自动换模型，可能换到一个只吃文本的模型，
+   * 图片被**静默丢掉**（不报错，模型只是「没看到图」）。
+   *
+   * 缺失（`undefined`）表示**厂商没声明**，不是「不支持」——
+   * 见 `pickFallbackModel` 里对「未知」的不对称处理。
+   */
+  inputModalities?: readonly string[];
 }
 
 /** 四级优先的级别（数字越小越优先）。 */
@@ -166,6 +179,38 @@ export function capabilityDistance(current: FallbackCandidate, candidate: Fallba
 }
 
 /**
+ * 本轮请求里**是否带了图片**。
+ *
+ * ## 为什么单独抽出来（2026-11-12 审查 A06）
+ *
+ * 三家的 `#fallbackModel` 都要回答这个问题，才能把 `requiresImages` 传给
+ * `pickFallbackModel`。逻辑分散三处必然漏一家 —— 这与仓库既有的
+ * 「同一逻辑分散多处，迟早漏一家」是同一条纪律。
+ *
+ * 判据只看 **user 消息里的 `type: "image"` 内容块**：宿主的 `ContentBlock` 用这个
+ * 判别式表达图片（`openAiUserContent` 里就是 `block.type === "image"`）。
+ * 形状不可信（跨远程边界），所以每一项都当 `unknown` 收窄。
+ * @param messages - 请求消息列表。
+ * @returns 有图片时为 `true`。
+ */
+export function hasImageInput(
+  messages: readonly { content?: unknown }[] | undefined,
+): boolean {
+  if (!Array.isArray(messages)) return false;
+  for (const message of messages) {
+    if (typeof message !== "object" || message === null) continue;
+    const content = message.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (typeof block === "object" && block !== null && (block as { type?: unknown }).type === "image") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * 从候选里按**四级优先**选一个替代模型。
  *
  * 同一级里有多个候选时**随机**取一个（需求「随机切换」）。为什么不是取第一个：
@@ -181,10 +226,42 @@ export function capabilityDistance(current: FallbackCandidate, candidate: Fallba
 export function pickFallbackModel(
   current: FallbackCandidate,
   candidates: readonly FallbackCandidate[],
-  options: { random?: () => number; excludeOfficial?: boolean; sameGatewayOnly?: boolean } = {},
+  options: {
+    random?: () => number;
+    excludeOfficial?: boolean;
+    sameGatewayOnly?: boolean;
+    /**
+     * 本轮请求**是否带图片**。
+     *
+     * - `true` → 只有**明确声明**支持 image 的候选才合格（未声明的不排除，见下）；
+     * - `false` / 缺省 → 不做模态过滤（老行为）。
+     *
+     * 为什么「未声明」不排除：缺 `inputModalities` 表示**我们不知道**，
+     * 而不是「它一定不支持」。一律排除会让一批没公布模态的模型永远换不过去 ——
+     * 那是把「可能丢图」换成「必然换不成」，更糟。
+     */
+    requiresImages?: boolean;
+    /**
+     * **刚刚网络失败过的网关**（2026-11-12 审查 A07）。
+     *
+     * 替代 `sameGatewayOnly: failureKind === "network"` 这个一刀切：
+     * 那个判断把「整台机器出不去」和「只有 A 家域名连不上」混成一件事，
+     * 在后一种情况下**恰好不让救援**（用户开 VPN 时遇到的就是这种）。
+     *
+     * 现在按网关逐个判断：只有**最近失败过的那些**被排除，其余仍可跨网关救援。
+     * 整网断的时候它们会很快全被记进去，所以也不会无限重试。
+     *
+     * 由调用方从 `core/switching/gateway-health` 取。
+     */
+    excludeProviders?: readonly string[];
+  } = {},
 ): FallbackCandidate | undefined {
   const excludeOfficial = options.excludeOfficial !== false;
   const random = options.random ?? Math.random;
+  /** 本轮是否带图片（`true` 才启用模态闸门）。 */
+  const requiresImages = options.requiresImages === true;
+  /** 刚刚网络失败过的网关（这些不参与跨网关救援，见选项注释）。 */
+  const excludeProviders = new Set(options.excludeProviders ?? []);
   /**
    * **只在同一网关内换**（2026-10-28 加）。
    *
@@ -209,8 +286,29 @@ export function pickFallbackModel(
     if (!isSwitchableProvider(candidate.provider)) return false;
     if (excludeOfficial && isOfficialProvider(candidate.provider)) return false;
     if (sameGatewayOnly && candidate.provider !== current.provider) return false;
+    /*
+     * **网关健康闸门**（2026-11-12 审查 A07）：刚刚网络失败过的目标不参与救援。
+     *
+     * 与 `sameGatewayOnly` 的分工：
+     * - `sameGatewayOnly` 是**调用方的策略选择**（比如用户配了「只在同网关换」）；
+     * - 这一条是**对目标可达性的判断** —— 只有确实刚失败过的那家被排除。
+     *
+     * 于是「整网断」时它们很快全被记进去（不会无限试），
+     * 而「只有 A 家挂」时 B 家仍可选 —— 这正是要救援的情形。
+     */
+    if (excludeProviders.has(candidate.provider)) return false;
     // 「自己」：同网关 + 同 id（同名但不同写法的算合格 —— 那正是第 1 级要找的）。
     if (candidate.provider === current.provider && candidate.model === current.model) return false;
+    /*
+     * **模态闸门**（2026-11-12 审查 A06）：本轮带图片时，排除**明确不支持**图片的候选。
+     *
+     * 判据是「候选自己声明了模态列表、且里面没有 image」——
+     * `inputModalities === undefined`（厂商没公布）不排除，理由见 options 的注释。
+     */
+    if (requiresImages) {
+      const declared = candidate.inputModalities;
+      if (Array.isArray(declared) && !declared.some((modality) => modality === "image")) return false;
+    }
     return true;
   });
   if (usable.length === 0) return undefined;

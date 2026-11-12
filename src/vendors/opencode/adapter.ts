@@ -13,7 +13,8 @@ import { LlmAdapter, LlmError, ReasoningEffortId, ToolCallId, resolveRetryPolicy
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
 
 import type { AccountPort, AccountView, FailureKind, CatalogEntry, CatalogModel, CatalogModelsPort, QuotaPort, Rejection } from "../../core/adapter";
-import { pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
+import { noteNetworkFailure, recentlyNetworkDown } from "../../core/switching/gateway-health";
+import { hasImageInput, pickFallbackModel, type FallbackCandidate as ModelFallbackCandidate } from "../../core/switching/model-fallback";
 import { officialModelName } from "../../core/model-names";
 import { catalogCandidateRevision, delegateStream, noteCatalogModels } from "../model-catalog-registry";
 import { NOOP_USAGE_PORT, type UsagePort } from "../../core/usage/port";
@@ -975,6 +976,17 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
     } catch {
       // 目录读不到：能力信息缺失（排序会给大惩罚），但仍可换同名模型。
     }
+    /*
+     * 本次是 network 失败：把**本家**记进失败表（2026-11-12 审查 A07）。
+     *
+     * 旧写法是 sameGatewayOnly: failureKind === "network"，它把
+     * 「整台机器出不去」和「只有这家域名连不上」混成一件事，于是后一种情况下
+     * **恰好不让救援**（用户开 VPN 时遇到的就是这种）。
+     *
+     * 现在按网关判断：只记本家，换模型时只排除「最近网络失败过的那几家」。
+     * 整网断时它们很快全被记进去（不会无限试），只有一家挂时别家仍可救援。
+     */
+    if (failureKind === "network") noteNetworkFailure(options.provider);
     const picked = pickFallbackModel(
       { provider: options.provider, model: options.model, ...currentMeta },
       // 候选只有「用户已允许的模型」（注册表用 listModels 过滤，只含账号里已显示的）。
@@ -983,9 +995,25 @@ class OpencodeAdapter extends LlmAdapter implements CatalogModelsPort {
         model: item.model,
         ...(item.contextWindow === undefined ? {} : { contextWindow: item.contextWindow }),
         ...(item.effortCount === undefined ? {} : { effortCount: item.effortCount }),
+        // 模态带到判定层：本轮带图时用它排除不识图的候选（审查 A06）。
+        ...(item.inputModalities === undefined ? {} : { inputModalities: item.inputModalities }),
       })),
       // 网络层失败（`network`）不跨网关：换一家走的是同一条路由，必然同样失败。
-      { sameGatewayOnly: failureKind === "network" },
+      {
+        /*
+         * **网关健康闸门**（2026-11-12 审查 A07）。
+         *
+         * 旧写法是 sameGatewayOnly: failureKind === "network" —— 那个判断把
+         * 「整台机器出不去」和「只有这家域名连不上」混成一件事，于是在后一种情况下
+         * **恰好不让救援**（用户开 VPN 时遇到的就是这种）。
+         *
+         * 现在按网关判断：本次是 network 失败就只排除**本家**，别家仍可救援。
+         * 每次 network 失败都记进 gateway-health，累计几轮后整网断也会自然停手。
+         */
+        excludeProviders: failureKind === "network" ? recentlyNetworkDown() : [],
+        // 本轮带图片时，只允许换到**明确声明**支持 image 的候选（审查 A06）。
+        requiresImages: hasImageInput(options.messages),
+      },
     );
     if (picked === undefined) return undefined;
     this.#deps.onModelFallback?.({ provider: options.provider, model: options.model }, picked);

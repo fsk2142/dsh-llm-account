@@ -62,6 +62,13 @@ export interface CatalogRow {
   contextWindow?: number;
   /** 推理档位数量；没公布时缺省。 */
   effortCount?: number;
+  /**
+   * 该模型支持的输入模态（`["text"]` / `["text","image"]` …）；厂商没公布时缺省。
+   *
+   * 缺省表示**我们不知道**，不是「不支持」—— 换模型时据此排除会误伤没公布模态的模型
+   * （详见 `pickFallbackModel` 的 `requiresImages` 注释）。
+   */
+  inputModalities?: readonly string[];
 }
 
 /** 一个候选：provider + model + 可选能力信息。 */
@@ -70,6 +77,8 @@ export interface ModelCandidate {
   model: string;
   contextWindow?: number;
   effortCount?: number;
+  /** 该模型支持的输入模态；缺省表示厂商没公布。 */
+  inputModalities?: readonly string[];
 }
 
 /** 合并清单的缓存新鲜期（毫秒）：一分钟。失败路径上的目录查询不该每次都打三个端点。 */
@@ -111,6 +120,8 @@ function store(provider: string, rows: readonly CatalogRow[], now: number): void
       model: row.id,
       ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }),
       ...(row.effortCount === undefined ? {} : { effortCount: row.effortCount }),
+      // 模态也一起缓存：换模型时要用它判断「目标能不能吃图」（审查 A06）。
+      ...(row.inputModalities === undefined ? {} : { inputModalities: row.inputModalities }),
     }];
   });
   cache.set(provider, { at: now, value });
