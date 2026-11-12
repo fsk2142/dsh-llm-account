@@ -22,6 +22,7 @@ import type {
   ToolSchema,
 } from "@deepseek-ai/dsh-llm";
 import { createHash, randomUUID } from "node:crypto";
+import { truncatedReason } from "../../core/stream-truncation";
 import {
   assertProjectableContent,
   assistantImageText,
@@ -1162,11 +1163,21 @@ class StreamAssembler {
         EMPTY_RESPONSE_CODE,
       );
     }
-    // 断流兜底的 finish 是**合成**的（正文被截断、没有真正的终止事件），故这里的
-    // length/max_tokens 一律按截断（max-tokens）处理，**不**套用「空内容打上限 → INVALID_REQUEST」
-    // —— 后者只针对 API 真正给出的终止事件（message_stop / finish_reason / finish），见
-    // mapFinishReason 与 messagesStop/openAiChunks/cliChunks。
-    return [...this.#emitMessagesUsage(), ...this.finish(mapFinishReason(this.#messagesFinishReason, true))];
+    /*
+     * **断流 = 失败，不是正常收尾**（2026-11-12 审查 A03，用户选 A）。
+     *
+     * 旧行为按 `#messagesFinishReason` 映射一个 finish —— 命令行与 OpenAI 协议多半落到
+     * `stop`，于是界面看起来一切正常、而回答只写了一半，**不会**触发续写。
+     *
+     * 现在一律交出 `finish: error`：
+     * - 宿主把这一轮标记为失败（不再假装成功）；
+     * - 已流出去的正文仍然留在对话里（用户明确要求保留）；
+     * - 用 `PROVIDER_STREAM_TRUNCATED`（**不在** RETRYABLE_CODES 里）——
+     *   半截回答不能自动重放，那会让已执行的工具调用重跑一遍。
+     *
+     * usage 仍然照常先交：那些 token 是真花掉的，不该因为断流就吞掉计数。
+     */
+    return [...this.#emitMessagesUsage(), ...this.finish(truncatedReason("Command Code"))];
   }
 
   /** 交出尚未发出的 Messages usage；已经交过或根本没有时为 `[]`。 */

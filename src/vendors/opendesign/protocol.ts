@@ -28,6 +28,7 @@ import type {
   ToolSchema,
 } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
+import { truncatedReason } from "../../core/stream-truncation";
 import { assertProjectableContent, assistantImageText, fileBlockText, projectImageBudget } from "../../core/image-projection";
 import { omittedHistoryNotice, trimWireMessages, WireLimitExceededError } from "../../core/wire-limit";
 
@@ -784,7 +785,18 @@ class StreamAssembler {
         EMPTY_RESPONSE_CODE,
       );
     }
-    return this.finish({ kind: "stop" });
+    /*
+     * **断流 = 失败，不是正常收尾**（2026-11-12 审查 A03，用户选 A）。
+     *
+     * 旧行为是 `return this.finish({ kind: "stop" })` —— 界面看起来一切正常，
+     * 而回答其实只写了一半，且**不会**触发任何重试/续写。
+     *
+     * 现在交出 `finish: error`：宿主把这一轮标记为失败（不再假装成功），
+     * 已经流出去的正文仍然留在对话里，用户能看到并自行「继续」。
+     *
+     * 为什么不是 throw：抛错会让已渲染的半截文本在界面上消失 —— 用户明确表示要保留。
+     */
+    return this.finish(truncatedReason("Open Design"));
   }
 }
 

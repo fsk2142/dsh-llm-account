@@ -709,7 +709,7 @@ it("缺凭据的账号被记入拒绝表，后续请求不再重选它（裁决�
 // （dsh-llm/lib/invariant.js:59）。已经出现过 finish 的流不得补第二条。
 // ---------------------------------------------------------------------------
 
-it("Messages 在 message_delta 之后断流（缺 message_stop）时补一条带 stop_reason 的 finish（Fix 2）", async () => {
+it("Messages 在 message_delta 之后断流（缺 message_stop）时交一条**失败** finish（A03，用户选 A）", async () => {
   const chunks = await decodeMessagesSse(
     "event: message_start\n" +
       'data: {"type":"message_start","message":{"usage":{"input_tokens":321,"output_tokens":1}}}\n\n' +
@@ -717,8 +717,8 @@ it("Messages 在 message_delta 之后断流（缺 message_stop）时补一条带
       'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":50}}\n\n',
   );
 
-  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "max-tokens" } }]);
-  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "max-tokens" } });
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "error", failure: { message: expect.any(String), code: "PROVIDER_STREAM_TRUNCATED" } } }]);
+  expect(chunks.at(-1), "断流必须报失败，不能伪装成正常收尾").toMatchObject({ type: "finish", reason: { kind: "error", failure: { code: "PROVIDER_STREAM_TRUNCATED" } } });
   // 断流前已交出的 usage 不重复，合并后的输入计数仍来自 message_start。
   expect(chunks.filter((chunk) => chunk.type === "usage")).toEqual([
     { type: "usage", usage: { inputTokens: 321, outputTokens: 50, cacheReadTokens: 0 } },
@@ -776,22 +776,22 @@ it("畸形网关连发两个 finish_reason：只有一条 finish，先到的结�
   expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "tool-calls" } });
 });
 
-it("openai 流在缺 finish_reason 的情况下 EOF 时补一条 finish，并关闭打开的文本块（Fix 2）", async () => {
+it("openai 流在缺 finish_reason 的情况下 EOF 时交一条**失败** finish，并关闭打开的文本块（A03）", async () => {
   const chunks = await decodeSse("openai", 'data: {"choices":[{"delta":{"content":"hi"}}]}\n');
 
-  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
-  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "error", failure: { message: expect.any(String), code: "PROVIDER_STREAM_TRUNCATED" } } }]);
+  expect(chunks.at(-1), "断流必须报失败").toMatchObject({ type: "finish", reason: { kind: "error" } });
   // 打开的文本块必须被关闭，否则宿主的 "finished with N open block(s)" 仍会拒。
   expect(chunks.filter((chunk) => chunk.type === "block-end")).toEqual([
     { type: "block-end", index: 0, block: { type: "text", text: "hi" } },
   ]);
 });
 
-it("cli 流在缺 finish 事件的情况下 EOF 时补一条 finish（Fix 2）", async () => {
+it("cli 流在缺 finish 事件的情况下 EOF 时交一条**失败** finish（A03）", async () => {
   const chunks = await decodeSse("cli", 'data: {"type":"text-delta","text":"hi"}\n');
 
-  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
-  expect(chunks.at(-1)).toEqual({ type: "finish", reason: { kind: "stop" } });
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "error", failure: { message: expect.any(String), code: "PROVIDER_STREAM_TRUNCATED" } } }]);
+  expect(chunks.at(-1), "断流必须报失败").toMatchObject({ type: "finish", reason: { kind: "error" } });
 });
 
 // ---------------------------------------------------------------------------
@@ -834,8 +834,8 @@ it("Messages 的 tool_use 块在 EOF 仍打开时被排空，且只有一条 fin
   expect(chunks.filter((chunk) => chunk.type === "block-end")).toEqual([
     { type: "block-end", index: 0, block: { type: "tool-call", id: "toolu_eof", name: "read_file", arguments: '{"path":' } },
   ]);
-  // 有内容（tool-call-delta）→ 仍然恰好一条 finish；宿主 FinishReason 没有「截断」取值，故为 stop。
-  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
+  // 有内容（tool-call-delta）→ 仍然恰好一条 finish；但它是**失败** finish（A03：断流不伪装成功）。
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "error", failure: { message: expect.any(String), code: "PROVIDER_STREAM_TRUNCATED" } } }]);
 });
 
 it("有内容但缺终止事件的 openai 流仍然恰好一条 finish 且块已关闭（Fix 3，回归守卫）", async () => {
@@ -859,7 +859,7 @@ it("openai 流只缓冲了工具调用、随后断流：工具调用被交出，
     'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}}]}\n',
   );
 
-  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "stop" } }]);
+  expect(chunks.filter((chunk) => chunk.type === "finish")).toEqual([{ type: "finish", reason: { kind: "error", failure: { message: expect.any(String), code: "PROVIDER_STREAM_TRUNCATED" } } }]);
   expect(openBlockIndices(chunks)).toEqual([]);
   expect(chunks.filter((chunk) => chunk.type === "block-end")).toEqual([
     { type: "block-end", index: 0, block: { type: "tool-call", id: "call_1", name: "read_file", arguments: '{"path":"a.txt"}' } },
