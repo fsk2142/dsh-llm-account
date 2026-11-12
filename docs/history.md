@@ -1820,3 +1820,64 @@ network 失败时只记**本家**，换模型时只排除「最近 60 秒内失�
 
 `tsc` 干净；**213 文件 / 2270 用例通过（2 条按平台 skip）**；构建成功；
 产物核实到 `requiresImages` / `excludeProviders` / `gateway-health` / `mode: 384`。
+
+---
+
+## 2.4.0：断流不再伪装成功（A03）（2026-11-12）
+
+用户选 A：半截断流（网关提前 EOF，没有终止事件）时报**失败**。
+
+旧行为是合成一条 `finish: stop` —— 界面看起来一切正常，而回答只写了一半，
+且**不会**触发任何续写/重试。
+
+### 做法：交 `finish: error`，不 `throw`
+
+抛错会让已流出去的半截文本在界面上消失（宿主视这次 attempt 失败、有的路径会回滚显示）。
+用户明确要求「半截内容仍在对话里」。所以：
+
+- `opendesign` / `commandcode` 的 `endOfStream` 都改为交出
+  `finish({ kind: "error", failure: { code: "PROVIDER_STREAM_TRUNCATED" } })`；
+- 宿主据 `error` 把这一轮标记为失败，已渲染的正文仍然保留；
+- usage 仍然先交（token 是真花掉的，不该被吞）；
+- 工具调用块仍然照常排空交出（Fix 3 的行为不变）。
+
+### 为什么这个码不加入 `RETRYABLE_CODES`
+
+半截回答**不能自动重放** —— 那会让已执行的工具调用重跑一遍，等于重复副作用。
+用户要的是「看到失败 + 自己决定继续」，不是「悄悄重来一次」。
+（打到 `max_tokens` 的自动续写走既有的 `max-tokens` 路径，与这里无关。）
+
+### 测试改动（5 条既有断言改到新语义）
+
+`tests/vendors/commandcode.test.ts` 里 5 条 Fix 2 用例原先断言 reason 是
+`stop` / `max-tokens`，现在改断言 `kind: "error"` + `code: "PROVIDER_STREAM_TRUNCATED"`。
+
+**这是产品行为按用户决定反转，不是「改测试迁就代码」** ——
+每条用例的标题也一起改了，说明它现在钉的是新语义。
+
+新增 `tests/core/stream-truncation.test.ts`（4 条）：
+- reason 是 `error` 而非 `stop`；
+- 文案同时说清「发生了什么 / 已有内容还算数 / 怎么继续」；
+- **三家的 `RETRYABLE_CODES` 都不含这个码**（用源码文本核对，防止日后被加进去）。
+
+### 验证
+
+`tsc` 干净；**214 文件 / 2274 用例通过（2 条按平台 skip）**；构建成功；
+产物核实到 `PROVIDER_STREAM_TRUNCATED` / `truncatedReason` / 文案片段。
+
+---
+
+## 审查报告 12 项：全部处理完毕（2026-11-12）
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| A01 | 目录代际按 key | 2.1.20 |
+| A02 | DSML 工具名白名单 + 不扫推理 | 2.1.20 |
+| A03 | 断流记成成功 | **2.4.0** |
+| A04 / A05 / A09 / A11 / A12 | 已有实现（本次逐一核实） | 无需改动 |
+| A06 | 换模型看模态能力 | **2.3.0** |
+| A07 | 按网关健康判断（替代一刀切 network） | **2.3.0** |
+| A08 | 搜索硬超时 + 有界读取 | 2.1.21 |
+| A10 | 台账权限 0700 / 0600 | **2.3.0** |
+
+顺带：实时 tok/s 于 2.2.0 拆成独立插件 `dsh-token-tps-stats`（带 HANDOVER.md）。
