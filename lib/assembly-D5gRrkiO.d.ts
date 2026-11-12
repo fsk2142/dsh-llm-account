@@ -119,8 +119,9 @@ interface CredentialPort {
  * 额度数字的单位。
  *
  * 目前只有美元一种：Command Code 的额度就是美元口径（旧插件把 `totalCredits` 与两个窗口的
- * `used`/`cap` 一律按 `$` 排版：`lib/client.js` 的 `formatMoney` 第 1516 行、窗口行 3647 行、
- * `/usage` 面板 7742-7743 行）。要加第二种单位，先在这里加成员、再让厂商端口产出它 ——
+ * `used`/`cap` 一律按 `$` 排版 —— 依据是旧插件产物 `lib/client.js` 里的
+ * `formatMoney` 与 `/usage` 面板的渲染，**不记行号**：产物每次构建都会重新编号）。
+ * 要加第二种单位，先在这里加成员、再让厂商端口产出它 ——
  * 界面只认这张表，`undefined` 表示厂商没给单位，就按裸数字显示。
  */
 type QuotaUnit = "usd";
@@ -186,7 +187,7 @@ interface QuotaWindow {
  * 为什么要带上额度与本期结束：套餐决定月度配给（Command Code 的套餐表：Go 10 / Pro 30
  * 或 80 / Max 150 / Ultra 300 美元每月），`credits.credits.monthlyCredits` 是**余额** ——
  * 两者相减才是本期的月度已用。旧插件与官方 CLI 的 `/usage` 都是这么算的
- * （`lib/client.js` 的 `monthlyView` 第 5722-5750 行、CLI 的 `getCreditDepletionPct`）。
+ * （旧插件产物里的 `monthlyView` 与 CLI 的 `getCreditDepletionPct`；行号不记，每次构建都会重新编号）。
  */
 interface QuotaPlan {
   /** 套餐标识原文（如 `individual-goat`）。 */
