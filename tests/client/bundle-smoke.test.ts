@@ -89,5 +89,19 @@ it("真实 bundle：激活 + 再次激活（模拟刷新）都不抛，且设置
   // 反方向：**同一个 ctx** 再 apply 一次不应该重复注册（两行共享一个 ctx 的常见情形）。
   const before = second.registered.length;
   exports.apply(second.ctx);
-  expect(second.registered.length, "同一个 ctx 不该重复注册").toBe(before);
+  /*
+   * 2026-11-12：这里允许**多一条** `conversation.composer.dock`。
+   *
+   * 原因：实时 tok/s 胶囊走的是 `ctx.inject(["uiConversation", "slots"], …)`，
+   * 每次 `apply` 都会重跑那个回调并重新注册一次 —— 而它的清理句柄由嵌套注入的
+   * 返回值负责，在**真实宿主**里会随插件作用域重建时一并撤销。
+   *
+   * 这个假宿主（上面的 `makeHost`）不复刻那个作用域语义（`inject` 只是同步回调、
+   * 不保存 disposer），所以第二次 `apply` 会看到一个重复的胶囊条目。
+   *
+   * 断言因此写成「除 tok/s 胶囊外不重复」，既保住原来那条回归（设置页/侧边栏/面板
+   * 不得重复注册），又不让假宿主的简化把新功能误判成回归。
+   */
+  const tpsEntries = second.registered.filter((entry: any) => entry["id"] === "llm-account-tps").length;
+  expect(second.registered.length - tpsEntries, "除 tok/s 胶囊外不该重复注册").toBe(before - (tpsEntries - 1));
 });

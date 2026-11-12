@@ -35,8 +35,33 @@
 /** 窗口长度（毫秒）：用户要的「1 秒内平均值」。 */
 export const TPS_WINDOW_MS = 1_000;
 
-/** 参与平均的窗口数（用户选的 B 方案：1 秒窗口 + 3 个窗口平均）。 */
-export const TPS_WINDOWS = 3;
+/**
+ * 参与平均的窗口数。
+ *
+ * ## 为什么从 3 提到 9（2026-11-12 用户实测反馈）
+ *
+ * 用户看到实际效果后直接说：**「3 个窗口肯定不行，至少 9 个窗口」**。
+ *
+ * 3 个窗口只覆盖 3 秒，帧级抖动（不同 chunk 大小差很多：一个 `block-start`
+ * 是 0 字符、一个正文 delta 可能是 200 字符）压不住，读数会来回跳。
+ * 9 个窗口覆盖 9 秒，相当于对「最近 9 秒」做平均 —— 数字稳得多，代价是对
+ * 速度**突变**的反应慢约 4~5 秒（模型从慢突然变快时，指针要爬一会儿才到位）。
+ *
+ * 这是用户明确选的取舍：**平滑优先于灵敏**。
+ */
+export const TPS_WINDOWS = 9;
+
+/**
+ * 「最近一帧」的宽限时间（毫秒）。
+ *
+ * 流式帧大约每 250ms 一批，但不保证均匀（工具调用、网关抖动都会拉长间隔）。
+ * 800ms 内的间隔仍视为「还在流」，用**分窗平均**（平滑）；
+ * 超过它才认为「停了」，改用**指数衰减**（指针回落）。
+ *
+ * 没有这个宽限的话，9 个窗口会把「停下」这件事延迟到 9 秒后才反映出来 ——
+ * 指针会先僵在原地，再突然掉下去，那不像速度表。
+ */
+export const TPS_IDLE_GRACE_MS = 800;
 
 /**
  * 指针回落的**时间常数**（毫秒）。
@@ -147,10 +172,17 @@ export interface TpsMeter {
  * @param options - `windowMs` / `windows` / `decayMs` 可注入（测试用），缺省见常量。
  * @returns 速度计。
  */
-export function createTpsMeter(options: { windowMs?: number; windows?: number; decayMs?: number } = {}): TpsMeter {
+export function createTpsMeter(options: { windowMs?: number; windows?: number; decayMs?: number; idleGraceMs?: number } = {}): TpsMeter {
   const windowMs = options.windowMs ?? TPS_WINDOW_MS;
   const windows = options.windows ?? TPS_WINDOWS;
   const decayMs = options.decayMs ?? TPS_DECAY_MS;
+  /**
+   * 空闲宽限（毫秒）：超过它才认为「已经停了」，改走指针衰减。
+   *
+   * 不设上限就把它绑到 `windows × windowMs`：9 窗口时那会是 9 秒，
+   * 而指针僵在高位 9 秒不像仪表 —— 所以保持一个固定的、与窗口数无关的短值。
+   */
+  const idleGraceMs = options.idleGraceMs ?? TPS_IDLE_GRACE_MS;
   /** 保留这么长时间的数据：`windows × windowMs`。 */
   const spanMs = windowMs * windows;
   /** 按**毫秒桶**聚合：同一毫秒内的帧合并，避免逐帧存一个对象。 */
@@ -168,9 +200,41 @@ export function createTpsMeter(options: { windowMs?: number; windows?: number; d
     }
   };
 
-  /** 按窗口算分窗平均；窗口里一个字节都没有时返回 `undefined`。 */
+  /**
+   * 按窗口算分窗平均。
+   *
+   * ## 空窗要不要参与平均（2026-11-12 改）
+   *
+   * 第一版是「**空窗不参与**」：只要有窗口收到字就只对非空窗口求平均。
+   * 那样在「稳定输出」时很准，但在**9 个窗口**下会出问题 ——
+   * 用户明确说 3 个不够、要 9 个，而 9 窗口的意义就是「对最近 9 秒做平均」。
+   * 如果仍然跳过空窗，那么**停顿 5 秒后重启输出**时，读数会拿「2 个非空窗口」求平均，
+   * 得到接近瞬时速度的高值 —— 那等于把 9 窗口的平滑作用抵消掉了。
+   *
+   * 现在：**一旦窗口里还有数据，就把空窗按 0 计入平均**。
+   * 这正是「最近 9 秒的平均速度」，停下来时数字会自然往下走，
+   * 与用户要的「像速度表一样逐渐降低」是同一件事的两面。
+   *
+   * 唯一的例外是**完全空闲**（用 {@link TPS_IDLE_GRACE_MS} 判断）：
+   * 那时不再用分窗平均（它会僵在高位好几种钟），改由指针衰减。
+   * @param at - 现在（毫秒）。
+   * @returns 估算 tok/s；窗口里完全没有数据时 `undefined`。
+   */
   const windowedRate = (at: number): number | undefined => {
-    const rates: number[] = [];
+    /** 最近一次收到帧的时刻（判断是否还在流）。 */
+    let latest: number | undefined;
+    for (const key of buckets.keys()) {
+      if (latest === undefined || key > latest) latest = key;
+    }
+    /*
+     * **空闲判断**：`settle` 之后，或最后一批帧距今超过宽限时间 → 交给指针衰减，
+     * 不要让 9 个窗口把「已经停了」这件事拖成「还显示高位」。
+     */
+    if (settled || latest === undefined || at - latest > idleGraceMs) return undefined;
+
+    let sum = 0;
+    let used = 0;
+    let anyData = false;
     for (let index = 0; index < windows; index += 1) {
       const from = at - (index + 1) * windowMs;
       const to = at - index * windowMs;
@@ -189,12 +253,18 @@ export function createTpsMeter(options: { windowMs?: number; windows?: number; d
           other += slice.other;
         }
       }
-      if (cjk === 0 && other === 0) continue;
-      // 空窗不参与，避免把「停顿」算成「变慢」。
-      rates.push((tokensOf({ cjk, other }) / windowMs) * 1_000);
+      const windowed = tokensOf({ cjk, other });
+      if (windowed > 0) anyData = true;
+      /*
+       * **不再跳过空窗**：一旦这段时间里有过输出，空窗就按 0 计入。
+       * 这才是「最近 N 秒的平均速度」；跳过空窗会系统性高估（详见本方法顶部说明）。
+       */
+      if (!anyData) continue;
+      sum += (windowed / windowMs) * 1_000;
+      used += 1;
     }
-    if (rates.length === 0) return undefined;
-    return rates.reduce((total, rate) => total + rate, 0) / rates.length;
+    if (!anyData || used === 0) return undefined;
+    return sum / used;
   };
 
   return {
