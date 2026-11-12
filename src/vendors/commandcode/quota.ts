@@ -37,7 +37,7 @@ import {
 /**
  * 本适配器产出的 `QuotaWindow.key` 词表（`QuotaWindow.key` 是字符串，这里只做文档与
  * 调用方收窄用）。**key 自带单位含义**，本适配器这三种 key 下 `used`/`cap` 一律是**美元
- * 口径的额度**（旧插件把窗口行与总消耗一律按 `$` 排版：窗口行 `lib/client.js` 第 3647 行、
+ * 口径的额度**（旧插件把窗口行与总消耗一律按 `$` 排版：窗口行的渲染与总消耗口径；行号不记，每次构建都会重新编号）。
  * `/usage` 面板第 7742 行、`formatMoney` 第 1516 行；线上实测 5 小时上限 14 = GOAT 月度
  * 70 的 1/5）：
  * - `"fiveHour"` / `"weekly"`：端点公布的限额窗口（`windowLimits.fiveHour` / `.weekly`）；

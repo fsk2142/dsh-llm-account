@@ -1694,7 +1694,7 @@ rows.find(ref === 目标账号) → undefined（这份读数里根本没这个�
 
 ### 用户报的现象
 
-截图：`fsk2142@foxmail.com`（Open Design）那张卡显示
+截图：某个 Open Design 账号那张卡显示
 「**账单摘要读取失败（账单接口不可达（`fetch failed`））：套餐信息与额度换算单位暂时缺失**」，
 但**同一张卡下面的 5 小时 / 每周额度是有数字的**（35% / 33%）。
 用户原话：「这个版本在读区账号时候经常会出现问题，尤其是刷新的时候如果读取不到就不显示了」。
@@ -1756,7 +1756,7 @@ rows.find(ref === 目标账号) → undefined（这份读数里根本没这个�
 
 `dsh-llm-account` 曾短暂承载过「实时 tok/s」胶囊（2.1.25–2.1.31）。它跟账号、额度、
 厂商全都无关 —— 只跟「当前会话正在流出多少字」有关 —— 所以拆成了独立插件
-`dsh-token-tps-stats`（同目录，`C:\Work\dsh-plug-in\dsh-token-tps-stats`，带 HANDOVER）。
+`dsh-token-tps-stats`（与 `dsh-llm-account` 同级的独立仓库，带 HANDOVER.md）。
 
 本版删除：
 - `src/client/tps-meter.ts` / `tps-pill.ts` / `tps-probe.ts`

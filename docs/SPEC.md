@@ -366,7 +366,7 @@ wantedRow（传入的 ref）
 
 1. `safety_snapshot` 快照当前组合。
 2. 构建新包（`pnpm install` + `pnpm build`）。
-3. 本地以 `file:C:/Work/dsh-llm-account` 形式添加（仓库里已有同类先例：`dsh-fpga-workbench`）。
+3. 本地以 `file:<仓库绝对路径>` 形式添加（仓库里已有同类先例：`dsh-fpga-workbench`）。
 4. 从 profile 依赖里移除两个旧包（**必须移除，不能并存**：两个 bundle 会插入相同的行 id）。
 5. 重启 dsh，刷新页面验证。
 6. 回退：恢复快照并重新安装两个旧包（设置命名空间未变，账号与配置一直都在）。
