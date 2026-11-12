@@ -14,6 +14,7 @@
 import { COPY } from "./copy";
 import { createConnectedPage, registerSharedSurfaces, startSharedState, type ClientSeamContext } from "./seams";
 import { applyShell, PAGE_LOCALE_NS, VENDORS } from "./shell";
+import { installTpsProbe } from "./tps-probe";
 
 /**
  * Debug counter: how many times the host called `apply` (plan 1c reads it to
@@ -122,5 +123,17 @@ export function apply(ctx: unknown): void {
         }),
     }),
   );
+  /*
+   * **实时 tok/s 的探针**（2026-11-12，第 1 步）。
+   *
+   * 放在所有既有注册**之后**、并且单独 guarded：探针本身写错了也碰不到设置页
+   * 与侧边栏的注册（那些已经各自 guarded、并且先执行）。
+   *
+   * 它走**嵌套注入**（`ctx.inject(["uiConversation"], …)`）而不是顶层 `inject` 数组：
+   * 服务缺失只会让这一个回调不跑，不会让整个客户端包激活失败。
+   *
+   * 目前它只往控制台打日志，不渲染 UI、不写设置。验证通过后才升级成真正的读数。
+   */
+  guarded("tps probe (assistant/live-chunk reachability)", () => installTpsProbe(seamContext));
 }
 
