@@ -1881,3 +1881,51 @@ network 失败时只记**本家**，换模型时只排除「最近 60 秒内失�
 | A10 | 台账权限 0700 / 0600 | **2.3.0** |
 
 顺带：实时 tok/s 于 2.2.0 拆成独立插件 `dsh-token-tps-stats`（带 HANDOVER.md）。
+
+---
+
+## 2.5.0：自动继续接到另两家 + 断流触发续写（2026-11-12）
+
+用户问「断流后不会自动继续吗」—— 查下来是**两个独立的缺陷**。
+
+### 缺陷一：自动继续只有 commandcode 接了
+
+`applyAutoContinue` 原本只在 commandcode 的 `apply` 里调用。opendesign / opencode
+连调用都没有 —— 界面上可见的「自动继续」开关在那两家上**从来不会生效**。
+
+接线本身有四个部分（`agent/pre-step` 修补、`session/event` 记 finish、
+`agentOfCurrentRun` 选 inbox、`applyAutoContinue` 本身），三份复制必然漂移，
+所以新增 `src/vendors/auto-continue-wiring.ts`，两家各调一次 `wireAutoContinue`。
+
+### 缺陷二：断流不在续写判据里
+
+`shouldContinueOnTruncate` 原来只认 `max-tokens` / `length`。A03 把断流改成
+`finish: error` + `PROVIDER_STREAM_TRUNCATED` 之后，断流就完全落在自动续写覆盖之外。
+
+现在三种信号都认，并且**默认行为不变**（`autoContinue` 仍是 `default(false)`，用户选的 A）。
+
+### 一个自己写错又改对的地方
+
+新增的 `autoContinueEnabledOf(document)` 第一版写成：
+
+```ts
+if (Object.hasOwn(document, "autoContinue") && document["autoContinue"] === true) return true;
+```
+
+于是「显式 `false` + 旧字段 `true`」会错误地返回 `true` —— 用户在界面上**关掉**之后，
+残留的旧字段又把它重新打开了。测试立刻报红（`expected true to be false`），改成
+「`hasOwn` 存在就直接以它的值为准」。
+
+### 一个已知限制（如实记录）
+
+`shouldContinueOnTruncate` **只看结束原因**，看不到「本轮有没有产生工具调用」。
+带工具调用的断流若自动续写，会让工具**重复执行**。
+
+这一点尚未在接线层筛掉 —— 要解决需要先验证宿主在 `assistant/message` 里能否稳定
+给出「本轮有 tool-call」这个事实。已写在 `shouldContinueOnTruncate` 的注释里，留给下一版。
+
+### 验证
+
+`tsc` 干净；**215 文件 / 2283 用例通过（2 条按平台 skip）**；构建成功；
+产物核实到 `wireAutoContinue` / `autoContinueEnabledOf` / `PROVIDER_STREAM_TRUNCATED`。
+新增 9 条测试（断流触发续写、默认关闭不续写、次数上限、开关优先级）。
