@@ -181,7 +181,23 @@ export type DiscoveryProblem =
  * @returns 快照与失败诊断（读不到时快照为空数组、problem 有值）。
  */
 export async function discoverVendors(ctx: ClientSeamContext, entries: readonly VendorEntry[]): Promise<VendorDiscovery> {
-  const settings = remoteOf(ctx)?.settings;
+  /*
+   * **属性访问本身也要兜住**（2026-11-12 真机报障）。
+   *
+   * `remoteOf(ctx)?.settings` 的可选链只挡 `remote` 为空，**挡不住 get 陷阱抛错**：
+   * 宿主的 `ctx.remote` 是 cordis 服务代理，读一个**没注入过**的成员会直接抛
+   * `cannot get property "remote.settings" without inject`。
+   *
+   * 这里是设置页的厂商发现路径 —— 抛出去就等于「设置页打不开」。
+   */
+  let settings: RemoteSettings | undefined;
+  try {
+    const remote = remoteOf(ctx);
+    const candidate = remote === undefined ? undefined : (remote as { settings?: unknown }).settings;
+    settings = typeof candidate === "object" && candidate !== null ? (candidate as RemoteSettings) : undefined;
+  } catch {
+    settings = undefined;
+  }
   if (settings === undefined || typeof settings.describe !== "function") {
     return {
       snapshots: [],
@@ -576,13 +592,31 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
   };
 
   const start = (): void => {
-    if (remote?.$mount === undefined || typeof remote.$mount !== "function") {
-      failure = `the host remote service has no $mount(); the ${USAGE_NAMESPACE} remote cannot be used`;
+    /*
+     * **读 `$mount` 也要兜住**（2026-11-12 真机报障）。
+     *
+     * `remote?.$mount` 的可选链挡不住 get 陷阱：宿主的 `ctx.remote` 是 cordis 服务代理，
+     * 读一个**没注入过**的成员会直接抛。这里读的是 `$mount` 本身 —— 同样会抛。
+     *
+     * 抛出去时这条链路是从渲染路径过来的，表现就是整块子树崩。降级成「没有 $mount」，
+     * 与真正的宿主不提供 `$mount` 同一种处理（那个分支本来就有可读的失败原因）。
+     */
+    let mount: ((contribution: { package: string; descriptors: readonly unknown[] }) => Promise<() => void>) | undefined;
+    try {
+      const candidate = remote === undefined ? undefined : (remote as { $mount?: unknown }).$mount;
+      mount = typeof candidate === "function"
+        ? (candidate as (contribution: { package: string; descriptors: readonly unknown[] }) => Promise<() => void>)
+        : undefined;
+    } catch {
+      mount = undefined;
+    }
+    if (mount === undefined) {
+      failure = `the host remote service has no usable $mount(); the ${USAGE_NAMESPACE} remote cannot be used`;
       notify();
       return;
     }
-    void remote
-      .$mount({ package: USAGE_PACKAGE, descriptors: usageDescriptors() })
+    void mount
+      .call(remote, { package: USAGE_PACKAGE, descriptors: usageDescriptors() })
       .then(
         (dispose) => {
           if (cancelled) {
@@ -3881,13 +3915,39 @@ export function resetSeams(): void {
  *
  * 卡片容器是独立组件，拿不到设置页容器 state 里的那份 —— 所以从上下文里现取（挂载完成后由
  * Gateway 提供，见 `mountUsageRemote`）。
+ *
+ * ## 为什么整个属性访问都包在 try/catch 里（2026-11-12 真机报障）
+ *
+ * 原来的写法是 `const namespace = remote?.[USAGE_NAMESPACE];`，看起来「安全」——
+ * 但可选链只挡住 `remote` 是 `null`/`undefined`，**挡不住访问属性本身抛错**。
+ *
+ * 宿主的 `ctx.remote` 是一个 **cordis 服务代理**：读它上面**没有注入过**的命名空间时，
+ * get 陷阱直接抛
+ *
+ * ```
+ * Error: cannot get property "remote.llm-account" without inject
+ * ```
+ *
+ * 复现条件正好是「浏览器已加载新 bundle、而宿主侧命名空间还没挂上」的那个窗口 ——
+ * 用户没重启、页面却重新拉了 `client.js` 时就是这个状态。于是这一行从**渲染路径**上抛出去，
+ * 卡片与设置页子树一起崩（控制台里那两条 `without inject` 就是它，只是出现在两处调用链）。
+ *
+ * 修法：把**取属性**这一步也纳入 try —— 与 `remoteOf` 同一条纪律（那个函数早就写了
+ * 「永不抛错」，只是这里没沿用）。
+ *
  * @param ctx - 客户端上下文。
- * @returns 命名空间；还没挂上时为 `undefined`。
+ * @returns 命名空间；还没挂上、或宿主代理拒绝读时为 `undefined`（调用方按「不可用」降级）。
  */
 function usageNamespaceOf(ctx: ClientSeamContext): UsageNamespace | undefined {
   const remote = remoteOf(ctx);
-  const namespace = remote?.[USAGE_NAMESPACE];
-  return typeof namespace === "object" && namespace !== null ? (namespace as UsageNamespace) : undefined;
+  if (remote === undefined) return undefined;
+  try {
+    const namespace = (remote as Record<string, unknown>)[USAGE_NAMESPACE];
+    return typeof namespace === "object" && namespace !== null ? (namespace as UsageNamespace) : undefined;
+  } catch {
+    // 未注入 / 代理拒绝 / 服务已卸载 —— 一律按「还没挂上」处理。
+    return undefined;
+  }
 }
 
 /**
@@ -3910,7 +3970,18 @@ export async function saveSettings(
   fields: readonly { key: string; value: unknown }[],
   revision: number,
 ): Promise<string | undefined> {
-  const settings = remoteOf(ctx)?.settings;
+  /*
+   * 同 `discoverVendors`：`ctx.remote` 是服务代理，读未注入的成员会抛 —— 这里包住，
+   * 把「拿不到设置服务」变成一句可读的失败原因而不是一次渲染崩溃。
+   */
+  let settings: RemoteSettings | undefined;
+  try {
+    const remote = remoteOf(ctx);
+    const candidate = remote === undefined ? undefined : (remote as { settings?: unknown }).settings;
+    settings = typeof candidate === "object" && candidate !== null ? (candidate as RemoteSettings) : undefined;
+  } catch {
+    settings = undefined;
+  }
   if (settings === undefined || typeof settings.mutate !== "function") return "the host settings service is unavailable";
   if (fields.length === 0) return undefined;
   const ops = fields.map((field) => ({ op: "set" as const, path: [field.key], value: field.value }));
