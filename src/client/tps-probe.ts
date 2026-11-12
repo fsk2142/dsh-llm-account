@@ -93,14 +93,46 @@ export function installTpsProbe(ctx: TpsProbeContext): void {
           console.debug("[dsh-llm-account] tps probe: uiConversation is not an object, skipped");
           return () => undefined;
         }
-        const events = (service as { events?: { register?: unknown } }).events;
-        if (typeof events !== "object" || events === null || typeof events.register !== "function") {
-          console.debug("[dsh-llm-account] tps probe: uiConversation.events.register is unavailable, skipped");
+        const events = (service as { events?: unknown }).events;
+        if (typeof events !== "object" || events === null) {
+          console.debug("[dsh-llm-account] tps probe: uiConversation.events is unavailable, skipped");
           return () => undefined;
         }
-        const register = events.register as (definition: TpsProbeDefinition) => unknown;
-        const off = register(definition());
-        console.debug("[dsh-llm-account] tps probe: registered (waiting for assistant/live-chunk)");
+        /*
+         * **把方法挂在对象上调用，绝不先取出来再调**（2026-11-12 真机崩溃的根因）。
+         *
+         * 第一次实现写的是：
+         *
+         * ```ts
+         * const register = events.register as (...) => unknown;
+         * const off = register(definition());   // ← this 丢了
+         * ```
+         *
+         * 而宿主的 `register` 是 **class 方法**，内部第一句就是
+         * `this.registerDefinition(...)`。把方法赋给变量后 `this` 变成 `undefined`，
+         * 于是抛 `Cannot read properties of undefined (reading 'registerDefinition')`。
+         *
+         * 这不只是 JS 常识问题 —— 它当时**真的在用户的控制台里刷了错误**。现在的写法
+         * `events.register(...)` 保持接收者在原位，`this` 正确绑定。
+         */
+        const target = events as { register?: unknown; registerDefinition?: unknown; registerFallback?: unknown };
+        // 诊断用：把该对象上真实可用的方法名列出来（下次一看日志就知道 API 形状）。
+        const methods = Object.keys(target).filter(
+          (key) => typeof (target as Record<string, unknown>)[key] === "function",
+        );
+        if (typeof target.register !== "function") {
+          console.debug(
+            `[dsh-llm-account] tps probe: events.register is unavailable; available methods=[${methods.join(", ")}]`,
+          );
+          return () => undefined;
+        }
+        const off = (target.register as (this: unknown, definition: TpsProbeDefinition) => unknown).call(
+          target,
+          definition(),
+        );
+        console.debug(
+          `[dsh-llm-account] tps probe: registered (waiting for assistant/live-chunk); events methods=[${methods.join(", ")}]`,
+        );
         return () => {
           try {
             if (typeof off === "function") (off as () => void)();
