@@ -269,11 +269,11 @@ export const VENDORS: readonly VendorEntry[] = [
       },
     ],
   },
-  // —— 功能页（跨厂商）：切换策略 + 网页搜索 ——
+  // —— 功能页（跨厂商）：只剩切换策略（网页搜索已于 2026-11-14 整体移除）——
   //
   // 它**不是**一家厂商：`providerId` 是虚拟值、`rowIds` 指向承载行（本插件的
-  // `llm-commandcode` 配置行）。这两台功能与「用哪家网关」无关，所以单独一张选项卡，
-  // 每台都能用 `featureSwitchEnabled` / `featureSearchEnabled` 整块隐藏。
+  // `llm-commandcode` 配置行）。切换策略与「用哪家网关」无关，所以单独一个条目。
+  // （原来这里还提到 `featureSearchEnabled` —— 那个开关随搜索一起删了。）
   //
   // 容器里所有「按厂商做什么」的路径必须排除它（读状态、读目录、账号表）——
   // 它没有额度、没有模型、没有账号。见 `seams.ts` 的 `availableEntries`。

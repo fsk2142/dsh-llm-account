@@ -913,9 +913,6 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     makeDescriptor("usageExportCsv", "UsageCsv", parseUsageCsv, [
       { name: "limit", typeSymbol: "ExportLimit", parse: parseNumber, optional: true },
     ]),
-    // 密钥实测：加完立刻发一次最小搜索请求，把「能不能用」当场告诉用户。
-    // 需求：「添加了key后就发起一次小请求验证一下是否可用，不可用的话就进行提示」。
-    // 只回结论与原因，**绝不回密钥**。
   ];
 }
 
@@ -945,12 +942,6 @@ export interface UsageNamespace {
    * @param limit - 最多导出多少条（尾部，即最近的）；省略 = 全部。
    */
   usageExportCsv?(limit?: number): Promise<unknown>;
-  /**
-   * 实测一组搜索密钥能不能用（每个引用名发一次最小请求）。
-   *
-   * 可选：老宿主没实现时界面跳过验证 —— 那种情况只显示「已保存」，不谎称已验证。
-   * 返回 `unknown`：真实值是信封，必须 `unwrapRemote`。
-   */
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   /**

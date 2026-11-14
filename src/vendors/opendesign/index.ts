@@ -168,7 +168,7 @@ export const Config: PluginConfigSchema = z.object(
        * 且**只在该账号已勾选的模型里**。
        */
       autoSwitchModelOnQuota: z.boolean().default(false),
-      // 自动继续 / 功能页 / 搜索：**全局**设置，三家 schema 都声明，谁先加载都读到同一个值。
+      // 自动继续 / 功能页：**全局**设置，三家 schema 都声明，谁先加载都读到同一个值。（搜索已移除，2026-11-14）
       // 自动重试（2026-10-29 合并）：一个总开关管两件事 —— 请求失败重试、输出截断续写。
       // 原来分成两个开关，界面上并排的复选框反而让人分不清该开哪个。
       autoContinue: z.boolean().default(false),
@@ -614,10 +614,6 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   allowsModel: (model) => isModelIdVisible(model, normalizeVisibility(document())),
   });
 
-  // 登记本家的**网关访问**（搜索的网关路用）。与上面的目录读口同一形状：provider 只在
-  // commandcode 行注册（三行都注册会撞宿主的 `WEB_DUPLICATE_PROVIDER`），但网关的密钥与
-  // 基地址在本行 —— 各自 apply 时登记进跨行注册表，搜索时现取。
-  //
   /**
    * 当前这次路由注册的句柄；`enabled: false` 时是 `undefined`（行仍然挂载）。
    *

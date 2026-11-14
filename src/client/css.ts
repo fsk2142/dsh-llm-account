@@ -193,17 +193,6 @@ export const PAGE_CSS = `
   top: 50%; transform: translateY(-50%); width: 2px; height: 16px; border-radius: 999px;
   background: var(--dsw-alias-state-business-primary); }
 
-/* ═══ 搜索密钥列表（已添加的那几条） ═══
- * 需求：「添加后那个默认名占的位置太宽，降低一下高度」。
- *
- * 这些是**列表项**，不是可编辑的设置行，所以不复用 14px 字号 + 上下 8px 内边距：
- * 那条设置行给的是「标签 + 说明 + 控件」的三段高度，而这里只有「一个名字 + 一个 ×」。
- * 压到 12px 字号、上下各 2px，并把状态徽标改成同一行的尾注（不再另起一行）。
- */
-.dsl-secret-row { gap: 10px; padding: 2px 0; font-size: 12px; line-height: 18px;
-  border-bottom: none; align-items: center; }
-.dsl-secret-row .dsl-field-text { flex-direction: row; align-items: center; gap: 8px;
-  flex-wrap: nowrap; min-width: 0; font-size: 12px; line-height: 18px; }
 /* 引用名可能很长（DEEPSEEK_API_KEY_12）：省略而不是把行撑宽或把 × 挤出去。 */
 .dsl-secret-row .dsl-mono { min-width: 0; overflow: hidden; text-overflow: ellipsis;
   text-wrap: nowrap; }
@@ -799,7 +788,6 @@ export const CSS_CLASS = {
   failure: "dsl-failure",
   field: "dsl-field",
   /* 密钥列表行：与设置行同一套排布，但矮一档（列表项，不是可编辑的设置行）。 */
-  secretRow: "dsl-secret-row",
   fieldText: "dsl-field-text",
   inline: "dsl-inline",
   inset: "dsl-inset",
