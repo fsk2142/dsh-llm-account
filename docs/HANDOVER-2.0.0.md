@@ -261,7 +261,7 @@ exceeds the allowed input item limit (1003 > 1000 items).
 ## 7. 开发与验证流程
 
 ```powershell
-cd C:\Work\dsh-plug-in\dsh-llm-account
+cd <本仓库目录>
 
 pnpm build          # tsdown，产物进 lib/（lib 是提交的！）
 npx tsc --noEmit    # 类型检查
@@ -328,7 +328,7 @@ tag 已推送。
 ## 9. 安装到本机 profile
 
 ```powershell
-$repo = 'C:\Work\dsh-plug-in\dsh-llm-account'
+$repo = '<本仓库目录>'
 $prof = "$env:USERPROFILE\.dsh\profiles\desktop"
 $target = "$prof\node_modules\dsh-llm-account"
 $stage = "$env:TEMP\dsh-stage"

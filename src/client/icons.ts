@@ -66,11 +66,6 @@ export function RefreshIcon(): ReactElement {
   );
 }
 
-/** 删除一行（叉）。 */
-export function RemoveIcon(): ReactElement {
-  return createElement("svg", FRAME, stroke("M4.5 4.5 11.5 11.5"), stroke("M11.5 4.5 4.5 11.5"));
-}
-
 /** 上移 / 下移的箭头（排序控件用）。 */
 export function MoveIcon(direction: "up" | "down"): ReactElement {
   return createElement(

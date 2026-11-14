@@ -1926,13 +1926,13 @@ network 失败时只记**本家**，换模型时只排除「最近 60 秒内失�
 审计中发现并修掉 7 处：
 
 - `docs/history.md` 里的真实邮箱与一处本机绝对路径 → 脱敏；
-- `docs/SPEC.md` 里的 `file:C:/Work/...` → 改成 `file:<仓库绝对路径>`；
+- `docs/SPEC.md` 里的那一处 `file:<写死的本机盘符路径>` → 改成 `file:<仓库绝对路径>`；
 - 4 处引用 `lib/client.js` 的**硬编码行号**（产物每次构建都会重新编号，必然过期）
   与 1 处「本文件 L354 附近」→ 全部改成按符号定位；
 - `docs/INDEX.md` 补上那 5 个一次性 FIX/REVIEW 文档（它们被 HANDOVER 引用，但索引漏列）。
 
-复核：`C:\Users\FSK` / `C:/Work` / `@foxmail.com` / `@qq.com` / 长密钥形态，
-在 `docs` + `src` + `README.md` 里**全部 0 处**。
+复核：本机用户目录路径、本机工作盘路径、真实邮箱、长密钥形态这四类，
+在 `docs` + `src` + `README.md` 里**全部 0 处**（用正则扫，不把实际串写回本文件）。
 
 ### 验证
 
@@ -2006,6 +2006,21 @@ network 失败时只记**本家**，换模型时只排除「最近 60 秒内失�
 
 ### 验证
 
-`tsc` 干净；**201 文件 / 2,128 用例通过（2 条按平台 skip）**；构建成功；
-产物核实：`applySearch` / `registerSearchProvider` / `probeSearchCredential` / `searchStrategy`
-在 `lib/*.js` 里**全部 0 处**。
+`tsc` 干净；**201 文件 / 2,125 用例通过（2 条按平台 skip）**；构建成功；
+产物核实：`applySearch` / `registerSearchProvider` / `probeSearchCredential` /
+`searchStrategy` / `credentialStatus` / `setCredential` 在 `lib/*.js` 里**全部 0 处**。
+
+### 本版合并的后续清理（同一版本号内）
+
+搜索剥离之后又做了两轮收尾，都不升版本号（用户要求「还是 2.3.0」）：
+
+1. **清掉 `credentialStatus` / `setCredential` 的空转链路** —— 这两个远程方法只剩实现、
+   没有调用方；`page.ts` 的 `credentialBadgeOf` 正则对 25 个字段一个都不匹配
+   （`apiKeyEnv` 结尾是 `Env`、`searchApiKeyRefs` 已删），永远返回 `null`。
+   四环（usage-remote / usage-contract / seams / page）一次清掉，
+   连带删 `core/credential-summary.ts` 与 10 个密钥相关 props。
+2. **修过期注释与界面文案** —— `vendor.features`「切换与搜索」→「切换」；
+   「四张卡片」在 4 个文件里改成「三张」；「三家 schema 都声明搜索」2 处改成事实；
+   删 3 处描述已删代码的孤儿注释、11 行搜索密钥列表 CSS。
+3. **隐私复扫** —— 又发现 4 处本机路径/邮箱（其中 2 处是我自己写回文档的复核清单），
+   全部脱敏；另删 2 个真死代码（`RemoveIcon`、`hasImageBlock`）。

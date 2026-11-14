@@ -296,15 +296,6 @@ function* imageOccurrencesOf(messages: readonly { role?: string; content: readon
 }
 
 /**
- * 一次请求里是否含图片块。
- * @param content - 消息内容块。
- * @returns 是否含图。
- */
-export function hasImageBlock(content: readonly ContentBlock[]): boolean {
-  return content.some((block) => block.type === "image");
-}
-
-/**
  * 取不到字节时的文字占位。
  *
  * **不能静默丢弃**：审查的原话是「流仍正常完成，用户无法知道模型没收到图」。

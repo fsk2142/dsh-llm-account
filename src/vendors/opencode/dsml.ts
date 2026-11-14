@@ -10,7 +10,7 @@
  * <｜DSML｜ calls>
  * <｜DSML｜ invoke name="terminal_send">
  * <｜DSML｜ parameter name="sessionId" string="true">pty-9</｜DSML｜ parameter>
- * <｜DSML｜ parameter name="text" string="true">cd C:\Work\...; Select-String ...</｜DSML｜ parameter>
+ * <｜DSML｜ parameter name="text" string="true">cd <某个目录>; Select-String ...</｜DSML｜ parameter>
  * </｜DSML｜ invoke>
  * </｜DSML｜ calls>
  * ```
