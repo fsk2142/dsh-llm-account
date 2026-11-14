@@ -85,44 +85,17 @@ export type CopyKey =
   | "field.autoContinueMaxAttempts.hint"
   | "field.autoContinueIntervalMs"
   | "field.autoContinueIntervalMs.hint"
-  | "field.searchStrategy"
-  | "field.searchStrategy.hint"
-  | "options.searchGatewayFirst"
-  | "options.searchApiFirst"
-  | "options.searchGatewayOnly"
-  | "options.searchApiOnly"
-  | "field.searchApiKeyRefs"
-  | "field.searchApiKeyRefs.hint"
-  | "options.searchOff"
-  | "search.secretAdd"
-  | "search.secretRemove"
-  | "search.secretEmpty"
-  | "search.secretSave"
-  | "search.secretSaving"
-  | "search.secretPlaceholder"
-  | "search.secretHint"
-  | "search.secretNeedRef"
-  | "search.keyConfigured"
-  | "search.keyMissing"
   /**
-   * 密钥实测（需求：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话
    * 就进行提示」+「或者多增加一个测试按钮，让用户可以自行测试密钥的有效性」）。
    */
-  | "search.keyTest"
-  | "search.keyTesting"
-  | "search.keyOk"
-  | "search.keyInvalid"
-  | "search.keyUnknown"
-  | "field.searchApiKeyEnv"
-  | "field.searchApiKeyEnv.hint"
   | "card.display"
   | "card.display.hint"
   | "card.switching"
   | "card.switching.hint"
-  | "card.search"
-  | "card.search.hint"
   | "card.advanced"
   | "card.advanced.hint"
+  | "credential.configured"
+  | "credential.missing"
   | "vendor.features"
   | "vendor.commandcode"
   | "vendor.opencodeGo"
@@ -486,38 +459,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.autoContinueMaxAttempts.hint": "封顶，防止无限重试烧额度。缺省 3。",
     "field.autoContinueIntervalMs": "重试间隔（毫秒）",
     "field.autoContinueIntervalMs.hint": "每次重试前等待多久。缺省 2000 毫秒；三次重试共约 6 秒。",
-    "field.searchStrategy": "搜索方式",
-    "field.searchStrategy.hint": "网关路：模型调服务端搜索工具，按 token 计费。API 路：直连 /v1/tools/search，按请求次数计费，需填下面的 key。",
-    "options.searchGatewayFirst": "网关优先（省 API 余额）",
-    "options.searchApiFirst": "API 优先（省 token）",
-    "options.searchGatewayOnly": "只用网关",
-    "options.searchApiOnly": "只用 API",
-    "field.searchApiKeyRefs": "DeepSeek API key 引用名",
-    "field.searchApiKeyRefs.hint": "凭据库里的引用名（非明文）。多个用逗号分隔，按顺序轮替：前一个无效或余额不足时换下一个。",
-    "options.searchOff": "不启用网页搜索",
-    "search.secretAdd": "添加密钥",
-    "search.secretRemove": "删除",
-    "search.secretEmpty": "还没有添加密钥。",
-    "search.secretSave": "保存密钥",
-    "search.secretSaving": "保存中…",
-    "search.secretPlaceholder": "粘贴 DeepSeek API key",
-    "search.secretHint": "密钥只写入本机凭据库，设置文件里不留明文。",
-    "search.secretNeedRef": "先在上面填一个凭据引用名，这里才能保存密钥。",
-    "search.keyConfigured": "已添加",
-    "search.keyMissing": "未添加",
-    "search.keyTest": "测试",
-    "search.keyTesting": "测试中…",
-    "search.keyOk": "可用",
-    "search.keyInvalid": "不可用",
-    "search.keyUnknown": "暂时无法验证",
     "card.display": "显示设置",
     "card.display.hint": "侧边栏额度卡片要不要显示、多久刷新一次。三家共用。",
     "card.switching": "切换设置",
     "card.switching.hint": "什么时候换号/换模型、中断后要不要自动继续。三家共用。",
-    "card.search": "搜索设置",
-    "card.search.hint": "联网搜索走哪条路：优先网关订阅额度，否则用下面这个 API key。三家共用。",
     "card.advanced": "高级设置",
     "card.advanced.hint": "端点、超时与输出上限。带厂商徽标的项只对那一家生效。",
+    "credential.configured": "已配置",
+    "credential.missing": "未配置",
     "vendor.features": "切换与搜索",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",
@@ -835,38 +784,14 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "field.autoContinueMaxAttempts.hint": "Caps the loop so it cannot burn quota forever. Default 3.",
     "field.autoContinueIntervalMs": "Retry interval (ms)",
     "field.autoContinueIntervalMs.hint": "Wait before each retry. Default 2000 ms; three retries take about 6 s.",
-    "field.searchStrategy": "Search route",
-    "field.searchStrategy.hint": "Gateway: the model calls the server-side search tool; billed per token. API: calls /v1/tools/search directly; billed per request, needs the key below.",
-    "options.searchGatewayFirst": "Gateway first (save API balance)",
-    "options.searchApiFirst": "API first (save tokens)",
-    "options.searchGatewayOnly": "Gateway only",
-    "options.searchApiOnly": "API only",
-    "options.searchOff": "Web search off",
-    "field.searchApiKeyRefs": "DeepSeek API key references",
-    "field.searchApiKeyRefs.hint": "Credential reference names, not literal secrets. Comma-separated; tried in order when one is invalid or out of balance.",
-    "search.secretAdd": "Add key",
-    "search.secretRemove": "Remove",
-    "search.secretEmpty": "No keys added yet.",
-    "search.secretSave": "Save key",
-    "search.secretSaving": "Saving…",
-    "search.secretPlaceholder": "Paste the DeepSeek API key",
-    "search.secretHint": "The key is written to the local credential store; the settings file never holds it.",
-    "search.secretNeedRef": "Fill in a credential reference name above first, then you can save the key here.",
-    "search.keyConfigured": "added",
-    "search.keyMissing": "not added",
-    "search.keyTest": "Test",
-    "search.keyTesting": "Testing…",
-    "search.keyOk": "Works",
-    "search.keyInvalid": "Not working",
-    "search.keyUnknown": "Could not verify",
     "card.display": "Display",
     "card.display.hint": "Whether the sidebar quota card shows, and how often it refreshes. Shared by all vendors.",
     "card.switching": "Switching",
     "card.switching.hint": "When to switch account/model, and whether to continue after an interruption. Shared.",
-    "card.search": "Search",
-    "card.search.hint": "Which route web search takes: gateway subscription quota first, then this API key. Shared.",
     "card.advanced": "Advanced",
     "card.advanced.hint": "Endpoints, timeouts and output limits. Items with a vendor badge apply to that vendor only.",
+    "credential.configured": "Configured",
+    "credential.missing": "Not configured",
     "vendor.features": "Switching & Search",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",

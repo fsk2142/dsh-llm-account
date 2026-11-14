@@ -17,8 +17,8 @@ import { describe, expect, it } from "vitest";
 import { SETTINGS_CARDS } from "../../src/client/settings-cards";
 
 describe("四张卡片", () => {
-  it("顺序固定：显示 → 切换 → 搜索 → 高级", () => {
-    expect(SETTINGS_CARDS.map((card) => card.id)).toEqual(["display", "switching", "search", "advanced"]);
+  it("**顺序固定：显示 → 切换 → 高级**（搜索卡已移除，2026-11-14）", () => {
+    expect(SETTINGS_CARDS.map((card) => card.id)).toEqual(["display", "switching", "advanced"]);
   });
 
   it("每张卡片都有可折叠的标题文案", () => {
@@ -27,7 +27,7 @@ describe("四张卡片", () => {
     }
   });
 
-  it("三家共有的字段归入前三张卡（不重复声明为厂商专属）", () => {
+  it("三家共有的字段都归入卡片（不重复声明为厂商专属）", () => {
     const shared = SETTINGS_CARDS.flatMap((card) => card.shared);
     expect(shared).toContain("showSidebarQuota");
     expect(shared).toContain("quotaRefreshMinutes");
@@ -35,7 +35,6 @@ describe("四张卡片", () => {
     expect(shared).toContain("autoContinue");
     expect(shared).toContain("autoContinueMaxAttempts");
     expect(shared).toContain("autoContinueIntervalMs");
-    expect(shared).toContain("searchStrategy");
     
     expect(shared).toContain("requestTimeoutMs");
     expect(shared).toContain("streamIdleTimeoutMs");

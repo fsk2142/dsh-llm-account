@@ -315,23 +315,6 @@ export const VENDORS: readonly VendorEntry[] = [
             hintKey: "field.autoContinueIntervalMs.hint",
             fallback: 2000,
           },
-          // —— 搜索 ——
-          {
-            key: "searchStrategy",
-            kind: "select",
-            labelKey: "field.searchStrategy",
-            hintKey: "field.searchStrategy.hint",
-            // 两条路的成本结构不同（网关路按 token、API 路按请求次数），让用户选。
-            options: [
-              { value: "gateway-first", labelKey: "options.searchGatewayFirst" },
-              { value: "api-first", labelKey: "options.searchApiFirst" },
-              { value: "gateway-only", labelKey: "options.searchGatewayOnly" },
-              { value: "api-only", labelKey: "options.searchApiOnly" },
-              // 需求：下拉里要有「不使用网页搜索」。
-              { value: "off", labelKey: "options.searchOff" },
-            ],
-            fallback: "gateway-first",
-          },
         ],
       },
     ],

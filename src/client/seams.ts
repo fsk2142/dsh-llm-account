@@ -55,7 +55,6 @@ import {
   type VendorSnapshot,
 } from "./page-state";
 import type { LoginView } from "./account-card";
-import { nextKeyRef, parseSecretRefs, removeKeyRef } from "../core/switching/search-keys";
 import {
   modelAvailableIn,
   modelQuotaOf as modelQuotaOf_,
@@ -65,7 +64,7 @@ import {
 import { PageShell } from "./page";
 import { ReadingCache } from "./reading-cache";
 import { savesImmediately, type VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type CredentialProbe, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
 import { checkForUpdate, PLUGIN_VERSION, pollUpdate, startUpdate, type UpdateState } from "./update-check";
 import { showDriftNotice } from "./drift-notice";
 import { AccountUsageBlock } from "./usage-card";
@@ -1160,7 +1159,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * 修的是这个缺陷：旧实现在在途时**提前返回**在途的 promise 而**不排队**，注释却写着
      * 「把这一轮排到它后面」—— 于是同一行的第二次写入既没落盘、也没有任何提示。
      * 可达路径：搜索密钥的删除按钮没有 busy 守卫，一次往返内点两个删除，第二个就被静默吞掉
-     * （磁盘上的 `searchApiKeyRefs` 仍留着用户以为已经删掉的引用名）。
+     * （搜索功能已于 2026-11-14 整体移除，这里只剩通用的草稿/落盘纪律）。
      *
      * 现在：在途时只做标记，由在途那轮**收尾时再排一轮**，那一轮会现读最新草稿 ——
      * 两次点击的效果都能落盘。
@@ -1292,54 +1291,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const draftFieldsOf = (ns: string): { key: string; value: unknown }[] =>
       Object.entries(latestDrafts.current[ns] ?? {}).map(([key, value]) => ({ key, value }));
 
-    /**
-     * 立刻写**一个**字段并重读（不经过草稿，也不等卡片上的保存按钮）。
-     *
-     * 用于那些「本身就是一次完整动作」的设置写入 —— 目前只有搜索密钥的引用名列表：
-     * 加钥匙 / 删钥匙都是一个已经完成的决定，没有「填完再点保存」的中间状态。
-     * 走同一条串行队列，所以不会与用户同时拨的开关撞修订号。
-     * @param ns - 设置命名空间。
-     * @param key - 字段名。
-     * @param value - 新值。
-     * @returns 这次写入的完成信号。
-     */
-    const saveOneField = (ns: string, key: string, value: unknown): Promise<void> => {
-      // 先同步进草稿镜像：界面立刻反映，且排队期间若有别的写入合并读取，看到的是新值。
-      const baseline = latestSnapshots.current[ns]?.value;
-      /**
-       * **有保存在途时不能因「等于旧 baseline」丢掉草稿**（2026-11-01 修 C02）。
-       *
-       * 在途期间 `baseline` 是上一次确认的旧值，而服务端即将变成那次保存的目标。
-       * 用户此刻拨到「旧 baseline 值」是**新的意图**，不是「改回原值」。
-       */
-      const hasPendingSave = savingRowInFlight.current.has(ns) || saveRowPending.current.has(ns);
-      const next = draftsAfterChange(latestDrafts.current[ns], baseline, key, value, hasPendingSave);
-      const drafts = { ...latestDrafts.current };
-      if (next === undefined) delete drafts[ns];
-      else drafts[ns] = next;
-      latestDrafts.current = drafts;
-      setState((current) => setField(current, ns, key, value, hasPendingSave));
-      return saveRow(ns);
-    };
-
-    /**
-     * 承载行当前的密钥引用名（**草稿优先**）。
-     *
-     * 为什么先看草稿：用户刚添加一条，列表先进草稿，`adopt` 要等一次往返才把它吸收进快照。
-     * 期间点删除（或紧接着再加一条）若只读快照，就会看不见刚刚那条 —— 症状是「点了 × 没反应」。
-     * @returns 引用名列表。
-     */
-    const currentKeyRefsOf = (): string[] => {
-      const raw = latestDrafts.current[FEATURE_TAB_NS]?.["searchApiKeyRefs"]
-        ?? latestSnapshots.current[FEATURE_TAB_NS]?.value?.["searchApiKeyRefs"]
-        ?? state.snapshots[FEATURE_TAB_NS]?.value?.["searchApiKeyRefs"];
-      if (Array.isArray(raw)) {
-        return raw
-          .filter((item): item is string => typeof item === "string" && item.trim() !== "")
-          .map((item) => item.trim());
-      }
-      return parseSecretRefs(typeof raw === "string" ? raw : "");
-    };
 
     // 草稿镜像每次渲染同步一次（纯赋值，不引入 Hook，所以不影响 Hook 顺序）。
     // 排队中的 `saveRow` 读的就是这一份 —— 它比任何渲染闭包都新。
@@ -1522,50 +1473,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     );
     const modelVendorKey = availableEntries.map((entry) => entry.providerId).join(",");
 
-    // 搜索 key 的引用名（逗号/空白分隔）→ 查一次「库里到底有没有」。
-    //
-    // 实际情况：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个输入框填的是
-    // **引用名**，真 key 在凭据库里 —— 不查一次，界面就只能沉默。
-    //
-    // 读取走 `currentKeyRefsOf()`（草稿优先，见那里的注释）：刚添加的那条还在草稿里，
-    // 只看快照会把它当成「不存在」，于是徽标和删除都对不上。
-    const credentialRefs = currentKeyRefsOf();
-    const credentialKey = credentialRefs.join(",");
-
-    // 查凭据是否真的配置了。依赖里用 `credentialKey`（字符串）而不是数组：
-    // 数组每次渲染都是新引用，会让这个 effect 每帧都重跑。
-    useEffect(() => {
-      // 收窄之后再存进局部常量：TS 不会把外层的判空带进回调里。
-      const api = usage;
-      const status = api?.credentialStatus;
-      if (status === undefined) return;
-      if (credentialKey === "") {
-        setCredentialStatus({});
-        return;
-      }
-      let alive = true;
-      const ask: (refs: readonly string[]) => Promise<unknown> = status;
-      const keyNow: string = credentialKey;
-      // `callRemote` 可能返回 `undefined`（调用本身抛错时已转成 rejected promise，
-      // 但签名上是联合类型），交给 `remoteValue` 摊平并解包信封。
-      void remoteValue<{ ref?: unknown; configured?: unknown }[]>(callRemote(() => ask(keyNow.split(","))))
-        .then((rows) => {
-          if (!alive) return;
-          // 读不到（`undefined`）时保持原状态：徽标不出现，而不是错误地显示「未添加」。
-          if (!Array.isArray(rows)) return;
-          const next: Record<string, boolean> = {};
-          for (const row of rows) {
-            if (typeof row?.ref === "string") next[row.ref] = row.configured === true;
-          }
-          setCredentialStatus(next);
-        })
-        .catch(() => {
-          // 读失败时保持 `undefined`：徽标不出现，而不是错误地显示「未添加」。
-        });
-      return () => {
-        alive = false;
-      };
-    }, [usage, credentialKey, state.credentialRevision]);
+    // 搜索 key 的「已配置」徽标随搜索功能一起移除（2026-11-14）：宿主自带的网页搜索
+    // 已更新，本插件不再承载搜索 provider、也不再管理搜索密钥。
 
     // 读**所有**可用厂商的未过滤模型目录：全局模型卡要把两家放在一起；只读当前标签页会让
     // 另一家的模型在切换标签页前一直缺一块。刷新走 {@link refreshVendorCatalog}（按账户
@@ -1723,11 +1632,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * 缺省 `undefined` 表示**还没读到**：那时页面不显示任何徽标，而不是猜「未添加」
      *。
      */
-    const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean> | undefined>(undefined);
-    /** 「保存密钥」的草稿 / 进行中 / 失败原因（搜索卡里那一块）。 */
-    const [secretDraft, setSecretDraft] = useState<string>("");
-    const [secretSaving, setSecretSaving] = useState(false);
-    const [secretError, setSecretError] = useState<string | undefined>(undefined);
+    const [credentialStatus] = useState<Record<string, boolean> | undefined>(undefined);
     /**
      * 插件自身的更新状态（`undefined` = 还没查过）。
      *
@@ -1745,15 +1650,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * ② 刚刚通过更新按钮装好了新版本 —— 那时页面里跑的还是旧代码。
      */
     const [reloadHint, setReloadHint] = useState(false);
-    /**
-     * 密钥实测结论（`ref → 结论`）与正在测试的那一把。
-     *
-     * 需求：「添加了 key 后就发起一次小请求验证一下是否可用，不可用的话就进行提示」
-     * +「多增加一个测试按钮，让用户可以自行测试密钥的有效性」。
-     * 结论**只在真的测过之后**存在：没测过就是 `undefined`，界面不给任何暗示。
-     */
-    const [keyProbes, setKeyProbes] = useState<Record<string, CredentialProbe>>({});
-    const [keyProbing, setKeyProbing] = useState<string | undefined>(undefined);
     /**
      * 定时重读计数：设置页会开着好一会儿，30 秒一次让数字跟上。
      *
@@ -2192,13 +2088,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     // 统计**全在账号下面**：
     // 页面上不再有跨账号的用量卡片，所以这里不再往 `PageShell` 传 `usage`。
     /**
-     * 测试一把密钥能不能用（添加后自动调一次；「测试」按钮也调它）。
-     *
-     * 三档结论直接来自宿主（`probeSearchCredential`）：`ok` / `invalid` / `unknown`。
-     * **`unknown` 绝不当成失败**：网络抖动不该让用户去换一把其实没问题的密钥。
-     * 失败本身不抛：结论进 `keyProbes`，界面上就是那一行的小标签。
-     * @param ref - 凭据引用名。
-     */
     /**
      * 查一次更新（用户点「检查更新」时）。
      *
@@ -2325,35 +2214,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       }
     };
 
-    const testSecret = async (ref: string): Promise<void> => {
-      const probe = usage?.probeSearchCredential;
-      if (probe === undefined) return; // 老宿主：没有实测通道，界面也不渲染按钮
-      setKeyProbing(ref);
-      try {
-        const result = unwrapRemote(await callRemote(() => probe([ref])));
-        // 按 **ref 匹配**而不是取 `[0]`：宿主契约说「顺序与入参一致」，但结论贴错行
-        // （把 A 的可用性显示在 B 那一行）是很难自查的误导 —— 匹配不到就当没测出来。
-        const verdict = result.ok
-          ? (result.value as CredentialProbe[] | undefined)?.find((row) => row.ref === ref)
-          : undefined;
-        setKeyProbes((probes) => ({
-          ...probes,
-          [ref]:
-            verdict === undefined
-              ? // 调用失败（装配故障/信封是失败）：同样只是「没测出来」。
-                { ref, state: "unknown", reason: result.ok ? "宿主没有返回结论" : result.error }
-              : verdict,
-        }));
-      } catch (error) {
-        setKeyProbes((probes) => ({
-          ...probes,
-          [ref]: { ref, state: "unknown", reason: error instanceof Error ? error.message : String(error) },
-        }));
-      } finally {
-        setKeyProbing((current) => (current === ref ? undefined : current));
-      }
-    };
-
     return PageShell({
       state,
       // 页面外壳要**完整**列表：它按 `activeNs` 找 entry 渲染字段，功能页也在其中
@@ -2424,78 +2284,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       onSave: (ns) => void saveRow(ns),
       ...(savingNs === undefined ? {} : { savingNs }),
       ...(credentialStatus === undefined ? {} : { credentialStatus }),
-      secretDraft,
-      secretSaving,
-      onSecretDraftChange: (value: string) => {
-        setSecretDraft(value);
-        setSecretError(undefined); // 一改就清掉上一次的错
-      },
-      onSecretError: (error: string | undefined) => setSecretError(error),
-      ...(secretError === undefined ? {} : { secretError }),
-      onSaveSecret:
-        usage?.setCredential === undefined
-          ? undefined
-          : async (_ref: string, secret: string) => {
-              setSecretSaving(true);
-              setSecretError(undefined);
-              try {
-                /**
-                 * **`existing` 只用一次（决定新引用名），不要用它算最终列表**
-                 * （2026-11-01 修 C06）。
-                 *
-                 * 报告的复现：添加 key2 的过程中删掉 key1 并已落盘，添加完成又变回
-                 * `[key1, key2]` —— 已移除的引用重新参与选择。
-                 *
-                 * 原因是 `setCredential` 是 `await`，期间用户可以删 key。原来的
-                 * `[...existing, ref]` 用的是 await **之前**的快照，把删掉的加回来了。
-                 */
-                const existing = currentKeyRefsOf();
-                const ref = nextKeyRef(existing);
-                const result = await callRemote(() => usage.setCredential!(ref, secret));
-                const unwrapped = unwrapRemote(await result);
-                if (!unwrapped.ok) return unwrapped.error;
-                setSecretDraft("");
-                /**
-                 * 引用名列表是**设置文档**里的一份数据，必须落盘 —— 只写草稿的话，刷新页面就没了，
-                 * 而密钥其实已经在凭据库里（用户会看到「列表空了但还能用」）。
-                 * 这里走 `saveOneField`：它不依赖输入类字段的「卡片保存按钮」那条路。
-                 *
-                 * **await 之后重新读一次列表**：期间用户的删除/添加必须保留。
-                 */
-                const latest = currentKeyRefsOf();
-                const merged = latest.includes(ref) ? latest : [...latest, ref];
-                await saveOneField(FEATURE_TAB_NS, "searchApiKeyRefs", merged);
-                setState((current) => ({ ...current, credentialRevision: current.credentialRevision + 1 }));
-                // **加完立刻验一次**（需求：「添加了 key 后就发起一次小请求验证一下
-                // 是否可用，不可用的话就进行提示」）。这样「存进去了但用不了」当场可见，
-                // 而不是等到某次搜索失败才发现。
-                void testSecret(ref);
-                return undefined;
-              } catch (error) {
-                return error instanceof Error ? error.message : String(error);
-              } finally {
-                setSecretSaving(false);
-              }
-            },
-      ...(usage?.probeSearchCredential === undefined ? {} : { onTestSecret: (ref: string) => void testSecret(ref) }),
-      ...(Object.keys(keyProbes).length === 0 ? {} : { keyProbes }),
-      ...(keyProbing === undefined ? {} : { keyProbing }),
-      onRemoveSecret: (ref: string) => {
-        // 从**草稿**里算：刚添加、还没被 `adopt` 吸收的那一条也在草稿里（读快照会漏掉它）。
-        const current = currentKeyRefsOf();
-        // 删掉的同时清掉它的实测结论：那条记录描述的是已经不存在的密钥。
-        setKeyProbes((probes) => {
-          if (probes[ref] === undefined) return probes;
-          const next = { ...probes };
-          delete next[ref];
-          return next;
-        });
-        void saveOneField(
-          FEATURE_TAB_NS,
-          "searchApiKeyRefs",
-          removeKeyRef(current, ref),
-        ).then(() => setState((s) => ({ ...s, credentialRevision: s.credentialRevision + 1 })));
-      },
     });
   };
 }

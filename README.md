@@ -16,7 +16,7 @@ DeepSeek Harness 插件，把 **Command Code**、**OpenCode Go**、**Open Design
 | 网页登录 | 设备授权登录，不需手工复制密钥 |
 | 账号改名 | 可改显示名；保留登录时的默认名，可一键恢复 |
 | 用量导出 | 导出 CSV |
-| 网页搜索 | 注册为宿主的搜索 provider，支持直连 API 与网关工具两条路 |
+| 网页搜索 | **不再提供**（2026-11-14 已移交宿主的官方实现） |
 
 ## 安装
 
@@ -90,18 +90,13 @@ dsh plugin --profile <你的profile> add github:fsk2142/dsh-llm-account
 
 **刷新间隔**：配置项 `quotaRefreshMinutes`（1–120 分钟，默认 1）。标签页隐藏时暂停刷新。
 
-### 网页搜索
+### 网页搜索（已移除）
 
-配置项 `searchStrategy`：
+本插件**不再提供**网页搜索。2026-11-14 起网页搜索由 DeepSeek Harness 官方实现提供，
+本插件不再注册任何搜索 provider，也不再维护 `searchStrategy` / `searchApiKeyRefs`。
 
-| 值 | 行为 | 计费 |
-| --- | --- | --- |
-| `api-first` | 优先直连 DeepSeek Search API，失败回退网关 | 按请求次数 |
-| `gateway-first` | 优先用网关的 `web_search` 工具，失败回退 API | 按 token（走套餐额度） |
-| `api-only` / `gateway-only` | 只用其中一条，不可用就明确失败 | — |
-| `off` | 关闭本插件的搜索，并把 host 的 `searchProvider` 槽位让出来 | — |
+升级后 profile 里残留的旧字段会被 schema 忽略（不报错），下一次写设置时自动消失。
 
-选 `off` 后本插件不再占用该槽位，其他搜索插件可以接管。
 
 ### 改账号名称
 

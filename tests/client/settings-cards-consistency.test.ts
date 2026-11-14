@@ -45,22 +45,10 @@ describe("卡片声明与厂商声明必须对得上", () => {
     expect(missing).toEqual([]);
   });
 
-  it("搜索卡里包含「搜索方式」（旧的 searchPreferGateway 已不存在）", () => {
-    const search = SETTINGS_CARDS.find((card) => card.id === "search");
-    expect(search?.shared).toContain("searchStrategy");
-    expect(search?.shared).not.toContain("searchPreferGateway");
-  });
-
-  it("搜索卡里不再声明 API key 引用字段（密钥由添加/删除动作维护）", () => {
-    const search = SETTINGS_CARDS.find((card) => card.id === "search");
-    // 2026-10-20 需求「只保留保存密钥那个」：引用名列表不再是用户编辑的字段。
-    expect(search?.shared).not.toContain("searchApiKeyRefs");
-  });
-
-  it("每个已声明的搜索相关字段都被卡片收录（没有漏掉的新字段）", () => {
-    const searchKeys = SETTINGS_CARDS.find((card) => card.id === "search")?.shared ?? [];
-    for (const key of ["searchStrategy"]) {
-      expect(searchKeys, key).toContain(key);
-    }
+  it("**搜索卡已移除**（网页搜索移交宿主，2026-11-14）", () => {
+    // 原来这三条断言「搜索卡包含 searchStrategy / 不含 searchPreferGateway /
+    // 不含 searchApiKeyRefs」—— 都被新需求取代：官方网页搜索更新后本插件不再承载搜索，
+    // 卡片与两个字段一起移除。完整的不回归守卫见 `search-removed.test.ts`。
+    expect(SETTINGS_CARDS.map((card) => card.id)).not.toContain("search");
   });
 });

@@ -94,7 +94,6 @@ import { createUsagePort } from "../usage-store";
 import { isModelIdVisible, normalizeVisibility } from "../../core/catalog";
 import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
-import { createSearchSlotSync } from "../search-release";
 import { createOpencodeLogin } from "./login";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opencode-go`）。 */
@@ -214,8 +213,6 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueOnTruncate: z.boolean(),
       autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
       autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
-      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only", "off"]).default("gateway-first"),
-      searchApiKeyRefs: z.array(z.string().role("credential-ref")).default(["DEEPSEEK_API_KEY"]),
     baseURL: z.string().default(DEFAULT_BASE_URL),
     requestTimeoutMs: z.number(),
     streamIdleTimeoutMs: z.number(),
@@ -558,22 +555,11 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
 
   applyRoute();
   // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判（与旧插件同一事件名）。
-  /**
-   * 搜索槽位同步（2026-10-28 补）：三家 provider 行都触发，`createSearchSlotSync`
-   * 内部合并同拍调用。手改 profile 只动本行的 `searchStrategy` 时也要能同步槽位。
-   */
-  const syncSearchSlot = createSearchSlotSync({
-    settings,
-    strategy: () => document()["searchStrategy"],
-    warn,
-  });
-
   ctx.on("loader/volatile-update", () => {
-  // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
-  // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
-  invalidateCatalogCandidates();
+    // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+    // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+    invalidateCatalogCandidates();
     applyRoute();
-    void syncSearchSlot();
   });
   // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
   // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。

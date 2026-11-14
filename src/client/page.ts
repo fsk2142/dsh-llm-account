@@ -12,9 +12,9 @@ import { createElement, Fragment, type ReactElement, type ReactNode } from "reac
 
 import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
-import { ChevronIcon, RemoveIcon } from "./icons";
+import { ChevronIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, specOf, type DraftField, type PageState } from "./page-state";
-import { parseSecretRefs, summarizeKeyStatus, validateSecretInput } from "../core/switching/search-keys";
+import { summarizeKeyStatus } from "../core/credential-summary";
 import { savesImmediately } from "./registry";
 import type { CredentialProbe } from "./usage-contract";
 import { PLUGIN_VERSION, type UpdateState } from "./update-check";
@@ -455,8 +455,6 @@ function settingsCardElement(
   }
 
   // 3) 搜索卡额外挂一块「密钥管理」：引用名列表**不再是设置字段**（用户不填它），
-  // 所以这里直接从承载行的值读，而不是通过字段声明。
-  if (card.id === "search") nodes.push(secretBlockOf(props, vendors));
 
   // 4) 保存条：**本卡有未保存输入时**才出现（需求：「一个卡片保留一个保存按钮，
   // 点完保存后按钮消失，如果复原则不显示保存」）。开关/下拉改了就存，不产生草稿，所以它们
@@ -644,7 +642,7 @@ function isFirstCarryingCard(
  *
  * 需求：「只保留保存密钥那个，没添加一个就自动显示添加了一个，然后还可以点 x
  * 删除已经添加的」。所以：
- * 1. 不再让用户填「引用名」—— 那份列表（`searchApiKeyRefs`）由添加/删除动作维护；
+ * 1. 引用名列表由添加/删除动作维护（搜索功能已于 2026-11-14 整体移除，见 history.md）；
  * 2. 添加成功就出现在下面的列表里（每条显示「已添加 / 未添加」）；
  * 3. 每条带 × 删除。
  *
@@ -654,155 +652,6 @@ function isFirstCarryingCard(
  * @param refsField - 承载现有引用名列表的设置字段；没有该字段时整块不渲染。
  * @returns 元素；宿主不支持写凭据（`onSaveSecret` 缺省）时为 `null`。
  */
-function secretBlockOf(props: PageShellProps, vendors: readonly VendorEntry[]): ReactNode {
-  const save = props.onSaveSecret;
-  if (save === undefined) return null;
-  const { t } = props;
-  // 引用名列表住在承载行的设置文档里，但它**不是**用户可编辑的字段，所以不走 `fieldsOf`。
-  //
-  // **必须先看草稿**：添加/删除写的是草稿（还没落盘）。只看快照就等于「点了没反应」——
-  // 用户的改动要等下一次宿主重读才进快照，而那期间界面已经渲染过一轮了。
-  const pick = (entry: VendorEntry): unknown => {
-    const draft = props.state.drafts[entry.ns]?.["searchApiKeyRefs"];
-    return draft !== undefined ? draft : props.state.snapshots[entry.ns]?.value?.["searchApiKeyRefs"];
-  };
-  const raw = vendors.map(pick).find((value) => value !== undefined);
-  const refs = Array.isArray(raw)
-    ? raw.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim())
-    : parseSecretRefs(typeof raw === "string" ? raw : "");
-
-  const rows =
-    refs.length === 0
-      ? [
-          createElement(
-            "small",
-            { key: "empty", "data-secret-empty": true, className: CSS_CLASS.note },
-            t("search.secretEmpty"),
-          ),
-        ]
-      : refs.map((ref) => {
-          const configured = props.credentialStatus?.[ref];
-          // 实测结论（`undefined` = 还没测过）：需求「添加后就验证一次」+
-          // 「多一个测试按钮让他自己测」。三档都显示出来 —— `unknown` 不能说成「不可用」。
-          const probe = props.keyProbes?.[ref];
-          const probing = props.keyProbing === ref;
-          return createElement(
-            "div",
-            {
-              key: ref,
-              "data-secret-row": ref,
-              // 紧凑一档：这些是**列表项**，不是设置行。沿用 `dsl-field` 的 14px 字号 + 上下 8px
-              // 内边距会让每条占将近 40px，两三条就把「高级/搜索」卡片撑得很长（用户反馈「默认名
-              // 占的位置太宽，降低一下高度」）。类名另给，不靠覆盖去压设置行的规则。
-              className: `${CSS_CLASS.field} ${CSS_CLASS.secretRow}`,
-            },
-            createElement(
-              "span",
-              { className: CSS_CLASS.fieldText },
-              createElement("span", { className: CSS_CLASS.mono }, ref),
-              // 状态未知（还没读回来）时不显示徽标 —— 不猜「未添加」。
-              configured === undefined
-                ? null
-                : createElement(
-                    "small",
-                    {
-                      key: "state",
-                      "data-secret-state": configured ? "configured" : "missing",
-                      className: configured ? CSS_CLASS.mark : CSS_CLASS.failure,
-                    },
-                    configured ? t("search.keyConfigured") : t("search.keyMissing"),
-                  ),
-              probe === undefined
-                ? null
-                : createElement(
-                    "small",
-                    {
-                      key: "probe",
-                      "data-secret-probe": probe.state,
-                      // 宿主给的原因挂在 data 属性上：界面上是短标签，排查时能拿到原文。
-                      ...(probe.reason === undefined ? {} : { "data-secret-probe-reason": probe.reason }),
-                      className: probe.state === "ok" ? CSS_CLASS.mark : CSS_CLASS.failure,
-                    },
-                    probe.state === "ok"
-                      ? t("search.keyOk")
-                      : probe.state === "invalid"
-                        ? t("search.keyInvalid")
-                        : t("search.keyUnknown"),
-                  ),
-            ),
-            // 测试按钮：随时自己验一次（添加时会自动验，这个按钮是「再验一次」与「排查」用）。
-            props.onTestSecret === undefined
-              ? null
-              : createElement(
-                  "button",
-                  {
-                    type: "button",
-                    "data-secret-test": ref,
-                    className: CSS_CLASS.buttonSm,
-                    disabled: probing,
-                    onClick: () => props.onTestSecret?.(ref),
-                  },
-                  probing ? t("search.keyTesting") : t("search.keyTest"),
-                ),
-            createElement(
-              "button",
-              {
-                type: "button",
-                "data-secret-remove": ref,
-                className: CSS_CLASS.iconDanger,
-                title: t("search.secretRemove"),
-                "aria-label": t("search.secretRemove"),
-                onClick: () => props.onRemoveSecret?.(ref),
-              },
-              createElement(RemoveIcon),
-            ),
-          );
-        });
-
-  return createElement(
-    "div",
-    { key: "secret", "data-secret-block": "true", className: CSS_CLASS.inset },
-    createElement(
-      "div",
-      { className: CSS_CLASS.actions },
-      createElement("input", {
-        "data-secret-input": "true",
-        type: "password",
-        // 受控值由容器持有（页面是纯函数，不留状态）。
-        value: props.secretDraft ?? "",
-        placeholder: t("search.secretPlaceholder"),
-        autoComplete: "off",
-        onChange: (event: { target?: { value?: string } }) => props.onSecretDraftChange?.(event.target?.value ?? ""),
-      }),
-      createElement(
-        "button",
-        {
-          type: "button",
-          "data-secret-add": "true",
-          className: CSS_CLASS.buttonPrimary,
-          disabled: props.secretSaving === true,
-          onClick: () => {
-            const secret = props.secretDraft ?? "";
-            const problem = validateSecretInput(secret, ["pending"]);
-            if (problem !== undefined) {
-              props.onSecretError?.(problem);
-              return;
-            }
-            // 引用名由容器分配（`nextKeyRef`），界面不参与命名。
-            void save("", secret.trim()).then((error) => props.onSecretError?.(error));
-          },
-        },
-        props.secretSaving === true ? t("search.secretSaving") : t("search.secretAdd"),
-      ),
-    ),
-    createElement("small", { className: CSS_CLASS.note }, t("search.secretHint")),
-    props.secretError === undefined || props.secretError === ""
-      ? null
-      : createElement("small", { "data-secret-error": true, className: CSS_CLASS.failure }, props.secretError),
-    createElement("div", { key: "rows", "data-secret-rows": "true", className: CSS_CLASS.inset }, ...rows),
-  );
-}
-
 
 /**
  * 一组通用字段卡片。
@@ -949,10 +798,10 @@ function credentialBadgeOf(props: PageShellProps, field: DraftField): ReactNode 
   const summary = summarizeKeyStatus(rows);
   const label =
     summary.state === "configured"
-      ? props.t("search.keyConfigured")
+      ? props.t("credential.configured")
       : summary.state === "partial"
-        ? `${props.t("search.keyConfigured")} ${summary.configured}/${summary.total}`
-        : props.t("search.keyMissing");
+        ? `${props.t("credential.configured")} ${summary.configured}/${summary.total}`
+        : props.t("credential.missing");
   return createElement(
     "small",
     {

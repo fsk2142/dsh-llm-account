@@ -281,7 +281,7 @@ function render(state: PageState, t = dictionaryOf("en")): StubElement {
   });
 }
 
-it("页面外壳渲染标题、简介，以及四张功能卡片（不再有厂商 tab / 设置对象下拉）", () => {
+it("页面外壳渲染标题、简介，以及**三张**功能卡片（搜索卡已移除，2026-11-14）", () => {
   const tree = render(createPageState(VENDORS, SNAPSHOTS));
   const all = elementsOf(tree);
 
@@ -289,11 +289,11 @@ it("页面外壳渲染标题、简介，以及四张功能卡片（不再有厂�
   expect(all.some((element) => element.props["data-tab"] !== undefined)).toBe(false);
   expect(all.some((element) => element.props["data-settings-target-select"] !== undefined)).toBe(false);
 
-  // 四张卡片按固定顺序出现（显示 → 切换 → 搜索 → 高级）。
+  // 三张卡片按固定顺序出现（显示 → 切换 → 高级）。
   const cards = all
     .filter((element) => element.props["data-card"] !== undefined)
     .map((element) => element.props["data-card"]);
-  expect(cards).toEqual(expect.arrayContaining(["display", "switching", "search", "advanced"]));
+  expect(cards).toEqual(expect.arrayContaining(["display", "switching", "advanced"]));
 
   const texts = textOf(tree);
   expect(texts).toContain(COPY.en.title);
@@ -321,7 +321,7 @@ it("渲染期抛错时显示错误面板，而不是整页空白", () => {
   expect(textOf(tree).join("\n")).toContain("t() exploded");
 });
 
-it("四张卡片都是可折叠的 details，标题用卡片名（不是写死的「高级」）", () => {
+it("三张卡片都是可折叠的 details，标题用卡片名（不是写死的「高级」）", () => {
   const state = createPageState(VENDORS, SNAPSHOTS);
   const tree = PageShell({
     state,
@@ -332,10 +332,10 @@ it("四张卡片都是可折叠的 details，标题用卡片名（不是写死�
     onSave: () => undefined,
   });
   const all = elementsOf(tree);
-  for (const id of ["display", "switching", "search", "advanced"]) {
+  for (const id of ["display", "switching", "advanced"]) {
     const details = all.find((element) => element.type === "details" && element.props["data-card"] === id);
     expect(details, `${id} 应该是可折叠的 details`).toBeDefined();
-    // 标题用卡片名，四张卡各有自己的名字。
+    // 标题用卡片名，每张卡各有自己的名字。
     const summary = elementsOf(details!).find((element) => element.type === "summary")!;
     expect(textOf(summary).join(" ")).toContain(COPY.zh[`card.${id}`]);
   }

@@ -91,8 +91,6 @@ export const USAGE_METHODS = [
   // 凭据状态（只回布尔，不回密钥）
   "credentialStatus",
   "setCredential",
-  // 密钥实测（真的发一次最小请求，回答「能不能用」）
-  "probeSearchCredential",
 ] as const;
 
 /** 一个方法名。 */
@@ -562,31 +560,6 @@ export interface CredentialProbe {
   reason?: string;
 }
 
-/**
- * 校验「密钥实测」的结果。
- *
- * 形状不可信：缺 `state`、出现三档之外的值、`ref` 为空，一律丢掉 —— 界面宁可什么都不显示，
- * 也不能把一个猜出来的结论当成事实呈现（这条与全项目「不猜」的纪律一致）。
- * @param endpoint - 调用点。
- * @param value - 线上值。
- * @returns 合格的结果列表（可能为空）。
- */
-function parseCredentialProbes(endpoint: string, value: unknown): CredentialProbe[] {
-  if (!Array.isArray(value)) {
-    throw boundaryError(endpoint, `expected an array of credential probes, got ${describeValue(value)}`);
-  }
-  const out: CredentialProbe[] = [];
-  for (const row of value) {
-    if (!isRecord(row)) continue;
-    const ref = row.ref;
-    const state = row.state;
-    if (typeof ref !== "string" || ref === "") continue;
-    if (state !== "ok" && state !== "invalid" && state !== "unknown") continue;
-    const reason = typeof row.reason === "string" && row.reason !== "" ? row.reason : undefined;
-    out.push(reason === undefined ? { ref, state } : { ref, state, reason });
-  }
-  return out;
-}
 
 /**
  * 校验用量报表。
@@ -983,7 +956,6 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     // 密钥实测：加完立刻发一次最小搜索请求，把「能不能用」当场告诉用户。
     // 需求：「添加了key后就发起一次小请求验证一下是否可用，不可用的话就进行提示」。
     // 只回结论与原因，**绝不回密钥**。
-    makeDescriptor("probeSearchCredential", "CredentialProbes", parseCredentialProbes, [REFS_PARAM]),
   ];
 }
 
@@ -1032,7 +1004,6 @@ export interface UsageNamespace {
    * 可选：老宿主没实现时界面跳过验证 —— 那种情况只显示「已保存」，不谎称已验证。
    * 返回 `unknown`：真实值是信封，必须 `unwrapRemote`。
    */
-  probeSearchCredential?(refs: readonly string[]): Promise<unknown>;
   accounts(vendor: string): Promise<AccountView[]>;
   switches(vendor: string): Promise<SwitchRecord[]>;
   /**

@@ -50,9 +50,9 @@ describe("两个界面开关已经移除", () => {
   });
 });
 
-describe("四张卡片仍然齐全（功能没有被删掉）", () => {
+describe("三张卡片仍然齐全（功能没有被删掉）", () => {
   it("顺序不变", () => {
-    expect(SETTINGS_CARDS.map((card) => card.id)).toEqual(["display", "switching", "search", "advanced"]);
+    expect(SETTINGS_CARDS.map((card) => card.id)).toEqual(["display", "switching", "advanced"]);
   });
 
   it("切换设置里仍有换模型与自动重试", () => {
@@ -62,10 +62,9 @@ describe("四张卡片仍然齐全（功能没有被删掉）", () => {
     expect(switching?.shared).toContain("autoContinue");
   });
 
-  it("搜索设置里仍有网关优先与 API key 引用", () => {
-    const search = SETTINGS_CARDS.find((card) => card.id === "search");
-    expect(search?.shared).toContain("searchStrategy");
-    // 密钥列表不是设置字段（由添加/删除动作维护）。
-    expect(search?.shared).not.toContain("searchApiKeyRefs");
+  it("**搜索设置整张卡已撤销**（网页搜索移交宿主，2026-11-14）", () => {
+    // 这条原来是「搜索设置里仍有网关优先与 API key 引用」——被新需求取代：
+    // 官方网页搜索更新后，本插件不再承载搜索，卡片与两个字段一起移除。
+    expect(SETTINGS_CARDS.map((card) => card.id)).not.toContain("search");
   });
 });

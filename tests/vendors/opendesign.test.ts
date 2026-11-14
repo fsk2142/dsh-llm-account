@@ -20,7 +20,6 @@ import { expect, it, vi } from "vitest";
 
 import type { SettingsOp } from "../../src/core/adapter";
 import * as opendesign from "../../src/vendors/opendesign/index";
-import { gatewayAccessOf } from "../../src/vendors/gateway-access";
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -384,34 +383,6 @@ it("三家装进同一个宿主：一份远程面同时回答三家，描述符�
   }
 });
 
-it("网关访问登记的是**本行**的基地址与账号密钥（搜索网关路的数据来源）", async () => {
-  // 2026-10-20 审计：以前 commandcode 的 `gatewayAccess("opendesign")` 读的是**自己行**的
-  // `apiKeyEnv` / `apiBase`，于是 opendesign 会话里的搜索拿着 commandcode 的密钥打
-  // commandcode 的端点（实测 400）。现在数据由 opendesign 行自己登记进跨行注册表。
-  const credentials = fakeCredentials({
-    OPENDESIGN_API_KEY: "sk-top",
-    OPENDESIGN_ACCOUNT_WORK_ab12cd: "sk-work",
-  });
-  const settings = fakeSettings([{ ns: "opendesign", value: { ...SHAPE }, revision: 1 }]);
-  const host = fakeHost({ settings: settings.service, credentials: credentials.service });
-  opendesign.apply(host.ctx, opendesign.Config({ ...SHAPE, baseURL: "https://custom-link.example/v1" }));
-
-  const access = await gatewayAccessOf("opendesign");
-  // 基地址取自本行文档（`baseURL` > `apiBase` > 内置默认），不是 commandcode 的端点。
-  expect(access?.baseURL).toBe("https://custom-link.example/v1");
-  // 密钥取自本行账号（顶层当前账号优先），不是 commandcode 的账号。
-  expect(access?.key).toBe("sk-top");
-  expect(access?.key).not.toBe("sk-commandcode");
-});
-
-it("本行一个账号都解析不到密钥时，登记项如实回答不可用", async () => {
-  const credentials = fakeCredentials(); // 空的：两把密钥都不在库里
-  const host = fakeHost({ credentials: credentials.service });
-  opendesign.apply(host.ctx, opendesign.Config(SHAPE));
-  expect(await gatewayAccessOf("opendesign")).toBeUndefined();
-});
-
-// —— 多账号兼容：工作区必须逐账号存（2026-10-20）——
 
 it("**重新登录第二个账号不会覆盖第一个的工作区**（顶层字段不再被写）", async () => {
   // 旧实现把登录发现的工作区写进**顶层** `workspaceId`，而顶层是所有账号共用的回退：

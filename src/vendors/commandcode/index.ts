@@ -64,12 +64,6 @@ import type { CommandCodeProtocol } from "./protocol";
 import { createCommandCodeQuota } from "./quota";
 import { applyUsageRemote } from "../usage-remote";
 import { applyAutoContinue, repairLegacyContinueMessages } from "../auto-continue";
-import { applySearch } from "../search";
-import { gatewayAccessOf } from "../gateway-access";
-import { registerSearchProvider } from "../search-provider";
-import { createSearchSlotSync } from "../search-release";
-import { probeSearchKey } from "../search-api";
-import { normalizeSearchKeyRefs } from "../../core/switching/search-keys";
 import { readImageBytes } from "../../core/image-projection";
 import { createUsagePort } from "../usage-store";
 import { isModelIdVisible, normalizeVisibility } from "../../core/catalog";
@@ -173,10 +167,6 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
       autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
       /** 功能页的两台开关：关掉只隐藏界面那一块，不影响已配置的能力。 */
-      /** 搜索：是否优先用网关订阅额度（默认是；没有可用网关时回退 API key）。 */
-      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only", "off"]).default("gateway-first"),
-      /** 搜索用的 API key 凭据引用名（配在凭据服务里，不是明文）。 */
-      searchApiKeyRefs: z.array(z.string().role("credential-ref")).default(["DEEPSEEK_API_KEY"]),
       accounts: z.array(
         z.object({
           label: z.string(),
@@ -559,23 +549,10 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判
   // （2026-10-20 补齐：opencode / opendesign 早有这条，唯独本行没有 ——
   //  后果是手改 profile 的 `enabled: false` 要重载宿主才生效）。
-  /**
-   * 搜索槽位同步：三家 provider 行**都**触发（2026-10-28 补），由
-   * `createSearchSlotSync` 合并同拍调用（并发 mutate 同一条 `web` 行会撞乐观锁）。
-   *
-   * 为什么是三家而不是只挂这一行：手改 profile 只动 opencode / opendesign 的
-   * `searchStrategy` 时，那两行的 `volatile-update` 也要能把槽位让出去 / 收回来。
-   */
-  const syncSearchSlot = createSearchSlotSync({
-    settings,
-    strategy: () => document()["searchStrategy"],
-    warn,
-  });
-
   ctx.on("loader/volatile-update", () => {
-  // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
-  // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
-  invalidateCatalogCandidates();
+    // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+    // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+    invalidateCatalogCandidates();
     applyRoute();
     /**
      * 设置变了 → 重读持久文档（2026-10-30 修 A01）。
@@ -585,10 +562,6 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
      * 用户改完开关拿到的仍是启动时的快照 —— 表现就是「开了不生效 / 关不掉」。
      */
     refreshRawDocument();
-    // 设定变了 → 如果搜索被关掉（或重新打开），把宿主 `web` 行的 `searchProvider`
-    // 槽位让出 / 收回（见 `search-release.ts` 的完整理由）。不在每次启动做：只在
-    // **用户动作**的瞬间改配置，因果关系清楚。
-    void syncSearchSlot();
   });
 
   // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
@@ -710,70 +683,11 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     },
   );
 
-  // 统一搜索：网关订阅额度优先，没有则用 API key。
-  //
-  // 为什么在这里注册：搜索是**全局**能力（一台会话用一次），不需要三家各注册一份
-  // —— 重复注册会撞宿主的 `WEB_DUPLICATE_PROVIDER`。
-  //
-  // 选路依据是**当前会话的路由**：宿主 `agents.currentInitiator()` 给出正在跑的 agent，
-  // 它的 `session.requestContext()` 是最近一次 `request/context` 事件
-  // （`{ provider, model, ... }`，实测确认有这两个字段）。
-  applySearch(
-    ctx as unknown as Parameters<typeof applySearch>[0],
-    {
-      // 搜索能力**总是启用**：2026-10-20 用户去掉了「开启网页搜索」界面开关
-      // （卡片用箭头收起即可）。宿主没有 `web` 服务时 `applySearch` 会自行静默跳过。
-      enabled: () => true,
-      register: (webCtx) =>
-        registerSearchProvider(webCtx, {
-          fetchImpl: globalThis.fetch.bind(globalThis),
-          sessionRoute: () => {
-            // 读不到就返回空路由：选路会保守地退回 API key（不猜网关）。
-            const agents = (ctx as unknown as { get?: (name: string) => unknown }).get?.("agents") as
-              | { currentInitiator?: () => { session?: { requestContext?: () => unknown } } | undefined }
-              | undefined;
-            const context = agents?.currentInitiator?.()?.session?.requestContext?.();
-            const record = typeof context === "object" && context !== null ? (context as Record<string, unknown>) : {};
-            return {
-              provider: typeof record.provider === "string" ? record.provider : undefined,
-              model: typeof record.model === "string" ? record.model : undefined,
-            };
-          },
-          strategy: () => {
-            const value = document()["searchStrategy"];
-            return typeof value === "string" && value !== "" ? value : "gateway-first";
-          },
-          // 网关访问走**跨行注册表**（`gateway-access`）：数据在 opendesign 行登记，
-          // 不在本行。以前这里读本行的 `apiKeyEnv` / `apiBase`，等于拿着 commandcode 的
-          // 密钥打 commandcode 的端点（实测 400）—— 2026-10-20 审计修掉。
-          gatewayAccess: (provider) => gatewayAccessOf(provider),
-          // 多 key：按用户填的顺序依次解析，解析不到的跳过（不算失败 —— 用户可能只填了一条）。
-          resolveApiKeys: async () => {
-            const refs = normalizeSearchKeyRefs(document()["searchApiKeyRefs"]);
-            const out: { ref: string; key: string }[] = [];
-            for (const ref of refs) {
-              const key = await credentials.resolve(ref);
-              if (key !== undefined) out.push({ ref, key });
-            }
-            return out;
-          },
-        }),
-    },
-  );
 
   // Task 3：把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
   applyUsageRemote(ctx, {
     vendor: PROVIDER_ID,
     credentials,
-    // 密钥实测（搜索卡「测试」按钮 + 添加后自动验一次）。与 provider 共用同一份实现，
-    // 保证「测试说的」与「搜索实际用的」永远一致。
-    probeSearchKey: async (ref) => {
-      const key = await credentials.resolve(ref);
-      if (key === undefined) {
-        return { state: "invalid" as const, reason: "凭据库里找不到这把密钥（可能已被删除）" };
-      }
-      return await probeSearchKey({ key, fetchImpl: fetch });
-    },
     rotation,
     accounts,
     quota,

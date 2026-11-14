@@ -17,7 +17,7 @@
  */
 
 /** 卡片 id（顺序即渲染顺序）。 */
-export type SettingsCardId = "display" | "switching" | "search" | "advanced";
+export type SettingsCardId = "display" | "switching" | "advanced";
 
 /** 一个厂商专属字段：它只对某一家网关有效。 */
 export interface SpecificField {
@@ -62,15 +62,6 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     labelKey: "card.switching",
     hintKey: "card.switching.hint",
     shared: ["autoSwitchModelOnQuota", "autoContinue", "autoContinueMaxAttempts", "autoContinueIntervalMs"],
-    specific: [],
-  },
-  {
-    id: "search",
-    labelKey: "card.search",
-    hintKey: "card.search.hint",
-    // 「搜索方式」四选一。密钥列表**不再是设置字段**（需求：
-    // 「只保留保存密钥那个」）—— 它由搜索卡里的「添加/删除」动作维护。
-    shared: ["searchStrategy"],
     specific: [],
   },
   {

@@ -78,9 +78,7 @@ import { applyUsageRemote } from "../usage-remote";
 import { createUsagePort } from "../usage-store";
 import { isModelIdVisible, normalizeVisibility } from "../../core/catalog";
 import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
-import { registerGatewayAccess } from "../gateway-access";
 import { SwitchingController } from "../switching";
-import { createSearchSlotSync } from "../search-release";
 import { VELA_PREFLIGHT_TIMEOUT_MS, createOpenDesignLogin, discoverWorkspaceId, findVelaBinary } from "./login";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opendesign`）。 */
@@ -190,8 +188,6 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueOnTruncate: z.boolean(),
       autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
       autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
-      searchStrategy: z.union(["gateway-first", "api-first", "gateway-only", "api-only", "off"]).default("gateway-first"),
-      searchApiKeyRefs: z.array(z.string().role("credential-ref")).default(["DEEPSEEK_API_KEY"]),
     /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */
     workspaceId: z.string().default(""),
     /** 推理网关基地址（Chat Completions）。 */
@@ -622,23 +618,6 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   // commandcode 行注册（三行都注册会撞宿主的 `WEB_DUPLICATE_PROVIDER`），但网关的密钥与
   // 基地址在本行 —— 各自 apply 时登记进跨行注册表，搜索时现取。
   //
-  // 2026-10-20 审计修掉的真 bug：以前 commandcode 的 `gatewayAccess("opendesign")` 读的是
-  // **自己行**的 `apiKeyEnv` / `apiBase`，于是 opendesign 会话里的搜索拿着 commandcode 的
-  // 密钥打 commandcode 的端点（实测 400：那个端点只收 Claude 系）—— 网关路等于从来没通过，
-  // 而它是默认策略的第一选择，且失败不回退 API key。
-  registerGatewayAccess(PROVIDER_ID, async () => {
-    const doc = document();
-    // 与适配器同一份基地址优先级：文档 `baseURL` > `apiBase` > 内置默认。
-    const baseURL = normalizeKey(doc.baseURL) ?? normalizeKey(doc.apiBase) ?? DEFAULT_BASE_URL;
-    // 账号顺序与适配器选账号同源（顶层当前账号 + accounts 条目，按全局顺序）；
-    // 第一个解析到密钥的就是这次搜索要用的（密钥在凭据库或启动环境里）。
-    for (const ref of orderOf(doc)) {
-      const key = await resolveAccountKey(ctx, credentials, ref);
-      if (key !== undefined) return { baseURL, key };
-    }
-    return undefined;
-  });
-
   /**
    * 当前这次路由注册的句柄；`enabled: false` 时是 `undefined`（行仍然挂载）。
    *
@@ -660,22 +639,11 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
 
   applyRoute();
   // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判（与另两行同一事件名）。
-  /**
-   * 搜索槽位同步（2026-10-28 补）：三家 provider 行都触发，`createSearchSlotSync`
-   * 内部合并同拍调用。手改 profile 只动本行的 `searchStrategy` 时也要能同步槽位。
-   */
-  const syncSearchSlot = createSearchSlotSync({
-    settings,
-    strategy: () => document()["searchStrategy"],
-    warn,
-  });
-
   ctx.on("loader/volatile-update", () => {
-  // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
-  // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
-  invalidateCatalogCandidates();
+    // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+    // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+    invalidateCatalogCandidates();
     applyRoute();
-    void syncSearchSlot();
   });
   // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
   // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。

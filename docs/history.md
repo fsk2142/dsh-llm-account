@@ -1947,3 +1947,65 @@ network 失败时只记**本家**，换模型时只排除「最近 60 秒内失�
   （三家共用一份、重复注册会撞宿主 `WEB_DUPLICATE_PROVIDER`），风险中等；
   用户当前三家全开，无实际影响，**决定不做**。
 - 带工具调用的断流自动续写会重复执行工具（见上文「已知限制」）。
+---
+
+## 2.3.0：网页搜索整体剥离（2026-11-14）
+
+用户要求：「官方的网页搜索功能已经更新，现在从我们的这个插件里面剥离网页搜索的功能」。
+
+### 删掉了什么
+
+**7 个搜索专用源模块**（共约 1,323 行）：
+
+| 文件 | 行数 | 职责 |
+| --- | --- | --- |
+| `src/vendors/search-provider.ts` | 516 | 搜索 provider 主体：选路、网关路、API 路 |
+| `src/vendors/search-release.ts` | 240 | 让出 / 收回宿主 `web` 行的 `searchProvider` 槽位 |
+| `src/vendors/search-api.ts` | 227 | 直连 `/v1/tools/search` 与密钥实测 |
+| `src/core/switching/search-keys.ts` | 163 | 引用名解析、命名校验、汇总 |
+| `src/core/switching/search-route.ts` | 131 | `gateway-first` / `api-only` 等选路判定 |
+| `src/vendors/gateway-access.ts` | 57 | 跨行登记「某家的基地址 + 密钥」（只服务搜索网关路） |
+| `src/vendors/search.ts` | 45 | 把 provider 接进 `ctx.web` 的装配 |
+
+**15 个测试文件**（约 2,000 行）+ `save-two-writes.test.ts`（整份都在测搜索密钥删除）。
+
+**三家 schema 的 `searchStrategy` / `searchApiKeyRefs`**；**设置页的搜索卡**（4 张 → 3 张）；
+**`probeSearchCredential` 远程方法**（连带描述符、`parseCredentialProbes`、`probeSearchKey` 端口）；
+**`copy.ts` 里 80 条搜索文案**；`shell.ts` 的字段声明。
+
+### 一个差点被一起删掉的东西
+
+`summarizeKeyStatus` 原本住在 `search-keys.ts` 里，但它**与搜索无关**：设置页对环境变量名类字段
+（三家的 `apiKeyEnv`）也要显示「已配置 / 未配置」徽标。跟着搜索一起删的症状是
+**那批徽标整片消失且不报错** —— 静默功能损失。
+
+已搬到 `src/core/credential-summary.ts`，文案键改成中性的 `credential.configured` / `credential.missing`。
+
+### 旧 profile 的兼容
+
+`searchStrategy` / `searchApiKeyRefs` 从 schema 里删掉之后，**旧 profile 里的这两个键不会报错** ——
+实测确认 `schemastery` 会忽略未声明的键（`S({ enabled: true, searchStrategy: "api-only" })` 正常返回）。
+下一次写设置时它们自然消失，不需要用户手改配置。
+
+### 新增的不回归守卫
+
+`tests/client/search-removed.test.ts`（6 条）：设置页没有搜索卡、三家 schema 没有搜索字段、
+源码里没有任何 `registerSearchProvider(` / `applySearch(` / `createSearchSlotSync(`、
+远端面没有 `probeSearchCredential`、7 个模块确实不存在。
+
+**为什么用源码文本核对**：这些都是**装配事实**，只要 `src` 里还留着一句
+`registerSearchProvider(...)`，宿主就可能真的多一个 provider（并撞 `WEB_DUPLICATE_PROVIDER`）。
+跑一遍插件是更可靠的验证，但它需要真实宿主；单测里源码文本是第二可靠的做法。
+
+### 文档
+
+- `README.md`：搜索小节改成「已移除」并说明升级后旧字段会被忽略；
+- `docs/SPEC.md` / `docs/operations.md`：在第 3 期标题下加**现状说明**，
+  正文保留 —— 它记的通用教训（上游端点协议限制、跨行共享数据必须有单一真相、
+  批量试凭据的三个坑）仍然成立，换功能同样适用。
+
+### 验证
+
+`tsc` 干净；**201 文件 / 2,128 用例通过（2 条按平台 skip）**；构建成功；
+产物核实：`applySearch` / `registerSearchProvider` / `probeSearchCredential` / `searchStrategy`
+在 `lib/*.js` 里**全部 0 处**。
