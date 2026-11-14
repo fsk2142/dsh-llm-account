@@ -45,7 +45,6 @@ export interface FakeHost {
   /** 写进凭据库的调用（引用名 + 明文；明文只在这里出现，便于断言「没写空密钥」）。 */
   credentialWrites: { ref: string; secret: string }[];
   /** `credentialStatus` 被问过的引用名（断言「添加后确实重新查了一次」）。 */
-  credentialStatusCalls: string[][];
   /** 让下一次 `setCredential` 被宿主拒绝（凭据服务报错）。 */
   failCredentialOnce: string | undefined;
   /** 每次实测被问到的引用名（断言「加完自动测了一次」）。 */
@@ -190,7 +189,6 @@ export function fakeHost(
     modelFailures: [],
     credentials: new Set(options.credentialsInitially ?? []),
     credentialWrites: [],
-    credentialStatusCalls: [],
     failCredentialOnce: undefined,
     probeCalls: [],
     probeVerdicts: {},
@@ -302,7 +300,6 @@ export function fakeHost(
       : {
           /** 凭据库里「确实存在」的引用名（`credentialStatus` 的回答）。 */
           credentialStatus: (refs: readonly string[]): Promise<unknown> => {
-            host.credentialStatusCalls.push([...refs]);
             return mini.track(refs.filter((ref) => host.credentials.has(ref)).map((ref) => ({ ref, configured: true })));
           },
           setCredential: (ref: string, secret: string): Promise<unknown> => {

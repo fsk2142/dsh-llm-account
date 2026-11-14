@@ -53,8 +53,6 @@ function render(state = createPageState(VENDORS, snapshots()), extra: Record<str
       onSelectTab: () => undefined,
       onSetField: () => undefined,
       onSave: () => undefined,
-      onSaveSecret: async () => undefined,
-      onRemoveSecret: () => undefined,
       ...extra,
     }),
   );

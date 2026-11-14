@@ -666,7 +666,6 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   // 把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
   applyUsageRemote(ctx, {
     vendor: PROVIDER_ID,
-    credentials,
     rotation,
     accounts,
     quota,

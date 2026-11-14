@@ -94,8 +94,6 @@ export type CopyKey =
   | "card.switching.hint"
   | "card.advanced"
   | "card.advanced.hint"
-  | "credential.configured"
-  | "credential.missing"
   | "vendor.features"
   | "vendor.commandcode"
   | "vendor.opencodeGo"
@@ -465,8 +463,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "card.switching.hint": "什么时候换号/换模型、中断后要不要自动继续。三家共用。",
     "card.advanced": "高级设置",
     "card.advanced.hint": "端点、超时与输出上限。带厂商徽标的项只对那一家生效。",
-    "credential.configured": "已配置",
-    "credential.missing": "未配置",
     "vendor.features": "切换与搜索",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",
@@ -790,8 +786,6 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "card.switching.hint": "When to switch account/model, and whether to continue after an interruption. Shared.",
     "card.advanced": "Advanced",
     "card.advanced.hint": "Endpoints, timeouts and output limits. Items with a vendor badge apply to that vendor only.",
-    "credential.configured": "Configured",
-    "credential.missing": "Not configured",
     "vendor.features": "Switching & Search",
     "vendor.opencodeGo": "OpenCode",
     "vendor.opendesign": "Open Design",

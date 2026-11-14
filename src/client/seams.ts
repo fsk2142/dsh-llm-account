@@ -1627,13 +1627,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [usageReport, setUsageReport] = useState<UsageReportView | undefined>(undefined);
     const [usageStatsProblem, setUsageStatsProblem] = useState<string | undefined>(undefined);
     /**
-     * 凭据引用名 → 是否真的配置了（搜索 key 的「已添加 / 未添加」徽标）。
-     *
-     * 缺省 `undefined` 表示**还没读到**：那时页面不显示任何徽标，而不是猜「未添加」
-     *。
-     */
-    const [credentialStatus] = useState<Record<string, boolean> | undefined>(undefined);
-    /**
      * 插件自身的更新状态（`undefined` = 还没查过）。
      *
      * **打开设置页就自动查一次**（需求：「每次打开设置页就自动检查更新并提示吧，
@@ -2283,7 +2276,6 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       // 卡片底部的保存按钮：只保存这一家尚未落盘的输入。
       onSave: (ns) => void saveRow(ns),
       ...(savingNs === undefined ? {} : { savingNs }),
-      ...(credentialStatus === undefined ? {} : { credentialStatus }),
     });
   };
 }

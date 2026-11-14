@@ -14,9 +14,7 @@ import { CSS_CLASS } from "./css";
 import { durationPartsOf, minutesOfDurationParts } from "./duration";
 import { ChevronIcon } from "./icons";
 import { cardGroupsOf, FEATURE_TAB_NS, fieldsOf, specOf, type DraftField, type PageState } from "./page-state";
-import { summarizeKeyStatus } from "../core/credential-summary";
 import { savesImmediately } from "./registry";
-import type { CredentialProbe } from "./usage-contract";
 import { PLUGIN_VERSION, type UpdateState } from "./update-check";
 import { SETTINGS_CARDS, type SettingsCard } from "./settings-cards";
 import type { VendorEntry } from "./registry";
@@ -62,35 +60,6 @@ export interface PageShellProps {
   /** 合并标签页：不渲染供应商 tab 行，改为一个「设置对象」下拉。 */
   mergeTabs?: boolean;
   /**
-   * 凭据引用名 → 是否**真的**配置了（界面用来显示「已添加 / 未添加」）。
-   *
-   * 为什么由容器传进来：判断要读宿主的凭据服务，那是远程调用；页面外壳是纯函数。
-   * 缺省（还没读到）时**不显示任何徽标** —— 不猜「未添加」，那会误报。
-   */
-  credentialStatus?: Readonly<Record<string, boolean>>;
-  /**
-   * 写入一把密钥到凭据库（搜索设置卡的「保存密钥」）。
-   *
-   * 为什么需要：那个「引用名」输入框只写**名字**，真 key 必须另有一条通道进凭据库 ——
-   * 否则用户填完名字点保存，库里仍然没有 key（2026-10-20 报障的根因）。
-   * 缺省表示宿主不支持（老宿主）：那时整块密钥输入不渲染。
-   * @returns `undefined` 表示成功；否则是人话原因。
-   */
-  onSaveSecret?: (ref: string, secret: string) => Promise<string | undefined>;
-  /** 删除一把已添加的密钥（列表每行的 ×）。 */
-  onRemoveSecret?: (ref: string) => void;
-  /**
-   * 测试一把密钥能不能用（每行的「测试」按钮）。
-   *
-   * 需求：「或者多增加一个测试按钮，让用户可以自行测试密钥的有效性」。
-   * 缺省时按钮不渲染（老宿主没有实测通道 —— 不留一个点了没反应的死按钮）。
-   */
-  onTestSecret?: (ref: string) => void;
-  /** 各把密钥的实测结论（`ref → 结论`）；没测过的不在里面。 */
-  keyProbes?: Readonly<Record<string, CredentialProbe>>;
-  /** 正在测试哪一把（按钮禁用 + 换文案）。 */
-  keyProbing?: string;
-  /**
    * 是否显示「插件已更新，刷新页面」的提示条。
    *
    * 由容器判定：设置页已经能打开、但侧边栏卡片没挂上 —— 那正是「插件没进客户端启动图」的
@@ -112,14 +81,6 @@ export interface PageShellProps {
   onCheckUpdate?: () => void;
   /** 开始更新（只在 `available` 时可用）。 */
   onUpdate?: () => void;
-  /** 正在写密钥（按钮禁用 + 换文案）。 */
-  secretSaving?: boolean;
-  /** 密码框的当前值（受控：页面是纯函数，草稿由容器持有）。 */
-  secretDraft?: string;
-  onSecretDraftChange?: (value: string) => void;
-  /** 上一次写密钥的结果（`undefined`/空串 = 成功；否则是人话原因）。 */
-  onSecretError?: (error: string | undefined) => void;
-  secretError?: string | undefined;
 }
 
 /**
@@ -681,12 +642,6 @@ function fieldElement(
   const control = fieldControl(props, entry, field);
   if (control === undefined) return null;
   const hint = spec.hintKey === undefined ? null : createElement("small", { "data-field-hint": spec.key }, t(spec.hintKey));
-  // 凭据类字段的「已添加 / 未添加」徽标。
-  //
-  // 实际情况：「添加 API KEY 后保存了，没有显示我是否已经添加」。那个框填的是**引用名**，
-  // 真 key 在凭据库里 —— 填了名字不等于库里有 key，所以必须去查一次并显示出来。
-  // 查不到（还没读回来）时**什么都不显示**：猜「未添加」会误报。
-  const credentialBadge = credentialBadgeOf(props, field);
   // 说明放在**标签下面**，与控件同一行的只有标签本身：否则一段长说明会和输入框一起
   // 把标签列挤到只剩一两个字宽（真机截图里「用量刷新间隔（分钟）」就是竖排的）。
   //
@@ -719,7 +674,6 @@ function fieldElement(
               createElement("small", { key: "vendor", className: CSS_CLASS.vendorBadge }, vendorLabel),
             ]),
         // 「已添加 / 未添加」徽标（只在凭据类字段上出现）。
-        ...(credentialBadge === null ? [] : [credentialBadge]),
       ),
       hint,
     ),
@@ -775,44 +729,6 @@ function cardSaveBar(
   );
 }
 
-/**
- * 凭据类字段的「已添加 / 未添加」徽标。
- *
- * 只对**引用名类**字段生效（搜 key 的那个），值可能是逗号分隔的多个引用名：
- * 逐个查库，全部配好才说「已添加」，部分配置说「部分已添加」并点名缺哪个。
- * @param props - 页面属性（含容器传进来的状态表）。
- * @param field - 字段的控件状态。
- * @returns 徽标元素；不适用或状态还没读回来时为 `null`。
- */
-function credentialBadgeOf(props: PageShellProps, field: DraftField): ReactNode {
-  const status = props.credentialStatus;
-  if (status === undefined) return null; // 还没读回来：不猜
-  const spec = field.spec;
-  if (spec.kind !== "text" || !/KeyRefs?$|ApiKey/i.test(spec.key)) return null;
-  const refs = String(field.value ?? "")
-    .split(/[,，\s]+/)
-    .map((item) => item.trim())
-    .filter((item) => item !== "");
-  if (refs.length === 0) return null;
-  const rows = refs.map((ref) => ({ ref, configured: status[ref] === true }));
-  const summary = summarizeKeyStatus(rows);
-  const label =
-    summary.state === "configured"
-      ? props.t("credential.configured")
-      : summary.state === "partial"
-        ? `${props.t("credential.configured")} ${summary.configured}/${summary.total}`
-        : props.t("credential.missing");
-  return createElement(
-    "small",
-    {
-      key: "credential",
-      "data-credential-status": summary.state,
-      "data-credential-missing": summary.missing.join(","),
-      className: summary.state === "configured" ? CSS_CLASS.mark : CSS_CLASS.failure,
-    },
-    label,
-  );
-}
 
 /** 字段的控件。 */
 function fieldControl(props: PageShellProps, entry: VendorEntry, field: DraftField): ReactNode {
