@@ -256,7 +256,9 @@ export function toQuotaSnapshot(payload: unknown): QuotaSnapshot {
     else windows.push(window);
   }
   const plan = planOf(windows);
-  return { windows, failures, ...(plan === undefined ? {} : { plan }) };
+  // 这家的 failures 是**窗口名**（那个窗口没读到）—— 全部算**致命**。
+  // 与旧版语义一致，只是让契约说清「这些确实让读数不可信」。
+  return { windows, failures, failuresFatal: [...failures], ...(plan === undefined ? {} : { plan }) };
 }
 
 /**

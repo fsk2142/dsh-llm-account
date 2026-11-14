@@ -62,6 +62,7 @@ import {
   quotaTableOf,
 } from "../core/model-quota-table";
 import { PageShell } from "./page";
+import { readableQuotaOf } from "./quota-readability";
 import { ReadingCache } from "./reading-cache";
 import { savesImmediately, type VendorEntry } from "./registry";
 import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
@@ -3236,9 +3237,23 @@ export function completeReading(status: VendorUsageStatus): boolean {
   });
 }
 
+/**
+ * 这份额度读数是否可信：委托给 `quota-readability`。
+ *
+ * **2026-11-14 修「额度经常读取失效」**：原实现是
+ * `windows 非空 && failures 为空` —— 一刀切。而三家的 `failures` 里混着两类：
+ * 「账单摘要读失败」（余额确实没有）与「周期额度读不到 / vela 身份不匹配」
+ * （余额与套餐**仍然准确**，opendesign 的文案自己就这么写）。
+ *
+ * 实测后果：用户配了 3 个 opendesign 账号，vela 登录态只属于其中一个，
+ * 另外两个的周期额度必然 403 → 那两个账号永远显示「读取失效」，
+ * 而它们明明读到了余额。
+ *
+ * 现在只看 `failuresFatal`（缺省时回落到旧语义，不会突然变宽松）。
+ * 判定细节与分档理由见 `quota-readability` 的模块注释。
+ */
 function readableQuota(quota: AccountUsageStatus["quota"]): quota is NonNullable<AccountUsageStatus["quota"]> {
-  return Array.isArray(quota?.windows) && quota.windows.length > 0 &&
-    !(Array.isArray(quota.failures) && quota.failures.length > 0);
+  return readableQuotaOf(quota);
 }
 
 /** 部分读数照常展示。缺额度的账号可暂用自己的上次读数，其有效期保持原样。 */

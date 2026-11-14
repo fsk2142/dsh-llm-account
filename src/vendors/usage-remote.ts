@@ -1074,6 +1074,9 @@ function quotaSummaryOf(snapshot: QuotaSnapshot): QuotaSummary {
     ...(snapshot.plan === undefined ? {} : { plan: { ...snapshot.plan } }),
     windows: snapshot.windows.map((window) => ({ ...window })),
     failures: [...snapshot.failures],
+    // 都是「让余额/窗口本身不可信」的那一份（2026-11-14 分档）：
+    // 缺省时不带这个字段，客户端按旧语义回落。
+    ...(snapshot.failuresFatal === undefined ? {} : { failuresFatal: [...snapshot.failuresFatal] }),
   };
 }
 

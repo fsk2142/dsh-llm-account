@@ -229,7 +229,15 @@ export interface QuotaPlanSummary {
 export interface QuotaSummary {
   plan?: QuotaPlanSummary;
   windows: QuotaWindow[];
+  /** **全部**失败文案（UI 一条不丢地显示）。 */
   failures: string[];
+  /**
+   * **致命**失败：只有让余额/窗口本身不可信的那些。
+   *
+   * 客户端判定「这份读数可不可信」只认它（见 `quota-readability`）。
+   * 缺省 = 老宿主，按旧语义回落。
+   */
+  failuresFatal?: string[];
 }
 
 /** 账号行的展示状态（对齐宿主侧的返回；`pinned` 只在 `VendorUsageStatus` 上）。 */
@@ -377,7 +385,25 @@ function parseVendorUsageStatus(endpoint: string, value: unknown): VendorUsageSt
     // 与 `parseCatalogModels` 同一纪律：边界上逐项收窄，让下游可以信任形状。
     const windows = (Array.isArray(quota.windows) ? quota.windows : []).map(cleanQuotaWindow).filter(isDefined);
     const failures = Array.isArray(quota.failures) ? quota.failures : [];
-    return { ...account, quota: { ...quota, windows, failures } };
+    /**
+     * **致命**失败子集（2026-11-14 分档）。
+     *
+     * 缺省 = 老宿主，**不补空数组** —— 补了会让 `quota-readability` 误以为
+     * 「新宿主说没有致命失败」，从而把旧版的坏读数当成可信。
+     */
+    const rawFatal = quota.failuresFatal;
+    const failuresFatal = Array.isArray(rawFatal)
+      ? rawFatal.filter((item): item is string => typeof item === "string")
+      : undefined;
+    return {
+      ...account,
+      quota: {
+        ...quota,
+        windows,
+        failures,
+        ...(failuresFatal === undefined ? {} : { failuresFatal }),
+      },
+    };
   });
   return { ...value, accounts } as unknown as VendorUsageStatus;
 }

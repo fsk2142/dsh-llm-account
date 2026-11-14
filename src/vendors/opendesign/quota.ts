@@ -56,6 +56,13 @@ export interface OpenDesignQuotaParts {
   preflight?: unknown;
   /** 失败原因（面向用户的中文句子），原样进入结果的 `failures`。 */
   failures: string[];
+  /**
+   * **致命**失败的子集（让余额/套餐本身不可信的那些）。
+   *
+   * 缺省表示「调用方没分档」—— 那时 `toQuotaSnapshot` 不产出 `failuresFatal`，
+   * 客户端按旧语义回落（保守）。
+   */
+  failuresFatal?: string[];
 }
 
 /** 额度端口的依赖。取数用的密钥、工作区与 vela 都是注入点，端口自己不依赖 `ctx`。 */
@@ -602,6 +609,8 @@ export function toQuotaSnapshot(parts: OpenDesignQuotaParts): QuotaSnapshot {
     windows,
     ...(plan === undefined ? {} : { plan }),
     failures: [...parts.failures],
+    // 只有调用方**明确**分过档才带这个字段：缺省让客户端按旧语义回落。
+    ...(parts.failuresFatal === undefined ? {} : { failuresFatal: [...parts.failuresFatal] }),
   };
 }
 
@@ -664,7 +673,16 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
           "MISSING_CREDENTIAL",
         );
       }
+      /** 全部失败文案（UI 一条不丢）。 */
       const failures: string[] = [];
+      /**
+       * **致命**失败：只有让余额/套餐本身不可信的那些。
+       *
+       * 分档理由（2026-11-14）：周期额度（5 小时/周）读不到时，余额与套餐仍然准确 ——
+       * 把它当致命会让那两个账号永远显示「额度读取失败」，而它们的数字其实好好的。
+       * 实测场景：vela 登录态只属于其中一个账号，另外两个走 vela 必然 403。
+       */
+      const fatal: string[] = [];
       const read = await getSummary(key);
       let summary = read.payload;
       let readProblem = read.problem;
@@ -754,6 +772,7 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
         ...(summary === undefined ? {} : { summary }),
         ...(preflight === undefined ? {} : { preflight }),
         failures,
+        failuresFatal: fatal,
       });
     },
   };

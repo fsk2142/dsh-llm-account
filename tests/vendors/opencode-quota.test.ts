@@ -326,13 +326,13 @@ it("负载整体认不出来是一个已分类的失败，而不是干净的空�
 
   // **合法但空**的一种形状：`usage` 是对象而三个窗口一个都没有 —— 端点明确说「当前没有
   // 窗口数据」，空读数是诚实的。
-  expect(toQuotaSnapshot({ usage: {} })).toEqual({ windows: [], failures: [] });
-  expect(await quotaPort({ usage: {} }).port.snapshot()).toEqual({ windows: [], failures: [] });
+  expect(toQuotaSnapshot({ usage: {} })).toEqual({ windows: [], failures: [], failuresFatal: [] });
+  expect(await quotaPort({ usage: {} }).port.snapshot()).toEqual({ windows: [], failures: [], failuresFatal: [] });
 });
 
 it("形状不认识或字段非法的窗口被丢弃并记名，而不是倒成 0（整份读数照常返回）", () => {
   // 窗口字段存在但值是 `undefined`：端点没公布这个窗口，不造窗口也不记名。
-  expect(toQuotaSnapshot({ usage: { rolling: undefined } })).toEqual({ windows: [], failures: [] });
+  expect(toQuotaSnapshot({ usage: { rolling: undefined } })).toEqual({ windows: [], failures: [], failuresFatal: [] });
 
   // percent 超出 0–100 / resetsAt 解析不了：这条窗口数据不可信，丢弃并记名。
   const badPercent = toQuotaSnapshot({ usage: { rolling: { status: "ok", percent: 150, resetsAt: "2026-10-13T20:00:00Z" } } });

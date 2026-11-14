@@ -314,6 +314,9 @@ export function toQuotaSnapshot(parts: CommandCodeQuotaParts): QuotaSnapshot {
     windows,
     ...(plan === undefined ? {} : { plan }),
     failures: [...parts.failures],
+    // 这家的 failures 是端点名（whoami/usage/credits/subscriptions），
+    // 每一个都是额度数据本身 —— 全部算**致命**（语义与旧版一致，只是显式声明）。
+    failuresFatal: [...parts.failures],
   };
 }
 
