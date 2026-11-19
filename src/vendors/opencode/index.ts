@@ -75,6 +75,7 @@ import {
   isRecord,
   markVolatileFields,
   unwrapVolatileConfig,
+  optionalStep,
 } from "../assembly";
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
 import { createOpencodeAdapter } from "./adapter";
@@ -554,17 +555,30 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
   };
 
   applyRoute();
-  // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判（与旧插件同一事件名）。
-  ctx.on("loader/volatile-update", () => {
-    // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
-    // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
-    invalidateCatalogCandidates();
-    applyRoute();
-  });
-  // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
-  // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。
-  (ctx.on as (event: string, listener: (...args: unknown[]) => void) => () => void)("session/event", (...args) =>
-    switching.noteHostEvent(...args),
+  /*
+   * 下面全是**可选**宿主接缝（2026-11-19 真机故障后逐个兜住）。
+   *
+   * 用户同事的 opendesign 整家从设置页消失、登录入口只剩另两家 —— 根因是某个
+   * `ctx.on(...)` / `applyUsageRemote(...)` 在旧宿主（0.2.2-rc.1）上抛错，异常冒到
+   * `apply()`，**整个厂商不加载**。它们全是附加功能：丢一个不该丢整家。
+   *
+   * 必须成功的只有上面的 `applyRoute()` —— 它注册适配器路由。
+   */
+  optionalStep("opencode", "volatile-update 订阅", () =>
+    // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判（与旧插件同一事件名）。
+    ctx.on("loader/volatile-update", () => {
+      // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+      // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+      invalidateCatalogCandidates();
+      applyRoute();
+    }),
+  );
+  optionalStep("opencode", "session/event 订阅", () =>
+    // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
+    // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。
+    (ctx.on as (event: string, listener: (...args: unknown[]) => void) => () => void)("session/event", (...args) =>
+      switching.noteHostEvent(...args),
+    ),
   );
   ctx.effect(
     () => () => {
@@ -574,44 +588,51 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
     "dsh-llm-account: opencode provider route",
   );
 
-  // Ruling 23：用户补上密钥后该账号必须能重新参与轮换。宿主 0.2.0-rc.2 的
-  // `credentials/reference-updated` 就是这个接缝（凭据引用名与账号 ref 同一套标识空间）。
-  ctx.on("credentials/reference-updated", (ref) => {
-    rotation.clearCredentialRejection(ref);
-  });
+  optionalStep("opencode", "凭据变更订阅", () =>
+    // Ruling 23：用户补上密钥后该账号必须能重新参与轮换。宿主 0.2.0-rc.2 的
+    // `credentials/reference-updated` 就是这个接缝（凭据引用名与账号 ref 同一套标识空间）。
+    ctx.on("credentials/reference-updated", (ref) => {
+      rotation.clearCredentialRejection(ref);
+    }),
+  );
 
   // Task 3：把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
-  applyUsageRemote(ctx, {
-    vendor: PROVIDER_ID,
-    rotation,
-    accounts: guarded,
-    quota,
-    pinnedRef: () => pinnedRefOf(document()),
-    quotaRef: () => selectedRefOf(document()),
-    capabilities,
-    // 设置页的模型勾选：未过滤的完整目录。
-    // 刷新按钮的落点：**必须 fresh**（绕过目录缓存）。TTL 内点刷新若拿缓存，
-    // 界面上就是「点了没反应」。
-    models: () => adapter.catalogModels(true),
-    switchState: () => switching.snapshot(),
-    switchNow: () => switching.switchNow(),
-    accountOrder: () => {
-      const order = document().accountOrder;
-      return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
-    },
-    setAccountOrder: async (order) => {
-      await accounts.setOrder?.(order);
-    },
-    setSwitchSettings: (input) => writeSwitchSettings(settings, OPENCODE_SETTINGS_NS, input),
-    modelRules: () => modelRulesOf(document()),
-    setAccountModels: (ref, models) =>
-      writeModelRules(settings, OPENCODE_SETTINGS_NS, (current) => assignModelsToAccount(modelRulesOf(current), ref, models)),
-    // 实验性设备码网页登录。
-    login,
-  });
+  optionalStep("opencode", "用量远程面", () =>
+    // Task 3：把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
+    applyUsageRemote(ctx, {
+      vendor: PROVIDER_ID,
+      rotation,
+      accounts: guarded,
+      quota,
+      pinnedRef: () => pinnedRefOf(document()),
+      quotaRef: () => selectedRefOf(document()),
+      capabilities,
+      // 设置页的模型勾选：未过滤的完整目录。
+      // 刷新按钮的落点：**必须 fresh**（绕过目录缓存）。TTL 内点刷新若拿缓存，
+      // 界面上就是「点了没反应」。
+      models: () => adapter.catalogModels(true),
+      switchState: () => switching.snapshot(),
+      switchNow: () => switching.switchNow(),
+      accountOrder: () => {
+        const order = document().accountOrder;
+        return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
+      },
+      setAccountOrder: async (order) => {
+        await accounts.setOrder?.(order);
+      },
+      setSwitchSettings: (input) => writeSwitchSettings(settings, OPENCODE_SETTINGS_NS, input),
+      modelRules: () => modelRulesOf(document()),
+      setAccountModels: (ref, models) =>
+        writeModelRules(settings, OPENCODE_SETTINGS_NS, (current) => assignModelsToAccount(modelRulesOf(current), ref, models)),
+      // 实验性设备码网页登录。
+      login,
+    }),
+  );
 
-  // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
-  disableSettingsAutoForm(ctx, OPENCODE_SETTINGS_NS);
+  optionalStep("opencode", "关闭自动生成设置表单", () =>
+    // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
+    disableSettingsAutoForm(ctx, OPENCODE_SETTINGS_NS),
+  );
 
 /* 自动继续：本家也要接（2026-11-12 此前只有 commandcode 接了，另两家开关形同虚设）。 */
 wireAutoContinue(

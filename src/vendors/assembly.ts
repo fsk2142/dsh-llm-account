@@ -245,6 +245,59 @@ function isSettingsForms(value: unknown): value is SettingsForms {
   return isRecord(value) && typeof value.describe === "function" && typeof value.mutate === "function";
 }
 
+/**
+ * 跑一个**可选**宿主接缝，失败只丢这一步（2026-11-19 真机故障）。
+ *
+ * ## 这个助手的由来
+ *
+ * 用户同事的 `opendesign` 整家从设置页消失、登录入口只剩另外两家。根因是
+ * `wireAutoContinue` 里两句 `ctx.on(...)` 写在 `try` 外面 —— 宿主（`0.2.2-rc.1`）
+ * 对某个事件名抛错，异常冒到 `apply()`，**整个厂商不加载**。
+ *
+ * 那条已经单独修了，但同一个反模式在 `apply()` 里还有好几处：`ctx.on(...)` 注册
+ * 宿主事件、`applyUsageRemote` 依赖 `ctx.inject`、`registerCatalogSource` 等。
+ * 任何一处因**宿主版本差异**抛错都会让整家消失 —— 而它们全是**附加功能**
+ *（用量面板、自动继续、目录源、凭据变更通知），丢一个不该丢整家。
+ *
+ * ## 取舍：为什么不是「全部 try/catch 包起来」
+ *
+ * 那样会把**必须成功**的步骤（注册适配器路由）也吞掉 —— 路由没了这一家等于没装，
+ * 却还显示着「已启用」，更难排查。所以只兜**可选**的那些，由调用点显式选择。
+ *
+ * ## 失败时的行为
+ *
+ * 打印一条带厂商名与步骤名的 `[dsh-llm-account]` 警告（能被用户在控制台里搜到），
+ * 然后**继续执行下一步** —— 不缺那一个功能，但整家照常工作。
+ *
+ * @param vendorLabel - 厂商名（日志里能直接看出是哪一家）。
+ * @param step - 步骤名（「用量面板」「自动继续」「目录源」这种，不是函数名）。
+ * @param run - 要执行的步骤。
+ * @returns 步骤的返回值；抛错时为 `undefined`。
+ */
+export function optionalStep<T>(vendorLabel: string, step: string, run: () => T): T | undefined {
+  try {
+    return run();
+  } catch (error: unknown) {
+    /*
+     * 用 `console.warn` 而不是 `ctx.logger`：这一步已经证明「宿主这个接缝不配合」，
+     * 再去碰 `ctx.logger` 可能同样抛（`logger` 也是宿主服务）。console 一定在。
+     *
+     * **日志本身再兜一层**：这个助手的契约是「绝对不外溢」。若 `console.warn` 被替换/
+     * 打补丁后抛（测试里就会，真机上也可能被别的插件包装），这里不能再把异常冒到 `apply()`
+     * —— 那等于绕过了整个防护。
+     */
+    try {
+      console.warn(
+        `[dsh-llm-account] ${vendorLabel}: ${step} skipped (this host may not support it):`,
+        error,
+      );
+    } catch {
+      // 连 warn 都失败：放弃日志，保住「不外溢」这条首要契约。
+    }
+    return undefined;
+  }
+}
+
 /** 读宿主设置服务；服务缺席时抛错（调用方都处在「必须读写配置」的路径上）。 */
 function requireSettingsForms(ctx: Context, namespace: string): SettingsForms {
   const service: unknown = ctx.get("settings");

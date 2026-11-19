@@ -46,6 +46,7 @@ import {
   isRecord,
   markVolatileFields,
   unwrapVolatileConfig,
+  optionalStep,
 } from "../assembly";
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
 import {
@@ -549,32 +550,41 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判
   // （2026-10-20 补齐：opencode / opendesign 早有这条，唯独本行没有 ——
   //  后果是手改 profile 的 `enabled: false` 要重载宿主才生效）。
-  ctx.on("loader/volatile-update", () => {
-    // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
-    // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
-    invalidateCatalogCandidates();
-    applyRoute();
-    /**
-     * 设置变了 → 重读持久文档（2026-10-30 修 A01）。
-     *
-     * `autoContinueEnabled()` 要看「用户到底有没有显式写过 `autoContinue`」，而那个
-     * 信息只在**持久文档**里。首次读取发生在 `apply`，之后如果不跟着设置变更重读，
-     * 用户改完开关拿到的仍是启动时的快照 —— 表现就是「开了不生效 / 关不掉」。
-     */
-    refreshRawDocument();
-  });
-
-  // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
-  // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。
-  (ctx.on as (event: string, listener: (...args: unknown[]) => void) => () => void)("session/event", (...args) =>
-    switching.noteHostEvent(...args),
+  optionalStep("commandcode", "volatile-update 订阅", () =>
+    // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判
+    // （2026-10-20 补齐：opencode / opendesign 早有这条，唯独本行没有 ——
+    //  后果是手改 profile 的 `enabled: false` 要重载宿主才生效）。
+    ctx.on("loader/volatile-update", () => {
+      // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
+      // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
+      invalidateCatalogCandidates();
+      applyRoute();
+      /**
+       * 设置变了 → 重读持久文档（2026-10-30 修 A01）。
+       *
+       * `autoContinueEnabled()` 要看「用户到底有没有显式写过 `autoContinue`」，而那个
+       * 信息只在**持久文档**里。首次读取发生在 `apply`，之后如果不跟着设置变更重读，
+       * 用户改完开关拿到的仍是启动时的快照 —— 表现就是「开了不生效 / 关不掉」。
+       */
+      refreshRawDocument();
+    }),
   );
 
-  // Ruling 23：用户补上密钥后该账号必须能重新参与轮换。宿主 0.2.0-rc.2 的
-  // `credentials/reference-updated` 就是这个接缝（凭据引用名与账号 ref 同一套标识空间）。
-  ctx.on("credentials/reference-updated", (ref) => {
-    rotation.clearCredentialRejection(ref);
-  });
+  optionalStep("commandcode", "session/event 订阅", () =>
+    // 回合结束是「等任务结束后再切换」的门控。实测 0.2.1-rc.2：事件名 `session/event`，
+    // 参数是 `(session, event)`，`event.type === "turn/end"`；类型里还没声明，故窄化后调用。
+    (ctx.on as (event: string, listener: (...args: unknown[]) => void) => () => void)("session/event", (...args) =>
+      switching.noteHostEvent(...args),
+    ),
+  );
+
+  optionalStep("commandcode", "凭据变更订阅", () =>
+    // Ruling 23：用户补上密钥后该账号必须能重新参与轮换。宿主 0.2.0-rc.2 的
+    // `credentials/reference-updated` 就是这个接缝（凭据引用名与账号 ref 同一套标识空间）。
+    ctx.on("credentials/reference-updated", (ref) => {
+      rotation.clearCredentialRejection(ref);
+    }),
+  );
 
   // 自动继续：会话非人为中断后自动接着跑。
   //
@@ -685,7 +695,8 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
 
 
   // Task 3：把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
-  applyUsageRemote(ctx, {
+  optionalStep("commandcode", "用量远程面", () =>
+    applyUsageRemote(ctx, {
     vendor: PROVIDER_ID,
     rotation,
     accounts,
@@ -702,20 +713,23 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
     switchState: () => switching.snapshot(),
     switchNow: () => switching.switchNow(),
     accountOrder: () => {
-      const order = document().accountOrder;
-      return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
+    const order = document().accountOrder;
+    return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
     },
     setAccountOrder: async (order) => {
-      await accounts.setOrder?.(order);
+    await accounts.setOrder?.(order);
     },
     setSwitchSettings: (input) => writeSwitchSettings(settings, COMMAND_CODE_SETTINGS_NS, input),
     modelRules: () => rulesOf(document()),
     setAccountModels: (ref, models) =>
-      writeModelRules(settings, COMMAND_CODE_SETTINGS_NS, (current) => assignModelsToAccount(rulesOf(current), ref, models)),
-  });
+    writeModelRules(settings, COMMAND_CODE_SETTINGS_NS, (current) => assignModelsToAccount(rulesOf(current), ref, models)),
+    }),
+  );
 
-  // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
-  disableSettingsAutoForm(ctx, COMMAND_CODE_SETTINGS_NS);
+  optionalStep("commandcode", "关闭自动生成设置表单", () =>
+    // Task 3：关掉宿主自动生成的设置表单，否则它会和统一页面并排出现（第 1a 期交接项）。
+    disableSettingsAutoForm(ctx, COMMAND_CODE_SETTINGS_NS),
+  );
 
   return { providerId: PROVIDER_ID, settingsNs: COMMAND_CODE_SETTINGS_NS, capabilities, adapter, rotation, intents, accounts, credentials, quota, login };
 }
