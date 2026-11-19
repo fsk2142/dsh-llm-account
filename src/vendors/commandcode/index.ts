@@ -46,6 +46,7 @@ import {
   isRecord,
   markVolatileFields,
   unwrapVolatileConfig,
+  registerRouteOrExplain,
   optionalStep,
 } from "../assembly";
 import type { RotationAccess, PluginConfigSchema, SettingsRowIds } from "../assembly";
@@ -534,7 +535,7 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   const applyRoute = (): void => {
     const enabled = document().enabled !== false;
     if (enabled && registration === undefined) {
-      registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
+      registration = registerRouteOrExplain(ctx, PROVIDER_ID, adapter);
     } else if (!enabled && registration !== undefined) {
       registration();
       registration = undefined;

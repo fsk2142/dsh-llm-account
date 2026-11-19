@@ -11,6 +11,7 @@
  * @module dsh-llm-account/src/vendors/assembly
  */
 import type { Context } from "@deepseek-ai/cordis";
+import type { AdapterRegistrationHandle } from "@deepseek-ai/dsh-llm";
 import { credentialRef, isCredentialRefName } from "@deepseek-ai/dsh-credentials";
 import type { CredentialProvider } from "@deepseek-ai/dsh-credentials";
 import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
@@ -238,6 +239,72 @@ export function disableSettingsAutoForm(ctx: Context, namespace: string): void {
     },
     "dsh-llm-account: settings auto-form policy",
   );
+}
+
+/**
+ * 注册 provider 路由；**撞名时给可操作的诊断，而不是让 apply 崩掉**（2026-11-19）。
+ *
+ * ## 被钉住的真机故障
+ *
+ * 宿主的 `registerAdapter` 在 provider id 已被**别的 adapter** 占用时抛
+ * `DUPLICATE_ADAPTER`：
+ *
+ * ```js
+ * if (unique.has(provider) || this.adapters.has(provider) && !owned.has(provider))
+ *   throw new LlmError(`an adapter for provider "${provider}" is already registered`, "DUPLICATE_ADAPTER");
+ * ```
+ *
+ * 用户同事在「模型 → 手动添加 provider」里建了一个自定义路由。那个界面允许用户**自己填**
+ * route（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`），只校验「是否与**当前已注册**的 id 重名」——
+ * 而插件启动顺序决定了我们的 provider 还没注册，于是 `opendesign` 这样的名字能建成功。
+ * 等我们的 `apply` 跑起来再注册，就撞上 `DUPLICATE_ADAPTER`，**整个厂商行不加载**。
+ *
+ * ## 为什么不能「静默跳过」
+ *
+ * 静默跳过等于「界面说这家已启用，但没有模型可选」—— 那是更难排查的坏结果。
+ * 所以要**打印一条能直接照着做的错误**，并且**不让它冒到 `apply()`**。
+ *
+ * @param ctx - 插件上下文（要 `llm` 服务）。
+ * @param provider - 要注册的 provider id。
+ * @param adapter - 该 provider 的适配器。
+ * @returns 注册句柄；撞名或宿主不支持时 `undefined`（那一家就没有模型可选，但界面仍在）。
+ */
+export function registerRouteOrExplain<A>(
+  ctx: Context,
+  provider: string,
+  adapter: A,
+): AdapterRegistrationHandle | undefined {
+  /** 打印一条警告；**日志本身再兜一层**（这个助手的契约是「绝对不外溢」）。 */
+  const warn = (message: string): void => {
+    try {
+      console.warn(message);
+    } catch {
+      // 连 warn 都失败：放弃日志，保住「不外溢」这条首要契约。
+    }
+  };
+  const llm = (ctx as unknown as { llm?: { registerAdapter?: unknown } }).llm;
+  if (llm === undefined || typeof llm.registerAdapter !== "function") {
+    warn(`[dsh-llm-account] ${provider}: this host has no llm.registerAdapter(); the route is not registered`);
+    return undefined;
+  }
+  try {
+    return (llm.registerAdapter as (ids: string[], a: A) => AdapterRegistrationHandle)([provider], adapter);
+  } catch (error: unknown) {
+    /*
+     * 撞名是最常见的一种，但别的失败也可能（providerInfo 形状、retry policy 解析等）。
+     * 一律说清「provider id + 宿主原话 + 该怎么办」，然后返回 undefined 让 apply 继续。
+     */
+    const message = error instanceof Error ? error.message : String(error);
+    const duplicate = /already registered|DUPLICATE_ADAPTER/iu.test(message);
+    warn(
+      duplicate
+        ? `[dsh-llm-account] ${provider}: provider id "${provider}" is ALREADY REGISTERED by another adapter ` +
+          `(likely a provider you added manually under 模型 → 添加). This plugin cannot claim that id, ` +
+          `so its models are unavailable until you delete or rename that custom provider. Host said: ${message}`
+        : `[dsh-llm-account] ${provider}: registerAdapter failed, so its models are unavailable: ${message}`,
+    );
+    return undefined;
+  }
 }
 
 /** 宿主设置服务的形状判定（只认本装配层用到的两个方法）。 */

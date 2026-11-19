@@ -43,7 +43,7 @@ import type { AccountState, CredentialPort, ModelRule, QuotaPort, VendorCapabili
 import { assignModelsToAccount, CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
 
-import { optionalStep } from "../assembly";
+import { optionalStep, registerRouteOrExplain } from "../assembly";
 import { autoContinueEnabledOf, wireAutoContinue } from "../auto-continue-wiring";
 import type { IntentLog } from "../../core/recovery";
 import {
@@ -627,7 +627,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   const applyRoute = (): void => {
     const enabled = document().enabled !== false;
     if (enabled && registration === undefined) {
-      registration = ctx.llm.registerAdapter([PROVIDER_ID], adapter);
+      registration = registerRouteOrExplain(ctx, PROVIDER_ID, adapter);
     } else if (!enabled && registration !== undefined) {
       registration();
       registration = undefined;
