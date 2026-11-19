@@ -142,6 +142,20 @@ export function autoContinueEnabledOf(
 /**
  * 接线自动继续。
  *
+ * ## 整段都在 try 里（2026-11-19 修真机故障）
+ *
+ * 原来的实现只把 `applyAutoContinue(...)` 那一句包在 try 里，而**前面两句
+ * `events.on("agent/pre-step", …)` / `events.on("session/event", …)` 在 try 之外**。
+ *
+ * 后果（真机确认）：宿主不认识某个事件名时 `ctx.on` 会抛，而这两个调用发生在
+ * `apply()` 里、没有任何兜底 —— 于是**整个厂商行的 apply 挂掉**，那一家彻底不加载：
+ *
+ * - 设置页里那一家整块消失（没有设置快照 → 没有 tab → 没有账号卡片）；
+ * - 「网页登录」按钮也只剩另外两家。
+ *
+ * 这是「自动继续」这个**附加功能**把**整个厂商**拖死的典型 — 收益极小、代价极大。
+ * 现在整段接线都在 try 内：任何一环失败只让「自动继续」失效，其余功能照常。
+ *
  * @param ctx - 插件上下文（只需要 `on` 与 `get`）。
  * @param settings - **函数**而不是快照：`loader/volatile-update` 不会重跑 apply，
  *   快照会让「运行时改开关/次数/间隔」全部不生效。
@@ -153,67 +167,100 @@ export function wireAutoContinue(
   settings: () => { enabled: boolean; maxAttempts: number; intervalMs: number },
   vendorLabel: string,
 ): () => void {
-  const host = ctx as HostContext;
-  const events = host as unknown as HostEvents;
+  /** 已注册的事件注销器（接线中途失败时要把前面注册的摘掉，不留半个监听）。 */
+  const disposers: (() => void)[] = [];
 
-  /** 按 session.id 记下最近一轮的 finish（只读当前轮，避免拿上一轮的判断这一轮）。 */
-  const finishesBySession = new Map<string, FinishRecord>();
-
-  /** 只允许**当前执行作用域**选 inbox：从别的 agent 那里拿会发错会话。 */
-  const agentOfCurrentRun = (): { inbox: CurrentInbox } | undefined => {
-    try {
-      const get = host.get;
-      const agents = typeof get === "function" ? get.call(host, "agents") : undefined;
-      const current = (agents as { currentInitiator?: () => unknown } | undefined)?.currentInitiator?.();
-      if (!isRecord(current) || !isRecord(current.session) || typeof current.session.id !== "string") {
-        return undefined;
+  /** 安全注销：单个失败不影响其余。 */
+  const disposeAll = (): void => {
+    for (const off of disposers.splice(0)) {
+      try {
+        off();
+      } catch {
+        // 注销失败不影响其余清理。
       }
-      if (!isRecord(current.inbox) || typeof current.inbox.append !== "function") return undefined;
-      return current as { inbox: CurrentInbox };
-    } catch {
-      return undefined;
     }
   };
 
-  const offPreStep = events.on("agent/pre-step", (payload: unknown, next?: unknown) => {
-    const record = isRecord(payload) ? payload : undefined;
-    if (record !== undefined) repairLegacyContinueMessages(record["messages"]);
-    // waterfall：必须把下游的 enter/reject 决策交回去，否则链路断在这里。
-    return typeof next === "function" ? (next as () => unknown)() : undefined;
-  });
-
-  const offSession = events.on("session/event", (session: unknown, event: unknown) => {
-    if (!isRecord(event) || event["type"] !== "assistant/message") return;
-    const data = isRecord(event["data"]) ? event["data"] : undefined;
-    if (data === undefined) return;
-    /*
-     * 宿主的终止原因藏在 compact stream 记录里；拿它而不是从 data 顶层读 ——
-     * 顶层没有这个字段（`assistant/message` 只带 message/usage/turn）。
-     */
-    const finish = Array.isArray(data["stream"])
-      ? lastAssistantStreamChunk(data["stream"] as readonly AssistantStreamRecord[], "finish")?.reason
-      : undefined;
-    if (!isRecord(finish) || typeof finish["kind"] !== "string") return;
-    if (!isRecord(session) || typeof session["id"] !== "string" || session["id"].length === 0) return;
-    const turn = data["turn"];
-    if (typeof turn !== "number" || !Number.isSafeInteger(turn)) return;
-    const finishRecord = finish as Record<string, unknown>;
-    const failureRaw = finishRecord["failure"];
-    const failure: Record<string, unknown> | undefined = isRecord(failureRaw) ? failureRaw : undefined;
-    const code = failure === undefined ? undefined : failure["code"];
-    finishesBySession.set(session["id"], {
-      turn,
-      kind: finish["kind"],
-      ...(typeof code === "string" && code !== "" ? { failureCode: code } : {}),
-    });
-    // 有界：会话很多时不无限增长（超了丢最旧的）。
-    if (finishesBySession.size > 128) {
-      const oldest = finishesBySession.keys().next().value;
-      if (oldest !== undefined) finishesBySession.delete(oldest);
-    }
-  });
-
   try {
+    const host = ctx as HostContext;
+    const events = host as unknown as HostEvents;
+
+    /** 按 session.id 记下最近一轮的 finish（只读当前轮，避免拿上一轮的判断这一轮）。 */
+    const finishesBySession = new Map<string, FinishRecord>();
+
+    /** 只允许**当前执行作用域**选 inbox：从别的 agent 那里拿会发错会话。 */
+    const agentOfCurrentRun = (): { inbox: CurrentInbox } | undefined => {
+      try {
+        const get = host.get;
+        const agents = typeof get === "function" ? get.call(host, "agents") : undefined;
+        const current = (agents as { currentInitiator?: () => unknown } | undefined)?.currentInitiator?.();
+        if (!isRecord(current) || !isRecord(current.session) || typeof current.session.id !== "string") {
+          return undefined;
+        }
+        if (!isRecord(current.inbox) || typeof current.inbox.append !== "function") return undefined;
+        return current as { inbox: CurrentInbox };
+      } catch {
+        return undefined;
+      }
+    };
+
+    /**
+     * 注册一个宿主事件。
+     *
+     * `ctx.on` 对**不认识的事件名**可能抛（宿主版本差异）。这里每个事件各自兜住：
+     * 一个事件不受支持不该连带另一个也注册不上 —— 而 `session/event` 是记 finish 的
+     * 关键路径，比 `agent/pre-step`（只修补旧版续写消息）重要。
+     */
+    const listen = (name: string, listener: (...args: unknown[]) => unknown): void => {
+      try {
+        const off = events.on(name, listener);
+        if (typeof off === "function") disposers.push(off as () => void);
+      } catch (error: unknown) {
+        console.warn(
+          `[dsh-llm-account] ${vendorLabel}: auto-continue could not subscribe "${name}" (this host may not support it):`,
+          error,
+        );
+      }
+    };
+
+    listen("agent/pre-step", (payload: unknown, next?: unknown) => {
+      const record = isRecord(payload) ? payload : undefined;
+      if (record !== undefined) repairLegacyContinueMessages(record["messages"]);
+      // waterfall：必须把下游的 enter/reject 决策交回去，否则链路断在这里。
+      return typeof next === "function" ? (next as () => unknown)() : undefined;
+    });
+
+    listen("session/event", (session: unknown, event: unknown) => {
+      if (!isRecord(event) || event["type"] !== "assistant/message") return;
+      const data = isRecord(event["data"]) ? event["data"] : undefined;
+      if (data === undefined) return;
+      /*
+       * 宿主的终止原因藏在 compact stream 记录里；拿它而不是从 data 顶层读 ——
+       * 顶层没有这个字段（`assistant/message` 只带 message/usage/turn）。
+       */
+      const finish = Array.isArray(data["stream"])
+        ? lastAssistantStreamChunk(data["stream"] as readonly AssistantStreamRecord[], "finish")?.reason
+        : undefined;
+      if (!isRecord(finish) || typeof finish["kind"] !== "string") return;
+      if (!isRecord(session) || typeof session["id"] !== "string" || session["id"].length === 0) return;
+      const turn = data["turn"];
+      if (typeof turn !== "number" || !Number.isSafeInteger(turn)) return;
+      const finishRecord = finish as Record<string, unknown>;
+      const failureRaw = finishRecord["failure"];
+      const failure: Record<string, unknown> | undefined = isRecord(failureRaw) ? failureRaw : undefined;
+      const code = failure === undefined ? undefined : failure["code"];
+      finishesBySession.set(session["id"], {
+        turn,
+        kind: finish["kind"],
+        ...(typeof code === "string" && code !== "" ? { failureCode: code } : {}),
+      });
+      // 有界：会话很多时不无限增长（超了丢最旧的）。
+      if (finishesBySession.size > 128) {
+        const oldest = finishesBySession.keys().next().value;
+        if (oldest !== undefined) finishesBySession.delete(oldest);
+      }
+    });
+
     applyAutoContinue(
       host as never,
       settings,
@@ -233,21 +280,18 @@ export function wireAutoContinue(
       },
     );
   } catch (error: unknown) {
-    // 接线失败不该拖垮整个插件：没有自动继续，其余功能照常。
+    /*
+     * **兜住一切**：接线失败不该拖垮整个厂商行。
+     *
+     * 这条分支是 2026-11-19 真机故障的修复点 —— 之前 `events.on` 在 try 外面，
+     * 宿主不支持那个事件名时异常冒到 `apply()`，整家厂商不加载。
+     *
+     * 已经注册成功的监听要摘掉：保留一半的接线比完全没有更难排查。
+     */
     console.error(`[dsh-llm-account] ${vendorLabel}: auto-continue wiring failed:`, error);
+    disposeAll();
     return () => undefined;
   }
 
-  return () => {
-    try {
-      if (typeof offPreStep === "function") (offPreStep as () => void)();
-    } catch {
-      // 注销失败不影响其余清理。
-    }
-    try {
-      if (typeof offSession === "function") (offSession as () => void)();
-    } catch {
-      // 同上。
-    }
-  };
+  return disposeAll;
 }
