@@ -547,9 +547,6 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
       registration = undefined;
     }
   }, "dsh-llm-account: commandcode provider route");
-  // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判
-  // （2026-10-20 补齐：opencode / opendesign 早有这条，唯独本行没有 ——
-  //  后果是手改 profile 的 `enabled: false` 要重载宿主才生效）。
   optionalStep("commandcode", "volatile-update 订阅", () =>
     // volatile 变更不重跑 `apply`，所以 `enabled` 的后续改写靠这个接缝重判
     // （2026-10-20 补齐：opencode / opendesign 早有这条，唯独本行没有 ——
@@ -697,32 +694,32 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   // Task 3：把生效账号 / 切换通知 / 每账号额度摘要发布成远程面（客户端页面与侧边栏卡片的数据源）。
   optionalStep("commandcode", "用量远程面", () =>
     applyUsageRemote(ctx, {
-    vendor: PROVIDER_ID,
-    rotation,
-    accounts,
-    quota,
-    pinnedRef: () => pinnedRefOf(document()),
-    quotaRef: () => selectedRefOf(document()),
-    capabilities,
-    // 网页登录端口（Task 5）：账户卡片的登录入口经远程调用它。
-    login,
-    // 设置页的模型勾选：未过滤的完整目录（页面把目录 ∪ 已配置项一起渲染）。
-    // 刷新按钮的落点：**必须 fresh**（绕过目录缓存）。TTL 内点刷新若拿缓存，
-    // 界面上就是「点了没反应」。
-    models: () => adapter.catalogModels(true),
-    switchState: () => switching.snapshot(),
-    switchNow: () => switching.switchNow(),
-    accountOrder: () => {
-    const order = document().accountOrder;
-    return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
-    },
-    setAccountOrder: async (order) => {
-    await accounts.setOrder?.(order);
-    },
-    setSwitchSettings: (input) => writeSwitchSettings(settings, COMMAND_CODE_SETTINGS_NS, input),
-    modelRules: () => rulesOf(document()),
-    setAccountModels: (ref, models) =>
-    writeModelRules(settings, COMMAND_CODE_SETTINGS_NS, (current) => assignModelsToAccount(rulesOf(current), ref, models)),
+        vendor: PROVIDER_ID,
+        rotation,
+        accounts,
+        quota,
+        pinnedRef: () => pinnedRefOf(document()),
+        quotaRef: () => selectedRefOf(document()),
+        capabilities,
+        // 网页登录端口（Task 5）：账户卡片的登录入口经远程调用它。
+        login,
+        // 设置页的模型勾选：未过滤的完整目录（页面把目录 ∪ 已配置项一起渲染）。
+        // 刷新按钮的落点：**必须 fresh**（绕过目录缓存）。TTL 内点刷新若拿缓存，
+        // 界面上就是「点了没反应」。
+        models: () => adapter.catalogModels(true),
+        switchState: () => switching.snapshot(),
+        switchNow: () => switching.switchNow(),
+        accountOrder: () => {
+        const order = document().accountOrder;
+        return Array.isArray(order) ? order.filter((key): key is string => typeof key === "string") : [];
+        },
+        setAccountOrder: async (order) => {
+        await accounts.setOrder?.(order);
+        },
+        setSwitchSettings: (input) => writeSwitchSettings(settings, COMMAND_CODE_SETTINGS_NS, input),
+        modelRules: () => rulesOf(document()),
+        setAccountModels: (ref, models) =>
+        writeModelRules(settings, COMMAND_CODE_SETTINGS_NS, (current) => assignModelsToAccount(rulesOf(current), ref, models)),
     }),
   );
 
