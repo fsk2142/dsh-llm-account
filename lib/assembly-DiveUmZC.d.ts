@@ -29,6 +29,14 @@ interface AccountView {
   configured: boolean;
   /** 是否为当前选中（固定）账号。 */
   active: boolean;
+  /**
+   * **已失效**（2026-11-23）：没有有效订阅且可用余额低于 $1，轮换会跳过它。
+   *
+   * 缺省表示「没有这个结论」（老宿主、或这一读没读到账单摘要）—— 与 `false` 不是
+   * 同一件事：`false` 是「读到并确认可用」，缺省是「不知道」。界面只在 `true` 时
+   * 显示标签，所以两者都不显示，但数据上必须分得开。
+   */
+  invalid?: true;
 }
 /** 按模型绑定账号：一个模型同一时间只属于一个账号。 */
 interface ModelRule {
@@ -568,6 +576,43 @@ declare class RotationEngine {
    * @param ref - 换了密钥的账号 ref。
    */
   clearCredentialRejection(ref: string): void;
+  /**
+   * 把一个账号记为**已失效**（2026-11-23 用户需求）。
+   *
+   * ## 什么算失效
+   *
+   * 「没有有效订阅」且「可用余额 < $1」（余额可能是负数，所以判据是 `< 1` 而不是
+   * `<= 0`）。判定本身不在本模块 —— 这里只承载结果，判据在额度读取里
+   *（`vendors/opendesign/quota.ts` 的 `deadAccountOf`），因为它要看账单摘要。
+   *
+   * ## 为什么不用拒绝表
+   *
+   * 拒绝表带冷却窗口（5 分钟），过点就恢复 —— 那是为「临时限额」设计的。失效是
+   * **没有时间性**的状态：不充值就永远不会好。用拒绝表会让它每 5 分钟复活一次，
+   * 每次复活都白打一次注定 402/403 的请求。
+   *
+   * @param ref - 账号 ref。
+   */
+  markDead(ref: string): void;
+  /**
+   * 撤销「已失效」标记。
+   *
+   * 唯一的正常调用点是**下次读到有效订阅或余额充足**（用户充值/订阅后自动复活），
+   * 不需要用户手动清。对不在集合里的 ref 是恒等变换。
+   * @param ref - 账号 ref。
+   */
+  clearDead(ref: string): void;
+  /**
+   * 这个账号是否已被标记为失效。
+   * @param ref - 账号 ref。
+   * @returns 已失效时为 `true`。
+   */
+  isDead(ref: string): boolean;
+  /**
+   * 全部已失效账号（快照，调用方改不动引擎内部状态）。
+   * @returns ref 集合。
+   */
+  deadAccounts(): ReadonlySet<string>;
   /**
    * 当前仍然生效的拒绝表快照（已过期条目在读取时被清掉）。
    * 返回的是新 Map：调用方改不动引擎内部状态。

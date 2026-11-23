@@ -432,8 +432,16 @@ export class LlmAccountUsageService extends TypertRemoteService {
 
     const accounts = views.map((view): AccountUsageStatus => {
       const rejection = rejections.get(view.ref);
+      /*
+       * **已失效标记**（2026-11-23）：引擎的 `dead` 集合是唯一权威。
+       *
+       * 加在账号视图上而不是另开字段：卡片要的就是「这个账号这一行要不要显示失效标签」，
+       * 单独下发一个 ref 列表只会让客户端多做一次关联。
+       */
+      const dead = deps.rotation.current().isDead(view.ref);
       return {
         ...view,
+        ...(dead ? { invalid: true as const } : {}),
         effective: effective !== undefined && view.ref === effective.ref,
         ...(rejection === undefined
           ? {}

@@ -25,7 +25,7 @@
  */
 import { LlmError } from "@deepseek-ai/dsh-llm";
 
-import type { QuotaPlan, QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
+import type { LivenessVerdict, QuotaPlan, QuotaPort, QuotaSnapshot, QuotaWindow } from "../../core/adapter";
 import { normalizeKey } from "../../core/credentials";
 // 档位名的解析**必须**复用 core 这一份：窗口上限表与逐模型额度表必须用同一套写法识别，
 // 否则会出现「同一个档位，模型查得到额度、窗口却算错」（这类 bug 曾真实存在，见 windowCapsOf）。
@@ -33,6 +33,7 @@ import { normalizeKey } from "../../core/credentials";
 // 代价是打包时会把 `model-quota-table` 里的静态额度表一起内联进本产物（实测 +17KB，
 // 约 180KB → 198KB）。这是刻意接受的开销：另写一份解析只在仓库里少 17KB，
 // 但两处回退链迟早会分叉 —— 分叉时的症状是「数字看着合理、其实是错的」。
+import { livenessOf } from "./liveness";
 import { planKeyCandidates } from "../../core/model-quota-table";
 import { IDENTITY_ENCODING_HEADER } from "./protocol";
 
@@ -95,6 +96,17 @@ export interface OpenDesignQuotaDeps {
    * HTTP 版按账号鉴权，**每个账号都能拿到自己的数字**。
    */
   preflightHttp?: (workspaceId: string, controlKey: string) => Promise<unknown>;
+  /**
+   * **账号是否已失效**的上报口（2026-11-23）。
+   *
+   * 判定本身在 {@link livenessOf}（纯函数，读 `/billing/summary`）；这里只负责在
+   * **摘要真的读到之后**把结论交给装配层，由它落到轮换引擎的 `markDead`/`clearDead`。
+   *
+   * 为什么放在额度读取里而不是单独探一次：摘要本来就在读（额度面板、侧边栏都走这条），
+   * 顺手判定**不增加任何请求**。读失败时 `livenessOf` 返回 `decided: false`，
+   * 调用方不会改动上次结论 —— 一次网络抖动不该把账号判死。
+   */
+  reportLiveness?: (ref: string, verdict: LivenessVerdict) => void;
   /**
    * 该账号的工作区 id（条目 `workspaceId` 优先，其次顶层 `workspaceId`）。
    *
@@ -698,9 +710,20 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
           readProblem = `${readProblem ?? "没有返回数据"}；vela 回退也失败（${messageOf(error)}）`;
         }
       }
+      /*
+       * **失效判定**（2026-11-23）：摘要真的读到了就在这里顺手判一次。
+       * 读不到（摘要为 undefined）就什么都不做 —— `livenessOf` 对空负载返回
+       * `decided: false`，调用方据此保留上次结论，一次网络抖动不该把账号判死。
+       */
+      if (summary !== undefined && ref !== undefined && deps.reportLiveness !== undefined) {
+        try {
+          deps.reportLiveness(ref, livenessOf(summary));
+        } catch {
+          // 上报失败不该影响额度读取本身（额度是主功能，失效标记是附加的）。
+        }
+      }
       if (summary === undefined) {
         // **按「缺的是哪把密钥」给不同的说明**（2026-10-21，多账号额度诊断）。
-        //
         // 两种失败都表现为「账单接口 401」，但用户该做的事完全不同：一个有救（重登），
         // 一个没救（这个账号从来没配过控制面密钥）。旧文案只有后半句，
         // 用户切到那个账号只看到「额度读不到」，不知道该登一次还是该换账号。

@@ -424,6 +424,21 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
           return inference === undefined ? "none" : "inference-only";
         },
         workspaceIdOf: (candidate) => workspaceFor(candidate),
+        /*
+         * **失效标记**（2026-11-23 用户需求）：额度读取顺手判「没订阅 + 余额 < $1」，
+         * 命中的账号会被轮换引擎永久跳过，不再白打注定 402/403 的请求。
+         *
+         * 撤标同样走这里 —— 用户充值/订阅后，下一次额度读取就会给出 `dead: false`，
+         * 账号自动复活，不需要手动清。
+         */
+        reportLiveness: (candidate, verdict) => {
+          if (!verdict.decided) return;
+          if (verdict.dead === true) {
+            rotation.current().markDead(candidate);
+            return;
+          }
+          rotation.current().clearDead(candidate);
+        },
         fetchImpl: fetch,
         // 控制面 403 时的第二来源：本机 vela 的登录态（真机实测：HTTP 被拒、CLI 能读）。
         summaryFallback: velaSummary,

@@ -65,6 +65,14 @@ export interface AttemptLoopRotation {
   markRejected(ref: string, rejection: Rejection): void;
   fallbackAllowed(context: { emitted: boolean; totalTokens: number; aborted: boolean }): boolean;
   noteSettled(ref: string): void;
+  /**
+   * 当前被标记为**已失效**的账号（2026-11-23）。
+   *
+   * 只用于区分「全失效」与「没有账号」这两种都让 `pick()` 返回 `undefined` 的处境 ——
+   * 两者要给用户的建议完全不同（一个去充值，一个去添加账号）。
+   * 结构类型可选：没实现这一项的引擎（测试桩）照旧工作。
+   */
+  deadAccounts?(): ReadonlySet<string>;
 }
 
 /** 换到的模型（可能是另一家厂商）。 */
@@ -163,6 +171,16 @@ export interface AttemptLoopHost<Config, Credential, AttemptContext> {
    * 一定有失败可抛（取不到候选本身就意味着已有失败），所以不需要另一条文案。
    */
   noAccount(model: string): LlmError;
+  /**
+   * **所有账号都被标记为已失效**时的错误（2026-11-23）。
+   *
+   * 与 {@link noAccount} 分开：一个要用户去**充值/订阅**，另一个要用户去**添加账号**。
+   * 给错建议等于让用户白折腾一轮。缺省时退回 `noAccount`。
+   * @param model - 目标模型。
+   * @param deadCount - 已失效账号数（文案里说清楚「几个」）。
+   * @returns 带稳定错误码的宿主错误。
+   */
+  noLiveAccount?(model: string, deadCount: number): LlmError;
   /** chunk 改写/补发（DSML 抢救）；抛出即终止本次尝试（不参与换号分类）。 */
   onChunk?(state: StreamPumpState, chunk: StreamChunk): void | StreamChunk[];
   /** usage 块延后到下一个内容块之前再发（opencode 的行为）。 */
@@ -208,6 +226,22 @@ export async function* runAttemptLoop<Config, Credential, AttemptContext>(
 
     const ref = host.rotation.pick({ model: options.model, tried: ledger.tried });
     if (ref === undefined) {
+      /**
+       * **全部账号都已失效**（2026-11-23 用户需求）。
+       *
+       * `pick()` 返回 `undefined` 且 `tried` 是空的、`ledger` 里一条失败都没有 ——
+       * 唯一的解释就是候选账号全被 `markDead` 踢掉了。这时**一个请求都不发**：
+       * 它们注定回 402/403，白打一次既费时间也费账单（用户明确要求「不要自动重试连接到」）。
+       *
+       * 必须先于下面的换模型分支判断：换模型对「账号没钱」毫无帮助，而查候选要读各家
+       * 目录（会发额外请求）—— 为一次注定失败的请求去打网络是上一版就修掉过的错。
+       */
+      if (ledger.tried.size === 0 && ledger.last === undefined) {
+        const dead = host.rotation.deadAccounts?.() ?? new Set<string>();
+        if (dead.size > 0) {
+          throw host.noLiveAccount?.(options.model, dead.size) ?? host.noAccount(options.model);
+        }
+      }
       /**
        * 换模型的机会：所有账号都被**拒绝**了（继续换账号已无意义，换同名模型往往还能服务）。
        *

@@ -130,6 +130,7 @@ export type CopyKey =
   | "account.pinnedBy"
   | "account.effectiveBy"
   | "account.liveBy"
+  | "account.invalid"
   | "account.quotaMissing"
   | "quota.used"
   | "quota.capOnly"
@@ -498,6 +499,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.pinnedBy": "已指定",
     "account.effectiveBy": "当前使用",
     "account.liveBy": "生效中",
+  "account.invalid": "已失效",
     "account.quotaMissing": "暂无额度数据",
     "quota.used": "已用 {used}",
     "quota.usedOf": "已用 {used} / 共 {cap}",
@@ -821,6 +823,7 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.pinnedBy": "Selected",
     "account.effectiveBy": "In use",
     "account.liveBy": "Serving",
+  "account.invalid": "Invalid",
     "account.quotaMissing": "No quota data",
     "quota.used": "Used {used}",
     "quota.usedOf": "Used {used} of {cap}",

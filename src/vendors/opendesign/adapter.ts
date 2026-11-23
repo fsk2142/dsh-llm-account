@@ -766,6 +766,21 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
             `llm-opendesign: 没有可用于模型 "${model}" 的 Open Design 账号；请先在账号页添加账号，或把密钥写入凭据库`,
             "MISSING_CREDENTIAL",
           ),
+        /*
+         * **全部账号都已失效**（2026-11-23 用户需求：未订阅 + 余额 < $1 的账号打上失效标签，
+         * 不再自动重试连过去）。
+         *
+         * 与 `noAccount` 的区别是**建议不同**：这里是「去充值/订阅」，那里是「去添加账号」。
+         * 用 `NO_LIVE_ACCOUNT` 而不是 `MISSING_CREDENTIAL`：后者会被宿主当成「配置缺失」
+         * 去引导用户找密钥，而这次的病因是钱与订阅。
+         */
+        noLiveAccount: (model, deadCount) =>
+          new LlmError(
+            `llm-opendesign: ${deadCount} 个 Open Design 账号都已失效（未订阅且可用余额低于 $1），` +
+              `没有可用于模型 "${model}" 的账号。请在本插件的账号页为其中一个账号充值或订阅后重试` +
+              `（额度读取会自动撤销失效标记，无需手动清理）`,
+            "NO_LIVE_ACCOUNT",
+          ),
       },
       options,
     );

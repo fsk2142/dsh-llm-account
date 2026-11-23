@@ -124,6 +124,17 @@ export class RotationEngine {
   readonly #rules: readonly ModelRule[];
   readonly #now: () => number;
   readonly #entries = new Map<string, RejectionEntry>();
+  /**
+   * **已失效账号**（永久不可用，见 {@link markDead}）。
+   *
+   * 与拒绝表是两件不同的事：
+   * - 拒绝表是「这个账号**此刻**为什么不行」—— 有时间性（冷却窗口），过点就恢复；
+   * - 这个集合是「这个账号**已经死了**」—— 没有订阅、也没有余额，时间不会修复它。
+   *
+   * 因此 `pick()` **真的跳过**它（拒绝表早已不参与选号，见 `pick()` 里的注释），
+   * 唯一能让它复活的是用户给账号充值/订阅，那时 `clearDead()` 把它撤下来。
+   */
+  readonly #dead = new Set<string>();
   /** 生效账号；`undefined` 表示本引擎实例还没有发过任何请求（不编造）。 */
   #effective: EffectiveAccount | undefined;
   /** 切换记录，**最新在前**（`switchNotice()` 的头部即最近一次）。 */
@@ -197,6 +208,14 @@ export class RotationEngine {
        */
       if (ref.trim() === "") continue;
       if (tried.has(ref)) continue;
+      /**
+       * **已失效的账号直接跳过**（2026-11-23）。
+       *
+       * 判定在额度读取里完成（无订阅 + 可用余额 < $1），与拒绝表分开记 —— 见字段
+       * `#dead` 上的注释。跳过它是这一步唯一会「选不到账号」的新原因；三个账号全
+       * 失效时 `pick()` 返回 `undefined`，调用方据此报「均已失效」而不是空打请求。
+       */
+      if (this.#dead.has(ref)) continue;
       /**
        * **不再看拒绝表**（2026-10-30 按用户要求改）。
        *
@@ -320,6 +339,15 @@ export class RotationEngine {
     this.#effective = effective === undefined ? undefined : { ...effective };
     // `switchNotices()` 已经是最新在前，取头部即保留最近的那些。
     this.#notices = source.switchNotices().slice(0, MAX_SWITCH_NOTICES).map((notice) => ({ ...notice }));
+    /*
+     * **失效标记也要搬**（2026-11-23）。引擎会在账号库状态（顺序/固定/规则）变化时
+     * 重建 —— 而那正是用户刚充值完、或刚改完绑定的时刻。不搬的话：用户充值 → 改设置
+     * → 引擎重建 → 失效标记丢失 → 下一个请求又白撞一次 402/403。
+     *
+     * 反方向的风险（用户充值后标记还在）由 `clearDead` 在额度读取里处理：读到有效
+     * 订阅或余额充足就会撤销，不需要用户手动清。
+     */
+    for (const ref of source.deadAccounts()) this.#dead.add(ref);
   }
 
   /**
@@ -357,6 +385,56 @@ export class RotationEngine {
    */
   clearCredentialRejection(ref: string): void {
     if (this.#entries.get(ref)?.rejection.kind === "invalid-credential") this.#entries.delete(ref);
+  }
+
+  /**
+   * 把一个账号记为**已失效**（2026-11-23 用户需求）。
+   *
+   * ## 什么算失效
+   *
+   * 「没有有效订阅」且「可用余额 < $1」（余额可能是负数，所以判据是 `< 1` 而不是
+   * `<= 0`）。判定本身不在本模块 —— 这里只承载结果，判据在额度读取里
+   *（`vendors/opendesign/quota.ts` 的 `deadAccountOf`），因为它要看账单摘要。
+   *
+   * ## 为什么不用拒绝表
+   *
+   * 拒绝表带冷却窗口（5 分钟），过点就恢复 —— 那是为「临时限额」设计的。失效是
+   * **没有时间性**的状态：不充值就永远不会好。用拒绝表会让它每 5 分钟复活一次，
+   * 每次复活都白打一次注定 402/403 的请求。
+   *
+   * @param ref - 账号 ref。
+   */
+  markDead(ref: string): void {
+    if (ref.trim() === "") return;
+    this.#dead.add(ref);
+  }
+
+  /**
+   * 撤销「已失效」标记。
+   *
+   * 唯一的正常调用点是**下次读到有效订阅或余额充足**（用户充值/订阅后自动复活），
+   * 不需要用户手动清。对不在集合里的 ref 是恒等变换。
+   * @param ref - 账号 ref。
+   */
+  clearDead(ref: string): void {
+    this.#dead.delete(ref);
+  }
+
+  /**
+   * 这个账号是否已被标记为失效。
+   * @param ref - 账号 ref。
+   * @returns 已失效时为 `true`。
+   */
+  isDead(ref: string): boolean {
+    return this.#dead.has(ref);
+  }
+
+  /**
+   * 全部已失效账号（快照，调用方改不动引擎内部状态）。
+   * @returns ref 集合。
+   */
+  deadAccounts(): ReadonlySet<string> {
+    return new Set(this.#dead);
   }
 
   /**
