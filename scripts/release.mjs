@@ -46,9 +46,23 @@ import {
 } from "./release-git.mjs";
 import { parseReleaseArgs } from "./release-cli.mjs";
 
+/** 在 Windows 上 `pnpm` / `npx` 是 `.cmd` shim，`execFileSync` 无 shell 时启动不了。 */
+const WIN = process.platform === "win32";
+
 /** 读一个命令的 stdout。 */
 function run(args, options = {}) {
-  return execFileSync(args[0], args.slice(1), { encoding: "utf8", ...options }).trim();
+  const output = execFileSync(args[0], args.slice(1), { encoding: "utf8", ...options });
+  // `stdio: "inherit"` 时 execFileSync 返回 null，不能直接 `.trim()`。
+  return typeof output === "string" ? output.trim() : "";
+}
+
+/**
+ * 用 shell 跑一条**固定字面量**命令（只给 pnpm/npx 这类 `.cmd` shim 用）。
+ * 传单个命令字符串而不是 args，避免 Node 的 shell+args 弃用警告。
+ */
+function runShell(command, options = {}) {
+  const output = execFileSync(command, { encoding: "utf8", shell: true, ...options });
+  return typeof output === "string" ? output.trim() : "";
 }
 
 /**
@@ -534,7 +548,8 @@ async function main() {
   // 3. 写版本号并重建产物（版本号是构建期注入的）。
   run(["node", "scripts/next-version.mjs", "--write"]);
   console.log("已写回 package.json");
-  run(["pnpm", "build"], { stdio: "inherit" });
+  if (WIN) runShell("pnpm build", { stdio: "inherit" });
+  else run(["pnpm", "build"], { stdio: "inherit" });
   console.log("产物已重建");
 
   // 4. 全量验证：任何一步失败都不该发出去。
@@ -542,8 +557,10 @@ async function main() {
   // 提交标题也在这里查：GitHub 文件树悬停显示的是「该路径最后一次提交的标题」，
   // 所以标题本身就是给读者看的第一句话（规范见 docs/RELEASING.md 第五节）。
   run(["node", "scripts/check-commit-titles.mjs"], { stdio: "inherit" });
-  run(["npx", "tsc", "--noEmit"], { stdio: "inherit" });
-  run(["npx", "vitest", "run"], { stdio: "inherit" });
+  if (WIN) runShell("npx tsc --noEmit", { stdio: "inherit" });
+  else run(["npx", "tsc", "--noEmit"], { stdio: "inherit" });
+  if (WIN) runShell("npx vitest run", { stdio: "inherit" });
+  else run(["npx", "vitest", "run"], { stdio: "inherit" });
 
   // 5. 暂存 + 提交 + 打 tag + 推送。
   //
