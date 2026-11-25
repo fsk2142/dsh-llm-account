@@ -83,19 +83,6 @@ export const PAGE_CSS = `
   color: var(--dsw-alias-label-tertiary); }
 .dsl-mono { font-family: var(--dsw-font-mono); letter-spacing: 0; }
 
-/* ═══ 标签页：与宿主设置页同款的下划线标签 ═══ */
-.dsl-tabs { display: flex; flex-direction: row; gap: 24px; border-bottom: .5px solid var(--dsw-alias-border-l2); }
-.dsl-tab { display: inline-flex; align-items: center; height: auto; margin: 0 0 -1px; padding: 6px 0 8px;
-  border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
-  color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 13px; font-weight: 500;
-  line-height: 20px; letter-spacing: normal; cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease; }
-.dsl-tab:hover { color: var(--dsw-alias-label-primary); }
-.dsl-tab[aria-selected="true"] { color: var(--dsw-alias-label-primary);
-  border-bottom-color: var(--dsw-alias-brand-primary); }
-.dsl-tab:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
-  outline-offset: 2px; border-radius: var(--dsw-radius-xs); }
-
 /* ═══ 卡片：宿主设置卡片的原样形状（发丝描边 + radius-xl + 扁平） ═══ */
 .dsl-card { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; padding: 14px;
   border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xl);
@@ -108,33 +95,17 @@ export const PAGE_CSS = `
 .dsl-card > summary::-webkit-details-marker { display: none; }
 .dsl-card > summary > svg { flex: none; color: var(--dsw-alias-label-tertiary); }
 .dsl-card[open] > summary > svg { transform: rotate(180deg); }
-/* 可收起卡片的标题行：标题占满，当前状态缩到右端（收起时也能读到关键信息）。 */
-.dsl-card-summary-title { flex: 1 1 auto; min-width: 0; }
-.dsl-card-summary > small { flex: none; margin: 0; text-align: right; }
 /* 收起状态下不显示正文的额外间距（details 自动隐藏，这里只补布局）。 */
 .dsl-card[open] > summary { margin-bottom: 2px; }
 .dsl-model-summary-title { font-size: 15px; font-weight: 600; line-height: 24px; }
-.dsl-model-vendor-group { display: flex; flex-direction: column; gap: 4px; padding-top: 8px;
-  border-top: .5px solid var(--dsw-alias-border-l1); }
-.dsl-model-vendor-group:first-of-type { border-top: none; padding-top: 0; }
 .dsl-model-group { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 2px 10px; }
 .dsl-model-group-summary { display: flex; flex-direction: row; align-items: center; gap: 6px;
   padding: 2px 0; list-style: none; cursor: pointer; color: var(--dsw-alias-label-secondary); }
 .dsl-model-group-summary::-webkit-details-marker { display: none; }
 .dsl-model-group-summary > svg { flex: none; transition: transform 150ms ease; }
 .dsl-model-group-summary > button { flex: none; margin-left: auto; padding: 0 6px; font-size: 11px; line-height: 18px; }
-.dsl-model-group[open] > .dsl-model-group-summary > svg,
-.dsl-model-vendor-group[open] > .dsl-model-group-summary > svg { transform: rotate(180deg); }
+.dsl-model-group[open] > .dsl-model-group-summary > svg { transform: rotate(180deg); }
 .dsl-model-group-title { font-size: 12px; line-height: 18px; font-weight: 600; }
-.dsl-model-add { display: flex; flex-direction: column; gap: 8px; padding-top: 12px;
-  border-top: .5px solid var(--dsw-alias-border-l1); }
-.dsl-model-add-title { font-size: 13px; line-height: 20px; font-weight: 600; }
-.dsl-model-add-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; align-items: center; }
-.dsl-model-add-select { flex: 0 0 auto; min-width: 120px; border: 0; background: transparent;
-  padding: 4px 0; color: var(--dsw-alias-label-secondary); }
-.dsl-model-add-input { flex: 1 1 220px; min-width: 0; border: 0;
-  border-bottom: .5px solid var(--dsw-alias-border-l2); border-radius: 0; background: transparent; padding: 6px 0; }
-.dsl-model-add .dsl-actions { justify-content: flex-end; }
 /* 「这个模型在这个套餐下能用多少额度」：次要文字，紧挨在开关左边。
    margin-inline-start:auto 让它靠右（模型名在左、额度与开关在右），
    与「模型名 …… 额度信息 开关」的出现顺序一致。 */
@@ -162,19 +133,19 @@ export const PAGE_CSS = `
 .dsl-field input[type="text"], .dsl-field input[type="number"], .dsl-field input[type="password"],
 .dsl-field select, .dsl-inline input[type="text"], .dsl-inline input[type="password"],
 .dsl-add-field input[type="text"], .dsl-add-field input[type="password"],
-.dsl-search input, .dsl-actions input[type="text"], .dsl-actions input[type="password"] {
+.dsl-actions input[type="text"], .dsl-actions input[type="password"] {
   box-sizing: border-box; height: 32px; width: 100%; margin: 0; padding: 0 10px;
   border: .5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
   caret-color: var(--dsw-alias-state-business-primary); font: inherit; font-size: 13px;
   line-height: 20px; transition: border-color 120ms ease; }
 .dsl-field input:hover, .dsl-field select:hover, .dsl-inline input:hover, .dsl-add-field input:hover,
-.dsl-search input:hover, .dsl-actions input:hover { border-color: var(--dsw-alias-border-l4); }
+.dsl-actions input:hover { border-color: var(--dsw-alias-border-l4); }
 .dsl-field input:focus, .dsl-field select:focus, .dsl-inline input:focus, .dsl-add-field input:focus,
-.dsl-search input:focus, .dsl-actions input:focus { outline: none;
+.dsl-actions input:focus { outline: none;
   border-color: var(--dsw-alias-state-business-primary); }
 .dsl-field input::placeholder, .dsl-inline input::placeholder, .dsl-add-field input::placeholder,
-.dsl-search input::placeholder, .dsl-actions input::placeholder { color: var(--dsw-alias-label-dimmed); }
+.dsl-actions input::placeholder { color: var(--dsw-alias-label-dimmed); }
 .dsl-duration { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px; flex: none; }
 .dsl-duration-part { display: inline-flex; flex-direction: row; align-items: center; gap: 4px;
   color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
@@ -198,8 +169,6 @@ export const PAGE_CSS = `
   text-wrap: nowrap; }
 .dsl-secret-row .dsl-field-text > small { flex: none; }
 /* × 也矮一档：图标按钮默认 28px，在这一行里比文字高出一截。 */
-.dsl-secret-row > .dsl-icon-danger { width: 22px; height: 22px; }
-.dsl-secret-row > .dsl-icon-danger svg { width: 14px; height: 14px; }
 /* 列表容器：几条紧挨着，不要 8px 的整段间隙（否则「矮了」看不出来）。 */
 [data-secret-rows] { gap: 0; padding: 2px 10px; }
 [data-secret-rows] > small { font-size: 12px; line-height: 18px; }
@@ -245,17 +214,6 @@ export const PAGE_CSS = `
   outline-offset: 2px; }
 .dsl-toggle:disabled { cursor: not-allowed; opacity: .5; }
 
-/* ═══ 搜索框：发丝边 + 左侧留白给放大镜（两个伪元素画出来，不引图标字体） ═══ */
-.dsl-search { position: relative; display: flex; flex-direction: row; align-items: center; }
-.dsl-search input { padding-left: 32px; }
-.dsl-search::before { content: ""; position: absolute; left: 12px; top: 50%; margin-top: -6px;
-  box-sizing: border-box; width: 10px; height: 10px; border: 1.5px solid var(--dsw-alias-label-tertiary);
-  border-radius: 50%; pointer-events: none; }
-.dsl-search::after { content: ""; position: absolute; left: 21px; top: 50%; margin-top: 3px;
-  width: 6px; height: 1.5px; background: var(--dsw-alias-label-tertiary);
-  transform: rotate(45deg); pointer-events: none; }
-.dsl-search-count { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
-
 /* ═══ 按钮 ═══
  * 两条纪律：
  * 1. 我们渲染的每一个按钮都有形状：:where() 把容器那半截选择器的特异度归零，所以这里只管
@@ -263,8 +221,8 @@ export const PAGE_CSS = `
  * 2. 每个档位类**各自都是完整按钮**：只挂一个也是这个形状。
  */
 :where(.dsl-root, .dsl-dashboard, .dsl-sidebar, .dsl-settings-panel) button,
-.dsl-button, .dsl-button-primary, .dsl-button-secondary, .dsl-button-ghost, .dsl-button-danger,
-.dsl-button-sm, .dsl-icon, .dsl-icon-danger, .dsl-item {
+.dsl-button-primary, .dsl-button-secondary, .dsl-button-ghost, .dsl-button-danger,
+.dsl-button-sm, .dsl-icon, .dsl-item {
   display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px;
   box-sizing: border-box; height: 32px; padding: 0 12px; margin: 0;
   border: .5px solid transparent; border-radius: var(--dsw-radius-md); background: none;
@@ -273,13 +231,13 @@ export const PAGE_CSS = `
   cursor: pointer; transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
   -webkit-appearance: none; appearance: none; }
 :where(.dsl-root, .dsl-dashboard, .dsl-sidebar, .dsl-settings-panel) button svg,
-.dsl-button svg, .dsl-button-primary svg, .dsl-button-secondary svg, .dsl-button-ghost svg,
-.dsl-button-danger svg, .dsl-button-sm svg, .dsl-icon svg, .dsl-icon-danger svg, .dsl-item svg {
+.dsl-button-primary svg, .dsl-button-secondary svg, .dsl-button-ghost svg,
+.dsl-button-danger svg, .dsl-button-sm svg, .dsl-icon svg, .dsl-item svg {
   flex: none; width: 16px; height: 16px; }
 :where(.dsl-root, .dsl-dashboard, .dsl-sidebar, .dsl-settings-panel) button:focus-visible,
-.dsl-button:focus-visible, .dsl-button-primary:focus-visible, .dsl-button-secondary:focus-visible,
+.dsl-button-primary:focus-visible, .dsl-button-secondary:focus-visible,
 .dsl-button-ghost:focus-visible, .dsl-button-danger:focus-visible, .dsl-button-sm:focus-visible,
-.dsl-icon:focus-visible, .dsl-icon-danger:focus-visible, .dsl-item:focus-visible {
+.dsl-icon:focus-visible, .dsl-item:focus-visible {
   outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 1px; }
 :where(.dsl-root, .dsl-dashboard, .dsl-sidebar, .dsl-settings-panel) button:disabled { cursor: not-allowed; }
@@ -305,14 +263,12 @@ export const PAGE_CSS = `
   font-size: 12px; line-height: 18px; }
 .dsl-button-sm svg { width: 14px; height: 14px; }
 /* 图标按钮：见方、无文字，悬停浮出底色；破坏性版本平时也保持安静，悬停才变色。 */
-.dsl-icon, .dsl-icon-danger { width: 28px; height: 28px; padding: 0;
+.dsl-icon { width: 28px; height: 28px; padding: 0;
   border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); }
 .dsl-icon:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary); }
-.dsl-icon-danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger,
-  var(--dsw-alias-interactive-bg-hover)); color: var(--dsw-alias-state-error-primary); }
 .dsl-icon[aria-expanded="true"] svg { transform: rotate(180deg); }
-.dsl-icon svg, .dsl-icon-danger svg, .dsl-card > summary > svg {
+.dsl-icon svg, .dsl-card > summary > svg {
   transition: transform 150ms ease; transform-box: fill-box; transform-origin: center; }
 /* 按账户刷新模型的加载态：图标转圈（aria-busy 由渲染层挂上，与 disabled 同时出现）。 */
 @keyframes dsl-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -408,11 +364,6 @@ export const PAGE_CSS = `
  * 被拒绝（冷却/额度用尽）的账号用警示色描边，扫一眼就能看出谁在冷却。 */
 .dsl-account[data-effective="true"] { border-color: var(--dsw-alias-state-business-primary); }
 .dsl-account[data-rejection-kind] { border-color: var(--dsw-alias-state-warn-primary); }
-.dsl-account-group { display: flex; flex-direction: column; gap: 8px; padding-top: 10px;
-  border-top: .5px solid var(--dsw-alias-border-l1); }
-.dsl-account-group:first-of-type { border-top: none; padding-top: 0; }
-.dsl-account-group > h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600;
-  color: var(--dsw-alias-label-secondary); }
 .dsl-account-head { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dsl-account-actions { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center;
   gap: 2px; margin-left: auto; }
@@ -451,10 +402,6 @@ export const PAGE_CSS = `
 /* 拒绝原因（冷却/额度用尽/服务端拒绝）：单独一行可读文本，用警示色，不装成标签。 */
 .dsl-rejection { margin: 0; font-size: 12px; line-height: 18px;
   color: var(--dsw-alias-state-warn-primary); overflow-wrap: anywhere; }
-/* 拖拽手柄：六个点（径向渐变点阵），不引图标字体、不引外部资源。 */
-.dsl-drag { flex: none; width: 12px; height: 18px; margin-left: 2px; opacity: .55;
-  cursor: grab; background-image: radial-gradient(circle at 2px 2px,
-  var(--dsw-alias-label-tertiary) 1px, transparent 1.2px); background-size: 6px 6px; }
 
 /* ═══ 标签（宿主 rowTag 的形状） ═══ */
 .dsl-mark { flex: none; box-sizing: border-box; padding: 0 6px; border: .5px solid var(--dsw-alias-border-l2);
@@ -469,24 +416,7 @@ export const PAGE_CSS = `
 
 /* ═══ 额度：每个窗口一小块（标签 + 读数 + 4px 进度条） ═══ */
 .dsl-meters { display: flex; flex-direction: column; gap: 10px; }
-.dsl-sidebar .dsl-ring-row { flex-wrap: nowrap; gap: 2px; padding: 4px 0 0; }
-.dsl-sidebar .dsl-ring { flex: 1 1 0; min-width: 0; }
-.dsl-sidebar .dsl-ring-chart,
-.dsl-sidebar .dsl-ring-svg { width: 38px; height: 38px; }
-.dsl-sidebar .dsl-ring-percent { font-size: 11px; }
-.dsl-sidebar .dsl-ring-label { font-size: 12px; line-height: 16px; }
-.dsl-sidebar .dsl-ring-note { display: none; }
-.dsl-sidebar .dsl-ring-reset { font-size: 10px; line-height: 13px; text-align: center; }
 .dsl-sidebar .dsl-meters { display: flex; flex-direction: column; gap: 9px; }
-.dsl-quota-row { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.dsl-meter-head { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between;
-  gap: 8px; min-width: 0; font-size: 12px; line-height: 18px; }
-.dsl-meter-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-wrap: nowrap;
-  color: var(--dsw-alias-label-tertiary); }
-.dsl-quota-value { flex: none; color: var(--dsw-alias-label-primary); font-size: 12px;
-  line-height: 18px; font-variant-numeric: tabular-nums; }
-.dsl-quota-hint { flex: none; margin-left: 6px; color: var(--dsw-alias-label-tertiary);
-  font-size: 11px; line-height: 18px; }
 /* 账号用量块：紧贴额度条下方，靠一条细分隔线与额度分开 —— 账号卡片本身就是外框，
    不再套第二层框（两层边框+两层内边距会把一行账号撑成一屏）。 */
 .dsl-usage-section { display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
@@ -536,33 +466,6 @@ export const PAGE_CSS = `
 .dsl-sidebar .dsl-quota-bar-percent { font-size: 12px; line-height: 17px; }
 .dsl-sidebar .dsl-quota-bar-track { height: 6px; }
 .dsl-sidebar .dsl-quota-bar-meta { font-size: 10px; line-height: 14px; }
-.dsl-ring { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 64px; }
-.dsl-ring-chart { position: relative; width: 40px; height: 40px; }
-.dsl-ring-svg { display: block; width: 40px; height: 40px; }
-.dsl-ring-track { fill: none; stroke: var(--dsw-alias-border-l2); stroke-width: 3; }
-.dsl-ring-fill { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke-dasharray 200ms ease; }
-.dsl-ring-fill[data-level="ok"] { stroke: var(--dsw-alias-state-success-primary); }
-.dsl-ring-fill[data-level="warn"] { stroke: var(--dsw-alias-state-warn-primary); }
-.dsl-ring-fill[data-level="error"] { stroke: var(--dsw-alias-state-error-primary); }
-.dsl-ring-percent { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary); }
-.dsl-ring[data-quota-ring-level="ok"] .dsl-ring-percent { color: var(--dsw-alias-state-success-primary); }
-.dsl-ring[data-quota-ring-level="warn"] .dsl-ring-percent { color: var(--dsw-alias-state-warn-primary); }
-.dsl-ring[data-quota-ring-level="error"] .dsl-ring-percent { color: var(--dsw-alias-state-error-primary); }
-.dsl-ring-label { font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-primary); font-weight: 600; }
-.dsl-ring-note { font-size: 12px; line-height: 16px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
-.dsl-ring-reset { font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-secondary); }
-.dsl-ring-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 6px 0 2px; }
-.dsl-ring-cell { display: flex; justify-content: center; }
-.dsl-quota-track { display: block; flex: none; overflow: hidden; box-sizing: border-box; width: 100%;
-  height: 4px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); }
-.dsl-quota-fill { display: block; height: 100%; border-radius: inherit;
-  background: var(--dsw-alias-state-business-primary); transition: width 200ms ease; }
-.dsl-quota-fill[data-quota-level="warn"] { background: var(--dsw-alias-state-warn-primary); }
-.dsl-quota-fill[data-quota-level="error"] { background: var(--dsw-alias-state-error-primary); }
-.dsl-quota-missing { margin: 0; font-size: 12px; line-height: 18px;
-  color: var(--dsw-alias-label-tertiary); }
-.dsl-quota { display: flex; flex-direction: column; gap: 8px; }
 .dsl-failure { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-primary);
   overflow-wrap: anywhere; }
 .dsl-diagnostic { box-sizing: border-box; max-height: 240px; margin: 0; padding: 10px 12px;
@@ -625,7 +528,6 @@ export const PAGE_CSS = `
  * **字号必须写死**：账号与厂商在 h3 里（13px），而套餐徽标是 h3 的兄弟节点、
  * 继承的是 .dsl-sidebar 的 12px —— 不加这一行两者会差 1px（需求 问
  * 「确认一下字号是否是统一的」，就是这一处）。 */
-.dsl-sidebar-account { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); }
 .dsl-sidebar-vendor { font-size: 13px; font-weight: 400; color: var(--dsw-alias-label-tertiary); }
 .dsl-sidebar-vendor::before { content: " · "; }
 /* 套餐徽标：**靠右对齐**。
@@ -638,8 +540,7 @@ export const PAGE_CSS = `
  * **对齐的关键**：列宽必须定义在**外层容器**上，不能每个行各写一套 —— 每一行是独立网格时，
  * 「5 小时」与「每周」标签宽度不同，后两列的起点就会错开（实际情况「对齐一下两个进度条」）。
  * 现在容器定义一次三列，每行用 display: contents 把子元素直接交给外层网格。 */
-.dsl-sidebar-row-primary,
-.dsl-sidebar-row-secondary { display: contents; }
+.dsl-sidebar-row-primary { display: contents; }
 .dsl-sidebar-windows { display: grid; grid-template-columns: max-content minmax(30px, 1fr) max-content max-content;
   align-items: center; gap: 6px 8px; width: 100%; min-width: 0; }
 /* 表头：「用量周期 / 重置时间」。字号更小、颜色更淡，读作标题而不是数据。
@@ -649,7 +550,6 @@ export const PAGE_CSS = `
 .dsl-sidebar-windows-head > .dsl-sidebar-window-reset { font-size: 10px; line-height: 14px;
   font-weight: 500; color: var(--dsw-alias-label-tertiary); }
 .dsl-sidebar-window { display: contents; }
-.dsl-sidebar-window-head { display: contents; }
 .dsl-sidebar-window-label { font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary);
   text-wrap: nowrap; }
 /* 重置时间：两行都有。等宽数字 + 固定不换行，两行的右边界因此对齐。 */
@@ -663,11 +563,7 @@ export const PAGE_CSS = `
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, var(--dsw-alias-border-l1)); }
 .dsl-sidebar-window-track { display: block; overflow: hidden; height: 6px; border-radius: 999px;
   background: var(--dsw-alias-border-l1); min-width: 0; width: 100%; }
-.dsl-sidebar-foot { display: flex; flex-direction: row; gap: 8px; }
-.dsl-sidebar-foot > button { flex: 1 1 auto; }
 .dsl-sidebar .dsl-empty { padding: 10px; font-size: 12px; line-height: 18px; }
-.dsl-marks { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px;
-  color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
 
 /* ═══ 中栏仪表盘 ═══
  *
@@ -750,41 +646,26 @@ export const CSS_CLASS = {
   intro: "dsl-intro",
   diagnostic: "dsl-diagnostic",
   boundary: "dsl-boundary",
-  tabs: "dsl-tabs",
-  tab: "dsl-tab",
   card: "dsl-card",
   cardFooter: "dsl-card-footer",
   panelHead: "dsl-panel-head",
   panelCount: "dsl-panel-count",
   account: "dsl-account",
   accountList: "dsl-account-list",
-  accountGroup: "dsl-account-group",
   vendorBadge: "dsl-vendor-badge",
   newBadge: "dsl-new-badge",
   addChooser: "dsl-add-chooser",
   addSummary: "dsl-add-summary",
   orderSummary: "dsl-order-summary",
-  cardSummary: "dsl-card-summary",
-  cardSummaryTitle: "dsl-card-summary-title",
-  modelSummary: "dsl-model-summary",
   modelSummaryTitle: "dsl-model-summary-title",
   modelGroup: "dsl-model-group",
-  modelVendorGroup: "dsl-model-vendor-group",
   modelGroupSummary: "dsl-model-group-summary",
   modelGroupTitle: "dsl-model-group-title",
-  modelAdd: "dsl-model-add",
-  modelAddTitle: "dsl-model-add-title",
   modelQuota: "dsl-model-quota",
   modelQuotaUnknown: "dsl-model-quota-unknown",
-  modelAddRow: "dsl-model-add-row",
-  modelAddSelect: "dsl-model-add-select",
-  modelAddInput: "dsl-model-add-input",
   duration: "dsl-duration",
   durationPart: "dsl-duration-part",
   mark: "dsl-mark",
-  quota: "dsl-quota",
-  quotaRow: "dsl-quota-row",
-  quotaMissing: "dsl-quota-missing",
   failure: "dsl-failure",
   field: "dsl-field",
   /* 密钥列表行：与设置行同一套排布，但矮一档（列表项，不是可编辑的设置行）。 */
@@ -808,16 +689,12 @@ export const CSS_CLASS = {
   addField: "dsl-add-field",
   addTitle: "dsl-add-title",
   addGroup: "dsl-add-group",
-  search: "dsl-search",
-  searchCount: "dsl-search-count",
-  button: "dsl-button",
   buttonPrimary: "dsl-button-primary",
   buttonSecondary: "dsl-button-secondary",
   buttonGhost: "dsl-button-ghost",
   buttonDanger: "dsl-button-danger",
   buttonSm: "dsl-button-sm",
   icon: "dsl-icon",
-  iconDanger: "dsl-icon-danger",
   item: "dsl-item",
   menu: "dsl-menu",
   menuPanel: "dsl-menu-panel",
@@ -827,12 +704,7 @@ export const CSS_CLASS = {
   accountActions: "dsl-account-actions",
   nameRow: "dsl-name-row",
   rejection: "dsl-rejection",
-  drag: "dsl-drag",
   meters: "dsl-meters",
-  meterHead: "dsl-meter-head",
-  meterLabel: "dsl-meter-label",
-  quotaValue: "dsl-quota-value",
-  quotaHint: "dsl-quota-hint",
   quotaBar: "dsl-quota-bar",
   quotaBarHead: "dsl-quota-bar-head",
   quotaBarLabel: "dsl-quota-bar-label",
@@ -854,33 +726,18 @@ export const CSS_CLASS = {
   usageMetricLabel: "dsl-usage-metric-label",
   usageMetricHint: "dsl-usage-metric-hint",
   usageFoot: "dsl-usage-foot",
-  ring: "dsl-ring",
-  ringChart: "dsl-ring-chart",
-  ringSvg: "dsl-ring-svg",
-  ringTrack: "dsl-ring-track",
-  ringFill: "dsl-ring-fill",
-  ringPercent: "dsl-ring-percent",
-  ringLabel: "dsl-ring-label",
-  ringNote: "dsl-ring-note",
-  ringReset: "dsl-ring-reset",
-  ringRow: "dsl-ring-row",
-  ringCell: "dsl-ring-cell",
   identity: "dsl-identity",
   identityText: "dsl-identity-text",
   mono: "dsl-mono",
   dot: "dsl-dot",
   toggle: "dsl-toggle",
-  quotaTrack: "dsl-quota-track",
-  quotaFill: "dsl-quota-fill",
   save: "dsl-save",
   sidebar: "dsl-sidebar",
   sidebarButton: "dsl-sidebar-button",
   sidebarWindows: "dsl-sidebar-windows",
   sidebarWindowsHead: "dsl-sidebar-windows-head",
   sidebarRowPrimary: "dsl-sidebar-row-primary",
-  sidebarRowSecondary: "dsl-sidebar-row-secondary",
   sidebarWindow: "dsl-sidebar-window",
-  sidebarWindowHead: "dsl-sidebar-window-head",
   sidebarWindowLabel: "dsl-sidebar-window-label",
   sidebarWindowReset: "dsl-sidebar-window-reset",
   sidebarWindowValue: "dsl-sidebar-window-value",
@@ -888,11 +745,8 @@ export const CSS_CLASS = {
   sidebarShell: "dsl-sidebar-shell",
   sidebarCompact: "dsl-sidebar-compact",
   sidebarHead: "dsl-sidebar-head",
-  sidebarAccount: "dsl-sidebar-account",
   sidebarVendor: "dsl-sidebar-vendor",
   sidebarPlan: "dsl-sidebar-plan",
-  sidebarFoot: "dsl-sidebar-foot",
-  marks: "dsl-marks",
   dashboard: "dsl-dashboard",
 } as const;
 

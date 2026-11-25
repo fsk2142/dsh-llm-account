@@ -555,26 +555,6 @@ function parseUsageCsv(endpoint: string, value: unknown): string {
 
 
 /**
- * 一次「密钥实测」的结论。
- *
- * 三档而不是两档，因为**「测不出来」和「密钥无效」是两件完全不同的事**：
- * - `ok`：真的拿到结果了；
- * - `invalid`：服务端明确拒绝（401 无效 / 402 余额不足 / 403 被封）—— 这把 key 不能用；
- * - `unknown`：**没能判定**（网络不通、超时、5xx）—— 不能因此告诉用户「你的 key 是错的」，
- *   那会让人去换一把其实没问题的密钥。界面对这一档只提示「暂时无法验证」。
- */
-export type CredentialProbeState = "ok" | "invalid" | "unknown";
-
-/** 密钥实测的结果（宿主 → 界面）。**绝不含密钥本身。** */
-export interface CredentialProbe {
-  ref: string;
-  state: CredentialProbeState;
-  /** 人话原因；`ok` 时为空。 */
-  reason?: string;
-}
-
-
-/**
  * 校验用量报表。
  *
  * **必须逐层校验**，不能只看顶层：渲染时会直接解引用 `account.period.kind` /

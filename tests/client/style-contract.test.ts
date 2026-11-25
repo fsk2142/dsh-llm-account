@@ -10,18 +10,17 @@
  * 把「每个按钮都有档位类」「每个类名在样式表里都有规则」当成契约，逐棵树验一遍。
  *
  * 覆盖两条路径：
- * - **纯卡片**（`AccountCard` 的各种分支、模型卡片、侧边栏、仪表盘）：props 由本文件完全控制，
- *   能覆盖编辑器/登录/展开报告/排序控件这些只在特定状态下才出现的按钮；
+ * - **纯组件**（`accountRows` / 添加入口、模型卡片、侧边栏、仪表盘）：props 由本文件完全控制，
+ *   能覆盖编辑器/展开报告/排序控件这些只在特定状态下才出现的按钮；
  * - **真实容器**（`createConnectedPage` + 注册出来的侧边栏与面板，走 `fake-host`）：保存条那个
  *   按钮只有「改过东西之后」才渲染，只有挂起来跑才知道它到底有没有类。
  */
 import { afterEach, expect, it, vi } from "vitest";
 
-import { AccountCard, type AccountCardProps } from "../../src/client/account-card";
+import { accountAddSection, accountRows, type AccountCardProps } from "../../src/client/account-card";
 import { CSS_CLASS, PAGE_CSS } from "../../src/client/css";
 import { dictionaryOf } from "../../src/client/copy";
 import { Dashboard } from "../../src/client/dashboard";
-import { OpenCodeAccountCard } from "../../src/client/opencode-account-card";
 import { SidebarCard } from "../../src/client/sidebar-card";
 import type { AccountUsageStatus, VendorCapabilities, VendorUsageStatus } from "../../src/client/usage-contract";
 import {
@@ -152,37 +151,30 @@ function assertStyled(tree: unknown, where: string): number {
 
 // —— 纯卡片 ————————
 
-it("账户卡片的每一档按钮都有类（含编辑器、登录、添加表单、展开报告）", () => {
+/** 生产账户面板使用的同一组合：账号行 + 全局添加入口。 */
+function accountTree(props: AccountCardProps): unknown {
+  return [...accountRows(props), accountAddSection(props)];
+}
+
+it("账户行与添加表单的每一档按钮都有类（含编辑器、展开报告）", () => {
   const trees: [string, unknown][] = [
     [
-      "默认 + 展开报告 + 登录等待 + 排序手柄",
-      AccountCard(
+      "默认 + 展开报告 + 排序手柄",
+      accountTree(
         accountProps({
           status: statusOf([account({ ref: "work", effective: true, quota: { windows: [{ key: "rolling", percent: 35 }], failures: [] } })]),
           expandedRef: "work",
-          login: { state: "waiting", authUrl: "https://example.invalid/auth?code=abcdef" },
         }),
       ),
     ],
-    ["添加表单（收起 → 展开后的提交/取消）", AccountCard(accountProps({ action: { kind: "add", label: "work", key: "sk-1" } }))],
-    ["重命名编辑器", AccountCard(accountProps({ status: statusOf([account({ ref: "work" })]), action: { kind: "rename", ref: "work", label: "w", key: "" } }))],
-    ["更换密钥编辑器", AccountCard(accountProps({ status: statusOf([account({ ref: "work" })]), action: { kind: "key", ref: "work", label: "", key: "sk" } }))],
-    ["读不到状态（诊断块）", AccountCard(accountProps({ status: undefined, problem: "gateway/input-invalid: …" }))],
+    ["添加表单（收起 → 展开后的提交/取消）", accountTree(accountProps({ action: { kind: "add", label: "work", key: "sk-1" } }))],
+    ["重命名编辑器", accountTree(accountProps({ status: statusOf([account({ ref: "work" })]), action: { kind: "rename", ref: "work", label: "w", key: "" } }))],
+    ["更换密钥编辑器", accountTree(accountProps({ status: statusOf([account({ ref: "work" })]), action: { kind: "key", ref: "work", label: "", key: "sk" } }))],
   ];
   let buttons = 0;
   for (const [where, tree] of trees) buttons += assertStyled(tree, where);
   // 真正渲染出来的按钮远远多于「每棵树一个」：这条断言防的是「树是空的所以全绿」。
   expect(buttons).toBeGreaterThan(15);
-});
-
-it("OpenCode 账户卡片：排序控件与 autoSwitch 也有类", () => {
-  const tree = OpenCodeAccountCard({
-    ...accountProps({ status: statusOf([account({ ref: "a" }), account({ ref: "b" })]) }),
-    settings: { autoSwitch: true },
-    onMove: vi.fn(),
-    onSetAutoSwitch: vi.fn(),
-  });
-  expect(assertStyled(tree, "opencode 账户卡片")).toBeGreaterThan(5);
 });
 
 it("侧边栏卡片与中栏仪表盘：按钮都有类", () => {
@@ -198,7 +190,7 @@ it("侧边栏卡片与中栏仪表盘：按钮都有类", () => {
 
 it("账号行是两段结构：身份块与动作在身份行里，额度条在它外面", () => {
   // 曾经三者是同一层的兄弟：身份块的 flex:1 被额度条的 min-width 挤没，名称成了竖排单字。
-  const tree = AccountCard(accountProps({ status: statusOf([account({ ref: "work", quota: { windows: [{ key: "rolling", percent: 35 }], failures: [] } })]) }));
+  const tree = accountTree(accountProps({ status: statusOf([account({ ref: "work", quota: { windows: [{ key: "rolling", percent: 35 }], failures: [] } })]) }));
   const row = elementsOfSim(tree).find((element) => element.props["data-account"] === "work");
   expect(row, "账号行").toBeDefined();
   const head = elementsOfSim(row).find((element) => classesOf(element).includes(CSS_CLASS.accountHead));
@@ -214,7 +206,7 @@ it("额度条：显示剩余百分比，绿色代表剩余充足，没数据不�
   const bar = (
     window: { key: string; used?: number; cap?: number; percent?: number; exceeded?: boolean },
   ): { level: unknown; remaining: unknown } | undefined => {
-    const tree = AccountCard(accountProps({ status: statusOf([account({ ref: "work", quota: { windows: [window], failures: [] } })]) }));
+    const tree = accountTree(accountProps({ status: statusOf([account({ ref: "work", quota: { windows: [window], failures: [] } })]) }));
     const wrapper = elementsOfSim(tree).find((element) => element.props["data-quota-bar"] !== undefined);
     if (wrapper === undefined) return undefined;
     return {

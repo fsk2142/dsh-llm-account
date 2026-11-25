@@ -24,8 +24,7 @@ import {
   parseVendorId,
   type UsageInvocationDescriptor,
 } from "../../src/client/usage-contract";
-import { AccountCard } from "../../src/client/account-card";
-import { OpenCodeAccountCard } from "../../src/client/opencode-account-card";
+import { accountRows } from "../../src/client/account-card";
 import { SidebarCard } from "../../src/client/sidebar-card";
 import { Dashboard } from "../../src/client/dashboard";
 import { dictionaryOf } from "../../src/client/copy";
@@ -438,10 +437,9 @@ describe("边界数据到渲染", () => {
     ];
     for (const status of statuses) {
       const label = JSON.stringify({ effective: status.effective ?? null, pinned: status.pinned ?? null });
-      // 四张卡片（两家账户卡片 + 侧边栏 + 仪表盘）都必须平安渲染。
+      // 账户行、侧边栏、仪表盘都必须平安渲染。
       for (const render of [
-        () => AccountCard({ status, t, action: undefined, expandedRef: undefined, login: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined, onLoginBegin: () => undefined }),
-        () => OpenCodeAccountCard({ status, t, settings: {}, action: undefined, expandedRef: undefined, login: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined, onLoginBegin: () => undefined, onMove: () => undefined, onSetAutoSwitch: () => undefined }),
+        () => accountRows({ status, t, action: undefined, expandedRef: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined }),
         () => SidebarCard({ t, status, onOpen: () => undefined }),
         () => Dashboard({ t, status, onClose: () => undefined }),
       ]) {
@@ -469,7 +467,7 @@ describe("边界数据到渲染", () => {
     for (const row of rows) {
       const status = suspiciousStatus({ accounts: [row] as unknown as AccountView[] });
       for (const render of [
-        () => AccountCard({ status, t, action: undefined, expandedRef: undefined, login: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined, onLoginBegin: () => undefined }),
+        () => accountRows({ status, t, action: undefined, expandedRef: undefined, onOpenAction: () => undefined, onActionField: () => undefined, onConfirmAction: () => undefined, onCancelAction: () => undefined, onSelect: () => undefined, onRemove: () => undefined, onToggleExpand: () => undefined }),
         () => Dashboard({ t, status, onClose: () => undefined }),
       ]) {
         const texts = renderSafely(render);

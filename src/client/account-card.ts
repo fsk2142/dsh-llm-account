@@ -1,5 +1,5 @@
 /**
- * 账户卡片：账号行、额度表、操作菜单、添加账户与网页登录入口。
+ * 账户行与添加表单：账号行、额度表、操作菜单、添加账户。
  *
  * 与 `page.ts` 同样的纪律（Ruling 22）：**纯 props → 元素树**，没有 Hook、没有内部状态。
  * 用户输入到一半的名称/密钥住在 `page-state.ts` 的 `action` 草稿里（可完整单测），
@@ -8,7 +8,7 @@
  * 三条不可退让的规则：
  * 1. **额度缺失不得渲染成 0**：窗口里没有的字段就是没有，宁可显示「暂无额度数据」。
  * 2. **密钥只走账户操作**：密钥输入不带设置字段标记（`data-field`），因此进不了设置草稿与保存条。
- * 3. **按能力降级**：菜单项与登录入口都由宿主发布的能力声明决定（规格 §7.3），不是写死的。
+ * 3. **按能力降级**：菜单项由宿主发布的能力声明决定（规格 §7.3），不是写死的。
  *
  * 视觉结构（2026-10-17 的界面重做）：
  * - 一行账号 = **身份行**（状态点 + 名称 + 标记 + 行尾动作）+ **额度表**（每个窗口一小块，
@@ -16,7 +16,7 @@
  * - 行内动作只留三个图标按钮（刷新模型、展开报告、更多操作），重命名/恢复默认名称/
  *   换密钥/移除/上移/下移全部收进 `⋯` 菜单 —— 一行五个带边框的文字按钮是「像调试输出」
  *   的主要来源；
- * - 展开报告、编辑器、登录等待都是内嵌面板（`dsl-inset`），不是散落在行间的裸文本。
+ * - 展开报告、编辑器都是内嵌面板（`dsl-inset`），不是散落在行间的裸文本。
  *
  * **注**：菜单里**没有**「固定账号」项 —— 那在 2026-10-19 被有意移除（切换账号改走
  * 全局切换面板的顺序列表）。2026-10-23 修正了本注释此前仍列着「固定」的过时描述。
@@ -29,8 +29,7 @@ import { companyLabelOf, groupModels } from "../core/model-groups";
 import { rejectionText } from "./copy";
 import { failureListText } from "./failure-text";
 import { failureText } from "./failure-text";
-import { ChevronIcon, ExternalIcon, MoreIcon, MoveIcon, RefreshIcon } from "./icons";
-import { isHttpUrl } from "./login-window";
+import { ChevronIcon, MoreIcon, MoveIcon, RefreshIcon } from "./icons";
 import type { AccountAction } from "./page-state";
 import { QuotaBar } from "./quota-bar";
 import { fallbackQuotaWindows, quotaPlanText } from "./quota";
@@ -56,14 +55,8 @@ export interface LoginView {
 
 /** 卡片属性：全部数据与回调，卡片自己不持有任何状态。 */
 export interface AccountCardProps {
-  /** 该厂商的状态；远程面还没挂上时为 `undefined`（卡片显示「暂无数据」而不是报错）。 */
+  /** 该厂商的状态；没有可渲染账号时为空。 */
   status: VendorUsageStatus | undefined;
-  /**
-   * 读不到状态时的原因（宿主原文）。
-   *
-   * `status === undefined` 有四种病因而症状一模一样，界面必须显示它，否则每次都得靠猜。
-   */
-  problem?: string | undefined;
   t: (key: string) => string;
   /** 正在进行的账户操作（来自 `page-state.ts`）。 */
   action?: AccountAction | undefined;
@@ -79,8 +72,6 @@ export interface AccountCardProps {
   actionError?: string | undefined;
   /** 平铺账户列表里跟在账号名后的供应商标签；单卡模式不传。 */
   vendorLabel?: string | undefined;
-  /** 网页登录的当前状态（没有登录入口的厂商为 `undefined`）。 */
-  login?: LoginView | undefined;
   onOpenAction: (action: { kind: AccountAction["kind"]; ref?: string; label?: string }) => void;
   onActionField: (field: "label" | "key", value: string) => void;
   onConfirmAction: () => void;
@@ -89,18 +80,8 @@ export interface AccountCardProps {
   onSelect: (ref: string | null) => void;
   onRemove: (ref: string) => void;
   onToggleExpand: (ref: string) => void;
-  onLoginBegin: () => void;
   /** 调整顺序（目标账号、移动后的最终下标）；没有排序能力的厂商不传。 */
   onMove?: (ref: string, toIndex: number) => void;
-  /**
-   * 追加到每一行 `⋯` 菜单末尾的厂商专属控件（T6 的排序控件由 `opencode-account-card.ts` 注入）。
-   *
-   * 扩展点：行本身的渲染只有一份实现（额度条、状态标记、菜单都在这里），厂商差异通过这个
-   * render prop 挂上去，而不是复制一整行。
-   * @param account - 该行账号。
-   * @param index - 它在轮换顺序里的下标（排序控件要用）。
-   */
-  rowExtras?: (account: AccountUsageStatus, index: number) => ReactNode;
   /** 该厂商的模型目录（用于每个账号的可用模型）。 */
   catalog?: readonly CatalogModel[];
   /** 模型目录正在读取（还没有结果）。 */
@@ -158,13 +139,6 @@ export interface AccountCardProps {
    * 返回 `undefined` 表示这一行不画（还没读到数据）。
    */
   usageOf?: (ref: string) => ReactNode;
-  /**
-   * 卡片底部的常驻内容（OpenCode 的 `autoSwitch` 开关）。
-   *
-   * 放在这里而不是让厂商卡片在外面另起一个 `<section>`：那个开关属于这张卡片，
-   * 单独漂在卡片上方（重做前的样子）既没有归属也看不出它在管什么。
-   */
-  cardFooter?: ReactNode;
 }
 
 /**
@@ -190,63 +164,6 @@ export function restoreDefaultLabelOf(account: {
   // 已经是默认名：菜单项不该出现（点了也没有变化）。
   if (fallback === account.label.trim()) return undefined;
   return fallback;
-}
-
-/**
- * 账户卡片。
- * @param props - 见 {@link AccountCardProps}。
- * @returns 元素树。
- */
-export function AccountCard(props: AccountCardProps): ReactElement {
-  return createElement(
-    "section",
-    { "data-card": "accounts", className: CSS_CLASS.card },
-    createElement("h2", null, props.t("group.accounts")),
-    ...accountCardBody(props),
-  );
-}
-
-/**
- * 账户卡片的内容（不含外层 `<section>` 与标题）。
- *
- * 合并面板把两家放进同一张卡片：每家一个分组标题，内容复用这里 —— 行的渲染只有一份实现，
- * 面板与单卡不会长出两套额度条/菜单/登录逻辑。
- * @param props - 见 {@link AccountCardProps}。
- * @returns 元素数组。
- */
-export function accountCardBody(props: AccountCardProps): ReactNode[] {
-  const { status, t } = props;
-  // 线上 `accounts` 可能缺（`?? []`），也可能含**渲染不了的行**（非对象）—— 结构校验只查
-  // 「是不是数组」，不查每一行。渲染路径必须自己挑出能画的行：一行画不了不该让整张卡片崩。
-  const accounts = (status?.accounts ?? []).filter(
-    (account): account is AccountUsageStatus => typeof account === "object" && account !== null,
-  );
-  return [
-    // 空态分三种原因，文案不许混用：「远程面还没挂上」是数据不可用；「挂上了但一家账号都
-    // 没有」是提示用户去添加 —— 都写成「暂无额度数据」会把没账号显示成额度故障。
-    ...(status === undefined
-      ? [
-          createElement("p", { key: "unavailable", "data-accounts-empty": "true", className: CSS_CLASS.note }, t("account.unavailable")),
-          // 原因必须显示：上面那句话对「远程面没挂上」「读口没装配」「调用报错」「形状不认识」
-          // 四种病因都成立，不显示就只能靠猜（本机实测里已经猜错过好几轮）。
-          ...(props.problem === undefined
-            ? []
-            : [
-                createElement(
-                  "pre",
-                  { key: "problem", "data-usage-problem": "true", className: CSS_CLASS.diagnostic },
-                  props.problem,
-                ),
-              ]),
-        ]
-      : accounts.length === 0
-        ? [createElement("p", { key: "empty", "data-accounts-empty": "true", className: CSS_CLASS.note }, t("account.empty"))]
-        : []),
-    ...accountRows(props),
-    ...loginSection(props),
-    addSection(props),
-    props.cardFooter === undefined ? null : props.cardFooter,
-  ];
 }
 
 /**
@@ -681,7 +598,6 @@ function actionOf(props: AccountCardProps, kind: AccountAction["kind"], ref: str
  */
 function accountMenu(props: AccountCardProps, account: AccountUsageStatus, index: number): ReactNode {
   const label = props.t("account.menu");
-  const extras = props.rowExtras?.(account, index);
   return createElement(
     "details",
     { key: "menu", className: CSS_CLASS.menu, "data-account-menu": account.ref },
@@ -694,7 +610,6 @@ function accountMenu(props: AccountCardProps, account: AccountUsageStatus, index
       "div",
       { className: CSS_CLASS.menuPanel, onClick: closeMenu },
       ...menuButtons(props, account),
-      extras === undefined || extras === null ? null : extras,
       ...(capabilitiesOf(props).reorder && props.onMove !== undefined
         ? [
             createElement(
@@ -882,75 +797,6 @@ function failureNotes(props: AccountCardProps): ReactNode[] {
   );
 }
 
-/** 网页登录入口：只有声明了 `browserLogin` 的厂商才有。 */
-function loginSection(props: AccountCardProps): ReactNode[] {
-  const { t, login } = props;
-  if (!capabilitiesOf(props).browserLogin) return [];
-  // 入口是行内动作（左对齐的普通按钮），不单独套一层通栏面板；等待中的说明才用内嵌面板，
-  // 因为那里有授权网址要占一整行。
-  const button = createElement(
-    "button",
-    { key: "login", type: "button", "data-action": "login", className: CSS_CLASS.buttonSecondary, onClick: () => props.onLoginBegin() },
-    createElement(ExternalIcon, null),
-    t("account.login"),
-  );
-  const detail: ReactNode[] = [];
-  if (login?.state === "waiting") {
-    detail.push(createElement("p", { key: "waiting" }, t("account.loginWaiting")));
-    if (login.userCode !== undefined) {
-      detail.push(
-        createElement(
-          "p",
-          { key: "code", "data-login-code": login.userCode, className: CSS_CLASS.mono },
-          t("account.loginCode").replace("{code}", login.userCode),
-        ),
-      );
-    }
-    if (login.authUrl !== undefined) {
-      detail.push(
-        createElement(
-          "a",
-          {
-            key: "url",
-            "data-login-url": "true",
-            className: CSS_CLASS.link,
-            // 授权网址来自厂商：只放行 http(s)。`javascript:` / `data:` 在 Electron 里
-            // 等于执行任意脚本（与 accounts-panel 的同一条闸门）。
-            ...(isHttpUrl(login.authUrl) ? { href: login.authUrl } : {}),
-            target: "_blank",
-            rel: "noreferrer",
-          },
-          login.authUrl,
-        ),
-      );
-    }
-  }
-  if (login?.state === "failed") {
-    detail.push(
-      createElement("p", { key: "reason", "data-login-reason": login.reason ?? "error", className: CSS_CLASS.failure }, reasonText(t, login.reason)),
-    );
-    // 诊断原文：一句「等待授权超时」背后有四种病因，只有 vela 的真实输出能区分它们。
-    // 界面上**照原样显示**（不再加包装文案）：这句话本身就是给用户/开发者看的线索。
-    if (login.detail !== undefined && login.detail !== "") {
-      detail.push(
-        createElement(
-          "pre",
-          { key: "detail", "data-login-detail": login.detail, className: CSS_CLASS.diagnostic },
-          login.detail,
-        ),
-      );
-    }
-    // 缺环境是**唯一**一种用户自己就能修好的失败：给出可执行的安装步骤，而不是一句
-    // 「请先安装」。
-    const guide = velaInstallGuide(t, login.reason, props.onLoginBegin === undefined ? undefined : () => props.onLoginBegin());
-    if (guide !== null) detail.push(guide);
-  }
-  return [
-    createElement("div", { key: "login-row", "data-login-panel": login?.state ?? "idle", className: CSS_CLASS.actions }, button),
-    ...(detail.length === 0 ? [] : [createElement("div", { key: "login-detail", className: CSS_CLASS.inset }, ...detail)]),
-  ];
-}
-
 /**
  * 失败原因文案：认识的原因用专门文案，不认识的回退到通用文案（**不打印原因键**）。
  *
@@ -1096,7 +942,7 @@ function addSection(props: AccountCardProps): ReactNode {
 }
 
 /**
- * 排序控件（供 `opencode-account-card.ts` 通过 {@link AccountCardProps.rowExtras} 注入）。
+ * 上移/下移控件（共享账户行使用）。
  *
  * 导出在这里而不是让厂商卡片自己画：菜单项的类与形状只有一份（`dsl-item`），
  * 由行渲染决定它们长什么样，厂商卡片只提供「上移/下移」两个语义。

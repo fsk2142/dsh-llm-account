@@ -40,8 +40,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *
  * **空串与纯空白一律丢弃**（白名单与显隐键两处）：`[""]` 会被当成「非空白名单」，
  * 让所有模型从选择器里消失 —— 旧插件里的 `storedAllowlist`（行号不记：每次构建都会重新编号）
- * 过滤 `m !== ""`、`readVisibility` 过滤 `id !== ""`，客户端 `normalizeModels`
- * 同样丢弃；三处对同一份字段的读法必须一致。
+ * 过滤 `m !== ""`、`readVisibility` 过滤 `id !== ""`。
+ * 同样丢弃；白名单与显隐键两处对同一份字段的读法必须一致。
  * @param raw - 设置文档中的原始值。
  * @returns 收敛后的可见性设置；不修改入参。
  */

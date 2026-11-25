@@ -586,28 +586,6 @@ export const SIDEBAR_TOGGLE_KEY = "showSidebarQuota";
 export const SIDEBAR_ACCOUNTS_KEY = "sidebarAccounts";
 
 /**
- * 清洗一个模型 id 列表。
- *
- * **丢弃空串与纯空白**（全局约束）：`[""]` 会被当作「非空白名单」，让所有模型从选择器里消失 ——
- * 这是既有的真实缺陷形态。顺带去掉首尾空白、丢掉非字符串、去重（保持首次出现的顺序）。
- * @param value - 原始值（可能来自设置文档，形状不可信）。
- * @returns 清洗后的模型 id 列表。
- */
-export function normalizeModels(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== "string") continue;
-    const id = item.trim();
-    if (id === "" || seen.has(id)) continue;
-    seen.add(id);
-    out.push(id);
-  }
-  return out;
-}
-
-/**
  * 侧边栏额度卡片是否开启。
  *
  * **只读已存储的设置文档**（`snapshots[ns].value`），不看草稿 —— 旧插件的同一判定写得很清楚

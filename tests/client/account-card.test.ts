@@ -8,12 +8,14 @@
  * 1. 额度缺失**不得渲染成 0**；
  * 2. `⋯` 菜单按能力降级（无排序能力时没有手柄、无 pin 能力时没有固定项）；
  * 3. 密钥输入**只**走 `onReplaceKey`（不能变成设置字段、不能被回显）；
- * 4. 固定账号与生效账号不同时两个都标注（§8.1 第 4 条）；
- * 5. 登录失败原因可读（含 `credential-slot-taken`）。
+ * 4. 固定账号与生效账号不同时两个都标注（§8.1 第 4 条）。
+ *
+ * 登录、空态与诊断由 `accounts-panel.test.ts` / `login-diagnostic.test.ts` 覆盖；
+ * 本文件只测生产实际使用的 `accountRows` + `accountAddSection` 组合。
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { AccountCard, type AccountCardProps } from "../../src/client/account-card";
+import { accountAddSection, accountRows, type AccountCardProps } from "../../src/client/account-card";
 import { dictionaryOf } from "../../src/client/copy";
 import type { AccountUsageStatus, VendorCapabilities, VendorUsageStatus } from "../../src/client/usage-contract";
 import type { StubElement } from "../support/react-stub";
@@ -93,7 +95,7 @@ function textsOf(node: unknown): string[] {
 
 /** 渲染一次卡片；除覆盖项外所有回调都是 vi.fn()。 */
 function renderCard(overrides: Partial<AccountCardProps> & Pick<AccountCardProps, "status">): {
-  tree: StubElement;
+  tree: unknown;
   props: AccountCardProps;
 } {
   const props: AccountCardProps = {
@@ -105,10 +107,9 @@ function renderCard(overrides: Partial<AccountCardProps> & Pick<AccountCardProps
     onSelect: vi.fn(),
     onRemove: vi.fn(),
     onToggleExpand: vi.fn(),
-    onLoginBegin: vi.fn(),
     ...overrides,
   };
-  return { tree: AccountCard(props), props };
+  return { tree: [...accountRows(props), accountAddSection(props)], props };
 }
 
 /** 触发一个元素的回调（模拟用户操作）。 */
@@ -232,16 +233,14 @@ it("`⋯` 菜单按能力降级：拖拽手柄已移除，固定项已移除", (
   const ccElements = elementsOf(commandCode);
   expect(ccElements.filter((element) => element.props["data-drag-handle"] !== undefined)).toEqual([]);
   expect(ccElements.filter((element) => element.props["data-action"] === "pin")).toEqual([]);
-  expect(ccElements.filter((element) => element.props["data-action"] === "login")).toHaveLength(1);
 
   const opencode = renderCard({
     status: statusOf({ capabilities: OPENCODE, accounts: [row({ ref: "a" })] }),
   }).tree;
   const ocElements = elementsOf(opencode);
-  // 拖拽手柄已从行内移除；pin/login 仍按能力降级。
+  // 拖拽手柄已从行内移除；pin 仍按能力降级。
   expect(ocElements.filter((element) => element.props["data-drag-handle"] !== undefined)).toHaveLength(0);
   expect(ocElements.filter((element) => element.props["data-action"] === "pin")).toEqual([]);
-  expect(ocElements.filter((element) => element.props["data-action"] === "login")).toEqual([]);
 });
 
 it("菜单操作打开对应操作并带上目标账号（值与提交由页面状态负责）", () => {
@@ -590,34 +589,6 @@ it("拒绝原因对全部分类都有可读文案：不把原始枚举或文案�
   expect(textsOf(elementsOf(tree).find((element) => element.props["data-account"] === "a")!).join(" ")).toContain(t("dashboard.unknown"));
 });
 
-// —— 登录（Step 7 的用户可见面） ——
-
-it("登录等待中显示授权网址；失败时把原因翻译成可读文案（含撞名）", () => {
-  const waiting = renderCard({
-    status: statusOf({ accounts: [row({ ref: "a" })] }),
-    login: { state: "waiting", authUrl: "https://commandcode.ai/studio/auth/cli?state=x", userCode: "ABCD-EFGH" },
-  }).tree;
-  const link = elementsOf(waiting).find((element) => element.props["data-login-url"] !== undefined)!;
-  expect(link.props.href).toBe("https://commandcode.ai/studio/auth/cli?state=x");
-  expect(textsOf(waiting)).toContain(dictionaryOf("zh")("account.loginWaiting"));
-  // 设备码流程：user code 必须显示出来，用户才知道在浏览器里输入什么。
-  expect(textsOf(waiting).join(" ")).toContain("ABCD-EFGH");
-
-  const failed = renderCard({
-    status: statusOf({ accounts: [row({ ref: "a" })] }),
-    login: { state: "failed", reason: "credential-slot-taken" },
-  }).tree;
-  const t = dictionaryOf("zh");
-  expect(textsOf(failed)).toContain(t("account.reason.credential-slot-taken"));
-  // 未知原因回退到通用文案，而不是把原因键原样印出来。
-  const unknown = renderCard({
-    status: statusOf({ accounts: [row({ ref: "a" })] }),
-    login: { state: "failed", reason: "something-new" },
-  }).tree;
-  expect(textsOf(unknown)).toContain(t("account.reason.error"));
-  expect(textsOf(unknown).join(" ")).not.toContain("something-new");
-});
-
 it("服务端的失败项（failures）以文字提示，不静默吞掉", () => {
   const status = statusOf({ accounts: [row({ ref: "a" })] });
   const { tree } = renderCard({ status: { ...status, failures: ["quota: commandcode read failed (timeout)"] } });
@@ -625,36 +596,6 @@ it("服务端的失败项（failures）以文字提示，不静默吞掉", () =>
   expect(note.props["data-failure-detail"]).toContain("timeout");
   // 带引号账号名的包装才有账号可留；这一条没有账号名，所以是通用文案。
   expect(textsOf(note).join(" ")).toContain(dictionaryOf("zh")("usage.failure.quota"));
-});
-
-it("状态还没到（远程面未挂载）时给出说明而不是空白", () => {
-  const { tree } = renderCard({ status: undefined });
-  // 「数据暂不可用」——不是「暂无额度数据」（那不是额度问题），更不是 0。
-  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.unavailable"));
-  expect(textsOf(tree)).not.toContain(dictionaryOf("zh")("account.quotaMissing"));
-  // 没有状态就没有账号行可渲染。
-  expect(elementsOf(tree).filter((element) => element.props["data-account"] !== undefined)).toEqual([]);
-});
-
-it("读不到状态时把原因显示出来（空态必须能自证，不能只有一句空话）", () => {
-  const { tree } = renderCard({ status: undefined, problem: "gateway/internal: usage service absent" });
-  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.unavailable"));
-  const pre = elementsOf(tree).filter((element) => element.props["data-usage-problem"] === "true");
-  expect(pre).toHaveLength(1);
-  expect(textsOf(tree).join(" ")).toContain("gateway/internal");
-});
-
-it("有状态时不显示原因条（没有失败就没有诊断噪音）", () => {
-  const { tree } = renderCard({ status: statusOf({ accounts: [row({ ref: "a" })] }), problem: "stale reason" });
-  expect(elementsOf(tree).filter((element) => element.props["data-usage-problem"] === "true")).toEqual([]);
-});
-
-it("一家账号都没有时提示添加账户，而不是显示成额度故障", () => {
-  const { tree } = renderCard({ status: statusOf({ accounts: [] }) });
-  expect(textsOf(tree)).toContain(dictionaryOf("zh")("account.empty"));
-  expect(textsOf(tree)).not.toContain(dictionaryOf("zh")("account.quotaMissing"));
-  // 「添加账户」的入口照旧在（空态正是为了引导用户去用它）。
-  expect(elementsOf(tree).filter((element) => element.props["data-action"] === "add")).toHaveLength(1);
 });
 
 /**

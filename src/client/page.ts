@@ -456,7 +456,7 @@ function settingsCardElement(
     },
     createElement(
       "summary",
-      { className: CSS_CLASS.modelSummary, "data-card-collapse": card.id },
+      { "data-card-collapse": card.id },
       createElement("span", { className: CSS_CLASS.modelSummaryTitle }, t(card.labelKey)),
       createElement(ChevronIcon, null),
     ),

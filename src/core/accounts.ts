@@ -165,11 +165,6 @@ export function globalOrderOfVendor(derived: readonly string[], override: unknow
   return ordered.map((key) => key.slice(prefix.length));
 }
 
-/** 全局顺序键。 */
-export function accountOrderKey(vendor: VendorId, ref: string): string {
-  return `${vendor}:${ref}`;
-}
-
 /**
  * 把一项提到首位，其余项的**相对顺序不变**（旧插件 `moveAccountFirst` 第 6779 行）。
  *
