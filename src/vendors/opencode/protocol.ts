@@ -52,9 +52,9 @@ import type {
 /** 对外复用：适配器把宿主的 `options.reasoningEffort` 交给协议层时要这个类型。 */
 export type { ThinkingLevel };
 import { createProvider, isContextOverflow, normalizeContext } from "opencode-go-pi-ai";
-import * as anthropicMessages from "opencode-go-pi-ai/api/anthropic-messages";
-import * as openaiCompletions from "opencode-go-pi-ai/api/openai-completions";
-import * as openaiResponses from "opencode-go-pi-ai/api/openai-responses";
+import { anthropicMessagesApi } from "opencode-go-pi-ai/api/anthropic-messages.lazy";
+import { openAICompletionsApi } from "opencode-go-pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "opencode-go-pi-ai/api/openai-responses.lazy";
 
 /** 网关默认基地址（旧插件 `src/catalog.ts` 第 6408 行）。 */
 export const DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1";
@@ -863,9 +863,9 @@ export interface OpencodeStreamInput {
 
 /** 三条线协议的实现表（旧插件 `buildProvider` 第 6496-6509 行的同一张表）。 */
 const PROTOCOLS: Readonly<Record<OpencodeApi, ProviderStreams>> = {
-  "anthropic-messages": anthropicMessages,
-  "openai-completions": openaiCompletions,
-  "openai-responses": openaiResponses,
+  "anthropic-messages": anthropicMessagesApi(),
+  "openai-completions": openAICompletionsApi(),
+  "openai-responses": openAIResponsesApi(),
 };
 
 /**

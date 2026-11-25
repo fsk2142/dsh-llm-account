@@ -1,6 +1,6 @@
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import * as reactStub from "../support/react-stub";
@@ -205,6 +205,23 @@ describe("host-side bundles", () => {
 
     // Exact set, sorted: `[]` for lib/index.js, which must carry no bare import.
     expect(bareDeepseekImports(source)).toEqual([...specifiers].sort());
+  });
+
+  it("opencode 协议实现按需分块，启动主 chunk 保持轻量", () => {
+    const names = emittedBundles().map((path) => basename(path));
+    const startupChunks = names.filter((name) => /^opencode-[^.]+\.js$/.test(name));
+    expect(startupChunks, "opencode 实现应落在唯一的启动 chunk").toHaveLength(1);
+    const startup = startupChunks[0]!;
+    const startupPath = fileURLToPath(new URL(`../../lib/${startup}`, import.meta.url));
+    expect(statSync(startupPath).size, "pi-ai 协议 SDK 不应在启动时全部内联").toBeLessThan(500 * 1024);
+
+    const startupSource = readBundle(startupPath);
+    const dynamicImports = [...startupSource.matchAll(/\bimport\s*\(\s*["']\.\/([^"']+\.js)["']\s*\)/g)].map((match) => match[1]);
+    for (const protocol of ["anthropic-messages", "openai-completions", "openai-responses"]) {
+      const chunks = names.filter((name) => name.startsWith(`${protocol}-`) && name.endsWith(".js"));
+      expect(chunks, `${protocol} 必须拆成按需加载的协议 chunk`).toHaveLength(1);
+      expect(dynamicImports).toContain(chunks[0]);
+    }
   });
 
   it("宿主提供的 dsh-typert-protocol 保持外部导入，没有被内联进任何产物", () => {
