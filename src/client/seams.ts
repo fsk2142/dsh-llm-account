@@ -1062,8 +1062,11 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     const [modelCatalogLoading, setModelCatalogLoading] = useState<Record<string, boolean | undefined>>({});
     /** 正在保存的命名空间（卡片级保存按钮的即时反馈）。 */
     const [savingNs, setSavingNs] = useState<string | undefined>(undefined);
-    /** 账户操作计数：每次成功的操作 +1，用来触发一次状态重读。 */
-    const [accountRevision, setAccountRevision] = useState(0);
+    /** 每个厂商的账户操作计数：只有真正变化的那一家需要重读状态与目录。 */
+    const [accountRevisions, setAccountRevisions] = useState<Record<string, number>>({});
+    const bumpAccountRevision = (vendor: string): void => {
+      setAccountRevisions((current) => ({ ...current, [vendor]: (current[vendor] ?? 0) + 1 }));
+    };
     /** 导出进行中（按钮禁用，避免连点导出两份）。 */
     const [exportBusy, setExportBusy] = useState(false);
     /** 上一次导出失败的原因（人话）；成功即清掉。 */
@@ -1085,6 +1088,12 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * 修订号变化（凭据 / 账号操作）意味着数据真的变了，必须现读（见 `STATUS_READING_TTL_MS`）。
      */
     const initialStatusRead = useRef(false);
+    /** 状态刷新 scope 的上一轮快照：全局变化刷全部，厂商修订号变化只刷那一家。 */
+    const statusRefreshScope = useRef<{
+      usage: unknown;
+      credentialRevision: number;
+      accountRevisions: Readonly<Record<string, number>>;
+    } | undefined>(undefined);
     /** 本轮登录为授权页开的占位窗口（用户手势里同步打开，见 `login-window.ts`）。 */
     const loginPopup = useRef<LoginWindowHandle | undefined>(undefined);
     /** 登录轮询连续失败次数（按厂商）：单次抖动不该把等待面板打掉，连续失败才判成读不到。 */
@@ -1338,8 +1347,26 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
     // **不做常驻轮询**：规格 §8.1 第 6 条要的是「关闭即静默」，只有登录等待期才需要定时问（见下）。
     useEffect(() => {
       let alive = true;
-      // 账户操作（排序、autoSwitch、增删改）会改设置文档，所以每次都把快照重读一遍；
-      // 用户的未保存草稿由 `createPageState(…, previous)` 保留。
+      const previous = statusRefreshScope.current;
+      const globalChanged =
+        previous === undefined ||
+        previous.usage !== usage ||
+        previous.credentialRevision !== state.credentialRevision;
+      const targets = globalChanged
+        ? entries
+        : entries.filter(
+            (entry) =>
+              (previous?.accountRevisions[entry.providerId] ?? 0) !==
+              (accountRevisions[entry.providerId] ?? 0),
+          );
+      statusRefreshScope.current = {
+        usage,
+        credentialRevision: state.credentialRevision,
+        accountRevisions,
+      };
+      if (targets.length === 0) return;
+      // 账户操作会改设置文档，所以仍重读快照；用户的未保存草稿由
+      // `createPageState(…, previous)` 保留。真正昂贵的逐账号额度只读 targets。
       //
       // **必须带 catch**（2026-10-20 独立审查附录）：`discoverVendors` 内部已经全防御，
       // 但它仍可能因为装配层故障 reject；不接住就是一条未处理拒绝（控制台刺眼、且在
@@ -1362,7 +1389,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         // 账号/凭据真的变了（缓存会随这次现读被覆盖）。
         const useCache = !initialStatusRead.current;
         initialStatusRead.current = true;
-        for (const entry of entries) {
+        for (const entry of targets) {
           const cached = useCache ? statusReadings.get(entry.providerId) : undefined;
           if (cached !== undefined) {
             setStatuses((current) => ({ ...current, [entry.providerId]: cached }));
@@ -1386,7 +1413,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       return () => {
         alive = false;
       };
-    }, [usage, state.credentialRevision, accountRevision]);
+    }, [usage, state.credentialRevision, accountRevisions]);
 
     // 远程面本身挂载失败：结束加载态，让面板显示「暂不可用 + 原因」，而不是一直转圈。
     useEffect(() => {
@@ -1457,7 +1484,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
             setLoginDismissed((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: false }));
             setLogins((current) => ({ ...current, [vendor]: status }));
             // 登录成功后账号表多了一条/换了密钥：重读一次，别让面板停在旧列表上。
-            if (status.state === "success") setAccountRevision((current) => current + 1);
+            if (status.state === "success") bumpAccountRevision(vendor);
           });
         }
       }, LOGIN_POLL_MS);
@@ -1473,17 +1500,48 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
       (entry) => entry.ns !== FEATURE_TAB_NS && state.tabs.some((tab) => tab.ns === entry.ns),
     );
     const modelVendorKey = availableEntries.map((entry) => entry.providerId).join(",");
+    /** 目录刷新 scope：首次/全局变化读全部，账号修订变化只读目标厂商。 */
+    const catalogRefreshScope = useRef<{
+      usage: unknown;
+      credentialRevision: number;
+      vendorKey: string;
+      accountRevisions: Readonly<Record<string, number>>;
+    } | undefined>(undefined);
 
     // 搜索 key 的「已配置」徽标随搜索功能一起移除（2026-11-14）：宿主自带的网页搜索
     // 已更新，本插件不再承载搜索 provider、也不再管理搜索密钥。
 
     // 读**所有**可用厂商的未过滤模型目录：全局模型卡要把两家放在一起；只读当前标签页会让
-    // 另一家的模型在切换标签页前一直缺一块。刷新走 {@link refreshVendorCatalog}（按账户
-    // 逐个读），不在这里靠计数器重跑 —— 见那里的说明。
+    // 另一家的模型在切换标签页前一直缺一块。手动刷新走 {@link refreshVendorCatalog}；账号
+    // revision 变化时只重跑发生变化的厂商，不碰其它家。
     useEffect(() => {
       if (usage === undefined) return;
-      const targets = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
+      const available = entries.filter((entry) => state.tabs.some((tab) => tab.ns === entry.ns));
+      if (available.length === 0) return;
+      const previous = catalogRefreshScope.current;
+      const globalChanged =
+        previous === undefined ||
+        previous.usage !== usage ||
+        previous.credentialRevision !== state.credentialRevision ||
+        previous.vendorKey !== modelVendorKey;
+      const targets = globalChanged
+        ? available
+        : available.filter(
+            (entry) =>
+              (previous?.accountRevisions[entry.providerId] ?? 0) !==
+              (accountRevisions[entry.providerId] ?? 0),
+          );
+      catalogRefreshScope.current = {
+        usage,
+        credentialRevision: state.credentialRevision,
+        vendorKey: modelVendorKey,
+        accountRevisions,
+      };
       if (targets.length === 0) return;
+      // 首次挂载仍吃 TTL 缓存；后续账号/密钥变化只作废目标厂商的旧目录。
+      if (previous !== undefined) {
+        for (const entry of targets) catalogReadings.delete(entry.providerId);
+      }
       let alive = true;
       // 目录是厂商级资源：TTL 内跨挂载复用（换一个设置对象标签页也不该把两家的目录重问一遍）。
       // 手动入口（账号行的刷新、失败重试）走 {@link refreshVendorCatalog}：它绕过缓存并覆盖它。
@@ -1512,14 +1570,14 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           });
         }
       }
-      // 依赖里的 `accountRevision`：**账号变了目录也会变** —— 目录要鉴权（Open Design 的
+      // 依赖里的按厂商修订号：**账号变了目录也会变** —— 目录要鉴权（Open Design 的
       // `/v1/models` 不带密钥回 401），加完账号/换完密钥不重读的话，界面会一直停在挂载时
       // 那次「读不到」的空目录上（实际情况：加了 API 却没模型）。失败读数不进缓存，
-      // 所以这里必定会真读一次。
+      // 所以目标厂商必定会真读一次，另外两家不碰。
       return () => {
         alive = false;
       };
-    }, [usage, modelVendorKey, accountRevision]);
+    }, [usage, modelVendorKey, state.credentialRevision, accountRevisions]);
 
     // 合并账户面板：两家放在同一张卡片里，动作按厂商路由（设计 §7.2）。
     // 按账户刷新模型目录（需求：「重新获取模型不是刷新所有的，应该是刷新
@@ -1600,7 +1658,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           setLoginDismissed((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: false }));
         }
         setLogins((current) => ({ ...current, [vendor]: status }));
-        if (status.state === "success") setAccountRevision((current) => current + 1);
+        if (status.state === "success") bumpAccountRevision(vendor);
       });
     };
 
@@ -1747,7 +1805,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           alive = false;
         };
       }
-    }, [accountRevision, usageTick]);
+    }, [usageTick]);
     /**
      * 已经报过「用量读不到」的厂商（每次渲染重建）。
      *
@@ -1941,7 +1999,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
             return;
           }
           setState((current) => closeAction(current));
-          setAccountRevision((current) => current + 1);
+          bumpAccountRevision(vendor);
         });
       },
       onCancelAction: () => {
@@ -1949,13 +2007,13 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         setState((current) => closeAction(current));
       },
       onSelect: (vendor: string, ref: string | null) => {
-        void usage?.selectAccount(vendor, ref).then(() => setAccountRevision((current) => current + 1));
+        void usage?.selectAccount(vendor, ref).then(() => bumpAccountRevision(vendor));
       },
       onRemove: (vendor: string, ref: string) => {
-        void usage?.removeAccount(vendor, ref).then(() => setAccountRevision((current) => current + 1));
+        void usage?.removeAccount(vendor, ref).then(() => bumpAccountRevision(vendor));
       },
       onMove: (vendor: string, ref: string, toIndex: number) => {
-        void usage?.moveAccount(vendor, ref, toIndex).then(() => setAccountRevision((current) => current + 1));
+        void usage?.moveAccount(vendor, ref, toIndex).then(() => bumpAccountRevision(vendor));
       },
       onSetAccountModels: (vendor: string, ref: string, models: readonly string[]) => {
         /**
@@ -1983,7 +2041,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           .catch(() => {})
           .then(async () => {
             await usage?.setAccountModels?.(vendor, ref, models);
-            setAccountRevision((current) => current + 1);
+            bumpAccountRevision(vendor);
           })
           .finally(() => {
             if (modelWriteQueues.current.get(ref) === started) modelWriteQueues.current.delete(ref);
@@ -2064,8 +2122,8 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                     return;
                   }
                   setClearConfirming(false);
-                  // 清完必须重读：否则界面还挂着已经不存在的数据。
-                  setAccountRevision((current) => current + 1);
+                  // 清完只重读报表：账号与额度没有变化，不该顺带重读三家。
+                  setUsageTick((current) => current + 1);
                 })
                 .catch((error: unknown) => {
                   setClearError(error instanceof Error ? error.message : String(error));

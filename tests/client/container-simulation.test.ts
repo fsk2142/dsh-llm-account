@@ -430,13 +430,13 @@ describe("设置页容器仿真", () => {
     await settleSim(mini);
     expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign"]);
 
-    // 一次账号操作 → 成功后修订号 +1 → 三家状态重读（缓存不能盖住刚发生的变更）。
+    // 一次账号操作 → 目标厂商修订号 +1 → 只强制现读目标厂商；另外两家保留缓存。
     //
     // 2026-10-20 起「新增账号（API key）」入口已去掉，所以这里改用**仍然存在**的
     // 「移除账号」来触发同一条机制 —— 被测的是「操作后强制现读」，不是那个具体入口。
     click(page.tree(), "data-action", "remove");
     await settleSim(mini);
-    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go", "opendesign"]);
+    expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode"]);
   });
 
   it("凭据变更（含设置页关闭时完成的网页登录）让缓存失效：下次打开重读", async () => {
@@ -854,13 +854,15 @@ describe("网页登录容器仿真", () => {
     click(page.tree(), "data-action", "login");
     await settleSim(mini);
     expect(findSim(page.tree(), "data-login-panel", "commandcode")).toBeDefined();
-    const readsBefore = host.statusCalls.length;
+    host.statusCalls.length = 0;
+    host.modelCalls.length = 0;
 
     vi.advanceTimersByTime(LOGIN_POLL_MS + 500);
     await settleSim(mini);
 
     expect(findSim(page.tree(), "data-login-panel")).toBeUndefined();
-    expect(host.statusCalls.length).toBeGreaterThan(readsBefore);
+    expect(host.statusCalls, "登录成功只重读 commandcode 的账号状态").toEqual(["commandcode"]);
+    expect(host.modelCalls, "登录成功只重读 commandcode 的模型目录").toEqual(["commandcode"]);
     page.unmount();
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -1028,30 +1030,33 @@ describe("网页登录自动收尾（不登录也不该一直挂着）", () => {
   });
 
   it("网页登录完成后模型目录自动重读：登录前读不到（401），登录后读到（目录要鉴权）", async () => {
-  const mini = await runtime();
-  await freshSeams();
+    const mini = await runtime();
+    await freshSeams();
     vi.useFakeTimers();
     const { LOGIN_POLL_MS } = await import("../../src/client/seams");
-  const host = fakeHost(mini, { login: { status: () => ({ state: "success" }) } });
-  // 登录之前：目录读不到（Open Design 的 /v1/models 不带密钥就是 401）。失败读数不进缓存。
-  host.modelFailures = ["models: opendesign read failed (401 missing_api_key)"];
-  const page = mini.mount(await pageContainer(host));
-  await settleSim(mini);
-  const before = host.modelCalls.length;
-  // 登录之后目录就正常了（同一把密钥）：把失败项清掉再触发重读。
-  host.modelFailures = [];
-  expect(before).toBeGreaterThanOrEqual(3);
-  stubBrowserWindow();
+    const host = fakeHost(mini, { login: { status: () => ({ state: "success" }) } });
+    // 登录之前：目录读不到（Open Design 的 /v1/models 不带密钥就是 401）。失败读数不进缓存。
+    host.modelFailures = ["models: opendesign read failed (401 missing_api_key)"];
+    const page = mini.mount(await pageContainer(host));
+    await settleSim(mini);
+    const before = host.modelCalls.length;
+    // 登录之后目录就正常了（同一把密钥）：把失败项清掉再触发重读。
+    host.modelFailures = [];
+    expect(before).toBeGreaterThanOrEqual(3);
+    stubBrowserWindow();
+    host.statusCalls.length = 0;
+    host.modelCalls.length = 0;
 
-  // 2026-10-20：「新增账号（API key）」入口已去掉，改由**网页登录完成**触发同一条重读链。
-  // 被测的是「账号变了就重读目录」，不是某个具体入口。
-  click(page.tree(), "data-action", "login");
-  await settleSim(mini);
+    // 2026-10-20：「新增账号（API key）」入口已去掉，改由**网页登录完成**触发同一条重读链。
+    // 被测的是「账号变了就重读目录」，不是某个具体入口。
+    click(page.tree(), "data-action", "login");
+    await settleSim(mini);
     vi.advanceTimersByTime(LOGIN_POLL_MS + 500);
-  await settleSim(mini);
+    await settleSim(mini);
 
-  // 账号修订号变化 → 目录重读（否则界面会一直停在挂载时那次空目录上）。
-  expect(host.modelCalls.length).toBeGreaterThan(before);
+    // 账号修订号变化 → 只重读目标厂商；否则界面会一直停在挂载时那次空目录上。
+    expect(host.modelCalls, "另外两家的目录不该被重新读取").toEqual(["commandcode"]);
+    expect(host.statusCalls, "另外两家的账号状态不该被重新读取").toEqual(["commandcode"]);
   page.unmount();
   vi.useRealTimers();
   vi.unstubAllGlobals();

@@ -129,6 +129,8 @@ export function fakeHost(
      * 那条降级路径）。抛错会让页面进入「用量读取失败」分支 —— 用来钉住两种降级。
      */
     usageReport?: (window: string) => unknown;
+    /** 可选清空台账入口；缺省不提供，保持旧宿主降级形状。 */
+    usageClear?: () => unknown;
     /**
      * 网页登录的脚本：`begin` 决定 `loginBegin(vendor)` 的返回（可以是 `failed` 状态，
      * 也可以抛错来模拟"调用没发出去"）；`status` 决定轮询读到的状态。
@@ -276,6 +278,14 @@ export function fakeHost(
       host.usageCalls.push({ method: "setAutoSwitch", vendor });
       return mini.track(undefined);
     },
+    ...(options.usageClear === undefined
+      ? {}
+      : {
+          usageClear: (): Promise<unknown> => {
+            host.usageCalls.push({ method: "usageClear", vendor: "all" });
+            return mini.track(options.usageClear?.());
+          },
+        }),
     loginBegin: (vendor: string): Promise<unknown> => {
       host.loginCalls.push({ method: "loginBegin", vendor });
       return mini.track(
