@@ -18,6 +18,7 @@ import { expect, it, vi } from "vitest";
 import type { AccountPort, AccountState, AccountView, LoginPort, QuotaSnapshot, VendorCapabilities, VendorId } from "../../src/core/adapter";
 import { RotationEngine } from "../../src/core/switching/rotation";
 import type { RotationAccess } from "../../src/vendors/assembly";
+import { sharedUsageLedger } from "../../src/vendors/usage-store";
 import {
   applyUsageRemote,
   LlmAccountUsageService,
@@ -196,6 +197,7 @@ it("服务注册到固定键与命名空间，并登记三个远程方法", asyn
     "loginStatus",
     "loginCancel",
     "usageReport",
+    "usageLastUsed",
     "usageClear",
     "usageExportCsv",
   ]);
@@ -659,6 +661,52 @@ it("**新增账号后缓存立刻失效**（BUG-01）", async () => {
   expect(snapshotCalls, "新增账号后必须重新读，不能命中旧缓存").toBeGreaterThan(afterFirst);
 }, 10_000);
 
+it("**并发 usageReport 只读一轮上游额度**（窗口提示单飞）", async () => {
+  let snapshotCalls = 0;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const deps = vendorDeps({
+    vendor: "commandcode",
+    views: [{ ref: "a", label: "A", configured: true } as never],
+    snapshot: async () => {
+      snapshotCalls += 1;
+      await gate;
+      return { ...SNAPSHOT, windows: [{ key: "fiveHour", used: 3, cap: 10, resetAt: Date.now() + 3_600_000 } as never] };
+    },
+  });
+  const { ctx } = await mount([deps]);
+  const service = ctx.get("llmAccountUsage") as { usageReport(w?: string): Promise<unknown> };
+
+  const first = service.usageReport("today");
+  const second = service.usageReport("today");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(snapshotCalls, "两个并发报表必须共用同一次窗口读取").toBe(1);
+  release();
+  await Promise.all([first, second]);
+  expect(snapshotCalls).toBe(1);
+}, 10_000);
+
+it("**usageLastUsed 只读本地台账与账号清单，不碰额度端点**", async () => {
+  let snapshotCalls = 0;
+  const deps = vendorDeps({
+    vendor: "commandcode",
+    views: [{ ref: "a", label: "A", configured: true } as never],
+    snapshot: async () => {
+      snapshotCalls += 1;
+      return SNAPSHOT;
+    },
+  });
+  const { ctx } = await mount([deps]);
+  const service = ctx.get("llmAccountUsage") as { usageLastUsed(): Promise<unknown> };
+  const ledger = sharedUsageLedger();
+  const at = Date.now() + 10_000;
+  await ledger.record({ vendor: "commandcode", account: "a", model: "m1", outcome: "success", at });
+  await ledger.record({ vendor: "commandcode", account: "deleted", model: "m2", outcome: "success", at: at + 1 });
+
+  await expect(service.usageLastUsed()).resolves.toEqual({ lastUsed: { vendor: "commandcode", account: "a", model: "m1", at } });
+  expect(snapshotCalls, "最近使用账号不需要任何额度 HTTP").toBe(0);
+}, 10_000);
+
 it("**删除账号后缓存立刻失效**（BUG-01）", async () => {
   let snapshotCalls = 0;
   const views = [{ ref: "a", label: "A", configured: true } as never];
@@ -694,16 +742,28 @@ it("**在途读取不会把旧结果写回缓存**（BUG-01 竞态）", async ()
    * 不经过缓存，测不到这个竞态。
    */
   let snapshotCalls = 0;
-  let release = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  let releaseOld = () => {};
+  let releaseNew = () => {};
+  let markOldStarted = () => {};
+  let markNewStarted = () => {};
+  const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+  const newGate = new Promise<void>((resolve) => { releaseNew = resolve; });
+  const oldStarted = new Promise<void>((resolve) => { markOldStarted = resolve; });
+  const newStarted = new Promise<void>((resolve) => { markNewStarted = resolve; });
   const deps = vendorDeps({
     vendor: "commandcode",
     views: [{ ref: "a", label: "A", configured: true } as never],
     snapshot: async () => {
       snapshotCalls += 1;
-      if (snapshotCalls === 1) await gate;
+      const call = snapshotCalls;
+      if (call === 1) {
+        markOldStarted();
+        await oldGate;
+      }
+      if (call === 2) {
+        markNewStarted();
+        await newGate;
+      }
       return { ...SNAPSHOT, windows: [{ key: "fiveHour", used: 3, cap: 10, resetAt: Date.now() + 3_600_000 } as never] };
     },
   });
@@ -713,13 +773,21 @@ it("**在途读取不会把旧结果写回缓存**（BUG-01 竞态）", async ()
     addAccount(v: string, i: unknown): Promise<unknown>;
   };
 
-  const inFlight = service.usageReport("today");
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  const oldFlight = service.usageReport("today");
+  await oldStarted;
   await service.addAccount("commandcode", { label: "B", key: "k2" });
-  release();
-  await inFlight;
-  const afterOld = snapshotCalls;
+  const newFlight = service.usageReport("today");
+  await newStarted;
+  expect(snapshotCalls, "失效后必须启动新一代读取").toBe(2);
 
+  releaseOld();
+  await oldFlight;
+  const joinedFlight = service.usageReport("today");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(snapshotCalls, "旧 flight 收尾不能删掉新 flight，后来的报表必须仍合并到新读取").toBe(2);
+
+  releaseNew();
+  await Promise.all([newFlight, joinedFlight]);
   await service.usageReport("today");
-  expect(snapshotCalls, "旧结果不该被写回，必须重新读").toBeGreaterThan(afterOld);
+  expect(snapshotCalls, "新一代成功结果落缓存后，后续报表直接复用").toBe(2);
 }, 10_000);

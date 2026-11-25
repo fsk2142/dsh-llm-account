@@ -43,6 +43,7 @@ import {
   type SwitchNowResult,
   type SwitchRecord,
   type UsageInvocationDescriptor,
+  type UsageLastUsedView,
   type UsageReportView,
   type UsageWindowView,
   type VendorUsageStatus,
@@ -273,6 +274,9 @@ export class LlmAccountUsageService extends TypertRemoteService {
    */
   private readonly quotaWindowCache = new Map<string, { at: number; ttlMs: number; value: readonly AccountWindowHint[] }>();
 
+  /** 每家正在进行的窗口提示读取：并发报表共用一份，不打重复额度。 */
+  private readonly quotaWindowFlights = new Map<VendorId, Promise<readonly AccountWindowHint[]>>();
+
   /**
    * 额度窗口缓存的有效期（毫秒）。
    *
@@ -324,6 +328,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
   private invalidateWindowHints(vendor?: VendorId): void {
     if (vendor === undefined) {
       this.quotaWindowCache.clear();
+      this.quotaWindowFlights.clear();
       // 全部失效：把每个已知代际都推进（在途读取会在写回时看到变化而丢弃）。
       for (const [key, generation] of this.quotaCacheGeneration) {
         this.quotaCacheGeneration.set(key, generation + 1);
@@ -331,6 +336,7 @@ export class LlmAccountUsageService extends TypertRemoteService {
       return;
     }
     this.quotaWindowCache.delete(vendor);
+    this.quotaWindowFlights.delete(vendor);
     this.quotaCacheGeneration.set(vendor, (this.quotaCacheGeneration.get(vendor) ?? 0) + 1);
   }
 
@@ -773,13 +779,16 @@ export class LlmAccountUsageService extends TypertRemoteService {
     if (cached !== undefined && now - cached.at < cached.ttlMs) {
       return cached.value;
     }
+    const inFlight = this.quotaWindowFlights.get(vendor);
+    if (inFlight !== undefined) return inFlight;
     /**
      * 记下**读取开始时的代际**。写回前若已变化，说明期间发生过账号变更
      * （`invalidateWindowHints` 把它 +1 了）—— 这次读到的结果已经过期，丢弃。
      */
     const generationAtStart = this.quotaCacheGeneration.get(vendor) ?? 0;
-    try {
-      const status = await this.status(vendor);
+    const flight = (async (): Promise<readonly AccountWindowHint[]> => {
+      try {
+        const status = await this.status(vendor);
       /** 上一次成功的值按 ref 建索引，供「这次失败的账号」沿用。 */
       const previous = new Map((cached?.value ?? []).map((hint) => [hint.ref, hint]));
       const hints: AccountWindowHint[] = [];
@@ -854,6 +863,14 @@ export class LlmAccountUsageService extends TypertRemoteService {
     } catch {
       // 这一家的额度读不到：有旧值就沿用（口径不跳变），没有就让调用方退回自然周期。
       return cached?.value ?? [];
+    }
+    })();
+    this.quotaWindowFlights.set(vendor, flight);
+    try {
+      return await flight;
+    } finally {
+      // 失效可能已启动新一代读取；旧 flight 收尾不能把新 flight 删掉。
+      if (this.quotaWindowFlights.get(vendor) === flight) this.quotaWindowFlights.delete(vendor);
     }
   }
 
@@ -961,6 +978,37 @@ export class LlmAccountUsageService extends TypertRemoteService {
       ...(failuresByKind.length === 0 ? {} : { failuresByKind }),
       ...(failuresByAccount.length === 0 ? {} : { failuresByAccount }),
     };
+  }
+
+  /**
+   * 侧边栏专用的轻量「最近使用账号」读数。
+   *
+   * 只读本地台账 + 各厂商账号清单，**不调用 quota.snapshot**。旧实现为了拿这一个字段
+   * 调完整 `usageReport("all")`，后者会反向读取三家额度窗口，侧边栏每刷新一次 status
+   * 就可能再放大一轮上游请求。
+   * @returns 最近使用账号；没有可用记录时 `lastUsed` 缺席。
+   */
+  async usageLastUsed(): Promise<UsageLastUsedView> {
+    let records: UsageRecord[] = [];
+    try {
+      records = await sharedUsageLedger().read();
+    } catch (error) {
+      console.warn("[dsh-llm-account] could not read the usage ledger:", error);
+    }
+    const known = new Set<string>();
+    await Promise.allSettled(
+      [...this.vendorDeps].map(async ([vendor, deps]) => {
+        try {
+          const views = await deps.accounts.list();
+          for (const view of views) known.add(`${vendor}\u0000${view.ref}`);
+        } catch {
+          // 这一家的账号清单读不到：按「没有已知账号」处理，过滤掉该家记录，
+          // 但另外两家的 lastUsed 仍可正常返回。
+        }
+      }),
+    );
+    const lastUsed = lastUsedAccountOf(records, (vendor, account) => known.has(`${vendor}\u0000${account}`));
+    return lastUsed === undefined ? {} : { lastUsed };
   }
 
   /**

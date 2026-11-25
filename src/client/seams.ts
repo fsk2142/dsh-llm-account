@@ -65,7 +65,7 @@ import { PageShell } from "./page";
 import { readableQuotaOf } from "./quota-readability";
 import { ReadingCache } from "./reading-cache";
 import { savesImmediately, type VendorEntry } from "./registry";
-import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
+import { USAGE_NAMESPACE, USAGE_PACKAGE, usageDescriptors, type AccountView, type AccountUsageStatus, type CatalogModelsResult, type UsageLastUsedView, type UsageNamespace, type UsageReportView, type UsageWindowView, type VendorUsageStatus } from "./usage-contract";
 import { checkForUpdate, PLUGIN_VERSION, pollUpdate, startUpdate, type UpdateState } from "./update-check";
 import { showDriftNotice } from "./drift-notice";
 import { AccountUsageBlock } from "./usage-card";
@@ -2450,6 +2450,9 @@ export interface SidebarCardController {
 /** 侧边栏卡片的轮询间隔（毫秒）。与旧插件一样按需起停，不做常驻。 */
 export const SIDEBAR_POLL_MS = 60_000;
 
+/** 启动建清单后的短新鲜窗口：控制器重建复用刚读到的状态，超过则正常现读。 */
+const SIDEBAR_STARTUP_STATUS_TTL_MS = 5_000;
+
 /** 失败退避的上限（毫秒）：连续失败时最多慢到 5 分钟一问，再慢用户就该以为是坏了。 */
 export const SIDEBAR_POLL_MAX_MS = 300_000;
 
@@ -2612,9 +2615,25 @@ export function createSidebarCardView(options: {
     });
     // 渲染期间不重读的两个可变值（引用：不触发渲染，只在读取/排程时被读）。
     const inFlight = useRef(false);
+    /** 同一厂商的启动建清单与控制器首读共用一份 status 请求。 */
+    const statusFlights = useRef(new Map<string, ReturnType<typeof readStatusDetail>>());
+    /** 启动期刚读完的厂商时间：控制器重建时短时间复用，周期轮询/手动刷新仍现读。 */
+    const statusReadAt = useRef(new Map<string, number>());
+    /** lastUsed 读取单飞：状态轮询、可见性恢复、控制器重建不能叠请求。 */
+    const lastUsedFlight = useRef<Promise<void> | undefined>(undefined);
     const failures = useRef(0);
     /** 组件是否还挂着（异步回调据此丢弃过期的 setState）。 */
     const aliveRef = useRef(true);
+    /** 侧边栏内部按厂商单飞；不跨容器共享，避免设置页的强制现读被旧请求合并。 */
+    const readVendorStatus = (usage: UsageNamespace, name: string): ReturnType<typeof readStatusDetail> => {
+      const existing = statusFlights.current.get(name);
+      if (existing !== undefined) return existing;
+      const flight = readStatusDetail(usage, name).finally(() => {
+        if (statusFlights.current.get(name) === flight) statusFlights.current.delete(name);
+      });
+      statusFlights.current.set(name, flight);
+      return flight;
+    };
     useEffect(
       () => () => {
         aliveRef.current = false;
@@ -2683,6 +2702,7 @@ export function createSidebarCardView(options: {
      */
     const read = (manual: boolean): void => {
       if (!manual && domDocument()?.visibilityState === "hidden") return;
+      refreshLastUsed();
       if (inFlight.current) return;
       const usage = usageNamespace(ctx);
       if (usage === undefined) {
@@ -2703,8 +2723,18 @@ export function createSidebarCardView(options: {
       // 清单随之建立 —— 否则轮询会在这里直接返回，永远建不起清单（死锁）。
       const readVendor = vendor ?? vendors[0];
       if (readVendor === undefined) return;
+      const fresh = statuses[readVendor];
+      const readAt = statusReadAt.current.get(readVendor) ?? 0;
+      if (!manual && fresh !== undefined && Date.now() - readAt < SIDEBAR_STARTUP_STATUS_TTL_MS) {
+        setView({
+          status: fresh,
+          ...(fresh.failures.length > 0 ? { failure: fresh.failures[0] } : {}),
+          stale: false,
+        });
+        return;
+      }
       inFlight.current = true;
-      void readStatusDetail(usage, readVendor).then(({ status: next, problem }) => {
+      void readVendorStatus(usage, readVendor).then(({ status: next, problem }) => {
         inFlight.current = false;
         if (!aliveRef.current) return;
         if (next === undefined) {
@@ -2714,6 +2744,7 @@ export function createSidebarCardView(options: {
           return;
         }
         const reading = noteStatusReading(readVendor, next);
+        statusReadAt.current.set(readVendor, Date.now());
         // 这次读数同时刷新「该家的账号表」——清单据此重建（账号增减都能跟上）。
         setStatuses((current) => {
           const merged = { ...current, [readVendor]: reading };
@@ -2755,30 +2786,44 @@ export function createSidebarCardView(options: {
     );
 
     /**
-     * 读「最近一次请求是哪个账号」（侧边栏跟随当前会话）。
+     * 轮询间隔的取值指纹：只有它变了才需要重建控制器（读一次新的间隔）。
      *
-     * 一次 `usageReport` 就带回它（宿主从台账算好，不额外打网络）。读失败不抛：拿不到就
-     * 退回轮播，侧边栏不该因此变空。
+     * **轮播已移除**：不再有`setTurn` /
+     * `setInterval`，对应的设置项 `sidebarRotateMinutes` 也一并从设置页删掉了。
      */
-    useEffect(() => {
+    const refreshKey = quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"]);
+
+    /**
+     * 每拍刷新「最近一次请求是哪个账号」（侧边栏跟随当前会话）。
+     *
+     * 优先用轻量 `usageLastUsed`（本地台账 + 账号清单，不碰额度）；老宿主没有该接口时
+     * 才回退完整报表。单飞避免慢请求与下一拍叠加；失败不抛，沿用缓存/退回清单第一个。
+     */
+    const refreshLastUsed = (): void => {
+      if (lastUsedFlight.current !== undefined) return;
       const usage = usageNamespace(ctx);
-      if (usage?.usageReport === undefined) return;
-      let live = true;
-      void remoteValueDetailed<UsageReportView>(callRemote(() => usage.usageReport?.(USAGE_REPORT_WINDOW))).then(
-        (detail) => {
-          if (!live || !detail.ok) return;
-          const report = reportOf(detail.value);
-          setLastUsed(report?.lastUsed);
-          // 同时写进模块级缓存：下一次挂载的首帧要用它（见 sidebarLastUsed）。
-          noteLastUsed(report?.lastUsed);
-        },
-      );
-      return () => {
-        live = false;
-      };
-      // 与额度轮询同节奏：`read` 每拍会改 `statuses`，`lastUsed` 跟着定期重读即可。
-      // （没有轮播了，所以不再依赖 `turn` —— 那次读只会因为额度刷新而重跑。）
-    }, [statuses]);
+      if (usage === undefined) return;
+      const lightweight = typeof usage.usageLastUsed === "function";
+      const pending = lightweight
+        ? callRemote(() => usage.usageLastUsed?.())
+        : usage.usageReport === undefined
+          ? undefined
+          : callRemote(() => usage.usageReport?.(USAGE_REPORT_WINDOW));
+      if (pending === undefined) return;
+      const flight = remoteValueDetailed<UsageLastUsedView | UsageReportView>(pending)
+        .then((detail) => {
+          if (!aliveRef.current || !detail.ok || detail.value === undefined) return;
+          const lastUsed = lightweight
+            ? (detail.value as UsageLastUsedView).lastUsed
+            : reportOf(detail.value as UsageReportView)?.lastUsed;
+          setLastUsed(lastUsed);
+          noteLastUsed(lastUsed);
+        })
+        .finally(() => {
+          if (lastUsedFlight.current === flight) lastUsedFlight.current = undefined;
+        });
+      lastUsedFlight.current = flight;
+    };
 
     /**
      * **建清单**：各开启的家读一次（每家一次，读到的账号表进 `statuses`）。
@@ -2794,9 +2839,10 @@ export function createSidebarCardView(options: {
       if (usage === undefined) return;
       let cancelled = false;
       for (const name of vendors) {
-        void readStatusDetail(usage, name).then(({ status }) => {
+        void readVendorStatus(usage, name).then(({ status }) => {
           if (cancelled || status === undefined) return;
           const reading = noteStatusReading(name, status);
+          statusReadAt.current.set(name, Date.now());
           setStatuses((current) => {
             const merged = { ...current, [name]: reading };
             noteSidebarStatuses(merged);
@@ -2809,14 +2855,6 @@ export function createSidebarCardView(options: {
       };
       // 只跟厂商清单走：账号增减由每拍的读数自然刷新（`read` 会更新 `statuses`）。
     }, [vendors.join(",")]);
-
-    /**
-     * 轮询间隔的取值指纹：只有它变了才需要重建控制器（读一次新的间隔）。
-     *
-     * **轮播已移除**：不再有`setTurn` /
-     * `setInterval`，对应的设置项 `sidebarRotateMinutes` 也一并从设置页删掉了。
-     */
-    const refreshKey = quotaRefreshMs(sidebarVendorSettings()?.["quotaRefreshMinutes"]);
 
     // 冷启动兜底：设置页从未打开过时存储是冷的，卡片自己读一次已存储的开关
     // （一次设置读取，不是用量查询；读不到就保持关闭，绝不轮询）。

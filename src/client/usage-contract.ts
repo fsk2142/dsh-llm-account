@@ -84,6 +84,8 @@ export const USAGE_METHODS = [
   "loginCancel",
   // 用量统计（跨厂商：每账号自身周期 + 总账）
   "usageReport",
+  // 侧边栏只需「最近使用账号」：本地台账 + 账号清单，不碰额度端点
+  "usageLastUsed",
   // 清空用量台账（用户显式操作，页面会先二次确认）
   "usageClear",
   // 导出用量台账为 CSV 文本
@@ -147,6 +149,19 @@ export interface AccountUsageView {
   lastAt?: number;
 }
 
+/** 最近一次请求使用的账号（侧边栏跟随用）。 */
+export interface LastUsedAccountView {
+  vendor: string;
+  account: string;
+  model: string;
+  at: number;
+}
+
+/** 轻量最近使用账号响应；没有记录时 `lastUsed` 缺席。 */
+export interface UsageLastUsedView {
+  lastUsed?: LastUsedAccountView;
+}
+
 /** 一份用量报表。 */
 export interface UsageReportView {
   accounts: AccountUsageView[];
@@ -165,7 +180,7 @@ export interface UsageReportView {
    * ——刚发过请求的那个会话几乎必然就是用户在看的那个（见 `core/last-used` 的说明）。
    * 没有可用记录时缺失（那就退回轮播）。
    */
-  lastUsed?: { vendor: string; account: string; model: string; at: number };
+  lastUsed?: LastUsedAccountView;
   /**
    * 失败明细：这一期按分类（`FailureKind`）收成的几行。
    *
@@ -600,6 +615,13 @@ function parseUsageReport(endpoint: string, value: unknown): UsageReportView {
   } as UsageReportView;
 }
 
+/** 校验轻量最近使用账号响应；没有记录时返回空对象。 */
+function parseUsageLastUsed(endpoint: string, value: unknown): UsageLastUsedView {
+  if (!isRecord(value)) throw boundaryError(endpoint, "expected a last-used response object");
+  const lastUsed = lastUsedOf(value.lastUsed);
+  return lastUsed === undefined ? {} : { lastUsed };
+}
+
 /**
  * 校验并搬运「按账号的失败明细」。
  *
@@ -669,7 +691,7 @@ function isUsageWindow(value: unknown): value is UsageWindowView {
  * @param value - 线上值（形状不可信）。
  * @returns 校验后的读数；不合格时为 `undefined`（当作「没有」，不猜）。
  */
-function lastUsedOf(value: unknown): { vendor: string; account: string; model: string; at: number } | undefined {
+function lastUsedOf(value: unknown): LastUsedAccountView | undefined {
   if (!isRecord(value)) return undefined;
   const { vendor, account, at } = value;
   if (typeof vendor !== "string" || vendor === "") return undefined;
@@ -933,6 +955,7 @@ export function usageDescriptors(): UsageInvocationDescriptor[] {
     // 用量统计：**跨厂商**的一份报表（总账 + 每账号周期）。不带 vendor 参数，
     // 因为它读的是一本共享台账（见 `vendors/usage-store`）。
     makeDescriptor("usageReport", "UsageReport", parseUsageReport, [WINDOW_PARAM]),
+    makeDescriptor("usageLastUsed", "UsageLastUsed", parseUsageLastUsed, []),
     makeDescriptor("usageClear", "Void", parseVoid, []),
     // 导出：返回 CSV 文本（不是文件）—— 传文件路径/让宿主写盘会把「存在哪」变成新问题，
     // 而浏览器侧本来就有下载能力。
@@ -951,6 +974,8 @@ export interface UsageNamespace {
    * 可选：老版本宿主侧没实现它时，页面不该因此崩 —— 卡片整体不渲染即可。
    */
   usageReport?(window: UsageWindowView): Promise<UsageReportView>;
+  /** 侧边栏专用：只读本地台账与账号清单，不触发额度 HTTP。 */
+  usageLastUsed?(): Promise<unknown>;
   /** 清空用量台账（不可撤销；页面负责二次确认）。 */
   /**
    * 清空用量台账（不可撤销；页面负责二次确认）。

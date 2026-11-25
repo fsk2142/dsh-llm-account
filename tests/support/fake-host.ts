@@ -129,6 +129,8 @@ export function fakeHost(
      * 那条降级路径）。抛错会让页面进入「用量读取失败」分支 —— 用来钉住两种降级。
      */
     usageReport?: (window: string) => unknown;
+    /** 轻量最近使用账号接口；缺省不提供，走旧宿主 usageReport 回退。 */
+    usageLastUsed?: () => unknown;
     /** 可选清空台账入口；缺省不提供，保持旧宿主降级形状。 */
     usageClear?: () => unknown;
     /**
@@ -235,6 +237,15 @@ export function fakeHost(
           usageReport: (window: string): Promise<unknown> => {
             host.usageCalls.push({ method: "usageReport", vendor: window });
             return mini.track(options.usageReport?.(window));
+          },
+        }),
+    ...(options.usageLastUsed === undefined
+      ? {}
+      : {
+          usageLastUsed: (): Promise<unknown> => {
+            host.usageCalls.push({ method: "usageLastUsed", vendor: "all" });
+            const value = options.usageLastUsed?.();
+            return mini.track(value === undefined ? {} : { lastUsed: value });
           },
         }),
     models: (vendor: string): Promise<unknown> => {
