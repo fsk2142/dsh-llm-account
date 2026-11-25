@@ -7,7 +7,7 @@
  * - `switchAtTurnEnd` 为真时，先把决定记成 pending，等 `session/event` 的 `turn/end`
  *   之后的下一次请求再写选择 —— 任务进行中不换号；
  * - 写选择走 `accounts.select()`（设置文档），再让轮换引擎记一条提示；
- * - 额度优先逐个读候选，读数有 TTL 缓存，单个读取失败只丢该候选，不拖垮整次评估。
+ * - 额度优先并发读候选（最多 4 个），读数有 TTL 缓存，单个读取失败只丢该候选，不拖垮整次评估。
  *
  * 控制器不抛错：任何失败都降级为「这次不切」，并把原因交给 `warn`（不能因为一次额度读取
  * 失败把用户的请求一起弄挂）。
@@ -27,6 +27,9 @@ import type { RotationAccess } from "./assembly";
 
 /** 额度读数的复用窗口；到期后重新读（避免每个请求都打额度端点）。 */
 export const QUOTA_CACHE_MS = 60_000;
+
+/** best-quota 候选额度的最大并发数；与账号中心的状态读取保持同一上限。 */
+const QUOTA_READ_CONCURRENCY = 4;
 
 /** 会话边界表的上限；超过后丢最早的一条（长时间运行的会话不会无限涨）。 */
 const MAX_SESSIONS = 128;
@@ -289,24 +292,49 @@ export class SwitchingController {
 
     // 账号列表的顺序就是轮换顺序（含手动排序覆盖）。
     const views = (await this.#deps.accounts.list()).filter((view) => view.configured);
-    const candidates: SwitchCandidate[] = [];
-    for (const view of views) {
-      let snapshot = this.#freshQuota(view.ref, now);
-      // 只有额度优先模式需要为每个候选花一次读取；手动模式只用拒绝表。
-      if (settings.strategy === "best-quota" && snapshot === undefined) {
-        snapshot = await this.#readQuota(view.ref, now);
-      }
-      candidates.push({
-        ref: view.ref,
-        ...(snapshot === undefined ? {} : { quota: snapshot }),
-        ...(rejections.has(view.ref) ? { rejected: true } : {}),
+    const candidates = new Array<SwitchCandidate>(views.length);
+    if (settings.strategy === "best-quota") {
+      /*
+       * **有界并发**（2026-11-25 P1）：旧实现逐个 `await`，N 个候选的请求前延迟
+       * 近似 N × 单次额度耗时。最多 4 个 worker 并发，既不让账号多时无限打上游，
+       * 也把常见 2–4 个账号的等待压到最慢的一批。按下标写回，保持轮换顺序不变。
+       */
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(QUOTA_READ_CONCURRENCY, views.length) }, async () => {
+        for (;;) {
+          const index = cursor;
+          cursor += 1;
+          const view = views[index];
+          if (view === undefined) return;
+          const snapshot = this.#freshQuota(view.ref, now) ?? (await this.#readQuota(view.ref, now));
+          candidates[index] = {
+            ref: view.ref,
+            ...(snapshot === undefined ? {} : { quota: snapshot }),
+            ...(rejections.has(view.ref) ? { rejected: true } : {}),
+          };
+        }
       });
+      await Promise.all(workers);
+    } else {
+      for (let index = 0; index < views.length; index += 1) {
+        const view = views[index]!;
+        // 非额度优先不发起读取，但仍要把已有缓存额度带进候选：顺序/定时切换
+        // 需要据此跳过缓存中已耗尽的账号（旧语义，审查 P1 回归）。
+        const snapshot = this.#freshQuota(view.ref, now);
+        candidates[index] = {
+          ref: view.ref,
+          ...(snapshot === undefined ? {} : { quota: snapshot }),
+          ...(rejections.has(view.ref) ? { rejected: true } : {}),
+        };
+      }
     }
     this.#lastEvaluatedAt = now;
 
     // 当前账号可能不在 `views` 里（凭据没配好），额度优先时单独补读一次。
+    // 在候选池里已经读过（即使失败）就不再补读，避免当前账号被打两次。
     let currentSnapshot = this.#freshQuota(current, now);
-    if (settings.strategy === "best-quota" && currentSnapshot === undefined) {
+    const currentWasCandidate = views.some((view) => view.ref === current);
+    if (settings.strategy === "best-quota" && currentSnapshot === undefined && !currentWasCandidate) {
       currentSnapshot = await this.#readQuota(current, now);
     }
     // Quota reads can await user settings changes; recheck before queuing or applying.

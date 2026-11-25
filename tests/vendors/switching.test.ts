@@ -19,16 +19,19 @@ function harness(options: {
   document?: Record<string, unknown>;
   pinned?: string | null;
   quotas?: Record<string, QuotaSnapshot | Error>;
+  refs?: string[];
+  snapshot?: (ref: string) => Promise<QuotaSnapshot>;
   now?: () => number;
 } = {}) {
+  const refs = options.refs ?? ["a", "b", "c"];
   let pinned = options.pinned === undefined ? "a" : options.pinned;
-  const engine = new RotationEngine({ order: ["a", "b", "c"], pinned: "a", rules: [] });
+  const engine = new RotationEngine({ order: refs, pinned: "a", rules: [] });
   engine.noteSelected("a");
   const rotation: RotationAccess = { current: () => engine, clearCredentialRejection: () => {} };
   const selects: string[] = [];
   const accounts = {
     list: async (): Promise<AccountView[]> =>
-      ["a", "b", "c"].map((ref) => ({ ref, label: ref, configured: true, active: ref === pinned })),
+      refs.map((ref) => ({ ref, label: ref, configured: true, active: ref === pinned })),
     select: async (ref: string | null): Promise<void> => {
       selects.push(ref ?? "null");
       pinned = ref;
@@ -39,6 +42,7 @@ function harness(options: {
     snapshot: async (ref?: string): Promise<QuotaSnapshot> => {
       const key = ref ?? pinned ?? "a";
       quotaCalls.push(key);
+      if (options.snapshot !== undefined) return options.snapshot(key);
       const value = options.quotas?.[key];
       if (value instanceof Error) throw value;
       return value ?? quota(50);
@@ -54,7 +58,7 @@ function harness(options: {
     now: options.now,
     warn: vi.fn(),
   });
-  return { controller, engine, selects, pinned: () => pinned, quotaCalls, select: accounts.select };
+  return { controller, engine, selects, pinned: () => pinned, quotaCalls, select: accounts.select, document };
 }
 
 it("isTurnEndEvent：认 turn/end（含事件包一层），不认其它事件", () => {
@@ -132,6 +136,135 @@ it("额度优先：到期且另一个账号明显更充足时切过去，原因�
   expect(engine.switchNotice()).toMatchObject({ fromRef: "a", toRef: "b", reason: "balance" });
   // 三个账号都读了（a 当前 + b/c 候选）；没有额度读数就没法比较。
   expect(quotaCalls.sort()).toEqual(["a", "b", "c"]);
+});
+
+it("额度优先：三个候选的额度读取同时开始，不逐个等待", async () => {
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  let signalFirst!: () => void;
+  const first = new Promise<void>((resolve) => { signalFirst = resolve; });
+  const { controller } = harness({
+    document: { switchStrategy: "best-quota", switchAtTurnEnd: false, switchIntervalMinutes: 60 },
+    snapshot: async (ref) => {
+      started.push(ref);
+      if (ref === "a") signalFirst();
+      await new Promise<void>((resolve) => releases.set(ref, resolve));
+      return quota(50);
+    },
+  });
+
+  const pending = controller.beforeRequest({ sessionId: "s1" });
+  await first;
+  expect(started.slice().sort(), "前三个候选必须都开始读，不能卡在第一个").toEqual(["a", "b", "c"]);
+  for (const release of releases.values()) release();
+  await pending;
+});
+
+it("额度优先：候选同时在途数量最多 4，其余按批次接力", async () => {
+  const refs = ["a", "b", "c", "d", "e", "f"];
+  const started: string[] = [];
+  const gates = new Map<string, Promise<void>>();
+  const releases = new Map<string, () => void>();
+  for (const ref of refs) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    gates.set(ref, gate);
+    releases.set(ref, release);
+  }
+  let active = 0;
+  let maxActive = 0;
+  let signalFirst!: () => void;
+  let signalFifth!: () => void;
+  const first = new Promise<void>((resolve) => { signalFirst = resolve; });
+  const fifth = new Promise<void>((resolve) => { signalFifth = resolve; });
+  const { controller } = harness({
+    refs,
+    document: { switchStrategy: "best-quota", switchAtTurnEnd: false, switchIntervalMinutes: 60 },
+    snapshot: async (ref) => {
+      started.push(ref);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (started.length === 1) signalFirst();
+      if (started.length === 5) signalFifth();
+      await gates.get(ref)!;
+      active -= 1;
+      return quota(50);
+    },
+  });
+
+  const pending = controller.beforeRequest({ sessionId: "s1" });
+  await first;
+  expect(started.length, "第一批最多同时读 4 个").toBe(4);
+  expect(maxActive).toBe(4);
+
+  releases.get("a")!();
+  await fifth;
+  expect(started.length, "释放一个后只补进一个，不能超过 4").toBe(5);
+  expect(maxActive, "任何时刻在途数都不能超过 4").toBe(4);
+
+  for (const [ref, release] of releases) if (ref !== "a") release();
+  await pending;
+  expect(started.slice().sort()).toEqual(refs.slice().sort());
+});
+
+it("非 best-quota 仍使用缓存额度：顺序切换跳过已耗尽账号", async () => {
+  const { controller, engine, selects, document } = harness({
+    document: { switchStrategy: "best-quota", switchAtTurnEnd: false, switchIntervalMinutes: 60 },
+    quotas: { a: quota(50), b: quota(100), c: quota(60) },
+  });
+  await controller.beforeRequest({ sessionId: "s1" }); // 填充 a/b/c 的 TTL 缓存
+
+  document.switchStrategy = "order";
+  engine.markRejected("a", { kind: "quota", message: "exhausted" });
+  await controller.beforeRequest({ sessionId: "s1" });
+
+  expect(selects, "b 已缓存为额度耗尽，顺序模式必须跳过它").toEqual(["c"]);
+});
+
+it("当前账号读取失败时不重复补读", async () => {
+  const { controller, engine, quotaCalls } = harness({
+    document: { switchStrategy: "best-quota", switchAtTurnEnd: false, switchIntervalMinutes: 60 },
+    quotas: { a: new Error("boom"), b: quota(10), c: quota(60) },
+  });
+  engine.markRejected("a", { kind: "quota", message: "exhausted" });
+
+  await controller.beforeRequest({ sessionId: "s1" });
+
+  expect(quotaCalls.filter((ref) => ref === "a"), "候选池已经读过当前账号，失败也不能再补读一次").toHaveLength(1);
+});
+
+it("候选乱序完成仍按账号清单顺序打破并列", async () => {
+  const started: string[] = [];
+  const gates = new Map<string, Promise<void>>();
+  const releases = new Map<string, () => void>();
+  for (const ref of ["a", "b", "c"]) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    gates.set(ref, gate);
+    releases.set(ref, release);
+  }
+  let signalStarted!: () => void;
+  const allStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+  const { controller, engine, selects } = harness({
+    document: { switchStrategy: "best-quota", switchAtTurnEnd: false, switchIntervalMinutes: 60 },
+    snapshot: async (ref) => {
+      started.push(ref);
+      if (started.length === 3) signalStarted();
+      await gates.get(ref)!;
+      return ref === "a" ? quota(0) : quota(50);
+    },
+  });
+  engine.markRejected("a", { kind: "quota", message: "exhausted" });
+
+  const pending = controller.beforeRequest({ sessionId: "s1" });
+  await allStarted;
+  releases.get("c")!(); // 后启动的 c 先完成
+  await Promise.resolve();
+  releases.get("b")!();
+  releases.get("a")!();
+  await pending;
+
+  expect(selects, "b/c 额度相同，必须选清单里靠前的 b，不能按完成顺序选 c").toEqual(["b"]);
 });
 
 it("普通对话以外（title/compaction）不读也不切", async () => {
