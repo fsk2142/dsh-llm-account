@@ -1074,52 +1074,31 @@ export class LlmAccountUsageService extends TypertRemoteService {
 const QUOTA_READ_TIMEOUT_MS = 30_000;
 
 /**
- * 带超时（超时后重试一次）的额度读取。
+ * 带超时的额度读取；超时会 abort 底层请求。
  *
- * ## 超时后底层调用怎么办（2026-10-22 修 MEDIUM-1）
- *
- * `Promise.race` 的败者**不会被取消** —— 超时 reject 之后 `snapshot(ref)` 仍在飞。
- * 若直接重试，失败路径上会同时存在两个未完成的 snapshot：
- *
- * - 厂商额度接口的请求量翻倍（重试几次就翻几倍）；
- * - `snapshot` 内部会 `resolveKey(ref)`，在 opencode 那条链路上可能触发 OAuth 刷新并
- *   回写凭据槽 —— 两个并发刷新会互相踩踏。
- *
- * 本包的 `QuotaPort.snapshot` **不接受 `AbortSignal`**（端口签名由厂商实现决定，三家
- * 都不支持取消），所以无法真正中止它。能做的是两件事：
- *
- * 1. 给败者挂一个 `.catch()`，避免它在超时后被当成 unhandled rejection；
- * 2. **放弃重试**（`QUOTA_READ_RETRIES = 0`）—— 超时的根因是上游慢，再发一次只会让
- *    在途请求叠加。界面已经会如实显示 `timeout after 30000ms`，用户点刷新即可再来。
- *
- * 这比「重试拿翻倍请求量换一次可能的成功」更克制：额度面板是旁路读数，晚一拍看到
- * 数字没有代价，而并发刷新踩踏会真的让某个账号的凭据暂时失效。
+ * `QuotaPort.snapshot` 接受可选 `AbortSignal`。HTTP 端口会把它与自身端点预算合并，
+ * Open Design 的 vela 子进程也会在 abort 时被杀掉。对不合作的老端口仍保留
+ * `Promise.race` 兜底：30 秒后界面先得到失败，但至少不会重试或叠加请求。
  * @param quota - 额度端口。
  * @param ref - 账号 ref。
  * @returns 读数；超时或端口明确失败时抛错（由调用方记入 failures）。
  */
 export async function quotaWithTimeout(quota: QuotaPort, ref: string): Promise<QuotaSnapshot> {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  /** 底层读取的 promise；超时后仍会继续跑完，所以要在后面挂 catch。 */
-  const reading = quota.snapshot(ref);
+  const reading = quota.snapshot(ref, controller.signal);
   try {
     return await Promise.race([
       reading,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`timeout after ${QUOTA_READ_TIMEOUT_MS}ms`)), QUOTA_READ_TIMEOUT_MS);
+        timer = setTimeout(() => {
+          reject(new Error(`timeout after ${QUOTA_READ_TIMEOUT_MS}ms`));
+          controller.abort();
+        }, QUOTA_READ_TIMEOUT_MS);
       }),
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
-    /**
-     * **给败者挂一个兜底 catch。**
-     *
-     * 竞态赢的是超时那一侧时，`reading` 还在飞；它之后 reject 的话，没有人 await 它
-     * —— 那会变成 unhandled rejection（Node 会打印警告，测试里还可能被判失败）。
-     * 这里挂一个空 catch 明确表示「这个结果已经不再需要」。
-     *
-     * 注意不能因此认为它被取消了：请求仍会跑完，只是结果被丢弃。
-     */
     void reading.catch(() => undefined);
   }
 }

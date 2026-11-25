@@ -279,9 +279,10 @@ export interface QuotaPort {
    * 读一次额度。
    * @param ref - 指定账号；缺省时读「当前选中账号」（页面/侧边栏的既有行为）。
    *   切换策略的额度优先模式用它逐个读候选账号，不需要临时改当前账号。
+   * @param signal - 可选取消信号；调用方超时/离开页面时可中止底层 HTTP 与 CLI。
    * @returns 归一化读数。
    */
-  snapshot(ref?: string): Promise<QuotaSnapshot>;
+  snapshot(ref?: string, signal?: AbortSignal): Promise<QuotaSnapshot>;
 }
 
 /** 模型目录的最小统一形状。 */

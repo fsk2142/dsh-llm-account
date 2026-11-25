@@ -419,9 +419,10 @@ export function createCommandCodeQuota(deps: CommandCodeQuotaDeps): QuotaPort {
   }
 
   /** 拉一个端点；任何失败（状态、正文、传输）都只把端点名记进 `failed`。 */
-  async function getJson(path: string, name: QuotaEndpoint, headers: Record<string, string>, failed: Set<QuotaEndpoint>): Promise<unknown> {
+  async function getJson(path: string, name: QuotaEndpoint, headers: Record<string, string>, failed: Set<QuotaEndpoint>, signal?: AbortSignal): Promise<unknown> {
     try {
-      const response = await deps.fetchImpl(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      const requestSignal = signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+      const response = await deps.fetchImpl(`${base}${path}`, { headers, signal: requestSignal });
       if (!response.ok) {
         failed.add(name);
         return undefined;
@@ -440,8 +441,9 @@ export function createCommandCodeQuota(deps: CommandCodeQuotaDeps): QuotaPort {
   }
 
   return {
-    async snapshot(accountRef?: string): Promise<QuotaSnapshot> {
+    async snapshot(accountRef?: string, signal?: AbortSignal): Promise<QuotaSnapshot> {
       const ref = accountRef ?? deps.ref();
+      signal?.throwIfAborted();
       const key = ref === undefined ? undefined : normalizeKey(await deps.resolveKey(ref));
       if (key === undefined) {
         const account = ref === undefined ? "(none selected)" : `"${ref}"`;
@@ -452,11 +454,11 @@ export function createCommandCodeQuota(deps: CommandCodeQuotaDeps): QuotaPort {
       }
       const headers = accountHeaders(key);
       const failed = new Set<QuotaEndpoint>();
-      const whoami = await getJson(WHOAMI_PATH, "whoami", headers, failed);
+      const whoami = await getJson(WHOAMI_PATH, "whoami", headers, failed, signal);
       const [usage, credits, subscriptions] = await Promise.all([
-        getJson(USAGE_SUMMARY_PATH, "usage", headers, failed),
-        getJson(BILLING_CREDITS_PATH, "credits", headers, failed),
-        getJson(subscriptionsPath(orgIdOf(whoami)), "subscriptions", headers, failed),
+        getJson(USAGE_SUMMARY_PATH, "usage", headers, failed, signal),
+        getJson(BILLING_CREDITS_PATH, "credits", headers, failed, signal),
+        getJson(subscriptionsPath(orgIdOf(whoami)), "subscriptions", headers, failed, signal),
       ]);
       const snapshot = toQuotaSnapshot({
         ...(whoami === undefined ? {} : { whoami }),

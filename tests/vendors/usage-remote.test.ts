@@ -25,6 +25,7 @@ import {
   USAGE_NAMESPACE,
   USAGE_PACKAGE,
   USAGE_SERVICE_KEY,
+  quotaWithTimeout,
   type UsageVendorDeps,
 } from "../../src/vendors/usage-remote";
 
@@ -333,10 +334,9 @@ it("**额度读取超时后不重试**（2026-10-22 改，见 bug 审查 MEDIUM-
   /**
    * 旧行为：超时后重试一次，第二次成功就不记失败。
    *
-   * **为什么改成不重试**：`QuotaPort.snapshot` 不接受 `AbortSignal`，`Promise.race`
-   * 超时后底层调用**仍在飞**。重试会让失败路径上同时存在两个未完成的 snapshot ——
-   * 厂商额度接口请求量翻倍，且 `snapshot` 内部会 `resolveKey(ref)`，在 opencode 那条
-   * 链路上可能触发 OAuth 刷新并回写凭据槽，两个并发刷新会互相踩踏。
+   * **为什么不重试**：超时后 `quotaWithTimeout` 会 abort 底层请求；即使老端口不合作，
+   * 再重试也会让失败路径上出现新的 snapshot。额度面板是旁路读数，晚一拍看到数字
+   * 没有代价，而并发刷新踩踏会真的让某个账号的凭据暂时失效。
    *
    * 取舍：额度面板是旁路读数，晚一拍看到数字没有代价；并发刷新踩踏会真的让某个账号
    * 的凭据暂时失效。所以宁可如实报一次超时，让用户点刷新。
@@ -362,6 +362,26 @@ it("**额度读取超时后不重试**（2026-10-22 改，见 bug 审查 MEDIUM-
     // 这个 fake 配了 2 个账号 —— 断言「次数 = 账号数」而不是写死 3。
     expect(calls, "每个账号只读一次，不在超时后再发").toBe(2);
     expect(status.failures.length, "超时如实记进 failures").toBeGreaterThan(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("**额度读取超时会 abort 底层请求，而不是只丢弃 Promise**", async () => {
+  let captured: AbortSignal | undefined;
+  const quota = {
+    snapshot: async (_ref?: string, signal?: AbortSignal): Promise<QuotaSnapshot> => {
+      captured = signal;
+      return new Promise<QuotaSnapshot>(() => {});
+    },
+  };
+  vi.useFakeTimers();
+  try {
+    const pending = quotaWithTimeout(quota as never, "a");
+    const assertion = expect(pending).rejects.toThrow("timeout after 30000ms");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+    expect(captured?.aborted, "超时必须把取消信号传给额度端口").toBe(true);
   } finally {
     vi.useRealTimers();
   }

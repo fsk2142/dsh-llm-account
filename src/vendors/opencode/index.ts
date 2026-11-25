@@ -369,7 +369,7 @@ const guarded = guardedAccounts(accounts);
 
   /** 额度端口：每次读数都用当时的配置（`apiBase` 是构造参数，跟着现读的配置走）。 */
   const quota: QuotaPort = {
-    async snapshot(accountRef?: string) {
+    async snapshot(accountRef?: string, signal?: AbortSignal) {
       const apiBase = normalizeKey(document().baseURL) ?? DEFAULT_BASE_URL;
       const ref = accountRef ?? selectedRefOf(document());
       return createOpencodeQuota({
@@ -378,7 +378,7 @@ const guarded = guardedAccounts(accounts);
         resolveAuth: (candidate, signal) => adapter.resolveAccountAuth(candidate, signal),
         fetchImpl: fetch,
         apiBase,
-      }).snapshot();
+      }).snapshot(ref, signal);
     },
   };
 

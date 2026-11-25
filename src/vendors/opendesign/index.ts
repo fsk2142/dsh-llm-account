@@ -81,7 +81,7 @@ import { createUsagePort } from "../usage-store";
 import { isModelIdVisible, normalizeVisibility } from "../../core/catalog";
 import { invalidateCatalogCandidates, modelCandidates, registerCatalogSource } from "../model-catalog-registry";
 import { SwitchingController } from "../switching";
-import { VELA_PREFLIGHT_TIMEOUT_MS, createOpenDesignLogin, discoverWorkspaceId, findVelaBinary } from "./login";
+import { VELA_PREFLIGHT_TIMEOUT_MS, collectVelaRun, createOpenDesignLogin, discoverWorkspaceId, findVelaBinary } from "./login";
 
 /** 插件名（fiber 名与日志前缀；profile 行 id 由 patch 层给定，是 `opendesign`）。 */
 export const name = "llm-opendesign";
@@ -373,14 +373,17 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
    * @param candidate - 账号 ref。
    * @returns 工作区 id，或 `undefined`（本机没有 vela / 没登录）。
    */
-  const workspaceFor = async (candidate: string): Promise<string | undefined> => {
+  const workspaceFor = async (candidate: string, signal?: AbortSignal): Promise<string | undefined> => {
+    signal?.throwIfAborted();
     const stored = opendesignWorkspaceId(document(), candidate);
     if (stored !== undefined) return stored;
     if (discoveredWorkspace?.value !== undefined) return discoveredWorkspace.value;
     if (discoveredWorkspace !== undefined && Date.now() - discoveredWorkspace.at < WORKSPACE_DISCOVERY_RETRY_MS) {
       return undefined;
     }
-    const found = await discoverWorkspaceId();
+    const found = await discoverWorkspaceId({ signal });
+    // 被取消的发现结果不能写进 60 秒失败缓存，否则下一次正常读取会白等一分钟。
+    if (signal?.aborted === true) return undefined;
     discoveredWorkspace = { value: found, at: Date.now() };
     // 写回顶层：下一次读（含重启后）不必再问 vela；`fillTopLevelWorkspace` 只补空、不覆盖。
     if (found !== undefined) await fillTopLevelWorkspace(found);
@@ -389,9 +392,26 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
 
   /** 额度端口：每次读数都用当时的配置；`snapshot(ref)` 可读指定账号（切换策略用）。 */
   const quota: QuotaPort = {
-    async snapshot(accountRef?: string) {
+    async snapshot(accountRef?: string, signal?: AbortSignal) {
       const walletBase = normalizeKey(document().walletBase) ?? DEFAULT_WALLET_BASE_URL;
       const ref = accountRef ?? selectedRefOf(document());
+      /** 同一次 snapshot 内共享“密钥 + 类型”，失败诊断不能再次查凭据。 */
+      let keyResolution: Promise<{ key?: string; kind: "control" | "inference-only" | "none" }> | undefined;
+      const resolveKey = async (
+        candidate: string,
+        signal?: AbortSignal,
+      ): Promise<{ key?: string; kind: "control" | "inference-only" | "none" }> => {
+        signal?.throwIfAborted();
+        keyResolution ??= (async () => {
+          const control = await resolveAccountKey(ctx, credentials, opendesignControlRef(document(), candidate));
+          if (control !== undefined) return { key: control, kind: "control" as const };
+          const inference = await resolveAccountKey(ctx, credentials, candidate);
+          return inference === undefined
+            ? { kind: "none" as const }
+            : { key: inference, kind: "inference-only" as const };
+        })();
+        return keyResolution;
+      };
       return createOpenDesignQuota({
         ref: () => ref,
         // 控制面密钥：账号声明的槽优先，缺省派生（`<ref>_CONTROL`）；凭据库 → 启动环境。
@@ -401,11 +421,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         // 只有 `vela_ctrl_…`（网页登录产物里的 controlKey）能通。所以这条回退**注定失败**；
         // 它唯一的价值是兼容「宿主哪天让同一把密钥通吃」。真正的诊断由下面的
         // `controlKeyKind` 交给额度端口，让失败文案能说清「你缺的是哪一把」。
-        resolveControlKey: async (candidate) => {
-          const control = await resolveAccountKey(ctx, credentials, opendesignControlRef(document(), candidate));
-          if (control !== undefined) return control;
-          return resolveAccountKey(ctx, credentials, candidate);
-        },
+        resolveControlKey: async (candidate, signal) => (await resolveKey(candidate, signal)).key,
         /**
          * 告诉额度端口「这次拿到的是不是真正的控制面密钥」。
          *
@@ -417,13 +433,8 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
          * 早先两种都只报「账单接口返回 HTTP 401」，用户看不出该做什么 —— 这正是
          * 「切到某个账号就看不到额度」最难自查的地方。
          */
-        controlKeyKind: async (candidate) => {
-          const control = await resolveAccountKey(ctx, credentials, opendesignControlRef(document(), candidate));
-          if (control !== undefined) return "control";
-          const inference = await resolveAccountKey(ctx, credentials, candidate);
-          return inference === undefined ? "none" : "inference-only";
-        },
-        workspaceIdOf: (candidate) => workspaceFor(candidate),
+        controlKeyKind: async (candidate, signal) => (await resolveKey(candidate, signal)).kind,
+        workspaceIdOf: (candidate, signal) => workspaceFor(candidate, signal),
         /*
          * **失效标记**（2026-11-23 用户需求）：额度读取顺手判「没订阅 + 余额 < $1」，
          * 命中的账号会被轮换引擎永久跳过，不再白打注定 402/403 的请求。
@@ -441,19 +452,20 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         },
         fetchImpl: fetch,
         // 控制面 403 时的第二来源：本机 vela 的登录态（真机实测：HTTP 被拒、CLI 能读）。
-        summaryFallback: velaSummary,
+        summaryFallback: (signal) => velaSummary(signal),
         walletBase,
-        preflight: velaPreflight,
+        preflight: (workspaceId, signal) => velaPreflight(workspaceId, signal),
         // **HTTP 版的周期额度**（2026-10-21 实测发现）：按这个账号自己的控制面密钥鉴权，
         // 返回与 `vela billing preflight` 完全一致的结构。它是多账号额度的正解 ——
         // vela CLI 没有 `--key`，永远只能查本机登录态那一个人的数据。
-        preflightHttp: async (workspaceId, controlKey) => {
+        preflightHttp: async (workspaceId, controlKey, signal) => {
           const base = normalizeKey(document().walletBase) ?? DEFAULT_WALLET_BASE_URL;
+          const requestSignal = signal === undefined ? AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS) : AbortSignal.any([signal, AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS)]);
           const response = await fetch(
             `${base.replace(/\/+$/, "")}/workspaces/${encodeURIComponent(workspaceId)}/billing/preflight`,
             {
               headers: { Authorization: `Bearer ${controlKey}`, ...IDENTITY_ENCODING_HEADER },
-              signal: AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS),
+              signal: requestSignal,
             },
           );
           if (!response.ok) {
@@ -466,13 +478,10 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         },
         // **身份闸门**（多账号兼容）：preflight 用的是本机 vela 登录态，不是这个账号的
         // 密钥；两者不是同一人时它返回别人的用量，必须逐次核对再决定采信与否。
-        identitiesOf: async (ref) => {
-          const key =
-            normalizeKey(await resolveAccountKey(ctx, credentials, opendesignControlRef(document(), ref))) ??
-            normalizeKey(await resolveAccountKey(ctx, credentials, ref));
-          return identitiesFor(key, normalizeKey(document().walletBase) ?? DEFAULT_WALLET_BASE_URL);
+        identitiesOf: async (_ref, controlKey, signal) => {
+          return identitiesFor(controlKey, normalizeKey(document().walletBase) ?? DEFAULT_WALLET_BASE_URL, signal);
         },
-      }).snapshot();
+      }).snapshot(ref, signal);
     },
   };
 
@@ -937,7 +946,8 @@ async function resolveAccountKey(ctx: Context, credentials: CredentialPort, ref:
  * @param workspaceId - 该账号的工作区 id。
  * @returns preflight 的 JSON 负载；输出不是对象时读作「没有数据」。
  */
-async function velaPreflight(workspaceId: string): Promise<unknown> {
+async function velaPreflight(workspaceId: string, signal?: AbortSignal): Promise<unknown> {
+  signal?.throwIfAborted();
   // 工作区 id 来自设置/登录产物（用户可改）。它是命令行参数，`--`/空格这类值会被 vela 的
   // 参数解析器当成开关（参数注入）；只接受厂商实际使用的字符集，且不能以 `-` 开头
   // （否则 `--help` 也能过字符集）。
@@ -952,20 +962,16 @@ async function velaPreflight(workspaceId: string): Promise<unknown> {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  const timer = setTimeout(() => {
-    child.kill();
-  }, VELA_PREFLIGHT_TIMEOUT_MS);
   try {
-    const [stdout, code] = await Promise.all([readStream(child.stdout), waitForExit(child)]);
-    if (code !== 0) throw new Error(`vela billing preflight 失败（退出码 ${code ?? "unknown"}）`);
-    const parsed: unknown = JSON.parse(stdout);
+    const run = await collectVelaRun(child, VELA_PREFLIGHT_TIMEOUT_MS, signal);
+    if (run.aborted) throw new Error("额度读取已取消");
+    if (run.code !== 0) throw new Error(`vela billing preflight 失败（退出码 ${run.code ?? "unknown"}）`);
+    const parsed: unknown = JSON.parse(run.stdout);
     return isRecord(parsed) ? parsed : undefined;
   } catch (error) {
     // 输出不是 JSON 时给一句准确的（JSON.parse 抛 SyntaxError，消息对用户没有意义）。
     if (error instanceof SyntaxError) throw new Error("vela billing preflight 的输出不是 JSON");
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -992,9 +998,12 @@ async function velaPreflight(workspaceId: string): Promise<unknown> {
 async function identitiesFor(
   key: string | undefined,
   base: string,
+  signal?: AbortSignal,
 ): Promise<{ account?: string; vela?: string } | undefined> {
-  const account = await accountIdentityViaApi(key, base);
-  const vela = await velaIdentityViaCli();
+  const [account, vela] = await Promise.all([
+    accountIdentityViaApi(key, base, signal),
+    velaIdentityViaCli(signal),
+  ]);
   if (account === undefined && vela === undefined) return undefined;
   return {
     ...(account === undefined ? {} : { account }),
@@ -1008,12 +1017,13 @@ async function identitiesFor(
  * @param base - 控制面基地址。
  * @returns 身份 id，或 `undefined`。
  */
-async function accountIdentityViaApi(key: string | undefined, base: string): Promise<string | undefined> {
+async function accountIdentityViaApi(key: string | undefined, base: string, signal?: AbortSignal): Promise<string | undefined> {
   if (key === undefined || key === "") return undefined;
   try {
+    const requestSignal = signal === undefined ? AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS) : AbortSignal.any([signal, AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS)]);
     const response = await fetch(`${base.replace(/\/+$/, "")}/me`, {
       headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(VELA_PREFLIGHT_TIMEOUT_MS),
+      signal: requestSignal,
     });
     if (!response.ok) return undefined;
     const payload: unknown = await response.json();
@@ -1024,23 +1034,17 @@ async function accountIdentityViaApi(key: string | undefined, base: string): Pro
 }
 
 /** 本机 vela 登录态的身份：`vela whoami` 输出里 `ID: <id>` 那一行。失败读作「不知道」。 */
-async function velaIdentityViaCli(): Promise<string | undefined> {
+async function velaIdentityViaCli(signal?: AbortSignal): Promise<string | undefined> {
+  signal?.throwIfAborted();
   const vela = findVelaBinary();
   if (vela === undefined) return undefined;
   try {
     const child = spawn(vela, ["whoami"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    const timer = setTimeout(() => {
-      child.kill();
-    }, VELA_PREFLIGHT_TIMEOUT_MS);
-    try {
-      const [stdout, code] = await Promise.all([readStream(child.stdout), waitForExit(child)]);
-      if (code !== 0) return undefined;
-      // 实测输出形如两行：第一行是邮箱，第二行是 `ID: <id>`。
-      const matched = /^ID:\s*(\S+)\s*$/m.exec(stdout);
-      return matched === null ? undefined : normalizeKey(matched[1]);
-    } finally {
-      clearTimeout(timer);
-    }
+    const run = await collectVelaRun(child, VELA_PREFLIGHT_TIMEOUT_MS, signal);
+    if (run.aborted || run.code !== 0) return undefined;
+    // 实测输出形如两行：第一行是邮箱，第二行是 `ID: <id>`。
+    const matched = /^ID:\s*(\S+)\s*$/m.exec(run.stdout);
+    return matched === null ? undefined : normalizeKey(matched[1]);
   } catch {
     return undefined;
   }
@@ -1054,7 +1058,8 @@ async function velaIdentityViaCli(): Promise<string | undefined> {
  * 失败一律读作「没有数据」：这是**附加**来源，不能把额度读取整块拖垮。
  * @returns 摘要负载；找不到 vela / 非零退出 / 输出不是 JSON 时为 `undefined`。
  */
-async function velaSummary(): Promise<unknown | undefined> {
+async function velaSummary(signal?: AbortSignal): Promise<unknown | undefined> {
+  signal?.throwIfAborted();
   const vela = findVelaBinary();
   if (vela === undefined) return undefined;
   let child: ReturnType<typeof spawn>;
@@ -1063,31 +1068,12 @@ async function velaSummary(): Promise<unknown | undefined> {
   } catch {
     return undefined;
   }
-  const timer = setTimeout(() => child.kill(), VELA_PREFLIGHT_TIMEOUT_MS);
   try {
-    const [stdout, code] = await Promise.all([readStream(child.stdout), waitForExit(child)]);
-    if (code !== 0) return undefined;
-    const parsed: unknown = JSON.parse(stdout);
+    const run = await collectVelaRun(child, VELA_PREFLIGHT_TIMEOUT_MS, signal);
+    if (run.aborted || run.code !== 0) return undefined;
+    const parsed: unknown = JSON.parse(run.stdout);
     return isRecord(parsed) ? parsed : undefined;
   } catch {
     return undefined;
-  } finally {
-    clearTimeout(timer);
   }
-}
-
-/** 读完一个输出流（`null` 流读作空串 —— 假 stdio 时可能没有管道）。 */
-async function readStream(stream: NodeJS.ReadableStream | null): Promise<string> {
-  if (stream === null) return "";
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-/** 等子进程退出；启动失败（`error` 事件）读作退出码 `null`。 */
-function waitForExit(child: ReturnType<typeof spawn>): Promise<number | null> {
-  return new Promise((resolve) => {
-    child.on("exit", (code) => resolve(code));
-    child.on("error", () => resolve(null));
-  });
 }

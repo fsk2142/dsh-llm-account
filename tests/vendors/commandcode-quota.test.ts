@@ -6,7 +6,7 @@
  * 不跨任务共享（计划 Review Focus 前的说明）。
  */
 import { LlmError } from "@deepseek-ai/dsh-llm";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import type {
   AccountView,
@@ -941,6 +941,28 @@ it("设置修订号冲突时重读并重放，而不是覆盖对方写入（Revi
   // 意图只追加一次，收尾一次。
   expect(store.writeCount()).toBe(2);
   expect(store.snapshot()).toEqual([]);
+});
+
+it("snapshot 把取消信号传给 Command Code 的 HTTP 端点", async () => {
+  const controller = new AbortController();
+  const signals: (AbortSignal | undefined)[] = [];
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    signals.push(init?.signal ?? undefined);
+    throw new Error("transport aborted");
+  }) as typeof fetch;
+  const port = createCommandCodeQuota({
+    apiBase: "https://api.example.test",
+    ref: () => "acc-a",
+    resolveKey: async () => "sk-a",
+    fetchImpl,
+  });
+
+  const pending = port.snapshot("acc-a", controller.signal);
+  await vi.waitFor(() => expect(signals.length).toBeGreaterThan(0));
+  controller.abort();
+  await pending;
+
+  expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
 });
 
 it("snapshot(ref) 用指定账号的密钥，而不是当前 ref getter", async () => {

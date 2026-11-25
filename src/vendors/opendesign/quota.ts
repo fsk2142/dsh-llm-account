@@ -71,7 +71,7 @@ export interface OpenDesignQuotaDeps {
   /** 这一读要报告的账号 ref；`undefined` 表示当前没有选中账号。 */
   ref: () => string | undefined;
   /** 解析该 ref 的**控制面**密钥（凭据服务 / 环境变量的注入点）。 */
-  resolveControlKey: (ref: string) => Promise<string | undefined>;
+  resolveControlKey: (ref: string, signal?: AbortSignal) => Promise<string | undefined>;
   /**
    * 这个账号**有没有真正的控制面密钥**（2026-10-21，多账号额度诊断）。
    *
@@ -85,7 +85,7 @@ export interface OpenDesignQuotaDeps {
    *
    * 缺省（不注入）时不作区分，失败文案退回旧口径。
    */
-  controlKeyKind?: (ref: string) => Promise<"control" | "inference-only" | "none">;
+  controlKeyKind?: (ref: string, signal?: AbortSignal) => Promise<"control" | "inference-only" | "none">;
   /**
    * **HTTP 版的周期额度**（`GET /workspaces/{ws}/billing/preflight`，2026-10-21 实测）。
    *
@@ -95,7 +95,7 @@ export interface OpenDesignQuotaDeps {
    * 它是多账号额度的正解：vela CLI 没有 `--key`，永远查本机登录态那一个人的数据；
    * HTTP 版按账号鉴权，**每个账号都能拿到自己的数字**。
    */
-  preflightHttp?: (workspaceId: string, controlKey: string) => Promise<unknown>;
+  preflightHttp?: (workspaceId: string, controlKey: string, signal?: AbortSignal) => Promise<unknown>;
   /**
    * **账号是否已失效**的上报口（2026-11-23）。
    *
@@ -113,7 +113,7 @@ export interface OpenDesignQuotaDeps {
    * 允许异步：网页登录的产物**不带**工作区（`~/.amr/config.json` 只有两把密钥与 user），
    * 装配层会在缺省时问一次 `vela team-projects list` 兜底。
    */
-  workspaceIdOf: (ref: string) => string | undefined | Promise<string | undefined>;
+  workspaceIdOf: (ref: string, signal?: AbortSignal) => string | undefined | Promise<string | undefined>;
   /** 注入的 `fetch`（生产传全局 `fetch`）。 */
   fetchImpl: typeof fetch;
   /**
@@ -122,13 +122,13 @@ export interface OpenDesignQuotaDeps {
    * 实测：控制面的 `GET /billing/summary` 对登录产物里的两把密钥都回 **403**，而同一份数据
    * vela CLI 能拿到 —— 没有这条回退，套餐与换算率在真机上永远是空的（实际情况「套餐信息也没有」）。
    */
-  summaryFallback?: () => Promise<unknown | undefined>;
+  summaryFallback?: (signal?: AbortSignal) => Promise<unknown | undefined>;
   /**
    * vela 周期额度查询（`billing preflight --workspace-id <id> --format json` 的注入点）。
    * 缺省表示本机没有可用的 vela：这时**不**查询，也不记失败（用户没配 workspaceId 时本来就
    * 不该出现这条错误）。
    */
-  preflight?: (workspaceId: string) => Promise<unknown>;
+  preflight?: (workspaceId: string, signal?: AbortSignal) => Promise<unknown>;
   /**
    * **该账号的身份**（控制面 `/me` 的 `id`）+ **本机 vela 登录态的身份**。
    *
@@ -143,7 +143,7 @@ export interface OpenDesignQuotaDeps {
    * @param ref - 账号 ref。
    * @returns 该账号的控制面身份 id 与 vela 登录态身份 id。
    */
-  identitiesOf?: (ref: string) => Promise<{ account?: string; vela?: string } | undefined>;
+  identitiesOf?: (ref: string, controlKey: string | undefined, signal?: AbortSignal) => Promise<{ account?: string; vela?: string } | undefined>;
   /** 控制面基地址；缺省 {@link DEFAULT_WALLET_BASE_URL}。 */
   walletBase?: string;
   /** 每个端点的预算（毫秒）；缺省 {@link DEFAULT_QUOTA_TIMEOUT_MS}。 */
@@ -198,19 +198,14 @@ function messageOf(error: unknown): string {
  */
 async function tryHttpPreflight(
   workspaceId: string,
+  controlKey: string,
   deps: OpenDesignQuotaDeps,
+  signal?: AbortSignal,
 ): Promise<{ ok: true; value: unknown } | { ok: false; reason: string }> {
   const run = deps.preflightHttp;
   if (run === undefined) return { ok: false, reason: "这个宿主版本没有 HTTP 周期额度接口" };
-  let controlKey: string | undefined;
   try {
-    controlKey = normalizeKey(await deps.resolveControlKey(deps.ref() ?? ""));
-  } catch {
-    controlKey = undefined;
-  }
-  if (controlKey === undefined) return { ok: false, reason: "没有可用的控制面密钥" };
-  try {
-    const value = await run(workspaceId, controlKey);
+    const value = await run(workspaceId, controlKey, signal);
     if (value === undefined) return { ok: false, reason: "HTTP 接口没有返回数据" };
     return { ok: true, value };
   } catch (error) {
@@ -238,12 +233,14 @@ async function tryHttpPreflight(
  */
 async function checkPreflightIdentity(
   ref: string,
+  controlKey: string | undefined,
   deps: OpenDesignQuotaDeps,
+  signal?: AbortSignal,
 ): Promise<"same" | "different" | "unknown"> {
   if (deps.identitiesOf === undefined) return "unknown";
   let identities: { account?: string; vela?: string } | undefined;
   try {
-    identities = await deps.identitiesOf(ref);
+    identities = await deps.identitiesOf(ref, controlKey, signal);
   } catch {
     return "unknown";
   }
@@ -657,11 +654,12 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
    * @param key - 控制面密钥（缺省回退到推理密钥）。
    * @returns 负载，或失败原因（人话）。
    */
-  async function getSummary(key: string): Promise<{ payload?: unknown; problem?: string }> {
+  async function getSummary(key: string, signal?: AbortSignal): Promise<{ payload?: unknown; problem?: string }> {
     try {
+      const requestSignal = signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
       const response = await deps.fetchImpl(`${base}${BILLING_SUMMARY_PATH}`, {
         headers: { Authorization: `Bearer ${key}`, ...IDENTITY_ENCODING_HEADER },
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: requestSignal,
       });
       if (!response.ok) {
         return { problem: `账单接口返回 HTTP ${response.status}` };
@@ -675,9 +673,10 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
   }
 
   return {
-    async snapshot(accountRef?: string): Promise<QuotaSnapshot> {
+    async snapshot(accountRef?: string, signal?: AbortSignal): Promise<QuotaSnapshot> {
       const ref = accountRef ?? deps.ref();
-      const key = ref === undefined ? undefined : normalizeKey(await deps.resolveControlKey(ref));
+      signal?.throwIfAborted();
+      const key = ref === undefined ? undefined : normalizeKey(await deps.resolveControlKey(ref, signal));
       if (key === undefined) {
         const account = ref === undefined ? "(none selected)" : `"${ref}"`;
         throw new LlmError(
@@ -695,19 +694,31 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
        * 实测场景：vela 登录态只属于其中一个账号，另外两个走 vela 必然 403。
        */
       const fatal: string[] = [];
-      const read = await getSummary(key);
+      const read = await getSummary(key, signal);
       let summary = read.payload;
       let readProblem = read.problem;
+      /** 身份闸门只跑一次，summary 回退与后续 preflight 回退共用结论。 */
+      let identityVerdict: Promise<"same" | "different" | "unknown"> | undefined;
+      const sameVelaIdentity = async (): Promise<boolean> => {
+        if (ref === undefined) return false;
+        identityVerdict ??= checkPreflightIdentity(ref, key, deps, signal);
+        return (await identityVerdict) === "same";
+      };
       if (summary === undefined && deps.summaryFallback !== undefined) {
         // 控制面拒绝（401/403）或不可达时的第二来源：本机 vela 自己的登录态。
-        try {
-          const fallback = await deps.summaryFallback();
-          if (fallback !== undefined) {
-            summary = fallback;
-            readProblem = undefined;
+        // 但 vela 是单例登录态，可能属于另一个账号；身份不一致时绝不采信套餐与换算率。
+        if (!(await sameVelaIdentity())) {
+          readProblem = `${readProblem ?? "没有返回数据"}；本机 vela 登录态无法确认与本账号一致，未采用回退摘要`;
+        } else {
+          try {
+            const fallback = await deps.summaryFallback(signal);
+            if (fallback !== undefined) {
+              summary = fallback;
+              readProblem = undefined;
+            }
+          } catch (error) {
+            readProblem = `${readProblem ?? "没有返回数据"}；vela 回退也失败（${messageOf(error)}）`;
           }
-        } catch (error) {
-          readProblem = `${readProblem ?? "没有返回数据"}；vela 回退也失败（${messageOf(error)}）`;
         }
       }
       /*
@@ -727,7 +738,7 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
         // 两种失败都表现为「账单接口 401」，但用户该做的事完全不同：一个有救（重登），
         // 一个没救（这个账号从来没配过控制面密钥）。旧文案只有后半句，
         // 用户切到那个账号只看到「额度读不到」，不知道该登一次还是该换账号。
-        const kind = ref === undefined || deps.controlKeyKind === undefined ? undefined : await deps.controlKeyKind(ref);
+        const kind = ref === undefined || deps.controlKeyKind === undefined ? undefined : await deps.controlKeyKind(ref, signal);
         if (kind === "inference-only" || kind === "none") {
           failures.push(
             kind === "inference-only"
@@ -739,7 +750,7 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
         }
       }
       let preflight: unknown;
-      const workspaceId = ref === undefined ? undefined : normalizeKey(await deps.workspaceIdOf(ref));
+      const workspaceId = ref === undefined ? undefined : normalizeKey(await deps.workspaceIdOf(ref, signal));
       if (workspaceId !== undefined && ref !== undefined && (deps.preflightHttp !== undefined || deps.preflight !== undefined)) {
         /**
          * **优先走 HTTP**（2026-10-21 发现，多账号额度的正解）。
@@ -755,20 +766,20 @@ export function createOpenDesignQuota(deps: OpenDesignQuotaDeps): QuotaPort {
          * 顺序有意为之：HTTP 能通就绝不用 vela（那条路有身份歧义）；HTTP 失败
          * （老版本没这个端点 / 网络问题）才退回 vela，那时仍然要过身份闸门。
          */
-        const viaHttp = await tryHttpPreflight(workspaceId, deps);
+        const viaHttp = await tryHttpPreflight(workspaceId, key, deps, signal);
         if (viaHttp.ok) {
           preflight = viaHttp.value;
         } else if (deps.preflight !== undefined) {
-          const identityVerdict = await checkPreflightIdentity(ref, deps);
-          if (identityVerdict !== "same") {
+          const verdict = await (identityVerdict ??= checkPreflightIdentity(ref, key, deps, signal));
+          if (verdict !== "same") {
             failures.push(
-              identityVerdict === "different"
+              verdict === "different"
                 ? "周期额度：HTTP 接口不可用，退回本机 vela 查询；而 vela 登录态与本账号不是同一个人，为避免显示别人的用量已跳过（余额与套餐仍然准确）"
                 : "周期额度：HTTP 接口不可用，退回本机 vela 查询；无法确认登录态与本账号是否同一人，已跳过（余额与套餐仍然准确）",
             );
           } else {
             try {
-              const value = await deps.preflight(workspaceId);
+              const value = await deps.preflight(workspaceId, signal);
               if (value === undefined) {
                 failures.push("周期额度查询没有返回数据：本机 vela 没给出可用的读数");
               } else {

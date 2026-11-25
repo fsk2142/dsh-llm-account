@@ -8,7 +8,7 @@
  * 共享辅助会让其中一边把另一边的字段形状当成契约。
  */
 import { LlmError } from "@deepseek-ai/dsh-llm";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import type { AccountView, CredentialPort, SettingsOp, SettingsPort, SettingsSnapshot } from "../../src/core/adapter";
 import { normalizeKey } from "../../src/core/credentials";
@@ -413,6 +413,52 @@ it("错误语义照旧插件：408/429/5xx 可重试并保留上一次读数，�
   await expect(tooBig.snapshot()).rejects.toMatchObject({ retryable: true, retainPrevious: false });
   // 状态是 200：字节上限必须在读正文之前就按 content-length 拦住。
   expect(calls).toHaveLength(1);
+});
+
+it("snapshot 把取消信号传给 OpenCode 的 usage HTTP", async () => {
+  const controller = new AbortController();
+  let seenSignal: AbortSignal | undefined;
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    seenSignal = init?.signal ?? undefined;
+    throw new Error("transport aborted");
+  }) as typeof fetch;
+  const port = createOpencodeQuota({
+    apiBase: "https://opencode.ai/zen/go/v1",
+    ref: () => "acc-a",
+    resolveKey: async () => "sk-a",
+    fetchImpl,
+  });
+
+  const pending = port.snapshot("acc-a", controller.signal);
+  const rejected = expect(pending).rejects.toBeInstanceOf(OpencodeUsageError);
+  await vi.waitFor(() => expect(seenSignal).toBeDefined());
+  controller.abort();
+  await rejected;
+  expect(seenSignal?.aborted).toBe(true);
+});
+
+it("鉴权与 usage HTTP 各自享有完整的超时预算", async () => {
+  let authSignal: AbortSignal | undefined;
+  let requestSignal: AbortSignal | undefined;
+  const port = createOpencodeQuota({
+    apiBase: "https://opencode.ai/zen/go/v1",
+    ref: () => "acc-a",
+    resolveKey: async () => "sk-a",
+    resolveAuth: async (_ref, signal) => {
+      authSignal = signal;
+      return { key: "sk-a" };
+    },
+    fetchImpl: (async (_input: unknown, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return jsonResponse(fullUsage());
+    }) as typeof fetch,
+  });
+
+  await port.snapshot("acc-a");
+
+  expect(authSignal).toBeDefined();
+  expect(requestSignal).toBeDefined();
+  expect(requestSignal, "HTTP 不能复用鉴权信号，否则两阶段会共用一个超时预算").not.toBe(authSignal);
 });
 
 it("凭据解析抛错也必须是已分类的失败：可重试、不保留，并保留原始 cause（旧插件第 7865-7873 行）", async () => {

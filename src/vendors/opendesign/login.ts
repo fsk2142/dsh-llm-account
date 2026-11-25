@@ -62,6 +62,8 @@ export function defaultProfilePath(): string {
 /** vela 子进程的一个输出流（只认 `data`：两个流都逐块读）。 */
 export interface VelaStream {
   on(event: "data", listener: (chunk: unknown) => void): unknown;
+  removeListener?(event: "data", listener: (chunk: unknown) => void): unknown;
+  destroy?(): unknown;
 }
 
 /** vela 子进程的最小结构（真实 `ChildProcess` 与测试假实现都满足它）。 */
@@ -70,6 +72,10 @@ export interface VelaChild {
   readonly stderr: VelaStream | null;
   on(event: "error", listener: (error: unknown) => void): unknown;
   on(event: "exit", listener: (code: number | null) => void): unknown;
+  on(event: "close", listener: (code: number | null) => void): unknown;
+  removeListener?(event: "error", listener: (error: unknown) => void): unknown;
+  removeListener?(event: "exit", listener: (code: number | null) => void): unknown;
+  removeListener?(event: "close", listener: (code: number | null) => void): unknown;
   kill(): unknown;
 }
 
@@ -885,41 +891,68 @@ export function parseVelaJson(text: string): unknown {
 }
 
 /** vela 子进程的完整输出与退出码。 */
-interface VelaRunResult {
+export interface VelaRunResult {
   code: number | null;
   stdout: string;
   stderr: string;
+  /** 外部取消或超时中止；调用方不应把这种退出解释成业务失败。 */
+  aborted: boolean;
 }
 
-/** 收完一个子进程的输出（或到点就 kill 它）。 */
-function collectVelaRun(child: VelaChild, timeoutMs: number): Promise<VelaRunResult> {
+/** 收完一个子进程的输出（或到点/取消就 kill 并立即收敛）。 */
+export function collectVelaRun(child: VelaChild, timeoutMs: number, signal?: AbortSignal): Promise<VelaRunResult> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const finish = (code: number | null): void => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onStdout = (chunk: unknown): void => { stdout += textOfChunk(chunk); };
+    const onStderr = (chunk: unknown): void => { stderr += textOfChunk(chunk); };
+    const onClose = (code: number | null): void => finish(code, false);
+    const onError = (): void => finish(null, false);
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      child.stdout?.removeListener?.("data", onStdout);
+      child.stderr?.removeListener?.("data", onStderr);
+      child.removeListener?.("close", onClose);
+      child.removeListener?.("error", onError);
+      try { child.stdout?.destroy?.(); } catch { /* 已关闭 */ }
+      try { child.stderr?.destroy?.(); } catch { /* 已关闭 */ }
+    };
+    const finish = (code: number | null, aborted: boolean): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
+      cleanup();
+      resolve({ code, stdout, stderr, aborted });
     };
-    const timer = setTimeout(() => {
+    const kill = (): void => {
       try {
         child.kill();
       } catch {
         // 已经退出：不构成错误。
       }
-      finish(null);
+    };
+    const onAbort = (): void => {
+      kill();
+      finish(null, true);
+    };
+    // 预取消时不要注册任何监听器，直接 kill + 收敛。
+    if (signal?.aborted === true) {
+      kill();
+      finish(null, true);
+      return;
+    }
+    timer = setTimeout(() => {
+      kill();
+      finish(null, true);
     }, timeoutMs);
     timer.unref?.();
-    child.stdout?.on("data", (chunk) => {
-      stdout += textOfChunk(chunk);
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += textOfChunk(chunk);
-    });
-    child.on("exit", (code) => finish(code));
-    child.on("error", () => finish(null));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.on("close", onClose);
+    child.on("error", onError);
   });
 }
 
@@ -934,6 +967,8 @@ export interface WorkspaceDiscoveryDeps {
   resolveVela?: () => Promise<string | undefined>;
   /** 预算（毫秒）；缺省 {@link WORKSPACE_DISCOVERY_TIMEOUT_MS}。 */
   timeoutMs?: number;
+  /** 调用方取消信号；abort 时立即 kill 子进程。 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -959,7 +994,7 @@ export async function discoverWorkspaceId(deps: WorkspaceDiscoveryDeps = {}): Pr
   } catch {
     return undefined;
   }
-  const run = await collectVelaRun(child, deps.timeoutMs ?? WORKSPACE_DISCOVERY_TIMEOUT_MS);
+  const run = await collectVelaRun(child, deps.timeoutMs ?? WORKSPACE_DISCOVERY_TIMEOUT_MS, deps.signal);
   if (run.code !== 0) return undefined;
   const payload = parseVelaJson(run.stdout);
   if (!isRecord(payload)) return undefined;
@@ -985,11 +1020,12 @@ export interface VelaPreflightDeps {
  * @param deps - vela 的解析与启动注入点。
  * @returns `(workspaceId) => Promise<unknown>`。
  */
-export function createVelaPreflight(deps: VelaPreflightDeps = {}): (workspaceId: string) => Promise<unknown> {
+export function createVelaPreflight(deps: VelaPreflightDeps = {}): (workspaceId: string, signal?: AbortSignal) => Promise<unknown> {
   const spawn = deps.spawn ?? defaultSpawn;
   const resolveVela = deps.resolveVela ?? defaultResolveVela;
   const timeoutMs = deps.timeoutMs ?? VELA_PREFLIGHT_TIMEOUT_MS;
-  return async (workspaceId: string): Promise<unknown> => {
+  return async (workspaceId: string, signal?: AbortSignal): Promise<unknown> => {
+    signal?.throwIfAborted();
     // 工作区 id 来自设置/登录产物（用户可改），最终会成为命令行参数。`--`/空格这类值会被
     // vela 的参数解析器当成开关（参数注入），所以只接受厂商实际使用的字符集，且**不能以
     // `-` 开头**（否则 `--help` 也能过字符集）。与 `index.ts` 的 `velaPreflight` 同一道闸门。
@@ -1001,7 +1037,8 @@ export function createVelaPreflight(deps: VelaPreflightDeps = {}): (workspaceId:
       throw new Error("本机找不到 vela（VELA_BIN、Open Design 桌面端内置与 PATH 都没有）");
     }
     const child = spawn(vela, ["billing", "preflight", "--workspace-id", workspaceId, "--format", "json"]);
-    const result = await collectVelaRun(child, timeoutMs);
+    const result = await collectVelaRun(child, timeoutMs, signal);
+    if (result.aborted) throw new Error("vela billing preflight 已取消");
     if (result.code !== 0) {
       const detail = normalizeKey(result.stderr) ?? normalizeKey(result.stdout) ?? "vela 没有给出错误说明";
       throw new Error(`vela billing preflight 失败：${detail}`);

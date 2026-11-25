@@ -357,8 +357,10 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
       : DEFAULT_USAGE_TIMEOUT_MS;
 
   return {
-    async snapshot(accountRef?: string): Promise<QuotaSnapshot> {
+    async snapshot(accountRef?: string, signal?: AbortSignal): Promise<QuotaSnapshot> {
       const ref = accountRef ?? deps.ref();
+      signal?.throwIfAborted();
+      const authSignal = signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
       // 凭据**解析失败**与「解析成功但为空」是两回事（旧插件第 7864-7881 行）：
       // - 抛出，且 code 是 `MISSING_CREDENTIAL`：这个账号就是没配密钥，重试也不会变 → 不重试；
       // - 抛其它错：凭据服务/环境读取本身失败（可能瞬时），旧插件给 `retryable: true`
@@ -370,7 +372,7 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
       try {
         if (ref === undefined) throw missingKeyError();
         if (deps.resolveAuth !== undefined) {
-          auth = await deps.resolveAuth(ref, AbortSignal.timeout(timeoutMs));
+          auth = await deps.resolveAuth(ref, authSignal);
         } else {
           const key = normalizeKey(await deps.resolveKey(ref));
           if (key === undefined) throw missingKeyError();
@@ -389,6 +391,8 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
 
       let response: Response;
       try {
+        // HTTP 阶段重新开始自己的预算，不吞掉鉴权阶段已经耗时的时间。
+        const requestSignal = signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
         response = await deps.fetchImpl(`${base}${USAGE_PATH}`, {
           headers: {
           accept: "application/json",
@@ -399,7 +403,7 @@ export function createOpencodeQuota(deps: OpencodeQuotaDeps): QuotaPort {
           ...opencodeSessionHeaders(),
           ...attributionHeaders(),
         },
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: requestSignal,
           redirect: "error",
         });
       } catch (error) {

@@ -348,6 +348,28 @@ it("额度端口：请求打控制面基地址，Bearer 头用控制面密钥", 
   }
 });
 
+it("额度失败诊断也复用同一次密钥解析，不重复查凭据", async () => {
+  vi.stubGlobal(
+    "fetch",
+    (async () => new Response(JSON.stringify({ message: "forbidden" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch,
+  );
+  try {
+    const credentials = fakeCredentials({ OPENDESIGN_CONTROL_WORK: "ctrl-work" });
+    const resolve = vi.spyOn(credentials.service as { resolve(ref: string): Promise<unknown> }, "resolve");
+    const host = fakeHost({ credentials: credentials.service });
+    const bundle = opendesign.apply(host.ctx, opendesign.Config(SHAPE));
+
+    await bundle.quota.snapshot("OPENDESIGN_ACCOUNT_WORK_ab12cd");
+
+    expect(resolve, "摘要失败后的 controlKeyKind 也必须复用第一次解析").toHaveBeenCalledTimes(1);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it("三家装进同一个宿主：一份远程面同时回答三家，描述符只登记一次", async () => {
   // 远程面（Task 3）需要真的 `Service` 基类与真的服务解析：假 ctx 撑不住，用真 cordis。
   // 所有请求给一个即答的 200 `{}`：只验证「接线」，不打真实网络。

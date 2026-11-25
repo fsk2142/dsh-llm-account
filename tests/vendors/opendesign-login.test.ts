@@ -4,6 +4,7 @@
  * 传输（spawn）、文件读取（readFile）、等待（sleep）、时钟（now）与 vela 解析
  * （resolveVela）全部注入：不碰真网、不依赖真实定时器、不读本机 `~/.amr`。
  */
+import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
 
 import { accountRef } from "../../src/core/accounts";
@@ -15,6 +16,7 @@ import {
   spawnOptionsFor,
   createOpenDesignLogin,
   createVelaPreflight,
+  collectVelaRun,
   discoverWorkspaceId,
   type OpenDesignLoginDeps,
   type VelaChild,
@@ -29,6 +31,7 @@ interface FakeVelaChild extends VelaChild {
 function fakeChild(options: { prompt?: string; exitCode?: number | null } = {}): FakeVelaChild {
   const dataListeners: ((chunk: unknown) => void)[] = [];
   const exitListeners: ((code: number | null) => void)[] = [];
+  const closeListeners: ((code: number | null) => void)[] = [];
   const errorListeners: ((error: unknown) => void)[] = [];
   let buffered = options.prompt ?? "";
   const child: FakeVelaChild = {
@@ -44,6 +47,7 @@ function fakeChild(options: { prompt?: string; exitCode?: number | null } = {}):
     stderr: { on: () => undefined },
     on: (event, listener) => {
       if (event === "exit") exitListeners.push(listener as (code: number | null) => void);
+      if (event === "close") closeListeners.push(listener as (code: number | null) => void);
       if (event === "error") errorListeners.push(listener as (error: unknown) => void);
       return undefined;
     },
@@ -54,6 +58,7 @@ function fakeChild(options: { prompt?: string; exitCode?: number | null } = {}):
     },
     emitExit: (code) => {
       for (const listener of exitListeners) listener(code);
+      for (const listener of closeListeners) listener(code);
     },
   };
   if (options.exitCode !== undefined) child.emitExit(options.exitCode);
@@ -419,6 +424,72 @@ it("discoverWorkspaceId：找不到 vela / 命令失败 / 输出不是 JSON / �
   expect(await discoverWith("boom", 1)).toBeUndefined();
   expect(await discoverWith("not json at all", 0)).toBeUndefined();
   expect(await discoverWith('{"workspaceId":"  "}', 0)).toBeUndefined();
+});
+
+it("discoverWorkspaceId：调用方取消会立即 kill 子进程并返回未发现", async () => {
+  const child = fakeChild();
+  const kill = vi.spyOn(child, "kill");
+  const spawn = vi.fn(() => child);
+  const controller = new AbortController();
+  const pending = discoverWorkspaceId({ spawn, resolveVela: async () => "vela", signal: controller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+  expect(await pending).toBeUndefined();
+  expect(kill).toHaveBeenCalledTimes(1);
+});
+
+it("collectVelaRun：取消后立即收敛，并清理子进程与流监听器", async () => {
+  const stdout = new EventEmitter() as EventEmitter & { destroy: ReturnType<typeof vi.fn> };
+  const stderr = new EventEmitter() as EventEmitter & { destroy: ReturnType<typeof vi.fn> };
+  stdout.destroy = vi.fn();
+  stderr.destroy = vi.fn();
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: typeof stdout;
+    stderr: typeof stderr;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.kill = vi.fn();
+  const controller = new AbortController();
+
+  const pending = collectVelaRun(child as unknown as VelaChild, 500, controller.signal);
+  controller.abort();
+  const result = await pending;
+
+  expect(result.aborted).toBe(true);
+  expect(child.kill).toHaveBeenCalledTimes(1);
+  expect(child.listenerCount("exit")).toBe(0);
+  expect(child.listenerCount("error")).toBe(0);
+  expect(stdout.listenerCount("data")).toBe(0);
+  expect(stderr.listenerCount("data")).toBe(0);
+  expect(stdout.destroy).toHaveBeenCalledTimes(1);
+  expect(stderr.destroy).toHaveBeenCalledTimes(1);
+});
+
+it("collectVelaRun：正常退出会等 stdout 关闭，不丢退出前缓冲的输出", async () => {
+  const stdout = new EventEmitter() as EventEmitter & { destroy: ReturnType<typeof vi.fn> };
+  const stderr = new EventEmitter() as EventEmitter & { destroy: ReturnType<typeof vi.fn> };
+  stdout.destroy = vi.fn();
+  stderr.destroy = vi.fn();
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: typeof stdout;
+    stderr: typeof stderr;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.kill = vi.fn();
+
+  const pending = collectVelaRun(child as unknown as VelaChild, 500);
+  child.emit("exit", 0);
+  stdout.emit("data", "late output");
+  child.emit("close", 0);
+
+  const result = await pending;
+  expect(result.code).toBe(0);
+  expect(result.stdout).toBe("late output");
+  expect(result.aborted).toBe(false);
 });
 
 it("vela preflight 拒绝形状不对的工作区 id（参数注入闸门）", async () => {

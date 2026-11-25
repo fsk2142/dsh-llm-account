@@ -410,11 +410,11 @@ export function apply(ctx: Context, config?: unknown): CommandCodeBundle {
   };
 
   const quota: QuotaPort = {
-    async snapshot(accountRef?: string) {
+    async snapshot(accountRef?: string, signal?: AbortSignal) {
       const apiBase = normalizeKey(document().apiBase) ?? DEFAULT_API_BASE;
       const port = commandCodeQuotaPort(apiBase);
       // `snapshot(accountRef)` 让调用方指定账号；不传则用工厂的 `ref` getter（现取）。
-      return accountRef === undefined ? port.snapshot() : port.snapshot(accountRef);
+      return port.snapshot(accountRef, signal);
     },
   };
 

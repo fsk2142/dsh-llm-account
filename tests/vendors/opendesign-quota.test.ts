@@ -148,7 +148,7 @@ it("snapshot：先解析控制面密钥，再打账单摘要；请求带控制�
   expect(fetchImpl.requests).toEqual([
     { url: "https://wallet.example.test/api/v1/billing/summary", authorization: "Bearer control-key-1" },
   ]);
-  expect(preflight).toHaveBeenCalledWith("ws-1");
+  expect(preflight).toHaveBeenCalledWith("ws-1", undefined);
   expect(snapshot.windows).toEqual([{ key: "fiveHour", unit: "usd", used: 2.4, cap: 14 }]);
   expect(snapshot.plan).toMatchObject({ id: "GOAT" });
   expect(snapshot.failures).toEqual([]);
@@ -285,7 +285,7 @@ it("同一人时才采信 preflight，窗口正常出现", async () => {
     }),
   );
   const snapshot = await quota.snapshot();
-  expect(preflight).toHaveBeenCalledWith("ws-1");
+  expect(preflight).toHaveBeenCalledWith("ws-1", undefined);
   const fiveHour = snapshot.windows.find((w) => w.key === "fiveHour");
   expect(fiveHour?.used).toBe(1.7871);
   expect(fiveHour?.cap).toBe(5);
@@ -350,7 +350,7 @@ it("工作区可以是异步发现的（网页登录产物不带 workspaceId）�
   );
 
   const snapshot = await quota.snapshot();
-  expect(preflight).toHaveBeenCalledWith("ws-discovered");
+  expect(preflight).toHaveBeenCalledWith("ws-discovered", undefined);
   // 厂商只发 5 小时/7 天两个窗口 —— **只发布这两个**（2026-10-23 起不再补月度）。
   // 5 小时窗口的上限取**官方 $18**（不是 50000 ÷ 10000 = $5）；已用按官方口径折算
   // （50000 / $18 = 2777.8，所以 906/2777.8 = 0.3262）。
@@ -503,7 +503,7 @@ it("**HTTP 周期额度优先，且不需要身份闸门**（它按账号自己�
     }),
   );
   const snapshot = await quota.snapshot();
-  expect(httpPreflight).toHaveBeenCalledWith("ws-1", "control-key-1");
+  expect(httpPreflight).toHaveBeenCalledWith("ws-1", "control-key-1", undefined);
   // 关键：压根没碰 vela。
   expect(velaPreflight).not.toHaveBeenCalled();
   const fiveHour = snapshot.windows.find((w) => w.key === "fiveHour");
@@ -511,6 +511,66 @@ it("**HTTP 周期额度优先，且不需要身份闸门**（它按账号自己�
   expect(fiveHour?.cap).toBe(5);
   // 也不该出现「不是同一个人」那条失败（HTTP 已经给出了准确数据）。
   expect(snapshot.failures.join(" ")).not.toContain("不是同一个人");
+});
+
+it("**一次读取只解析一次控制密钥，HTTP preflight 复用同一把**", async () => {
+  const fetchImpl = scriptedFetch([() => json({ membershipTier: "GOAT", creditsPerUsd: 10000 })]);
+  const resolveControlKey = vi.fn(async () => "control-key-1");
+  const httpPreflight = vi.fn(async () => ({ codingPlan: { windows: [] } }));
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      resolveControlKey,
+      workspaceIdOf: () => "ws-1",
+      preflightHttp: httpPreflight,
+    }),
+  );
+
+  await quota.snapshot();
+
+  expect(resolveControlKey, "摘要与周期额度不能各解析一遍密钥").toHaveBeenCalledTimes(1);
+  expect(httpPreflight).toHaveBeenCalledWith("ws-1", "control-key-1", undefined);
+});
+
+it("snapshot 把取消信号传给账单 HTTP 与 vela 回退", async () => {
+  const controller = new AbortController();
+  let seenSignal: AbortSignal | undefined;
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    seenSignal = init?.signal ?? undefined;
+    throw new Error("transport aborted");
+  }) as typeof fetch;
+  const summaryFallback = vi.fn(async (signal?: AbortSignal) => {
+    expect(signal).toBe(controller.signal);
+    return undefined;
+  });
+  const quota = createOpenDesignQuota(deps(fetchImpl, { summaryFallback }));
+
+  const pending = quota.snapshot("OPENDESIGN_API_KEY", controller.signal);
+  await vi.waitFor(() => expect(seenSignal).toBeDefined());
+  controller.abort();
+  await pending;
+
+  expect(seenSignal?.aborted).toBe(true);
+  expect(summaryFallback).toHaveBeenCalledTimes(1);
+});
+
+it("**本机 vela 是另一个账号时，拒绝采用 billing summary 回退**", async () => {
+  const fetchImpl = scriptedFetch([() => json({ message: "forbidden" }, 403)]);
+  const summaryFallback = vi.fn(async () => ({ membershipTier: "GOAT", creditsPerUsd: 10000 }));
+  const reportLiveness = vi.fn();
+  const quota = createOpenDesignQuota(
+    deps(fetchImpl, {
+      summaryFallback,
+      identitiesOf: async () => ({ account: "user-b", vela: "user-a" }),
+      reportLiveness,
+    }),
+  );
+
+  const snapshot = await quota.snapshot();
+
+  expect(summaryFallback, "身份不一致不能采信本机 vela 的摘要").not.toHaveBeenCalled();
+  expect(snapshot.plan, "不能把账号 A 的套餐显示到账号 B").toBeUndefined();
+  expect(reportLiveness, "未采信的摘要也不能改变失效状态").not.toHaveBeenCalled();
+  expect(snapshot.failures.join(" ")).toContain("无法确认与本账号一致");
 });
 
 it("HTTP 失败时**退回 vela**，那时才过身份闸门", async () => {
