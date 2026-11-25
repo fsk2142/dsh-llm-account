@@ -294,7 +294,16 @@ function effortsOfCapabilities(capabilities: unknown): readonly string[] | undef
   if (!Array.isArray(reasoning.effort)) return undefined;
   const efforts: string[] = [];
   for (const level of reasoning.effort) {
-    if (typeof level === "string" && level !== "") efforts.push(level);
+    if (typeof level !== "string" || level === "") continue;
+    /*
+     * 网关用 `none` 表示「关闭思考」，pi-ai 的档位词表里同一个位置叫 `off`。
+     *
+     * 2026-11-25 真机目录新增 `hy4-flash-free`，公布的档位是 `["none","high"]`。
+     * 原样透传会让宿主显示一个 pi-ai 不认识的 `none`，而 `clampThinkingLevel`
+     * 对未知值的处理是退回 `off` —— 界面与实际行为不一致。这里在目录边界
+     * 归一化成 `off`，后续目录、宿主声明、pi-ai map 三处看到的就是同一个词。
+     */
+    efforts.push(level === "none" ? "off" : level);
   }
   return efforts.length === 0 ? undefined : efforts;
 }

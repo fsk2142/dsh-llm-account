@@ -2024,3 +2024,25 @@ network 失败时只记**本家**，换模型时只排除「最近 60 秒内失�
    删 3 处描述已删代码的孤儿注释、11 行搜索密钥列表 CSS。
 3. **隐私复扫** —— 又发现 4 处本机路径/邮箱（其中 2 处是我自己写回文档的复核清单），
    全部脱敏；另删 2 个真死代码（`RemoveIcon`、`hasImageBlock`）。
+
+---
+
+## 2.5.1：opencode 网关 `none` 档位归一化为 `off`（2026-11-25）
+
+用户发现 opencode 目录新增模型，要求检查思考等级。用账号密钥实测 `/models`：
+
+- 账号可见 **13 条** = 7 个 chat + 3 个 decision + 3 个 embedding；
+- `hy4-flash-free`（2026-11-16 上线）公布 `capabilities.reasoning.effort: ["none","high"]`；
+- pi-ai 的合法档位词表是 `off / minimal / low / medium / high / xhigh / max`，**没有 `none`**。
+
+原实现把网关字符串原样透传，宿主会显示一个 pi-ai 不认识的 `none`；真正请求时
+`clampThinkingLevel` 对未知值退回 `off`，造成「界面写 none、实际是 off」的不一致。
+
+修法只在目录边界做归一化：`none → off`，其余档位原样保留。models.dev 的
+`reasoning_options` 解析不变（它本来就过滤 `none`）。decision / embedding 的
+`type` 过滤不在本版范围，避免扩大改动面。
+
+新增回归用例 `opencode-catalog-efforts.test.ts`：真实 `hy4-flash-free` 形状必须解析成
+`["off","high"]`。先观察它在旧实现上失败（得到 `["none","high"]`），再改实现转绿。
+
+验证：`tsc` 干净；**207 文件 / 2,175 用例通过（2 条按平台 skip）**；构建成功。

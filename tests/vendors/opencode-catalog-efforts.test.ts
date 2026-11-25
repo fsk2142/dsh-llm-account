@@ -71,6 +71,19 @@ describe("网关 /models 公布的推理档位", () => {
     expect(entries[0]!.efforts).toEqual(["low", "max"]);
   });
 
+  it("**网关的 `none` 归一化成 pi-ai 的 `off`**（hy4-flash-free 真机档位是 none/high）", () => {
+    const { entries } = parseModels({
+      object: "list",
+      data: [
+        {
+          id: "hy4-flash-free",
+          capabilities: { reasoning: { supported: true, effort: ["none", "high"] } },
+        },
+      ],
+    });
+    expect(entries[0]!.efforts, "none 是网关的关闭思考写法，pi-ai 只认 off").toEqual(["off", "high"]);
+  });
+
   it("`effort` 为空数组时不产出 efforts 字段（不是 `[]`）", () => {
     const { entries } = parseModels({
       object: "list",
