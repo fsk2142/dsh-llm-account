@@ -578,7 +578,7 @@ declare class RotationEngine {
    */
   clearCredentialRejection(ref: string): void;
   /**
-   * 把一个账号记为**已失效**（2026-11-23 用户需求）。
+   * 把一个账号记为**已失效**。
    *
    * ## 什么算失效
    *

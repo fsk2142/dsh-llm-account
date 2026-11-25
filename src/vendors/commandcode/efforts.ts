@@ -38,7 +38,7 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // `reasoning_effort` 的取值）；本表原来误抄成 `off`，2026-11-06 按官方口径删掉。
   //
   // 下面三行原来只有 `high` / `max`（照抄 CLI 词表），但 DeepSeek 官方三档是
-  // `low / high / max` —— 2026-11-06 用户要求补上 `low`，否则用户永远选不到最轻的档位。
+  // `low / high / max` —— 需求补上 `low`，否则用户永远选不到最轻的档位。
   "deepseek/deepseek-v4.1-flash": ["low", "high", "max"],
   "deepseek/deepseek-v4.1-flash-fast": ["low", "high", "max"],
   "deepseek/deepseek-v4-flash": ["low", "high", "max"],

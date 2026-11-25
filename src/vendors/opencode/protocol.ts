@@ -176,7 +176,7 @@ export function trimBase(baseUrl: string): string {
  * 带凭据： 6 个（真正可用的那批）
  * ```
  *
- * 后果是设置页的勾选列表里躺着一堆**选中也发不出去**的模型。用户报障原话是
+ * 后果是设置页的勾选列表里躺着一堆**选中也发不出去**的模型。实际现象是
  * 「连天界面那里，现在好像又出来了」 —— 上下文本身是另一处的问题，但这条清单
  * 一直在误导「哪些模型能用」。
  *
@@ -401,7 +401,7 @@ export function buildPiModel(facts: OpencodeModelFacts, baseUrl: string): PiMode
       ? {}
       : { thinkingLevelMap: Object.fromEntries(facts.efforts.map((level) => [level, level])) }),
     /**
-     * **按协议把「档位」接到该协议真正读取的地方**（2026-11-04 外部审查 U06；用户要求两条线都支持）。
+     * **按协议把「档位」接到该协议真正读取的地方**（外部审查 U06；两条线都支持）。
      *
      * pi-ai 的两个协议各有自己的开关，缺一个档位就发不出去：
      *

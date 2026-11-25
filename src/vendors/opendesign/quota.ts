@@ -132,7 +132,7 @@ export interface OpenDesignQuotaDeps {
   /**
    * **该账号的身份**（控制面 `/me` 的 `id`）+ **本机 vela 登录态的身份**。
    *
-   * 为什么必须有（2026-10-20 用户提的「一个网关多个账户」）：`vela billing preflight`
+   * 为什么必须有（「一个网关多个账户」）：`vela billing preflight`
    * **没有 `--key` 参数**，它永远用**本机 vela 登录态**那份身份去查额度。所以：
    *
    * - 账号 A 与 vela 登录态是同一人 → preflight 的数字是 A 的，可以用；

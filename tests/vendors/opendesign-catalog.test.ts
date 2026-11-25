@@ -168,7 +168,7 @@ describe("输入模态：opendesign 放在 architecture.input_modalities（2026-
   });
 
   it("**实测表能推翻过时的声明**（eco / v4-flash 实测能读图）", () => {
-    // 用户报障「eco 不能发送图片」：网关写的是 `["text"]`，但真机实测能准确读出图里的
+    // 实际现象「eco 不能发送图片」：网关写的是 `["text"]`，但真机实测能准确读出图里的
     // 数字（三张全对）、且 `prompt_tokens` 39 → 241 证明图片真的进了上下文。
     // 只看声明会让宿主的图片按钮永远不出现。
     const parsed = parseCatalog({

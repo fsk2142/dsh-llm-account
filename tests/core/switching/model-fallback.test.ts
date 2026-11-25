@@ -222,7 +222,7 @@ describe("pickFallbackModel 的 sameGatewayOnly（2026-10-28）", () => {
 /**
  * ## 自动切换只准在三家网关之间（2026-11-08 需求）
  *
- * 用户原话：「自动切换不要切换到 deepseek 的 API 上边去，只准在 opendesign /
+ * 原始描述：「自动切换不要切换到 deepseek 的 API 上边去，只准在 opendesign /
  * commandcode / opencode 三个网关之间切换」。
  *
  * 原来的实现是**黑名单**（`isOfficialProvider`：`deepseek` / `deepseek-account` 前缀）。

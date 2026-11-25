@@ -767,7 +767,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
             "MISSING_CREDENTIAL",
           ),
         /*
-         * **全部账号都已失效**（2026-11-23 用户需求：未订阅 + 余额 < $1 的账号打上失效标签，
+         * **全部账号都已失效**（需求：未订阅 + 余额 < $1 的账号打上失效标签，
          * 不再自动重试连过去）。
          *
          * 与 `noAccount` 的区别是**建议不同**：这里是「去充值/订阅」，那里是「去添加账号」。
@@ -808,7 +808,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
       const body = await deadlineOf(() => readErrorBody(response));
       // 兜底：网关不认这个档位（400 + 点名 reasoning_effort）时，按它念出的白名单**升一档**重发。
       //
-      // **故意向上而不是向下**（2026-11-06 用户要求）：降档会把用户的意图悄悄削弱 ——
+      // **故意向上而不是向下**：降档会把用户的意图悄悄削弱 ——
       // 用户点 `xhigh`、网关只认到 `high`，那次请求的思考量就比他要求的少。升档的代价只是
       // 多花 token，而降档的代价是答案质量下降。没有更强的档位时返回 `undefined`，
       // 这里会去掉字段、交回厂商默认，**不退回一个更弱的显式档位**。
@@ -928,7 +928,7 @@ class OpenDesignAdapter extends LlmAdapter implements CatalogModelsPort {
    * @returns 可以发出去的档位，或 `undefined`。
    */
   /**
-   * 用户选的档位：**原样发送**，不做白名单过滤（2026-11-03 用户要求）。
+   * 用户选的档位：**原样发送**，不做白名单过滤。
    *
    * 旧实现会把「目录没声明过的档位」静默换成 `undefined`（= 不带这个字段），
    * 于是用户选了 `high` 却发出一个没有档位的请求 —— 实际用的是厂商默认档，

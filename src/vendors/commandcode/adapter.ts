@@ -463,7 +463,7 @@ class CommandCodeAdapter extends LlmAdapter implements CatalogModelsPort {
   async *#attempt(config: ResolvedConfig, options: GenerateOptions, key: string): AsyncGenerator<StreamChunk> {
     const cap = Math.min(config.defaultMaxTokens, DEFAULT_GENERATE_MAX_TOKENS);
     /**
-     * 档位**原样发送**，不再按静态表收口（2026-11-03 用户要求）。
+     * 档位**原样发送**，不再按静态表收口。
      *
      * 旧写法只发「静态表里有的值」，表外一律不发 —— 于是用户选了 `off`（或某个表里
      * 没有的档位）时，请求里没有档位字段，实际用的是厂商默认档，而界面仍显示所选值。

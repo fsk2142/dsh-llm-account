@@ -227,7 +227,7 @@ export async function* runAttemptLoop<Config, Credential, AttemptContext>(
     const ref = host.rotation.pick({ model: options.model, tried: ledger.tried });
     if (ref === undefined) {
       /**
-       * **全部账号都已失效**（2026-11-23 用户需求）。
+       * **全部账号都已失效**。
        *
        * `pick()` 返回 `undefined` 且 `tried` 是空的、`ledger` 里一条失败都没有 ——
        * 唯一的解释就是候选账号全被 `markDead` 踢掉了。这时**一个请求都不发**：

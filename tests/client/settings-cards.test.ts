@@ -38,7 +38,7 @@ describe("四张卡片", () => {
     
     expect(shared).toContain("requestTimeoutMs");
     expect(shared).toContain("streamIdleTimeoutMs");
-    // 2026-10-20 用户去掉了「启用自动切换 / 开启网页搜索」两个界面开关
+    // 去掉了「启用自动切换 / 开启网页搜索」两个界面开关
     // （卡片本来就能用箭头收起）。
     expect(shared).not.toContain("featureSwitchEnabled");
     expect(shared).not.toContain("featureSearchEnabled");

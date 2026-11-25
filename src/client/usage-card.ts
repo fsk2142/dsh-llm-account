@@ -320,7 +320,7 @@ export function AccountUsageBlock(props: {
       label: t("usage.tokens"),
       value: compact(tokens),
       /**
-       * 小字按**三段**拆开：缓存命中 / 未命中 / 输出（2026-11-03 用户要求）。
+       * 小字按**三段**拆开：缓存命中 / 未命中 / 输出。
        *
        * 原来只写「{未命中} 入 / {输出} 出」。这个面板的总 token **含缓存命中**，
        * 而缓存命中通常占 99%，于是「入」看起来只有总量的零头 —— 用户会以为

@@ -1,4 +1,4 @@
-import { c as QuotaPort, i as AccountPort, l as VendorCapabilities, n as RotationAccess, o as CredentialPort, r as IntentLog, t as PluginConfigSchema } from "./assembly-pjQd_4b-.js";
+import { c as QuotaPort, i as AccountPort, l as VendorCapabilities, n as RotationAccess, o as CredentialPort, r as IntentLog, t as PluginConfigSchema } from "./assembly-C_ZGZ5D1.js";
 import { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import { Context } from "@deepseek-ai/cordis";
 //#region src/vendors/opencode/index.d.ts

@@ -76,7 +76,7 @@ it("「不限」是端点给的读数：文案写「不限」，不画条，也�
 });
 
 it("primaryQuotaWindow：侧边栏只取小时级窗口（5h / fiveHour / rolling）", () => {
-  // 2026-10-18 用户反馈：侧边栏三条窗口太占地方，只留 5 小时那条。
+  // 反馈：侧边栏三条窗口太占地方，只留 5 小时那条。
   const cc = [{ key: "5h", used: 1, cap: 9 }, { key: "weekly" }, { key: "monthlyCredits" }];
   expect(primaryQuotaWindow(cc, "commandcode")).toBe(cc[0]);
   // 同一语义的另一种厂商写法（fiveHour）也认；不在第一位也要挑出来。

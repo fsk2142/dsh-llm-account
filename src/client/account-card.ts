@@ -191,7 +191,7 @@ function accountRow(props: AccountCardProps, account: AccountUsageStatus, index:
   // 两者相同只标一次（避免同一件事写两遍）。
   const marks: ReactNode[] = [];
   /*
-   * **已失效**排在最前（2026-11-23 用户需求）：它是这一行最重要的结论 —— 账号
+   * **已失效**排在最前：它是这一行最重要的结论 —— 账号
    * 不会再被选中去发请求了，用户要先知道这个，再看「当前使用」之类的状态。
    */
   if (account.invalid === true) {

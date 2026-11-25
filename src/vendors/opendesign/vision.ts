@@ -3,7 +3,7 @@
  *
  * ## 为什么要覆盖厂商自己的声明
  *
- * 用户报障：「opendesign 最新的 eco 模型不能发送图片」。
+ * 实际现象：「opendesign 最新的 eco 模型不能发送图片」。
  *
  * 查下来不是插件把模态读错了 —— 网关的目录里 `deepseek-v4.1-flash-eco` 确实写着
  * `architecture.input_modalities: ["text"]`。**是这条声明本身过时了。**

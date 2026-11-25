@@ -436,7 +436,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
         controlKeyKind: async (candidate, signal) => (await resolveKey(candidate, signal)).kind,
         workspaceIdOf: (candidate, signal) => workspaceFor(candidate, signal),
         /*
-         * **失效标记**（2026-11-23 用户需求）：额度读取顺手判「没订阅 + 余额 < $1」，
+         * **失效标记**：额度读取顺手判「没订阅 + 余额 < $1」，
          * 命中的账号会被轮换引擎永久跳过，不再白打注定 402/403 的请求。
          *
          * 撤标同样走这里 —— 用户充值/订阅后，下一次额度读取就会给出 `dead: false`，
@@ -978,7 +978,7 @@ async function velaPreflight(workspaceId: string, signal?: AbortSignal): Promise
 /**
  * 核对「这个账号」与「本机 vela 登录态」是不是同一个人（多账号兼容的身份闸门）。
  *
- * 为什么必须核对（2026-10-20 用户提出的「一个网关多个账户」）：
+ * 为什么必须核对（「一个网关多个账户」）：
  *
  * 1. `vela billing preflight` **没有 `--key` 参数** —— 它永远用本机 vela 登录态那份身份
  *    去查额度。所以网关下挂了第二个人的账号时，采信它就是**显示别人的用量**。

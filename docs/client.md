@@ -233,7 +233,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 
 ## 结论表
 
-| 用户诉求 | 根因 / 约束 | 落地 |
+| 需求 | 根因 / 约束 | 落地 |
 | --- | --- | --- |
 | 经常获取不到账户信息 | 单账号额度读取预算 8s，而 Command Code 端口是 `whoami` → 三端点并行的**两跳**，慢网下每跳 4-5s；端口自身端点预算 300s。8s 必然砍掉正常读取 | `QUOTA_READ_TIMEOUT_MS` 8s → **30s**，超时后**重试一次**（只重试超时，确定性失败不重试）；失败项改用**账号名称**（不再泄漏内部 ref） |
 | 不要按供应商分组 | 旧仪表盘按厂商分 section，两个标题两个区块 | 平铺列表：所有厂商的账号一份列表，供应商是账号名后的**徽标**（`data-account-vendor`，与设置页账户行同一类）；兜底窗口与固定标注按账号**自己所属厂商**算 |
@@ -265,7 +265,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 
 ## 结论表
 
-| 用户诉求 | 根因 / 约束 | 落地 |
+| 需求 | 根因 / 约束 | 落地 |
 | --- | --- | --- |
 | ① 面板里有英文 | 诊断原文直接上屏：端点短名（`whoami`、`credits`、`usage`）、宿主包装过的 `quota: commandcode "Work" read failed (timeout after 30000ms)`、以及客户端接缝自己产的 `the llm-account remote namespace has no models()` | 新增 `client/failure-text.ts`：已知形状**映射成人话**（含带引号账号名的包装 →「账号 X 的额度读取失败（读取超时）」），认不出的形状**原样返回**（宿主能力错误要看得见）；原文一律留在 `data-*`（`data-failure-detail` / `data-account-quota-failure` / `data-dashboard-failure` …）。接线的四处：账户卡片（厂商级失败 + 额度失败 + 目录失败）、仪表盘（厂商级失败 + 账号额度失败）、侧边栏卡片、模型卡片（`failureListText` 处理 `；` 连接的多条） |
 | ② 不要切换记录 | 记录只说明过去发生过什么，用户要的是「现在哪张卡还有额度」 | 客户端**全部**移除：仪表盘的记录区（读取 + 渲染 + `switches` prop）、`seams.ts` 的 `readSwitches` 与仪表盘加载、`copy.ts` 的 `dashboard.switches`/`dashboard.noSwitches`、`css.ts` 的 `.dsl-switch*`/`[data-switch-record]`/`CSS_CLASS.switchNotice`/`switchRoute`。**宿主侧的 `switches()` 与 `rotation` 的记录保留**（跨行观测要它：设置页/侧边栏跟随真实账号），`switch-card` 的「即将切换」倒计时也保留 —— 那是将来的事，不是历史 |
@@ -323,7 +323,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 
 ### 结论表
 
-| 用户诉求 | 根因 / 约束 | 落地 |
+| 需求 | 根因 / 约束 | 落地 |
 | --- | --- | --- |
 | ① 套餐信息 | 端点只给 `planId` 与状态，**不给**套餐名与每月额度；名称/额度只有厂商静态表里有（CLI 与旧插件各带一份，内容一致） | 新增 `vendors/commandcode/plans.ts`：9 条 `planId` 前缀 → `{name, monthlyCredits}`（Go 10 / GOAT 70 / Pro 30 / Pro-v1 80 / Provider 15 / Max 150 / Ultra 300 / Teams Pro 40），**最长前缀**匹配（`individual-pro-v1` 用 80 而不是 30）；`adapter.ts` 的 `QuotaSnapshot.plan` 从 `string` 升级为结构化 `QuotaPlan { id, name?, status?, monthlyCredits?, periodEnd? }`；`quota.ts` 的 `planOf` 走 subscriptions 优先、`credits.planId` 回退（CLI 同），`data: null` 视为**没有订阅**（不是读失败）；账号卡与仪表盘各多一行 `data-account-plan` / `data-dashboard-plan`：`套餐 GOAT · 每月 $70.00 · 本期至 2026/11/14` |
 | ② 月度额度没显示 | 月度窗口此前**故意**不给上限（`monthlyCredits` 是**余额**，拿它当 cap 会画出百分之几百的伪读数），所以订阅账号也只看到「已用 $14.24」 | 现在**有套餐**时按厂商自己的算法给配给：`cap` = 套餐每月额度、`used` = `cap − 余额`、`resetAt` = 本期结束（旧插件 `monthlyView` 第 5722-5750 行、CLI `getCreditDepletionPct` 同一口径）→ 订阅账号看到 `已用 $14.23 / 共 $70.00` + 20% 的条 + 重置时间；**没有套餐**（未订阅 / 表里没有 / 余额缺失）时退回原来的「只报当期消耗」，一个字都不编 |
@@ -433,7 +433,7 @@ headlessly；去问用户、去看 `/usage` 浮层或网页」针对的是**哪�
 
 ## 用量统计的周期口径（2026-10-19）
 
-用户需求（原话要点）：
+需求（原话要点）：
 - 额度下方加用量：请求数与成功/失败、成功率、按官方计价表算价值、token 消耗、
   平均缓存命中率，尽量详细；
 - 「厂商价值，然后出个小字约等于官方多少价值」→ 两种口径并列，官方价用小字；

@@ -147,7 +147,7 @@ function reloadNotice(props: PageShellProps, t: (key: string) => string): ReactE
 /**
  * 把更新接口给的版本值格式化成**给人看的样子**。
  *
- * 为什么需要它（2026-10-21 用户在新设备报障）：「不是版本号，是一串字符」——
+ * 为什么需要它（在新设备报障）：「不是版本号，是一串字符」——
  * 用户装的是 **git 仓库**，而 git 安装的 `latestVersion` 是**commit SHA**
  * （市场插件 `updates.js` 的 github 分支用 `resolveHeadCommit` 取值），
  * 于是无条件加的 `v` 前缀把 `032c5469b9c3adce…` 变成了 `v032c5469…`。
