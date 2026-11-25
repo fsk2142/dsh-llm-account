@@ -20,9 +20,10 @@
 import { Context } from "@deepseek-ai/cordis";
 import { AssistantStreamAccumulator } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { AccountView, SettingsOp } from "../../src/core/adapter";
+import { resetAutoContinueBudgetForTest } from "../../src/vendors/auto-continue";
 import { resetCatalogSources } from "../../src/vendors/model-catalog-registry";
 import * as commandcode from "../../src/vendors/commandcode/index";
 import * as opencode from "../../src/vendors/opencode/index";
@@ -37,6 +38,8 @@ import * as opencode from "../../src/vendors/opencode/index";
 afterEach(() => {
   resetCatalogSources();
 });
+
+beforeEach(() => resetAutoContinueBudgetForTest());
 
 /** 判定一个值是否为「普通对象」（排除 `null` 与数组）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {

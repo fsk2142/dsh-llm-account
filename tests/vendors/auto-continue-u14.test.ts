@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { applyAutoContinue, CONTINUE_PROMPT, type AutoContinueProbe } from "../../src/vendors/auto-continue";
+import { applyAutoContinue, CONTINUE_PROMPT, resetAutoContinueBudgetForTest, type AutoContinueProbe } from "../../src/vendors/auto-continue";
+
+beforeEach(() => resetAutoContinueBudgetForTest());
 
 /**
  * 截断后的自动续写必须真正接到宿主（2026-11-04 外部审查 U14）。
@@ -48,12 +50,19 @@ function hostOf(): {
 }
 
 /** 记录 append 调用，形状与宿主 `Inbox` 一致。 */
-function inboxOf(): { calls: [string, unknown][]; append(target: string, message: unknown): void } {
+function inboxOf(): {
+  calls: [string, unknown][];
+  nextStep: unknown[];
+  append(target: string, message: unknown): void;
+} {
   const calls: [string, unknown][] = [];
+  const nextStep: unknown[] = [];
   return {
     calls,
+    nextStep,
     append(target: string, message: unknown) {
       calls.push([target, message]);
+      nextStep.push(message);
     },
   };
 }
@@ -142,8 +151,11 @@ describe("U14 · 截断后续写接到宿主", () => {
     );
 
     await host.fire("agent/turn-stopping", { turn: 7 });
+    expect(inbox.calls, "第一次续写").toHaveLength(1);
+    inbox.nextStep.length = 0; // 宿主消费掉 nextStep，同一 turn 再进入收尾判断。
     await host.fire("agent/turn-stopping", { turn: 7 });
     expect(inbox.calls, "前两次续写").toHaveLength(2);
+    inbox.nextStep.length = 0;
 
     await host.fire("agent/turn-stopping", { turn: 7 });
     expect(inbox.calls, "达到上限就不再续写").toHaveLength(2);
@@ -160,6 +172,67 @@ describe("U14 · 截断后续写接到宿主", () => {
 
     await host.fire("agent/turn-stopping", { turn: 1 });
     expect(inbox.calls, "两种写法都要认").toHaveLength(1);
+  });
+
+  it("**三家监听器串行触发时只追加一条续写消息**（2026-11-25 P0 回归）", async () => {
+    const host = hostOf();
+    const inbox = inboxOf();
+    const probe: AutoContinueProbe = {
+      inbox: inbox as never,
+      lastFinishReason: () => "max-tokens",
+    };
+
+    // 生产里 commandcode / opendesign / opencode 各 apply 一次，宿主 serial 会依次调用三家。
+    applyAutoContinue(host as never, () => SETTINGS, probe);
+    applyAutoContinue(host as never, () => SETTINGS, probe);
+    applyAutoContinue(host as never, () => SETTINGS, probe);
+
+    await host.fire("agent/turn-stopping", { turn: 1 });
+
+    expect(inbox.calls, "一次截断只能追加一条“继续”，不能三家各追加一条").toHaveLength(1);
+    expect(inbox.nextStep, "宿主随后看到的 nextStep 也只能有一条").toHaveLength(1);
+  });
+
+  it("**三家共享同一回合的续写预算**（2026-11-25 P0 回归）", async () => {
+    const host = hostOf();
+    const inbox = inboxOf();
+    const probe: AutoContinueProbe = {
+      inbox: inbox as never,
+      lastFinishReason: () => "max-tokens",
+    };
+    const settings = { ...SETTINGS, maxAttempts: 1 };
+
+    applyAutoContinue(host as never, () => settings, probe);
+    applyAutoContinue(host as never, () => settings, probe);
+    applyAutoContinue(host as never, () => settings, probe);
+
+    await host.fire("agent/turn-stopping", { turn: 1 });
+    expect(inbox.calls, "第一次截断只续写一次").toHaveLength(1);
+
+    // 宿主消费掉 nextStep 后，同一 turn 可能再次触发 turn-stopping（max-tokens 会粘住）。
+    inbox.nextStep.length = 0;
+    await host.fire("agent/turn-stopping", { turn: 1 });
+
+    expect(inbox.calls, "三家不能各自拥有一份次数预算，合计仍只能是 1 次").toHaveLength(1);
+  });
+
+  it("**三家次数配置不同时，首次消费的预算上限仍然共同生效**（2026-11-25 P0 回归）", async () => {
+    const host = hostOf();
+    const inbox = inboxOf();
+    const probe: AutoContinueProbe = {
+      inbox: inbox as never,
+      lastFinishReason: () => "max-tokens",
+    };
+
+    applyAutoContinue(host as never, () => ({ ...SETTINGS, maxAttempts: 1 }), probe);
+    applyAutoContinue(host as never, () => ({ ...SETTINGS, maxAttempts: 5 }), probe);
+    applyAutoContinue(host as never, () => ({ ...SETTINGS, maxAttempts: 5 }), probe);
+
+    await host.fire("agent/turn-stopping", { turn: 1 });
+    inbox.nextStep.length = 0;
+    await host.fire("agent/turn-stopping", { turn: 1 });
+
+    expect(inbox.calls, "第一家先用完 1 次后，第二家不能拿自己的 5 次接着续写").toHaveLength(1);
   });
 });
 
@@ -191,6 +264,7 @@ describe("U14 · max-tokens 粘住场景不能多余续写", () => {
     // 第一步：被截断 → 应当续写一次。
     await host.fire("agent/turn-stopping", { turn: 1 });
     expect(inbox.calls, "第一次截断要续写").toHaveLength(1);
+    inbox.nextStep.length = 0; // 宿主消费续写消息后再跑下一步。
 
     // 续写后模型正常收尾。
     finish = "stop";

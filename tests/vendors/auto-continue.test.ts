@@ -10,10 +10,12 @@
  *
  * 这里用最小假 ctx 验证「注册了哪些事件、返回什么」—— 真机行为由宿主保证。
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { applyAutoContinue } from "../../src/vendors/auto-continue";
+import { applyAutoContinue, resetAutoContinueBudgetForTest } from "../../src/vendors/auto-continue";
 import { DEFAULT_AUTO_CONTINUE } from "../../src/core/switching/auto-continue";
+
+beforeEach(() => resetAutoContinueBudgetForTest());
 
 /** 记录事件注册的最小假 ctx。 */
 function fakeCtx() {

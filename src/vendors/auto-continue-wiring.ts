@@ -18,8 +18,11 @@
  *
  * ## 三家各调一次会不会重复注册
  *
- * 会 —— 但**这是既有设计**，不是本模块引入的问题：`cordis` 的 profile 行各在自己的
- * 作用域里 apply，`applyAutoContinue` 注册的事件也跟着那个作用域走。
+ * 会，但**不会再重复续写**：`agent/turn-stopping` 是串行事件，`applyAutoContinue`
+ * 在追加前检查 `inbox.nextStep`，前一家追加后后两家会直接跳过；续写次数也改为
+ * 模块级共享预算，三家不会各自拥有一份额度。
+ *
+ * `cordis` 的 profile 行各在自己的作用域里 apply，监听器跟着那个作用域走。
  * 真正需要避免的是「**同一个作用域**里注册两份」，而三家的 `apply` 各在自己的行里跑，
  * 天然不重叠。
  *
@@ -61,7 +64,10 @@ interface HostContext {
 }
 
 /** 宿主的 inbox（形状照抄 `app.asar`：`nextStep` 是只读数组，`append(target, message)`）。 */
-type CurrentInbox = { append(target: "next-step", message: unknown): unknown };
+type CurrentInbox = {
+  readonly nextStep?: readonly unknown[];
+  append(target: "next-step", message: unknown): unknown;
+};
 
 /** 一个记录的 `isRecord` 窄化（跨远程边界的形状不可信）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {

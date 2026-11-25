@@ -60,7 +60,11 @@ export interface AutoContinueProbe {
    * 2. `append` 的第一个参数是 **target 字面量**。原来只传一个 message，
    *    运行时会把 message 当成 target，消息根本进不了 inbox。
    */
-  inbox?: { append(target: "next-step", message: unknown): unknown };
+  inbox?: {
+    /** 宿主真实 API 里有这个只读数组；串行监听器用它避免重复追加。 */
+    readonly nextStep?: readonly unknown[];
+    append(target: "next-step", message: unknown): unknown;
+  };
   /**
    * 最近一次的结束原因（宿主 `finish.kind`：`"max-tokens"` 表示被输出上限截断）。
    *
@@ -144,6 +148,66 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
+ * 同一会话、同一回合的自动继续预算（**模块级共享**）。
+ *
+ * 生产里 commandcode / opendesign / opencode 三家会各调用一次 `applyAutoContinue`，
+ * 而宿主事件是全局串行/瀑布调用。若预算留在各自闭包里，就会出现：
+ *
+ * - 三家各追加一条“继续”；
+ * - 第一家用满次数后，第二家还有自己的次数，接着续写。
+ *
+ * 两者都会放大模型调用与账单。这里把计数提到模块级，三家共用一份；键仍严格按
+ * `(sessionId, turn)` 隔离，不跨会话、不跨回合。模块只保留最多 1024 个键，超过时
+ * 丢最旧的一条，避免长跑宿主无限增长。
+ */
+interface TurnBudget {
+  attempts: number;
+  /** 首次消费预算时固定的上限；后续三家监听器必须沿用，不能各带一份。 */
+  limit: number;
+}
+
+const budgetsByTurn = new Map<string, TurnBudget>();
+
+/** 生成预算键；内容固定，不用可能包含分隔符的字符串拼接。 */
+function attemptKey(sessionId: string, turn: number): string {
+  return JSON.stringify([sessionId, turn]);
+}
+
+/** 读取共享预算。 */
+function budgetOf(sessionId: string, turn: number): TurnBudget | undefined {
+  return budgetsByTurn.get(attemptKey(sessionId, turn));
+}
+
+/** 当前有效上限：已有预算用首次固定的值，否则用本次监听器的设置。 */
+function budgetLimitOf(sessionId: string, turn: number, fallback: number): number {
+  return budgetOf(sessionId, turn)?.limit ?? fallback;
+}
+
+/** 已消费次数。 */
+function attemptsOf(sessionId: string, turn: number): number {
+  return budgetOf(sessionId, turn)?.attempts ?? 0;
+}
+
+/** 记一次共享预算，并做有界清理。 */
+function bumpAttempts(sessionId: string, turn: number, limit: number): void {
+  const key = attemptKey(sessionId, turn);
+  const previous = budgetsByTurn.get(key);
+  budgetsByTurn.set(key, {
+    attempts: (previous?.attempts ?? 0) + 1,
+    limit: previous?.limit ?? limit,
+  });
+  if (budgetsByTurn.size > 1024) {
+    const oldest = budgetsByTurn.keys().next().value;
+    if (oldest !== undefined) budgetsByTurn.delete(oldest);
+  }
+}
+
+/** 仅供测试隔离：生产代码不调用。 */
+export function resetAutoContinueBudgetForTest(): void {
+  budgetsByTurn.clear();
+}
+
+/**
  * 注册自动继续的两个事件。
  *
  * `settings` 是**读取函数**而不是值快照（2026-10-30 修）。
@@ -168,18 +232,6 @@ export function applyAutoContinue(
   probe?: AutoContinueProbe,
 ): () => void {
   const disposers: (() => void)[] = [];
-
-  // Both retries and truncation continuations share this session/turn budget.
-  const attemptsByTurn = new Map<string, number>();
-  const keyOf = (sessionId: string, turn: number): string => JSON.stringify([sessionId, turn]);
-  const attemptsOf = (sessionId: string, turn: number): number => attemptsByTurn.get(keyOf(sessionId, turn)) ?? 0;
-  const bump = (sessionId: string, turn: number): void => {
-    attemptsByTurn.set(keyOf(sessionId, turn), attemptsOf(sessionId, turn) + 1);
-    if (attemptsByTurn.size > 1024) {
-      const oldest = attemptsByTurn.keys().next().value;
-      if (oldest !== undefined) attemptsByTurn.delete(oldest);
-    }
-  };
 
   /**
    * `agent/request-error` 是 **waterfall**，签名是 `(payload, next) => decision`。
@@ -226,11 +278,12 @@ export function applyAutoContinue(
       const signal = record.signal instanceof AbortSignal ? record.signal : undefined;
       const current = settings();
       const attempts = attemptsOf(sessionId, turn);
-      if (!shouldRetryFailure(current, code, attempts)) {
+      const limit = budgetLimitOf(sessionId, turn, current.maxAttempts);
+      if (!shouldRetryFailure({ ...current, maxAttempts: limit }, code, attempts)) {
         // 不归我们重试：**必须交棒**，否则会截断宿主自己的重试链。
         return await handOff();
       }
-      bump(sessionId, turn);
+      bumpAttempts(sessionId, turn, limit);
       /**
        * **按配置的间隔等待再重试**。
        *
@@ -263,10 +316,22 @@ export function applyAutoContinue(
       if (sessionId === undefined || typeof turn !== "number" || !Number.isSafeInteger(turn) || turn < 0) return undefined;
       const inbox = probe.inbox;
       if (inbox === undefined) return undefined;
+      /*
+       * **串行监听器去重**（2026-11-25 P0）。
+       *
+       * 宿主 `agent/turn-stopping` 是 serial，三家监听器会依次执行。前一家追加后，
+       * `inbox.nextStep` 已经非空；后一家必须在这里停下，否则一次截断会追加三条
+       * “继续”，下一轮模型会收到重复指令，账单也被放大。
+       *
+       * 只读检查、不修改数组；宿主消费 nextStep 后会把长度归零，同一 turn 的下一拍
+       * 仍可继续（次数由上面的共享预算限制）。
+       */
+      if ((inbox.nextStep?.length ?? 0) > 0) return undefined;
       const reason = probe.lastFinishReason?.(sessionId, turn);
       const current = settings();
-      if (!shouldContinueOnTruncate(current, reason, attemptsOf(sessionId, turn))) return undefined;
-      bump(sessionId, turn);
+      const limit = budgetLimitOf(sessionId, turn, current.maxAttempts);
+      if (!shouldContinueOnTruncate({ ...current, maxAttempts: limit }, reason, attemptsOf(sessionId, turn))) return undefined;
+      bumpAttempts(sessionId, turn, limit);
       // 推一条消息 → 宿主随后检查 `inbox.nextStep.length` 时不再为 0，本轮继续。
       // 必须带 target（宿主 Inbox.append(target, message)）：只传消息的话，运行时会把消息当成 target，本轮照样结束。
       inbox.append("next-step", continuationMessage());
@@ -278,6 +343,10 @@ export function applyAutoContinue(
   return () => {
     for (const dispose of disposers) dispose();
     disposers.length = 0;
-    attemptsByTurn.clear();
+    /*
+     * **不清共享预算**：三家各自持有注销器，卸掉其中一家不能把另外两家的
+     * `(sessionId, turn)` 计数也抹掉，否则那两家会重新获得一份续写额度。
+     * 预算自身有 1024 条上限，且只按会话/回合增长，不需要在这里清理。
+     */
   };
 }
