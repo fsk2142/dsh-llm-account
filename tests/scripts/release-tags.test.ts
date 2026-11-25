@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 // **直接 import 生产实现** —— 这是本文件存在的意义。
-import { previousTagOf, statusEntries, statusPaths } from "../../scripts/release-git.mjs";
+import { currentBranch, isAncestor, previousTagOf, statusEntries, statusPaths } from "../../scripts/release-git.mjs";
 
 /** 与 `release.mjs` 的机密文件规则一致（仅用于断言，不复制被测逻辑）。 */
 const SECRET_FILE = /(^|\/)(\.env[^/]*|auth\.json|credentials[^/]*|.*\.pem|.*\.key|.*cookies.*\.(sqlite|db))$/i;
@@ -135,6 +135,25 @@ describe("statusPaths：路径解析（A02 / F02）", () => {
     const paths = statusPaths(repo);
     expect(paths).toContain("src/notes.txt");
     expect(paths.filter((path) => SECRET_FILE.test(path))).toEqual([]);
+  });
+});
+
+describe("release preflight：分支与快进关系", () => {
+  it("识别当前分支，detached HEAD 直接失败", () => {
+    const repo = tempRepo();
+    commitAs(repo, "feat: base");
+    expect(currentBranch(repo)).toBe("main");
+    git(repo, "checkout", "-q", "--detach");
+    expect(() => currentBranch(repo)).toThrow(/detached/u);
+  });
+
+  it("远端是 HEAD 祖先时才可快进发布", () => {
+    const repo = tempRepo();
+    commitAs(repo, "feat: base");
+    const base = git(repo, "rev-parse", "HEAD");
+    commitAs(repo, "fix: local ahead");
+    expect(isAncestor(repo, base, "HEAD")).toBe(true);
+    expect(isAncestor(repo, "HEAD", base)).toBe(false);
   });
 });
 

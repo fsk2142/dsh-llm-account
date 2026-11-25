@@ -52,6 +52,21 @@ describe("docs/RELEASING.md 不教危险操作（V55-02）", () => {
   });
 });
 
+describe("docs/HANDOVER-2.0.0.md 不教绕过发布防护的操作", () => {
+  const handover = doc("docs/HANDOVER-2.0.0.md");
+
+  it("不出现全量暂存与分两次推送", () => {
+    expect(handover).not.toMatch(/git\s+add\s+-A\b/u);
+    expect(handover).not.toMatch(/git\s+push\s+origin\s+main\s*\n\s*git\s+push\s+origin\s+refs\/tags\//u);
+  });
+
+  it("发布与本地安装都指向现行安全入口", () => {
+    expect(handover).toContain("docs/RELEASING.md");
+    expect(handover).toContain("plugin_manager");
+    expect(handover).not.toContain("Rename-Item -LiteralPath $target");
+  });
+});
+
 describe("README 的配置字段与 schema 一致", () => {
   /** README 文本。 */
   const readme = doc("README.md");
@@ -82,5 +97,18 @@ describe("README 的配置字段与 schema 一致", () => {
     for (const field of ["autoContinue", "autoContinueMaxAttempts", "autoContinueIntervalMs"]) {
       expect(readme, `README 应说明 ${field}`).toContain(field);
     }
+  });
+});
+
+describe("docs/client.md 的额度读取超时契约", () => {
+  const client = doc("docs/client.md");
+  const timeoutRow = client.split("\n").find((line) => line.startsWith("| 经常获取不到账户信息"));
+
+  it("单账号读取 30s 超时后 abort，且不自动重试", () => {
+    expect(timeoutRow, "结论表应保留额度读取超时这一行").toBeDefined();
+    expect(timeoutRow).toContain("30s");
+    expect(timeoutRow).toMatch(/abort/iu);
+    expect(timeoutRow).toContain("不自动重试");
+    expect(timeoutRow).not.toContain("重试一次");
   });
 });

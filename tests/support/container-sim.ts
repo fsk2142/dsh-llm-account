@@ -305,7 +305,7 @@ export interface SimElement {
  */
 export function expandSim(node: unknown, depth = 0): unknown[] {
   if (node === null || node === undefined || typeof node !== "object") return [node];
-  if (depth > 20) throw new Error("mini-react: the element tree is deeper than 20 levels");
+  if (depth > 40) throw new Error("mini-react: the element tree is deeper than 40 levels");
   if (Array.isArray(node)) return node.flatMap((child) => expandSim(child, depth + 1));
   const element = node as SimElement;
   if (!("props" in element) || !("type" in element)) return [];

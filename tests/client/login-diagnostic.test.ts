@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import { describeVelaOutput, parseVelaPrompt } from "../../src/vendors/opendesign/login";
 import { dictionaryOf } from "../../src/client/copy";
 import { AccountsPanel } from "../../src/client/accounts-panel";
+import { failureText } from "../../src/client/failure-text";
 import { elementsOfSim, textsOfSim } from "../support/container-sim";
 
 const t = dictionaryOf("zh");
@@ -48,8 +49,20 @@ describe("describeVelaOutput：把 vela 的输出变成可展示的诊断", () =
     const detail = describeVelaOutput(`failed with ${keyLike} and ${ctrlLike}`);
     expect(detail).not.toContain(keyLike);
     expect(detail).not.toContain(ctrlLike);
-    expect(detail).toContain("sk-***");
-    expect(detail).toContain("vela_***");
+    expect(detail).toContain("[redacted-key]");
+  });
+
+  it("邮箱、账号 ref、本机路径与激活 URL 查询值也要脱敏，病因保留", () => {
+    const detail = describeVelaOutput(
+      String.raw`EACCES C:\Users\FakeUser\vela.exe DSH_LLM_ACCOUNT_OPENDESIGN_fake_user_example_com_ab12cd fake@example.com https://open-design.ai/activate?deviceId=dev-1&userCode=ABCD`,
+    );
+    expect(detail).toContain("EACCES");
+    expect(detail).toContain("vela.exe");
+    expect(detail).not.toContain("FakeUser");
+    expect(detail).not.toContain("fake@example.com");
+    expect(detail).not.toContain("DSH_LLM_ACCOUNT_OPENDESIGN_");
+    expect(detail).not.toContain("dev-1");
+    expect(detail).not.toContain("ABCD");
   });
 
   it("超长时截断并标注长度", () => {
@@ -134,5 +147,31 @@ describe("界面：诊断原文真的显示在面板里", () => {
     const text = textsOfSim(tree).join(" ");
     expect(text).toContain(t("account.reason.timeout"));
     expect(text).toContain("raw output");
+  });
+
+  it("login.detail 渲染前脱敏假邮箱、账号 ref、Windows 路径与 URL 查询值，但保留错误码和病因", () => {
+    const detail = String.raw`EACCES user@example.com DSH_LLM_ACCOUNT_OPENDESIGN_user_example_com_ab12cd spawn C:\Users\Alice\AppData\vela.exe; https://open-design.ai/activate?deviceId=dev-123&email=user%40example.com&code=ABCD`;
+    const tree = panelWith({ state: "failed", reason: "timeout", detail });
+    const block = elementsOfSim(tree).find((element) => element.props["data-login-detail"] !== undefined);
+    expect(block, "应当有诊断块").toBeDefined();
+    const shown = textsOfSim(block).join(" ");
+    expect(shown).toContain("EACCES");
+    expect(shown).toContain("vela.exe");
+    expect(shown).toContain("https://open-design.ai/activate");
+    expect(shown).not.toContain("user@example.com");
+    expect(shown).not.toContain("DSH_LLM_ACCOUNT_OPENDESIGN_");
+    expect(shown).not.toContain("Alice");
+    expect(shown).not.toContain("dev-123");
+    expect(shown).not.toContain("user%40example.com");
+    expect(shown).not.toContain("ABCD");
+    expect(block!.props["data-login-detail"]).toBe(shown);
+    expect(textsOfSim(tree).join(" ")).toContain(t("account.reason.timeout"));
+  });
+
+  it("failureText 的未知诊断回退也复用脱敏，不把邮箱原样印到界面", () => {
+    const shown = failureText(t, "EACCES user@example.com while reading quota");
+    expect(shown).toContain("EACCES");
+    expect(shown).toContain("while reading quota");
+    expect(shown).not.toContain("user@example.com");
   });
 });

@@ -55,6 +55,7 @@ import {
   type VendorSnapshot,
 } from "./page-state";
 import type { LoginView } from "./account-card";
+import { redactDiagnostic } from "../core/diagnostic-text";
 import {
   modelAvailableIn,
   modelQuotaOf as modelQuotaOf_,
@@ -214,7 +215,7 @@ export async function discoverVendors(ctx: ClientSeamContext, entries: readonly 
     // 只有装配故障会走到这里（宿主契约：宿主侧失败走 ok:false 分支，不 reject）。
     return {
       snapshots: [],
-      problem: { kind: "describe-failed", detail: error instanceof Error ? error.message : String(error) },
+      problem: { kind: "describe-failed", detail: errorMessageOf(error) },
     };
   }
   const unwrapped = unwrapRemote(described);
@@ -315,16 +316,20 @@ function unwrapRemote(result: unknown): { ok: true; value: unknown } | { ok: fal
   return { ok: true, value: result };
 }
 
+function errorMessageOf(error: unknown): string {
+  return redactDiagnostic(error instanceof Error ? error.message : String(error));
+}
+
 /** 把宿主的 `RemoteError` 压成一行可读文本（`code` 与 message 都带，排查要靠 code）。 */
 function describeRemoteError(error: unknown): string {
-  if (typeof error === "string") return error;
+  if (typeof error === "string") return errorMessageOf(error);
   if (typeof error === "object" && error !== null) {
     const record = error as { code?: unknown; message?: unknown; name?: unknown };
     const code = typeof record.code === "string" ? record.code : undefined;
     const message = typeof record.message === "string" ? record.message : JSON.stringify(error);
-    return code === undefined ? message : `${code}: ${message}`;
+    return errorMessageOf(code === undefined ? message : `${code}: ${message}`);
   }
-  return String(error);
+  return errorMessageOf(error);
 }
 
 /** 宿主返回值的形状摘要（诊断用，不含任何值）。 */
@@ -470,7 +475,7 @@ async function remoteValueDetailed<T>(
     raw = await result;
   } catch (error: unknown) {
     // 只有装配层面的故障会走到这里（读口调用本身不该 reject），但仍要给出原因而不是空话。
-    return { ok: false, problem: error instanceof Error ? error.message : String(error) };
+    return { ok: false, problem: errorMessageOf(error) };
   }
   const unwrapped = unwrapRemote(raw);
   return unwrapped.ok ? { ok: true, value: unwrapped.value as T | undefined } : { ok: false, problem: unwrapped.error };
@@ -637,7 +642,7 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
           });
         },
         (error: unknown) => {
-          failure = error instanceof Error ? error.message : String(error);
+          failure = errorMessageOf(error);
           notify();
         },
       );
@@ -680,6 +685,21 @@ export function mountUsageRemote(ctx: ClientSeamContext, onChange?: (namespace: 
 export type AccountActionResult = { ok: true; value: unknown } | { ok: false; problem: string };
 
 /**
+ * 等一次账户写调用落地并拆开宿主信封。
+ *
+ * 宿主侧拒绝是 resolve 的 `{ ok: false, error }`，只有装配故障会 reject；两种失败都必须
+ * 归进同一个结果，调用方才能统一做到「失败不刷新、失败有提示」。
+ */
+async function accountMutationResult(pending: Promise<unknown>): Promise<AccountActionResult> {
+  try {
+    const unwrapped = unwrapRemote(await pending);
+    return unwrapped.ok ? { ok: true, value: unwrapped.value } : { ok: false, problem: unwrapped.error };
+  } catch (error) {
+    return { ok: false, problem: errorMessageOf(error) };
+  }
+}
+
+/**
  * 派发一次账户操作。
  *
  * 名称与密钥都在**边界上 trim**：用户粘贴的密钥常带换行/尾随空格，名称常带无意空格，
@@ -695,21 +715,6 @@ export function dispatchAccountAction(
   action: AccountAction,
 ): Promise<AccountActionResult> | undefined {
   if (usage === undefined) return undefined;
-  /**
-   * 解开宿主信封。
-   *
-   * 非信封（裸载荷 / `undefined`）一律按成功处理：老宿主可能直接 resolve 结果本身，
-   * 那种形状没有 `ok` 字段，按 `unwrapRemote` 的同一条规则。
-   */
-  const unwrap = async (pending: Promise<unknown>): Promise<AccountActionResult> => {
-    const result = await pending;
-    if (typeof result !== "object" || result === null || !("ok" in result)) {
-      return { ok: true, value: result };
-    }
-    const envelope = result as { ok?: unknown; value?: unknown; error?: unknown };
-    if (envelope.ok === false) return { ok: false, problem: describeRemoteError(envelope.error) };
-    return { ok: true, value: envelope.value };
-  };
 
   switch (action.kind) {
     case "add": {
@@ -718,20 +723,20 @@ export function dispatchAccountAction(
       if (label === "") return undefined;
       const key = action.key.trim();
       // 空密钥只建条目：`key` 字段整个不传，而不是传空串（那会被当成「要写空密钥」）。
-      return unwrap(usage.addAccount(vendor, key === "" ? { label } : { label, key }));
+      return accountMutationResult(usage.addAccount(vendor, key === "" ? { label } : { label, key }));
     }
     case "rename": {
       if (action.ref === undefined || action.ref === null) return undefined;
       const label = action.label.trim();
       if (label === "") return undefined;
-      return unwrap(usage.renameAccount(vendor, action.ref, label));
+      return accountMutationResult(usage.renameAccount(vendor, action.ref, label));
     }
     case "key": {
       // 空密钥不提交：那等于把账号的密钥清掉，用户不会想用这个方式做。
       if (action.ref === undefined || action.ref === null) return undefined;
       const key = action.key.trim();
       if (key === "") return undefined;
-      return unwrap(usage.replaceKey(vendor, action.ref, key));
+      return accountMutationResult(usage.replaceKey(vendor, action.ref, key));
     }
     case "restoreName": {
       /**
@@ -745,7 +750,7 @@ export function dispatchAccountAction(
        */
       if (action.ref === undefined || action.ref === null) return undefined;
       if (typeof usage.restoreAccountName !== "function") return undefined;
-      return unwrap(usage.restoreAccountName(vendor, action.ref));
+      return accountMutationResult(usage.restoreAccountName(vendor, action.ref));
     }
     case "select": {
       /**
@@ -760,7 +765,7 @@ export function dispatchAccountAction(
        * `null` 当成「没选」而提前 return —— 那会让「取消固定」这个操作失效。
        */
       if (action.ref === undefined) return undefined;
-      return unwrap(usage.selectAccount(vendor, action.ref));
+      return accountMutationResult(usage.selectAccount(vendor, action.ref));
     }
   }
 }
@@ -1002,7 +1007,7 @@ function renderWithBoundary(component: () => ReactElement): ReactElement {
  * @returns 错误面板元素。
  */
 function renderBoundaryPanel(error: unknown): ReactElement {
-  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  const detail = redactDiagnostic(error instanceof Error ? (error.stack ?? error.message) : String(error));
   return createElement(
     "div",
     { "data-page": "llm-account", "data-render-error": "true", className: CSS_CLASS.root },
@@ -1083,6 +1088,35 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * 没有失败分支）。用户一改字段或取消就清掉。
      */
     const [actionError, setActionError] = useState<string | undefined>(undefined);
+    /** 切换 / 移除 / 排序 / 模型分配这类没有草稿的直接写失败，按厂商显示。 */
+    const [mutationErrors, setMutationErrors] = useState<Record<string, string | undefined>>({});
+    const clearMutationError = (vendor: string): void => {
+      setMutationErrors((current) => (current[vendor] === undefined ? current : { ...current, [vendor]: undefined }));
+    };
+    const noteMutationError = (vendor: string, problem: string): void => {
+      const error = redactDiagnostic(problem);
+      setMutationErrors((current) => ({ ...current, [vendor]: error }));
+    };
+    /**
+     * 直接账户写：只有解包成功才刷新目标厂商。
+     *
+     * `pending === undefined` 表示调用根本没发出去（远程面/方法缺席）；它不同于旧宿主
+     * 成功时 resolve 的裸 `undefined`，后者会走进 `accountMutationResult` 并正常刷新。
+     */
+    const runAccountMutation = (vendor: string, pending: Promise<unknown> | undefined): void => {
+      clearMutationError(vendor);
+      if (pending === undefined) {
+        noteMutationError(vendor, t("account.serviceNotReady"));
+        return;
+      }
+      void accountMutationResult(pending).then((result) => {
+        if (!result.ok) {
+          noteMutationError(vendor, result.problem);
+          return;
+        }
+        bumpAccountRevision(vendor);
+      });
+    };
     /**
      * 挂载后的**第一次**状态读取是否已经发生：只有那一次允许吃模块级缓存。
      * 修订号变化（凭据 / 账号操作）意味着数据真的变了，必须现读（见 `STATUS_READING_TTL_MS`）。
@@ -1191,6 +1225,19 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
      * 键是账号 ref —— 它在三家之间唯一（各厂商自己生成），不带 vendor 前缀也不会串。
      */
     const latestAccountModels = useRef(new Map<string, readonly string[]>());
+    /** 宿主已确认的模型集合：最新一次乐观写失败时回滚到它，而不是回滚到另一个失败意图。 */
+    const confirmedAccountModels = useRef(new Map<string, readonly string[]>());
+    /** 每个账号的写意图代数：只有仍是最新意图失败时，才允许回滚乐观镜像。 */
+    const modelIntentVersions = useRef(new Map<string, number>());
+
+    /** 状态读数是服务端确认值；用它维护回滚基线，不被在途的乐观选择覆盖。 */
+    const rememberConfirmedAccountModels = (reading: VendorUsageStatus): void => {
+      for (const account of reading.accounts) {
+        if (typeof account !== "object" || account === null) continue;
+        const models = reading.modelRules?.find((rule) => rule.account === account.ref)?.models ?? [];
+        confirmedAccountModels.current.set(account.ref, [...models]);
+      }
+    };
 
     /**
      * **按账号**串行化模型写入（2026-11-02 修 C04 最终持久化）。
@@ -1277,7 +1324,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         .catch((error: unknown) => {
           // 装配层故障（宿主抛错）：同样不能静默 —— 用户点了保存，界面上必须有个交代。
           setState((current) =>
-            noteSaveResult(current, ns, error instanceof Error ? error.message : String(error)),
+            noteSaveResult(current, ns, errorMessageOf(error)),
           );
         })
         .then(() => {
@@ -1379,7 +1426,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         .catch((error: unknown) => {
           console.warn(
             "[dsh-llm-account] could not read the vendor snapshots:",
-            error instanceof Error ? error.message : String(error),
+            errorMessageOf(error),
           );
         });
       if (usage !== undefined) {
@@ -1392,6 +1439,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         for (const entry of targets) {
           const cached = useCache ? statusReadings.get(entry.providerId) : undefined;
           if (cached !== undefined) {
+            rememberConfirmedAccountModels(cached);
             setStatuses((current) => ({ ...current, [entry.providerId]: cached }));
             setStatusProblems((current) => ({ ...current, [entry.providerId]: undefined }));
             setStatusLoading((current) => ({ ...current, [entry.providerId]: false }));
@@ -1403,6 +1451,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
             if (!alive) return;
             if (status !== undefined) {
               const reading = noteStatusReading(entry.providerId, status);
+              rememberConfirmedAccountModels(reading);
               setStatuses((current) => ({ ...current, [entry.providerId]: reading }));
             }
             setStatusProblems((current) => ({ ...current, [entry.providerId]: problem }));
@@ -1784,7 +1833,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
           );
         } catch (error) {
           if (!alive) return;
-          setUsageStatsProblem(error instanceof Error ? error.message : String(error));
+          setUsageStatsProblem(errorMessageOf(error));
         }
       };
       try {
@@ -1800,7 +1849,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         };
       } catch (error) {
         alive = false;
-        setUsageStatsProblem(error instanceof Error ? error.message : String(error));
+        setUsageStatsProblem(errorMessageOf(error));
         return () => {
           alive = false;
         };
@@ -1967,6 +2016,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         ...(statusLoading[entry.providerId] === true ? { loading: true } : {}),
       })),
       ...(actionError === undefined ? {} : { actionError }),
+      mutationErrors,
       // 按账户刷新：每个账号行的刷新按钮 → 重读**该账号所属厂商**的目录（见 refreshVendorCatalog）。
       onRefreshModels: (vendor: string) => refreshVendorCatalog(vendor),
       onOpenAction: (vendor: string, action: { kind: AccountAction["kind"]; ref?: string; label?: string }) => {
@@ -2007,15 +2057,16 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
         setState((current) => closeAction(current));
       },
       onSelect: (vendor: string, ref: string | null) => {
-        void usage?.selectAccount(vendor, ref).then(() => bumpAccountRevision(vendor));
+        runAccountMutation(vendor, callRemote(() => usage?.selectAccount(vendor, ref)));
       },
       onRemove: (vendor: string, ref: string) => {
-        void usage?.removeAccount(vendor, ref).then(() => bumpAccountRevision(vendor));
+        runAccountMutation(vendor, callRemote(() => usage?.removeAccount(vendor, ref)));
       },
       onMove: (vendor: string, ref: string, toIndex: number) => {
-        void usage?.moveAccount(vendor, ref, toIndex).then(() => bumpAccountRevision(vendor));
+        runAccountMutation(vendor, callRemote(() => usage?.moveAccount(vendor, ref, toIndex)));
       },
       onSetAccountModels: (vendor: string, ref: string, models: readonly string[]) => {
+        clearMutationError(vendor);
         /**
          * **先同步记下这次的选择**（2026-11-01 修 C04）。
          *
@@ -2026,7 +2077,16 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
          * `latestAccountModels` 是同步镜像：回调立刻读它，绕过两个窗口
          * （远程往返 + 重读状态）。
          */
+        const version = (modelIntentVersions.current.get(ref) ?? 0) + 1;
+        modelIntentVersions.current.set(ref, version);
         latestAccountModels.current.set(ref, models);
+        /** 只有这一次仍是最新意图时才回滚；后来还有更新意图就不能覆盖它。 */
+        const rollbackOptimistic = (): void => {
+          if (modelIntentVersions.current.get(ref) !== version) return;
+          const confirmed = confirmedAccountModels.current.get(ref);
+          if (confirmed === undefined) latestAccountModels.current.delete(ref);
+          else latestAccountModels.current.set(ref, confirmed);
+        };
         /**
          * **串行提交**（2026-11-02 修 C04 最终持久化）。
          *
@@ -2037,11 +2097,32 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
          */
         const previous = modelWriteQueues.current.get(ref) ?? Promise.resolve();
         const started = previous
-          // 前一次失败不该卡住这一次 —— 队列只保证顺序，不传错误。
           .catch(() => {})
           .then(async () => {
-            await usage?.setAccountModels?.(vendor, ref, models);
+            if (typeof usage?.setAccountModels !== "function") {
+              rollbackOptimistic();
+              noteMutationError(vendor, t("account.serviceNotReady"));
+              return;
+            }
+            const pending = callRemote(() => usage.setAccountModels!(vendor, ref, models));
+            if (pending === undefined) {
+              rollbackOptimistic();
+              noteMutationError(vendor, t("account.serviceNotReady"));
+              return;
+            }
+            const result = await accountMutationResult(pending);
+            if (!result.ok) {
+              rollbackOptimistic();
+              noteMutationError(vendor, result.problem);
+              return;
+            }
+            confirmedAccountModels.current.set(ref, [...models]);
+            clearMutationError(vendor);
             bumpAccountRevision(vendor);
+          })
+          .catch((error: unknown) => {
+            rollbackOptimistic();
+            noteMutationError(vendor, errorMessageOf(error));
           })
           .finally(() => {
             if (modelWriteQueues.current.get(ref) === started) modelWriteQueues.current.delete(ref);
@@ -2095,7 +2176,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                 downloadCsv(unwrapped.value);
               } catch (error) {
                 // 装配故障（宿主抛错）走这里；宿主侧的「拒绝」不会 reject，见上。
-                setExportError(error instanceof Error ? error.message : String(error));
+                setExportError(errorMessageOf(error));
               } finally {
                 setExportBusy(false);
               }
@@ -2126,7 +2207,7 @@ function createConnectedPageBody(options: ConnectedPageOptions): () => ReactElem
                   setUsageTick((current) => current + 1);
                 })
                 .catch((error: unknown) => {
-                  setClearError(error instanceof Error ? error.message : String(error));
+                  setClearError(errorMessageOf(error));
                 })
                 .finally(() => setClearBusy(false));
             },
@@ -3880,7 +3961,7 @@ export async function saveSettings(
   try {
     result = await settings.mutate(row, ops, revision);
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return errorMessageOf(error);
   }
   // 宿主契约：宿主侧失败**不 reject**，而是 resolve 成 `{ ok: false, error }`。
   // 不拆信封就会把一次被拒绝的保存当成成功——用户以为存上了，实际没有，

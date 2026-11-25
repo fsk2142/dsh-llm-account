@@ -59,7 +59,7 @@ declare module "@deepseek-ai/cordis" {
 import type { AccountPort, AccountState, CredentialPort, ModelRule, QuotaPort, VendorCapabilities } from "../../core/adapter";
 import { assignModelsToAccount, CREDENTIAL_REF_PATTERN, globalOrderOfVendor } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
-import { autoContinueEnabledOf, wireAutoContinue } from "../auto-continue-wiring";
+import { createAutoContinueSwitch, wireAutoContinue } from "../auto-continue-wiring";
 import type { IntentLog } from "../../core/recovery";
 import {
   createCredentialsPort,
@@ -273,6 +273,7 @@ export function apply(ctx: Context, config?: unknown): OpencodeBundle {
   };
 
   const settings = createSettingsPort(ctx, OPENCODE_SETTINGS_NS, SETTINGS_ROWS);
+  const autoContinueSwitch = createAutoContinueSwitch(settings, OPENCODE_SETTINGS_NS, document);
   const credentials = createCredentialsPort(ctx);
   const intents = intentLogFor(
     OPENCODE_SETTINGS_NS,
@@ -571,6 +572,7 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
       // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
       // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
       invalidateCatalogCandidates();
+      autoContinueSwitch.refresh();
       applyRoute();
     }),
   );
@@ -639,7 +641,7 @@ const adapter = createOpencodeAdapter({ ...deps, credentialGuard });
 wireAutoContinue(
   ctx,
   () => ({
-    enabled: autoContinueEnabledOf(document()),
+    enabled: autoContinueSwitch.enabled(),
     maxAttempts: typeof document()["autoContinueMaxAttempts"] === "number" ? (document()["autoContinueMaxAttempts"] as number) : 3,
     intervalMs: typeof document()["autoContinueIntervalMs"] === "number" ? (document()["autoContinueIntervalMs"] as number) : 2000,
   }),

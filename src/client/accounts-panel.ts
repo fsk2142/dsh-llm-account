@@ -10,6 +10,7 @@
  */
 import { createElement, type ReactElement, type ReactNode } from "react";
 
+import { redactDiagnostic } from "../core/diagnostic-text";
 import { accountAddSection, accountRows, reasonText, velaInstallGuide, type AccountCardProps, type LoginView } from "./account-card";
 import { CSS_CLASS } from "./css";
 import { UsageClearButton, UsageExportButton } from "./failure-list";
@@ -91,6 +92,13 @@ export interface AccountsPanelProps {
    * 面板只负责把它递给**正在编辑的那一家**（动作里带着厂商），与 `action` 同一条路由。
    */
   actionError?: string | undefined;
+  /**
+   * 账户直接写操作（切换 / 移除 / 排序 / 模型分配）的失败原因，按厂商路由。
+   *
+   * 与编辑器里的 `actionError` 分开：这些动作没有草稿，失败后原行与顺序必须保持不变，
+   * 错误也不能借用别家的编辑器渲染。
+   */
+  mutationErrors?: Readonly<Record<string, string | undefined>>;
   /** 覆盖某个账号可用的模型。 */
   onSetAccountModels?: (vendor: string, ref: string, models: readonly string[]) => void;
   /**
@@ -238,6 +246,24 @@ export function AccountsPanel(props: AccountsPanelProps): ReactElement {
           },
           `${t("usage.clearFailed")}：${props.clearError}`,
         ),
+    // 账户直接写操作没有编辑器草稿，失败必须落在对应厂商旁；code 与 message 都保留供排查。
+    ...vendors.flatMap((group) => {
+      const raw = props.mutationErrors?.[group.entry.providerId];
+      if (raw === undefined || raw === "") return [];
+      const error = redactDiagnostic(raw);
+      return [
+        createElement(
+          "small",
+          {
+            key: `${group.entry.providerId}-mutation-error`,
+            "data-account-action-error": group.entry.providerId,
+            "data-account-action-error-detail": error,
+            className: CSS_CLASS.failure,
+          },
+          error,
+        ),
+      ];
+    }),
     createElement(
       "details",
       {
@@ -439,11 +465,12 @@ function loginNotes(props: AccountsPanelProps, vendor: string): ReactNode[] {
     // 挂在**这里**（`loginNotes`）而不是 `AccountCard` 的 `loginSection` —— 账户面板走的是
     // `accountRows` + 本函数这条路，`AccountCard` 整组件不参与渲染，挂那边等于永不显示。
     if (login.detail !== undefined && login.detail !== "") {
+      const detail = redactDiagnostic(login.detail);
       notes.push(
         createElement(
           "pre",
-          { key: `${vendor}-login-detail`, "data-login-detail": login.detail, className: CSS_CLASS.diagnostic },
-          login.detail,
+          { key: `${vendor}-login-detail`, "data-login-detail": detail, className: CSS_CLASS.diagnostic },
+          detail,
         ),
       );
     }
@@ -455,8 +482,9 @@ function loginNotes(props: AccountsPanelProps, vendor: string): ReactNode[] {
     const guide = velaInstallGuide(props.t, login.reason, () => props.onLoginBegin?.(vendor));
     if (guide !== null) notes.push(guide);
   }
-  const error = props.loginError?.[vendor];
-  if (error !== undefined) {
+  const rawError = props.loginError?.[vendor];
+  if (rawError !== undefined) {
+    const error = redactDiagnostic(rawError);
     notes.push(
       createElement(
         "small",
@@ -484,6 +512,7 @@ function accountPropsFor(props: AccountsPanelProps, group: AccountsPanelVendor):
     onCancelAction: props.onCancelAction,
     onSelect: (ref) => props.onSelect(vendor, ref),
     onRemove: (ref) => props.onRemove(vendor, ref),
+    ...(props.onMove === undefined ? {} : { onMove: (ref: string, toIndex: number) => props.onMove?.(vendor, ref, toIndex) }),
     onToggleExpand: (ref) => props.onToggleExpand(vendor, ref),
     ...(group.catalog === undefined ? {} : { catalog: group.catalog }),
     ...(group.catalogFailure === undefined ? {} : { catalogFailure: group.catalogFailure }),

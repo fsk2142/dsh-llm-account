@@ -15,7 +15,7 @@
  * 测试进程能正常退出本身就是句柄卫生的验尸报告。
  */
 import { createServer, request as httpRequest, type Server } from "node:http";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 
 import type { LoginStatus } from "../../src/core/adapter";
 import { accountRef } from "../../src/core/accounts";
@@ -436,6 +436,93 @@ it("成功路径：whoami 通过之后才 storeKey，状态推到 success 且服
   expect(await login.status()).toEqual({ state: "success" });
   const rebind = await listenOn(port);
   await closeServer(rebind);
+});
+
+it("storeKey 挂起期间取消：先立即 cancelled，写入完成后以 success 为准", async () => {
+  let releaseStore: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    releaseStore = resolve;
+  });
+  const stored: string[] = [];
+  let storeSettled = false;
+  const storeKey = vi.fn(async (_ref: string, key: string) => {
+    stored.push(key);
+    await gate;
+    storeSettled = true;
+  });
+  const login = createLogin({
+    fetchImpl: okFetch,
+    apiBase: "https://api.example",
+    storeKey,
+  });
+
+  const { port, state } = await beginWaiting(login);
+  expect(await post(callbackUrl(port), credentials(state, "k-commit"))).toEqual({
+    status: 200,
+    body: { success: true },
+  });
+  await waitFor(() => stored.length === 1, "storeKey 已进入写入");
+  expect(storeKey).toHaveBeenCalledTimes(1);
+
+  await login.cancel();
+  expect(await login.status()).toEqual({ state: "failed", reason: "cancelled" });
+
+  releaseStore?.();
+  await waitFor(() => storeSettled, "storeKey 完成");
+  expect(await untilSettled(login), "落库事实必须覆盖取消前的乐观状态").toMatchObject({
+    state: "success",
+    detail: expect.stringContaining("取消前"),
+  });
+  expect(stored).toEqual(["k-commit"]);
+  expect(storeKey).toHaveBeenCalledTimes(1);
+});
+
+it("旧 storeKey 挂起时再次 begin：旧写入收尾不能抢先改写状态", async () => {
+  let releaseFirstStore: (() => void) | undefined;
+  const firstStore = new Promise<void>((resolve) => {
+    releaseFirstStore = resolve;
+  });
+  const stored: string[] = [];
+  const storeKey = vi.fn(async (_ref: string, key: string) => {
+    stored.push(key);
+    if (key === "k-old") await firstStore;
+  });
+  const login = createLogin({
+    fetchImpl: okFetch,
+    apiBase: "https://api.example",
+    storeKey,
+  });
+
+  const first = await beginWaiting(login);
+  expect(await post(callbackUrl(first.port), credentials(first.state, "k-old"))).toEqual({
+    status: 200,
+    body: { success: true },
+  });
+  await waitFor(() => stored.includes("k-old"), "旧 attempt 已进入写入");
+
+  // 先放行旧写入，让它的 #complete 续体排到队首，再调用 begin()：旧收尾与 teardown 会排在
+  // 同一批微任务里。新尝试一旦接管代际，旧收尾就不能先把状态面改成 success（哪怕新监听还在绑定）。
+  releaseFirstStore?.();
+  await Promise.resolve();
+  const secondBeginning = login.begin();
+  await Promise.resolve();
+  expect((await login.status()).state, "旧写入不得改写新尝试的状态面").toBe("waiting");
+
+  const secondStatus = await secondBeginning;
+  if (secondStatus.state !== "waiting" || secondStatus.authUrl === undefined) {
+    throw new Error(`第二次 begin() 没有进入 waiting：${JSON.stringify(secondStatus)}`);
+  }
+  const second = authParts(secondStatus.authUrl);
+  expect(second.state).not.toBe(first.state);
+  expect(await login.status()).toMatchObject({ state: "waiting", authUrl: secondStatus.authUrl });
+
+  expect(await post(callbackUrl(second.port), credentials(second.state, "k-new"))).toEqual({
+    status: 200,
+    body: { success: true },
+  });
+  expect(await untilSettled(login)).toEqual({ state: "success" });
+  expect(stored).toEqual(["k-old", "k-new"]);
+  expect(storeKey).toHaveBeenCalledTimes(2);
 });
 
 it("whoami 401 → failed / invalid-key，且不写凭据", async () => {

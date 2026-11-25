@@ -12,6 +12,8 @@
  * @module dsh-llm-account/src/client/failure-text
  */
 
+import { redactDiagnostic } from "../core/diagnostic-text";
+
 /** 端点短名 → 文案键（Command Code 的 `QUOTA_ENDPOINTS`、OpenCode 的窗口键）。 */
 const SHORT_NAMES: Readonly<Record<string, string>> = {
   whoami: "usage.failure.whoami",
@@ -42,7 +44,7 @@ const SHORT_NAMES: Readonly<Record<string, string>> = {
  * @returns 界面文案（可能是原文）。
  */
 export function failureText(t: (key: string) => string, raw: string): string {
-  const text = raw.trim();
+  const text = redactDiagnostic(raw).trim();
   if (text === "") return t("usage.failed");
   const accountQuota = /^quota:\s*\S+\s+"([^"]*)"\s+read failed\b/i.exec(text);
   if (accountQuota !== null) {

@@ -14,7 +14,7 @@
  * | `fix:` / `perf:` | **PATCH** | 修 bug、优化 |
  * | `chore:` / `docs:` / `test:` / `build:` / `ci:` / `refactor:` / `style:` | 不抬 | 内部变化 |
  *
- * ## `0.x` 特例（本仓库就在这个区间）
+ * ## `0.x` 特例（SemVer 规则）
  *
  * SemVer 规范第 4 条：主版本为 0 时公开 API 不稳定。所以这里**不把 0.x 的破坏性变更
  * 抬到 1.0.0** —— 那会假装「API 稳定了」。`0.x` 里破坏性变更抬 MINOR
@@ -143,12 +143,12 @@ function refExists(cwd, ref) {
 export function nextVersion({ cwd, since }) {
   const { raw, parts } = readVersion(cwd);
   // 起点优先级：显式 `--since` → `v<当前版本>` tag → **全部历史**。
-  //
-  // 第三条是**没有 tag 的仓库**（本仓库当前就是这样）的实际情况：一个 tag 都没有时
-  // `v0.1.0` 并不存在，硬用它只会得到 `ambiguous argument`。退回全部历史是对的语义
-  // ——「这个号从发布至今累积了哪些改动」。
+  // 显式起点不存在一定是调用方错误，不能静默改成全历史；只有缺省 tag 不存在才兜底。
   const preferred = since ?? `v${raw}`;
-  const wholeHistory = !refExists(cwd, preferred);
+  if (since !== undefined && !refExists(cwd, preferred)) {
+    throw new Error(`显式起点不存在：${preferred}`);
+  }
+  const wholeHistory = since === undefined && !refExists(cwd, preferred);
   // `undefined` = 读全部历史（见 `commitsSince` 的注释）。
   const commits = commitsSince(cwd, wholeHistory ? undefined : preferred);
   const counts = { major: 0, minor: 0, patch: 0, none: 0 };

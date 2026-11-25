@@ -235,7 +235,7 @@ dsh-app-boot  prepareProfilePatches → preflight → denial(row, base)
 
 | 需求 | 根因 / 约束 | 落地 |
 | --- | --- | --- |
-| 经常获取不到账户信息 | 单账号额度读取预算 8s，而 Command Code 端口是 `whoami` → 三端点并行的**两跳**，慢网下每跳 4-5s；端口自身端点预算 300s。8s 必然砍掉正常读取 | `QUOTA_READ_TIMEOUT_MS` 8s → **30s**，超时后**重试一次**（只重试超时，确定性失败不重试）；失败项改用**账号名称**（不再泄漏内部 ref） |
+| 经常获取不到账户信息 | 单账号额度读取预算 8s，而 Command Code 端口是 `whoami` → 三端点并行的**两跳**，慢网下每跳 4-5s；端口自身端点预算 300s。8s 必然砍掉正常读取 | `QUOTA_READ_TIMEOUT_MS` 8s → **30s**；超时后调用 `AbortController.abort()` 取消底层 HTTP/vela 请求，**不自动重试**；失败项改用**账号名称**（不再泄漏内部 ref） |
 | 不要按供应商分组 | 旧仪表盘按厂商分 section，两个标题两个区块 | 平铺列表：所有厂商的账号一份列表，供应商是账号名后的**徽标**（`data-account-vendor`，与设置页账户行同一类）；兜底窗口与固定标注按账号**自己所属厂商**算 |
 | 面板增加「转到设置」 | 宿主**没有**「打开设置对话框」的插件接缝（设置开关住在 ui-settings-general 的模块级 store，未注册为 cordis 服务；`ctx.layout` 只有 `selectPanel`/`toggleSidebar`/`openRightbar`/`closeRightbar`；shortcuts 不能程序化触发 —— app.asar 逐一排除） | 把**同一份设置页组件**注册进 `main` 插槽（key `llm-account-settings`，宿主明文支持的 keyed 面板）；按钮调 `layout.selectPanel`，宿主没这个接缝时用 `canSelectPanel` 探针**不渲染**按钮；面板带返回栏回仪表盘（不是 `selectPanel(null)`：用户从仪表盘来的） |
 | 重新获取模型应刷新单个账户 | 旧实现是面板头部一个全局按钮 + 计数器，点了对**全部厂商**重读 | 全局按钮删除；**每个账号行**一个刷新按钮（`data-account-refresh-models`），回调带厂商：目录是厂商级资源（`models()` 按厂商寻址），一次读取惠及该厂商所有账号但不碰别家；加载中禁用并转圈（`aria-busy` + `dsl-spin`） |

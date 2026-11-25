@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // `.mjs` 没有类型声明：显式给一个形状，避免 tsc 把它当 any 漏检。
-type NextVersion = (options: { cwd: string }) => {
+type NextVersion = (options: { cwd: string; since?: string }) => {
   current: string;
   next: string;
   level: string;
@@ -97,6 +97,11 @@ describe("next-version：按 conventional commits 抬版本", () => {
   it("中文冒号 `：` 也认（本仓库的提交信息里两种都有）", () => {
     const dir = repoWith("1.2.3", ["feat：新功能"]);
     expect(nextVersion({ cwd: dir }).next).toBe("1.3.0");
+  });
+
+  it("显式 --since 不存在时直接失败，不静默改算全部历史", () => {
+    const dir = repoWith("1.2.3", ["feat: 新功能"]);
+    expect(() => nextVersion({ cwd: dir, since: "v9.9.9" })).toThrow(/v9\.9\.9/u);
   });
 
   it("**起点 tag 存在时从 tag 算**，只计入 tag 之后的提交", () => {

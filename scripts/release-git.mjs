@@ -34,6 +34,35 @@ export function git(cwd, args, options = {}) {
 }
 
 /**
+ * 取当前分支名；detached HEAD 不允许发版。
+ * @param {string} cwd - 仓库目录。
+ * @returns 分支名。
+ */
+export function currentBranch(cwd) {
+  try {
+    return git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  } catch {
+    throw new Error("发版中止：当前是 detached HEAD，无法确认要推送的分支。");
+  }
+}
+
+/**
+ * 判断 ancestor 是否为 descendant 的祖先（可快进）。
+ * @param {string} cwd - 仓库目录。
+ * @param {string} ancestor - 祖先 ref。
+ * @param {string} descendant - 后代 ref。
+ * @returns 是否为祖先。
+ */
+export function isAncestor(cwd, ancestor, descendant) {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 判断一个 git ref 是否存在。
  * @param {string} cwd - 仓库目录。
  * @param {string} ref - 如 `refs/tags/v1.5.0`。

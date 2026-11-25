@@ -7,6 +7,7 @@
 | --- | --- | --- |
 | `scrub-commit-message-ids.mjs` | `git filter-branch --msg-filter` 的过滤体：把提交信息里的账号标识/本机用户名/本机路径脱敏 | 一次性，已完成（v1.6.0 那次历史重写） |
 | `run-msg-id-scrub.mjs` | 调 `filter-branch` 把上面那个过滤器接进 `cb4e1ea..HEAD` | 一次性，已完成 |
+| `run-msg-scrub.mjs` | 调通用 `scrub-commit-msg.mjs` 重写 `HEAD` 可达历史的提交信息 | 一次性，已归档；不要日常运行 |
 
 ## 为什么放在这里而不是删掉
 
@@ -16,8 +17,7 @@
 长期使用、**不要**归档的同类脚本：
 
 - `scripts/scrub-commit-msg.mjs` —— 通用的当前提交脱敏；
-- `scripts/run-msg-scrub.mjs` —— 它的驱动；
-- `scripts/scrub-history.mjs` —— 完整历史重写流程。
+- `scripts/scrub-history.mjs` —— 带备份与校验的完整历史重写流程。
 
 ## 注意
 

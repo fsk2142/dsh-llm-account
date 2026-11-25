@@ -23,10 +23,12 @@ import type { GenerateOptions, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { AccountView, SettingsOp } from "../../src/core/adapter";
+import { truncatedReason } from "../../src/core/stream-truncation";
 import { resetAutoContinueBudgetForTest } from "../../src/vendors/auto-continue";
 import { resetCatalogSources } from "../../src/vendors/model-catalog-registry";
 import * as commandcode from "../../src/vendors/commandcode/index";
 import * as opencode from "../../src/vendors/opencode/index";
+import * as opendesign from "../../src/vendors/opendesign/index";
 
 /**
  * 每个用例后清掉**跨厂商模型注册表**。
@@ -89,6 +91,8 @@ interface FakeHost {
   liveRoutes(): string[][];
   /** 把一个事件投给假 ctx 上登记的监听器（宿主 `emit` 的最小替身）。 */
   emit(event: string, ...args: unknown[]): void;
+  /** 触发 **serial** 事件：依次 await 全部监听器（`agent/turn-stopping` 的真实语义）。 */
+  fireSerial(event: string, payload: unknown): Promise<void>;
     /**
      * 触发 **waterfall** 事件并拿到决策（2026-10-30 加，R11）。
      *
@@ -146,6 +150,9 @@ function fakeHost(services: Readonly<Record<string, unknown>> = {}): FakeHost {
     liveRoutes: () => registrations.filter((record) => record.active).map((record) => record.routes),
     emit: (event, ...args) => {
       for (const listener of listeners.get(event) ?? []) listener(...args);
+    },
+    fireSerial: async (event, payload) => {
+      for (const listener of [...(listeners.get(event) ?? [])]) await listener(payload);
     },
     /**
      * 触发 **waterfall** 事件并拿到决策（R11）。
@@ -1050,6 +1057,27 @@ it("限额时换到同名模型：目录里先记下候选，配一个能服务�
 /** 搜索 provider 的最小形状（本用例只用到 `search`）。 */
 
 
+it.each([
+  ["opencode", "opencode-go", OPENCODE_SHAPE],
+  ["opendesign", "opendesign", { enabled: true }],
+] as const)("%s：新字段显式 false 必须压过残留旧字段", async (_name, ns, shape) => {
+  const settings = fakeSettings([{ ns, value: { ...shape, autoContinue: false, autoContinueOnError: true }, revision: 1 }]);
+  const host = fakeHost({ settings: settings.service });
+  const parsed = (_name === "opencode" ? opencode.Config : opendesign.Config)({
+    ...shape,
+    autoContinue: false,
+    autoContinueOnError: true,
+  } as never);
+  (_name === "opencode" ? opencode.apply : opendesign.apply)(host.ctx, parsed);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const { decision } = await host.fireWaterfall("agent/request-error", {
+    turn: 1,
+    failure: { code: "TRANSPORT" },
+  });
+  expect(decision, "显式 false 不能被旧字段复活").toBeUndefined();
+}, 10_000);
+
 it("**旧字段能开启自动重试**：决策必须是 retry", async () => {
   /**
    * R11：原版只断言「下游没被调用」，那不能区分「自己重试了」和「监听器根本没跑」。
@@ -1422,4 +1450,58 @@ it("continuation uses only the current session's finish from the current turn", 
   host.emit("session/event", agentA.session, { type: "assistant/message", data: { turn: 2, stream: settledAssistantStream("max-tokens") } });
   await host.fireWaterfall("agent/turn-stopping", { turn: 2 });
   expect(callsA, "no current initiator must not use a previous agent").toHaveLength(1);
+});
+
+it("PROVIDER_STREAM_TRUNCATED finish appends exactly one continuation across all three assembled vendors", async () => {
+  const nextStep: unknown[] = [];
+  const appended: unknown[] = [];
+  const targets: string[] = [];
+  const agent = {
+    session: { id: "truncated-session" },
+    inbox: {
+      nextStep,
+      append: (target: "next-step", message: unknown) => {
+        targets.push(target);
+        appended.push(message);
+        nextStep.push(message);
+      },
+    },
+  };
+  const settings = fakeSettings([
+    {
+      ns: "llm-commandcode",
+      value: { ...COMMAND_CODE_SHAPE, autoContinue: true, autoContinueMaxAttempts: 3 },
+      revision: 1,
+    },
+    {
+      ns: "opencode-go",
+      value: { ...OPENCODE_SHAPE, enabled: true, autoContinue: true, autoContinueMaxAttempts: 3 },
+      revision: 1,
+    },
+    {
+      ns: "opendesign",
+      value: { enabled: true, autoContinue: true, autoContinueMaxAttempts: 3 },
+      revision: 1,
+    },
+  ]);
+  const host = fakeHost({ agents: { currentInitiator: () => agent }, settings: settings.service });
+  commandcode.apply(host.ctx, commandcode.Config({ ...COMMAND_CODE_SHAPE, autoContinue: true, autoContinueMaxAttempts: 3 }));
+  opencode.apply(host.ctx, opencode.Config({ ...OPENCODE_SHAPE, enabled: true, autoContinue: true, autoContinueMaxAttempts: 3 }));
+  opendesign.apply(host.ctx, opendesign.Config({ enabled: true, autoContinue: true, autoContinueMaxAttempts: 3 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const accumulator = new AssistantStreamAccumulator();
+  accumulator.push({ time: 1, chunk: { type: "finish", reason: truncatedReason("Command Code") } });
+  host.emit("session/event", agent.session, {
+    type: "assistant/message",
+    data: { turn: 7, stream: accumulator.snapshot() },
+  });
+  expect(host.listenerCount("agent/turn-stopping")).toBe(3);
+
+  await host.fireSerial("agent/turn-stopping", { turn: 7 });
+
+  expect(targets, "宿主 inbox 必须收到 next-step target").toEqual(["next-step"]);
+  expect(appended, "三家监听器共享同一回合，只能追加一次").toHaveLength(1);
+  expect(nextStep).toHaveLength(1);
+  expect(appended[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "继续" }] });
 });

@@ -39,6 +39,11 @@ describe("parseReleaseArgs：模式互斥（V55-01）", () => {
     expect(parseReleaseArgs(["--release-only", "v1.5.5"]).tag).toBe("v1.5.5");
   });
 
+  it("`--release-only` 拒绝人工备份/实验后缀", () => {
+    expect(() => parseReleaseArgs(["--release-only", "v1.5.5-backup"])).toThrow(/版本 tag/u);
+    expect(() => parseReleaseArgs(["--release-only", "v1.5.5-evil"])).toThrow(/版本 tag/u);
+  });
+
   it("未知参数报错（拼错不该静默落进另一个模式）", () => {
     expect(() => parseReleaseArgs(["--bogus"])).toThrow(/未知参数/u);
     expect(() => parseReleaseArgs(["--dryrun"])).toThrow(/未知参数/u);

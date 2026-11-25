@@ -97,6 +97,17 @@ describe("usage 远程面拆信封", () => {
     expect(next?.failures.length).toBe(0);
   });
 
+  it("状态失败原因保留 code 与病因，但邮箱不进入界面诊断", async () => {
+    const refused = await readStatusDetail(
+      usageOf({ ok: false, error: { code: "gateway/internal", message: "usage refused for user@example.com" } }),
+      "commandcode",
+    );
+    expect(refused.status).toBeUndefined();
+    expect(refused.problem).toContain("gateway/internal");
+    expect(refused.problem).toContain("usage refused");
+    expect(refused.problem).not.toContain("user@example.com");
+  });
+
   /**
    * 读不到时必须带得出**原因**。
    *

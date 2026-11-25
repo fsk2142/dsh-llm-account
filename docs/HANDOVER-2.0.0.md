@@ -1,10 +1,10 @@
-# 交接文档 · dsh-llm-account v2.1.4
+# 交接文档 · dsh-llm-account v2.5.3
 
-> 写于 2026-11-04，最后更新 2026-11-06（2.1.4）。读者：接手这个插件的人（或未来的自己）。
+> 写于 2026-11-04，最后更新 2026-11-25（2.5.3）。读者：接手这个插件的人（或未来的自己）。
 > 本文只讲**当前真实状态**和**踩过的坑**，设计细节见 `SPEC.md` / `decisions.md`。
 >
 > **文件名里的 `2.0.0` 是历史包袱**：这份文档写在 2.0.0 那轮交接，之后一直原地
-> 更新（2.1.0 → 2.1.4）。改名会让已经发出去的链接失效，所以保留文件名、只更新内容。
+> 更新。改名会让已经发出去的链接失效，所以保留文件名、只更新内容。
 
 ---
 
@@ -27,16 +27,16 @@ DSH（DeepSeek Harness）的**第三方 LLM 账号/额度管理插件**。给三
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | **2.1.4** |
+| 版本 | **2.5.3** |
 | 分支 / 远端 | `main` / `git@github.com:fsk2142/dsh-llm-account.git` |
-| 保留的 tag | `v1.0.0` … `v2.1.4`（历史上 33 个零碎补丁版已清理） |
+| 保留的 tag | `v1.0.0` … `v2.5.3`（历史上 33 个零碎补丁版已清理） |
 | Releases | 与 tag 一一对应 |
-| 测试 | **200 文件 / 2084 用例** 全绿 |
+| 测试 | **209 文件 / 2,212 用例** 全绿 |
 | 类型检查 | 0 错误 |
-| 代码量 | `src/` 106 文件、约 4.1 万行（含注释） |
+| 代码量 | 以 `npm run dead-code` 与 `git ls-files src` 的实时结果为准 |
 
-**当前已装到本机**：`~/.dsh/profiles/desktop/node_modules/dsh-llm-account`，
-profile 依赖 SHA 见该目录的 `package.json`（与最新 tag 对齐）。
+**当前已装到本机**：通过插件管理器安装的 `dsh-llm-account` profile bundle。
+具体来源 SHA 与版本以 **Plugins** 页面 / `plugin_manager list_bundles` 为准。
 
 > 这一节的具体数字随每次发版变化，**不要把它当成长期有效的断言** ——
 > 需要准确值时直接跑测试与 `git tag`。原来这里写死了 HEAD 与用例数，
@@ -288,73 +288,32 @@ npx tsc --noEmit                        # 确认恢复干净
 
 ## 8. 发布流程
 
+**唯一入口是 [docs/RELEASING.md](RELEASING.md)**。推荐直接运行：
+
 ```powershell
-# 1. 改版本
-$pkg = Get-Content package.json -Raw | ConvertFrom-Json
-$pkg.version = 'X.Y.Z'
-$pkg | ConvertTo-Json -Depth 10 | Set-Content package.json -Encoding utf8
-
-# 2. 构建 + 全量验证
-pnpm build
-npx tsc --noEmit
-npx vitest run
-node scripts/check-final-newline.mjs
-
-# 3. 提交 + 打 tag + 推送
-git add -A
-git commit -m "chore(release): vX.Y.Z"
-git tag -a vX.Y.Z -m "..."
-git push origin main
-git push origin refs/tags/vX.Y.Z
-
-# 4. Release
-$env:GITHUB_TOKEN = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','User')
-# 用 API POST /repos/fsk2142/dsh-llm-account/releases
-# tag_name=vX.Y.Z, name=vX.Y.Z, body=<变更说明>
+node scripts/release.mjs --note "这次改了什么"
 ```
 
-`scripts/release.mjs` 也能做（`--release-only <tag> --note "..."`），但它假设
-tag 已推送。
+脚本会先要求工作树干净、当前分支为 `main`、`origin/main` 可快进，再算版本、
+重建、跑类型检查与全量测试，最后只推目标 tag 并创建 GitHub Release。
+不要手工全量暂存，不要分两次推 main/tag，也不要把实验 tag 一并推上去。
 
-### 版本号约定
-
-- 修补：只改实现细节
-- 次版本：新增能力、行为调整
-- **主版本**：跨主路径的行为级修正（2.0.0 就是这么来的 —— 14 项缺陷 + 认证/图片/
-  档位/续写/委托五条主路径都动了）
-
----
+没有 GitHub API 凭据时，脚本会明确跳过 Release；随后用
+`node scripts/release.mjs --release-only vX.Y.Z --note "..."` 补建，不要重新发版。
 
 ## 9. 安装到本机 profile
 
-```powershell
-$repo = '<本仓库目录>'
-$prof = "$env:USERPROFILE\.dsh\profiles\desktop"
-$target = "$prof\node_modules\dsh-llm-account"
-$stage = "$env:TEMP\dsh-stage"
+用 DSH 的 `plugin_manager` 安装/更新本地目录，**不要**手工复制 `lib/` 或改 profile 的
+`package.json` / `pnpm-lock.yaml`：
 
-# 只拷这 6 项（其余是源码/文档，不需要）
-New-Item -ItemType Directory -Path $stage -Force | Out-Null
-foreach ($i in @('lib','cordis.patch.yml','icon.svg','LICENSE','package.json','README.md')) {
-  Copy-Item (Join-Path $repo $i) -Destination $stage -Recurse -Force
-}
-
-# 备份 + 替换
-Rename-Item -LiteralPath $target -NewName "dsh-llm-account.bak-$(Get-Date -Format 'HHmmss')"
-Copy-Item -LiteralPath $stage -Destination $target -Recurse -Force
-
-# 同步 profile 依赖 SHA（否则 pnpm 会尝试重新拉旧版）
-$sha = git -C $repo rev-parse 'vX.Y.Z^{commit}'
-# 改 $prof\package.json 里的 dsh-llm-account#<sha>
-# 同时改 $prof\pnpm-lock.yaml（version / integrity = codeload tarball 的 sha512 base64）
-# 以及 $prof\node_modules\.modules.yaml
+```text
+plugin_manager action=install_bundle
+target=<本仓库绝对路径>
 ```
 
-**注意**：
-
-- 改完必须**重启 DSH**（或重载插件）才生效，运行中的进程还用旧代码。
-- 备份目录记得清（历史上堆了 30 个、91 MB）。用 `safe_delete`，shell 的 `rm` 会被拦。
-- **不要**用 `Remove-Item -Recurse` 清临时目录 —— 会被沙箱拦截，改用 `safe_delete`。
+安装后以返回的 `application: applied` 为准，再用 `plugin_manager list_bundles`
+核对 `dsh-llm-account` 的 version 与 source SHA。需要重启 DSH 时由用户决定；
+运行中的进程不会自动换成新代码。
 
 ---
 

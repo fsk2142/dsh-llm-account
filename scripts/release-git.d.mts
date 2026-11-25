@@ -23,6 +23,12 @@ export declare function statusPaths(cwd: string): string[];
 
 export declare function existingPaths(cwd: string, candidates: readonly string[]): string[];
 
+/** 当前分支名；detached HEAD 抛错。 */
+export declare function currentBranch(cwd: string): string;
+
+/** ancestor 是否为 descendant 的祖先（可快进）。 */
+export declare function isAncestor(cwd: string, ancestor: string, descendant: string): boolean;
+
 /** 正式发布标签的形态。 */
 export declare const RELEASE_TAG: RegExp;
 

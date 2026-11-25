@@ -8,372 +8,6 @@
  * @module dsh-llm-account/src/client/copy
  */
 
-/** 页面文案的键。`vendor.*` 前缀的是厂商标签页标题，其余是外壳与通用卡片。 */
-export type CopyKey =
-  | "nav"
-  | "title"
-  | "intro"
-  | "save"
-  | "saveHint"
-  | "saving"
-  | "settingsTarget"
-  | "settingsTarget.hint"
-  | "advanced"
-  | "advancedHint"
-  | "group.switch"
-  | "group.switch.hint"
-  | "group.privacy"
-  | "group.privacy.hint"
-  | "group.accounts"
-  | "group.accounts.hint"
-  | "group.integrations"
-  | "group.integrations.hint"
-  | "group.advanced"
-  | "group.advanced.hint"
-  | "field.autoSwitch"
-  | "field.autoSwitch.hint"
-  | "field.switchStrategy"
-  | "field.switchStrategy.hint"
-  | "field.switchIntervalMinutes"
-  | "field.switchIntervalMinutes.hint"
-  | "field.switchAtTurnEnd"
-  | "field.switchAtTurnEnd.hint"
-  | "options.switchOrder"
-  | "options.switchBestQuota"
-  | "options.switchScheduled"
-  | "field.scheduledIntervalMinutes"
-  | "field.scheduledIntervalMinutes.hint"
-  | "duration.days"
-  | "duration.hours"
-  | "duration.minutes"
-  | "switch.title"
-  | "switch.panelTitle"
-  | "switch.current"
-  | "switch.noCurrent"
-  | "switch.now"
-  | "switch.pending"
-  | "switch.nextIn"
-  | "switch.nextSwitchIn"
-  | "switch.switchDue"
-  | "switch.due"
-  | "switch.order"
-  | "switch.noInterval"
-  | "switch.unknown"
-  | "field.showSidebarQuota"
-  | "field.showSidebarQuota.hint"
-  | "field.quotaRefreshMinutes"
-  | "field.autoSwitchModelOnQuota"
-  | "field.quotaRefreshMinutes.hint"
-  | "field.apiBase"
-  | "field.apiBase.hint"
-  | "field.baseURL"
-  | "field.baseURL.hint"
-  | "field.protocol"
-  | "field.protocol.hint"
-  | "field.requestTimeoutMs"
-  | "field.requestTimeoutMs.hint"
-  | "field.streamIdleTimeoutMs"
-  | "field.streamIdleTimeoutMs.hint"
-  | "field.defaultMaxTokens"
-  | "field.defaultMaxTokens.hint"
-  | "options.openai"
-  | "options.messages"
-  | "options.cli"
-  | "field.autoContinue"
-  | "field.autoContinue.hint"
-  | "field.autoContinueMaxAttempts"
-  | "field.autoContinueMaxAttempts.hint"
-  | "field.autoContinueIntervalMs"
-  | "field.autoContinueIntervalMs.hint"
-  /**
-   * 就进行提示」+「或者多增加一个测试按钮，让用户可以自行测试密钥的有效性」）。
-   */
-  | "card.display"
-  | "card.display.hint"
-  | "card.switching"
-  | "card.switching.hint"
-  | "card.advanced"
-  | "card.advanced.hint"
-  | "vendor.features"
-  | "vendor.commandcode"
-  | "vendor.opencodeGo"
-  | "vendor.opendesign"
-  | "field.workspaceId"
-  | "field.workspaceId.hint"
-  | "field.walletBase"
-  | "field.walletBase.hint"
-  | "credentials.updated"
-  | "account.configured"
-  | "account.missing"
-  | "account.empty"
-  | "account.count"
-  | "account.unavailable"
-  | "account.loading"
-  | "account.add"
-  | "account.addFor"
-  | "account.loginFor"
-  | "account.addAccount"
-  | "account.addAccount.hint"
-  | "account.orderTitle"
-  | "account.orderHint"
-  | "account.rename"
-  | "account.restoreName"
-  | "account.replaceKey"
-  | "account.use"
-  | "account.current"
-  | "account.models"
-  | "account.remove"
-  | "account.menu"
-  | "account.expand"
-  | "account.collapse"
-  | "account.plan"
-  | "account.pinnedBy"
-  | "account.effectiveBy"
-  | "account.liveBy"
-  | "account.invalid"
-  | "account.quotaMissing"
-  | "quota.used"
-  | "quota.capOnly"
-  | "quota.usedOf"
-  | "quota.usedPercent"
-  | "quota.remaining"
-  | "quota.unlimited"
-  | "quota.resetToday"
-  | "quota.resetTomorrow"
-  | "quota.resetAtLong"
-  | "quota.resetUnknown"
-  | "usage.title"
-  | "usage.window.today"
-  | "usage.window.7d"
-  | "usage.window.30d"
-  | "usage.window.all"
-  | "usage.requests"
-  | "usage.okShort"
-  | "usage.failedShort"
-  | "usage.requestsValue"
-  | "usage.successRate"
-  | "usage.tokens"
-  | "usage.input"
-  | "usage.output"
-  | "usage.cacheRead"
-  | "usage.cacheWrite"
-  | "usage.cacheHitRate"
-  | "usage.cost"
-  | "usage.spent"
-  | "usage.spentWindow"
-  | "usage.lastAt"
-  | "usage.failuresTitle"
-  | "usage.exportCsv"
-  | "usage.exporting"
-  | "usage.exportFailed"
-  | "usage.clearFailed"
-  | "usage.clear"
-  | "usage.clearConfirm"
-  | "usage.clearConfirmAction"
-  | "usage.clearing"
-  | "usage.officialCost"
-  | "usage.officialShort"
-  | "usage.localOnly"
-  | "usage.costPartial"
-  | "usage.fromVendor"
-  | "usage.localSpent"
-  | "usage.priceUnknown"
-  | "usage.period"
-  | "usage.periodRange"
-  | "usage.periodFrom"
-  | "usage.inputShort"
-  | "usage.cacheHitShort"
-  | "usage.uncachedShort"
-  | "usage.outputShort"
-  | "usage.periodFromVendor"
-  | "usage.periodEstimated"
-  | "usage.perAccount"
-  | "usage.total"
-  | "usage.empty"
-  | "usage.emptyAccount"
-  | "usage.loading"
-  | "usage.readFailed"
-  | "usage.kind.five-hour"
-  | "usage.kind.day"
-  | "usage.kind.week"
-  | "usage.kind.month"
-  | "quota.resetAt"
-  /**
-   * 估算值的「约」前缀（2026-10-20）：5 小时/周的重置时间由「`used` 首次变正 + 窗口长度」
-   * 推算，不是厂商公布的。**必须与真实值可区分** —— 否则用户会拿一个可能差几十分钟的
-   * 推算时刻去安排事情。
-   */
-  | "quota.estimatedPrefix"
-  | "quota.window.fiveHour"
-  | "quota.window.rolling"
-  | "quota.window.daily"
-  | "quota.window.weekly"
-  | "quota.window.monthly"
-  | "sidebar.usagePeriod"
-  | "sidebar.resetTime"
-  | "quota.window.monthlyCredits"
-  | "quota.window.plan"
-  | "quota.window.unknown"
-  | "quota.planMonthly"
-  | "quota.planPeriodEnd"
-  | "quota.planStatus.trialing"
-  | "quota.planStatus.past_due"
-  | "quota.planStatus.canceled"
-  | "quota.planStatus.incomplete"
-  | "account.newLabel"
-  | "account.newLabel.placeholder"
-  | "account.newKey.placeholder"
-  | "account.newKey"
-  | "account.newKey.hint"
-  | "account.addTitle"
-  | "account.labelRequired"
-  | "account.keyRequired"
-  | "account.serviceNotReady"
-  | "account.confirm"
-  | "account.cancel"
-  | "account.login"
-  | "account.loginWaiting"
-  | "account.loginCode"
-  | "account.loginStarting"
-  | "account.loginCancel"
-  | "account.loginFailed"
-  | "account.loginExpired"
-  | "account.moveUp"
-  | "account.moveDown"
-  | "account.autoSwitch"
-  | "account.autoSwitch.hint"
-  | "models.loading"
-  | "models.retry"
-  | "models.refreshAccount"
-  | "models.freeGroup"
-  | "models.otherCompany"
-  /**
-   * 一组模型的「全选 / 取消全选」。
-   *
-   * 需求：「原来的显示模型可以改成 全选 这样更符合那个按钮的本来含义」。
-   * 以前的文案是「显示本组 / 隐藏本组」，读起来像「展开或收起这一段」，而它实际做的是
-   * **勾选这一组里所有模型**。改名后与复选框语义一致。
-   */
-  | "models.selectAll"
-  | "models.clearAll"
-  | "models.quotaHint"
-  | "models.quotaFree"
-  | "models.quotaApprox"
-  | "models.quotaUnknown"
-  | "drift.title"
-  | "drift.body"
-  | "drift.reload"
-  | "drift.later"
-  | "sidebar.pinned"
-  | "sidebar.effective"
-  | "sidebar.open"
-  | "sidebar.noRequest"
-  /**
-   * 侧边栏只显示「5 小时」与「每周」两档。这两档缺失时如实说没有，**不拿月度顶替**
-   *。
-   */
-  | "sidebar.noShortWindow"
-  | "usage.failed"
-  | "usage.failure.timeout"
-  | "usage.failure.whoami"
-  | "usage.failure.usage"
-  | "usage.failure.credits"
-  | "usage.failure.subscriptions"
-  | "usage.failure.window"
-  | "usage.failure.quota"
-  | "usage.failure.accountQuota"
-  | "usage.failure.models"
-  | "usage.failure.modelsUnsupported"
-  | "usage.remoteUnavailable"
-  | "usage.stale"
-  | "usage.refresh"
-  | "time.now"
-  | "time.minutes"
-  | "time.hours"
-  | "time.days"
-  | "rejection.unavailable"
-  | "rejection.server"
-  | "rejection.network"
-  | "save.failed"
-  | "switch.reason.quota"
-  | "switch.reason.rate-limit"
-  | "switch.reason.invalid-credential"
-  | "switch.reason.manual"
-  | "switch.reason.balance"
-  | "switch.reason.scheduled"
-  | "dashboard.title"
-  | "dashboard.close"
-  | "dashboard.refresh"
-  | "dashboard.accounts"
-  | "dashboard.noData"
-  | "dashboard.unknown"
-  | "account.reason.credential-slot-taken"
-  | "account.reason.invalid-key"
-  | "account.reason.unavailable"
-  | "account.reason.cancelled"
-  | "account.reason.timeout"
-  | "account.reason.denied"
-  | "account.reason.network"
-  | "account.reason.vela-missing"
-  /**
-   * vela 缺失时的**安装指引**（需求：「opendesign 新增账户的时候如果使用网页登录，
-   * 用户缺少环境的时候给出提示，如何快速安装环境」）。
-   *
-   * 只给一句「请先安装」没有用 —— 用户不知道装什么、从哪装、装完怎么确认。
-   */
-  | "account.vela.title"
-  | "account.vela.step1"
-  | "account.vela.step2"
-  | "account.vela.step3"
-  | "account.vela.command"
-  | "account.vela.retry"
-  /**
-   * 插件更新后需要**刷新页面**的提示（需求：「如果我不重启，侧边栏就无法出来，
-   * 是否可以提示刷新页面的方式，这样就不需要我重启了」）。
-   *
-   * 为什么插件自己解决不了：侧边栏卡片属于宿主的**客户端启动图** —— 启动图在页面加载那一刻
-   * 就确定了，之后新装/更新的插件不会自动进图（除非重启宿主）。而「刷新页面」会让浏览器重新
-   * 走一遍启动图，插件随即被加载，效果与重启等价但成本低得多。
-   */
-  | "update.title"
-  | "update.body"
-  | "update.action"
-  /**
-   * 插件自身的更新检查（需求：「希望加一个更新，这样有新版本的时候直接更新就可以，
-   * 就不用每次卸载后重新装」）。
-   *
-   * 三种结论各有专门文案 —— 尤其是「链接安装」：那种装法**永远不会**通过更新按钮变化，
-   * 把它说成「已是最新」会让用户等一个永远不来的按钮。
-   */
-  | "update.check"
-  /** 还没查过更新（首次进设置页的默认状态）—— 给一句说明 + 检查按钮，不是空白。 */
-  | "update.notChecked"
-  | "update.checking"
-  | "update.section"
-  | "update.start"
-  | "update.available"
-  | "update.current"
-  | "update.notApplicable"
-  | "update.unknown"
-  /**
-   * 标题行右侧那一条的**短标签**（2026-10-21）。
-   *
-   * 同一组状态在这里要极简（只有一行、旁边就是标题），长句子放进 `title` 属性；
-   * 所以每条状态都有「长版」（上面的 available/current/…，用于 `title` 与提示条）
-   * 与「短版」。
-   */
-  | "update.availableShort"
-  | "update.currentShort"
-  | "update.notApplicableShort"
-  | "update.unknownShort"
-  | "update.starting"
-  | "update.done"
-  | "update.failed"
-  | "account.reason.no-signin"
-  | "account.reason.config-invalid"
-  | "account.reason.error"
-  | "empty.noVendor"
-
 /** 语言字典：键 → 文案。 */
 export type CopyDictionary = Record<string, string>;
 
@@ -452,9 +86,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
-    "field.autoContinue": "异常中断时自动重试",
-    "field.autoContinue.hint": "请求失败后自动重试；只有手动停止不重试。上下文超长、密钥无效、额度用尽这类重试必然失败的除外。（回答被截断的自动续写暂不支持：DSH 还没提供需要的宿主接口。）",
-    "field.autoContinueMaxAttempts": "每轮最多重试次数",
+    "field.autoContinue": "异常中断时自动继续",
+    "field.autoContinue.hint": "默认关闭。开启后重试瞬时失败，并在 max-tokens 或 PROVIDER_STREAM_TRUNCATED 截断时续写；每轮次数受限，手动停止、上下文超长、密钥无效与额度用尽不重试。宿主缺少接缝时对应路径安全关闭，不影响账号功能。",
+    "field.autoContinueMaxAttempts": "每轮最多自动继续次数",
     "field.autoContinueMaxAttempts.hint": "封顶，防止无限重试烧额度。缺省 3。",
     "field.autoContinueIntervalMs": "重试间隔（毫秒）",
     "field.autoContinueIntervalMs.hint": "每次重试前等待多久。缺省 2000 毫秒；三次重试共约 6 秒。",
@@ -479,12 +113,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.unavailable": "账号数据暂不可用。",
     "account.loading": "正在读取账号数据…",
     "account.add": "添加账户",
-    "account.addFor": "使用 API Key",
     "account.loginFor": "网页登录",
     "account.addAccount": "新增账户",
-    "account.addAccount.hint": "先选供应商，再选 API Key 或网页登录。",
+    "account.addAccount.hint": "选择供应商，然后使用网页登录添加账号。",
     "account.orderTitle": "切换顺序",
-    "account.orderHint": "全局顺序；额度用尽/定时可调整顺序，额度优先只展示顺序和当前账号。",
+    "account.orderHint": "顺序用于额度耗尽或定时切换；额度优先按剩余额度选择。手动切号请点账号行的「使用」。",
     "account.rename": "重命名",
     "account.restoreName": "恢复默认名称",
     "account.replaceKey": "更换密钥",
@@ -776,9 +409,9 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "options.messages": "Anthropic Messages",
     "options.cli": "CLI",
     "vendor.commandcode": "Command Code",
-    "field.autoContinue": "Auto-retry interrupted runs",
-    "field.autoContinue.hint": "Retries failed requests; only a manual stop is left alone. Deterministic failures (context too long, invalid key, quota) are not retried. (Auto-continuing a truncated answer is not supported yet: DSH does not expose the host API it needs.)",
-    "field.autoContinueMaxAttempts": "Max retries per turn",
+    "field.autoContinue": "Auto-continue interrupted runs",
+    "field.autoContinue.hint": "Off by default. When on, transient failures are retried and max-tokens or PROVIDER_STREAM_TRUNCATED truncation is continued; attempts per turn are limited. Manual stops, context overflow, invalid keys and exhausted quota are not retried. If the host lacks a required seam, that path safely disables itself without affecting accounts.",
+    "field.autoContinueMaxAttempts": "Max auto-continues per turn",
     "field.autoContinueMaxAttempts.hint": "Caps the loop so it cannot burn quota forever. Default 3.",
     "field.autoContinueIntervalMs": "Retry interval (ms)",
     "field.autoContinueIntervalMs.hint": "Wait before each retry. Default 2000 ms; three retries take about 6 s.",
@@ -803,12 +436,11 @@ export const COPY: { readonly zh: CopyDictionary; readonly en: CopyDictionary } 
     "account.unavailable": "Account data is not available yet.",
     "account.loading": "Loading accounts…",
     "account.add": "Add account",
-    "account.addFor": "Use an API key",
     "account.loginFor": "Web login",
     "account.addAccount": "Add account",
-    "account.addAccount.hint": "Pick a provider, then an API key or web login.",
+    "account.addAccount.hint": "Pick a provider, then add the account with web login.",
     "account.orderTitle": "Switch order",
-    "account.orderHint": "One global order shared by both providers; each rotates its own projection.",
+    "account.orderHint": "Order is used for exhaustion or scheduled switching; quota-first compares remaining quota. To select an account manually, use “Use” on its account row.",
     "account.rename": "Rename",
     "account.restoreName": "Restore default name",
     "account.replaceKey": "Replace key",
@@ -1064,7 +696,7 @@ export function dictionaryOf(language: Language): (key: string) => string {
  * 读法，文案通用）；其余三种失败分类有各自的拒绝文案。**未知分类不在这张表里**：调用方
  * 回退到「未知」，绝不把原始枚举或键名印到界面上。
  */
-const REJECTION_COPY_KEYS: Readonly<Record<string, CopyKey>> = {
+const REJECTION_COPY_KEYS: Readonly<Record<string, string>> = {
   quota: "switch.reason.quota",
   "rate-limit": "switch.reason.rate-limit",
   "invalid-credential": "switch.reason.invalid-credential",

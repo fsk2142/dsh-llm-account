@@ -9,8 +9,8 @@
  * - **两把密钥**：账号条目有 `apiKeyEnv`（推理）与可选的 `controlKeyEnv`（额度面）；
  *   控制面槽缺省时派生为 `<ref>_CONTROL`（默认账号是 `OPENDESIGN_CONTROL_KEY`）。
  *   `quota` 的密钥解析因此多走一层 {@link opendesignControlRef}。
- * - **工作区**：账号条目（或顶层）的 `workspaceId` 是 vela 周期额度的查询参数；
- *   没配就不查，也不记失败（`./quota` 的约定）。
+ * - **工作区**：账号条目的 `workspaceId` 是 vela 周期额度的查询参数；只有旧单账号文档
+ *   才兼容顶层回退。没配就不查，也不记失败（`./quota` 的约定）。
  * - **网页登录 = 设备授权**：由官方 `vela login` 完成（`./login`），成功产物
  *   `~/.amr/config.json` 只读导入；找不到 vela 时给 `vela-missing` 的人话原因。
  *
@@ -44,7 +44,7 @@ import { assignModelsToAccount, CREDENTIAL_REF_PATTERN, globalOrderOfVendor } fr
 import { normalizeKey } from "../../core/credentials";
 
 import { optionalStep, registerRouteOrExplain } from "../assembly";
-import { autoContinueEnabledOf, wireAutoContinue } from "../auto-continue-wiring";
+import { createAutoContinueSwitch, wireAutoContinue } from "../auto-continue-wiring";
 import type { IntentLog } from "../../core/recovery";
 import {
   createCredentialsPort,
@@ -190,7 +190,7 @@ export const Config: PluginConfigSchema = z.object(
       autoContinueOnTruncate: z.boolean(),
       autoContinueMaxAttempts: z.number().step(1).min(1).max(20).default(3),
       autoContinueIntervalMs: z.number().step(100).min(500).max(60000).default(2000),
-    /** 顶层工作区（账号条目没配 `workspaceId` 时的回退；vela 周期额度用）。 */
+    /** 旧单账号文档的工作区回退（多账号只读各自条目；vela 周期额度用）。 */
     workspaceId: z.string().default(""),
     /** 推理网关基地址（Chat Completions）。 */
     baseURL: z.string().default(DEFAULT_BASE_URL),
@@ -276,6 +276,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   };
 
   const settings = createSettingsPort(ctx, OPENDESIGN_SETTINGS_NS, SETTINGS_ROWS);
+  const autoContinueSwitch = createAutoContinueSwitch(settings, OPENDESIGN_SETTINGS_NS, document);
   const credentials = createCredentialsPort(ctx);
   const intents = intentLogFor(
     OPENDESIGN_SETTINGS_NS,
@@ -357,37 +358,18 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     automaticSwitch: true,
   };
 
-  /** 工作区发现的失败重试间隔（毫秒）：成功永久缓存，失败一分钟内不再问 vela。 */
-  const WORKSPACE_DISCOVERY_RETRY_MS = 60_000;
   /**
-   * 进程内的「发现到的工作区」缓存。
+   * 取某账号的工作区：只读账号条目；旧单账号文档的顶层回退由
+   * {@link opendesignWorkspaceId} 单独收口。
    *
-   * 网页登录的产物**不带工作区**（本机实测 `~/.amr/config.json` 只有两把密钥与 user），
-   * 而周期额度必须有它。所以读额度时缺省就问一次 `vela team-projects list`；成功一次就写回
-   * 顶层设置并常驻，失败只缓存一分钟（用户可能刚装好 vela）。
-   */
-  let discoveredWorkspace: { value: string | undefined; at: number } | undefined;
-
-  /**
-   * 取某账号的工作区：条目/顶层设置优先，缺省时用 vela 兜底发现并写回。
+   * 额度读取**不发现、不写设置**：`vela team-projects list` 反映的是本机单例登录态，
+   * 不能证明属于当前账号。新增与网页登录仍会在写入账号条目前逐账号核对身份。
    * @param candidate - 账号 ref。
-   * @returns 工作区 id，或 `undefined`（本机没有 vela / 没登录）。
+   * @returns 工作区 id，或 `undefined`（该账号没有可信的工作区）。
    */
   const workspaceFor = async (candidate: string, signal?: AbortSignal): Promise<string | undefined> => {
     signal?.throwIfAborted();
-    const stored = opendesignWorkspaceId(document(), candidate);
-    if (stored !== undefined) return stored;
-    if (discoveredWorkspace?.value !== undefined) return discoveredWorkspace.value;
-    if (discoveredWorkspace !== undefined && Date.now() - discoveredWorkspace.at < WORKSPACE_DISCOVERY_RETRY_MS) {
-      return undefined;
-    }
-    const found = await discoverWorkspaceId({ signal });
-    // 被取消的发现结果不能写进 60 秒失败缓存，否则下一次正常读取会白等一分钟。
-    if (signal?.aborted === true) return undefined;
-    discoveredWorkspace = { value: found, at: Date.now() };
-    // 写回顶层：下一次读（含重启后）不必再问 vela；`fillTopLevelWorkspace` 只补空、不覆盖。
-    if (found !== undefined) await fillTopLevelWorkspace(found);
-    return found;
+    return opendesignWorkspaceId(document(), candidate);
   };
 
   /** 额度端口：每次读数都用当时的配置；`snapshot(ref)` 可读指定账号（切换策略用）。 */
@@ -493,31 +475,6 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
     pinnedRef: () => pinnedRefOf(document()),
     warn,
   });
-
-  /**
-   * 把发现到的工作区补进**顶层**字段（账号条目，读不到时才写这里）。
-   *
-   * 只补空：用户已经填过（顶层或条目里）就不动 —— 覆盖别人显式配好的值比缺一个 id 更糟。
-   * 失败只记一条警告：这是登录收尾的附加动作，失败不该把登录判成失败。
-   * @param workspaceId - 发现到的工作区 id。
-   */
-  const fillTopLevelWorkspace = async (workspaceId: string): Promise<void> => {
-    if (normalizeKey(document().workspaceId) !== undefined) return;
-    try {
-      const snapshot = await settings.describe(OPENDESIGN_SETTINGS_NS);
-      const stored = snapshot.value.workspaceId;
-      if (typeof stored === "string" && stored.trim() !== "") return;
-      await settings.mutate(
-        OPENDESIGN_SETTINGS_NS,
-        [{ op: "set", path: ["workspaceId"], value: workspaceId }],
-        snapshot.revision,
-      );
-    } catch (error) {
-      warn(
-        `dsh-llm-account: could not store the discovered Open Design workspace id (${error instanceof Error ? error.message : String(error)})`,
-      );
-    }
-  };
 
   // 网页登录：vela 设备授权。成功后把 profile 里的三样东西交给装配层落库
   // （同 ref/同标签换密钥，否则新增账号；控制面密钥与工作区跟着新条目走）。
@@ -676,6 +633,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
       // 设置变了，候选缓存必须作废：否则「取消勾选/删账号/撤销凭据」后
       // 60 秒内仍会把已不可用的模型当作切换目标（审查 U11）。
       invalidateCatalogCandidates();
+      autoContinueSwitch.refresh();
       applyRoute();
     }),
   );
@@ -742,7 +700,7 @@ export function apply(ctx: Context, config?: unknown): OpenDesignBundle {
   wireAutoContinue(
     ctx,
     () => ({
-      enabled: autoContinueEnabledOf(document()),
+      enabled: autoContinueSwitch.enabled(),
       maxAttempts: typeof document()["autoContinueMaxAttempts"] === "number" ? (document()["autoContinueMaxAttempts"] as number) : 3,
       intervalMs: typeof document()["autoContinueIntervalMs"] === "number" ? (document()["autoContinueIntervalMs"] as number) : 2000,
     }),

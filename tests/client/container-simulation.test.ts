@@ -38,6 +38,7 @@ import {
   type SimElement,
 } from "../support/container-sim";
 import { fakeHost, type FakeHost } from "../support/fake-host";
+import type { UsageNamespace } from "../../src/client/usage-contract";
 
 vi.mock("react", async () => {
   const stub = await import("../support/react-stub");
@@ -464,6 +465,174 @@ describe("设置页容器仿真", () => {
     expect(host.statusCalls).toEqual(["commandcode", "dsh-opencode-go", "opendesign", "commandcode", "dsh-opencode-go", "opendesign"]);
     second.unmount();
   });
+});
+
+// —— 仿真 1b：账户直接写操作必须解 RemoteResult ——
+
+describe("账户直接写操作的信封防御", () => {
+  async function openCodePage(mini: MiniReact): Promise<{ host: FakeHost; page: ReturnType<MiniReact["mount"]>; usage: UsageNamespace }> {
+    await freshSeams();
+    const host = fakeHost(mini, {
+      accounts: {
+        "dsh-opencode-go": [
+          { ref: "oc-1", label: "First", configured: true, active: false, effective: false },
+          { ref: "oc-2", label: "Second", configured: true, active: false, effective: false },
+        ],
+      },
+    });
+    let page: ReturnType<MiniReact["mount"]>;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      page = mini.mount(await pageContainer(host));
+    } finally {
+      errors.mockRestore();
+    }
+    await settleSim(mini);
+    const rendered = textsOfSim(page.tree()).join(" ");
+    if (!rendered.includes("First")) throw new Error(`the account page did not render its fixture: ${rendered.slice(0, 240)}`);
+    const { ensureUsageRemote } = await import("../../src/client/seams");
+    const usage = ensureUsageRemote(host.ctx as never).namespace();
+    if (usage === undefined) throw new Error("the usage namespace was not mounted");
+    return { host, page, usage };
+  }
+
+  const directActions = [
+    { method: "selectAccount", marker: "data-account-use", value: "oc-1" },
+    { method: "removeAccount", marker: "data-action", value: "remove" },
+    { method: "moveAccount", marker: "data-move", value: "down" },
+  ] as const;
+
+  it.each(directActions)("$method 收到 ok:false：不刷新目标厂商、显示 code/message、账号状态不变", async ({ method, marker, value }) => {
+    const mini = await runtime();
+    const { host, page, usage } = await openCodePage(mini);
+    const statusBefore = host.statusCalls.length;
+    const modelsBefore = host.modelCalls.length;
+    vi.spyOn(usage, method).mockResolvedValue({
+      ok: false,
+      error: { code: "gateway/internal", message: `${method} refused` },
+    } as never);
+
+    click(page.tree(), marker, value);
+    await settleSim(mini);
+
+    expect(host.statusCalls).toHaveLength(statusBefore);
+    expect(host.modelCalls).toHaveLength(modelsBefore);
+    const error = find(page.tree(), "data-account-action-error", "dsh-opencode-go");
+    expect(textsOfSim(error).join(" ")).toContain("gateway/internal");
+    expect(textsOfSim(error).join(" ")).toContain(`${method} refused`);
+    expect(findSim(page.tree(), "data-account", "oc-1")).toBeDefined();
+    expect(
+      elementsOfSim(page.tree())
+        .filter((element) => element.props["data-account"] !== undefined)
+        .map((element) => element.props["data-account"]),
+    ).toEqual(["oc-1", "oc-2"]);
+  });
+
+  it("setAccountModels 收到 ok:false：不刷新、显示错误，并把乐观镜像回滚到旧选择", async () => {
+    const mini = await runtime();
+    const { host, page, usage } = await openCodePage(mini);
+    const statusBefore = host.statusCalls.length;
+    const modelsBefore = host.modelCalls.length;
+    const write = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { code: "gateway/internal", message: "model write refused" },
+    });
+    usage.setAccountModels = write as never;
+
+    fireSim(find(page.tree(), "data-account-model", "oc-1:m1"), "onChange", { target: { checked: true } });
+    await settleSim(mini);
+
+    expect(host.statusCalls).toHaveLength(statusBefore);
+    expect(host.modelCalls).toHaveLength(modelsBefore);
+    const error = find(page.tree(), "data-account-action-error", "dsh-opencode-go");
+    expect(textsOfSim(error).join(" ")).toContain("gateway/internal");
+    expect(textsOfSim(error).join(" ")).toContain("model write refused");
+    expect(find(page.tree(), "data-account-model", "oc-1:m1").props["checked"]).toBe(false);
+
+    // 回滚后再点 m2，必须从旧选择空集算出 [m2]，不能沿着失败的乐观值算出 [m1, m2]。
+    fireSim(find(page.tree(), "data-account-model", "oc-1:m2"), "onChange", { target: { checked: true } });
+    await settleSim(mini);
+    expect(write).toHaveBeenLastCalledWith("dsh-opencode-go", "oc-1", ["m2"]);
+  });
+
+  it("模型队列失败不卡死；已有更新意图时不回滚较新的乐观镜像", async () => {
+    const mini = await runtime();
+    const { host, page, usage } = await openCodePage(mini);
+    const statusBefore = host.statusCalls.length;
+    const modelsBefore = host.modelCalls.length;
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    let resolveSecond: ((value: unknown) => void) | undefined;
+    const first = new Promise<unknown>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<unknown>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const write = vi.fn()
+      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => second);
+    usage.setAccountModels = write as never;
+
+    fireSim(find(page.tree(), "data-account-model", "oc-1:m1"), "onChange", { target: { checked: true } });
+    await settleSim(mini);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenNthCalledWith(1, "dsh-opencode-go", "oc-1", ["m1"]);
+
+    // 第一发仍在途时追加第二发；它必须排队，而不是并发提交。
+    fireSim(find(page.tree(), "data-account-model", "oc-1:m2"), "onChange", { target: { checked: true } });
+    expect(write).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.({ ok: false, error: { code: "gateway/internal", message: "first write refused" } });
+    await settleSim(mini);
+
+    // 第一次失败不能卡住队尾；第二次仍基于较新的 [m1, m2] 意图提交。
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenNthCalledWith(2, "dsh-opencode-go", "oc-1", ["m1", "m2"]);
+    expect(host.statusCalls).toHaveLength(statusBefore);
+    expect(host.modelCalls).toHaveLength(modelsBefore);
+    const firstError = find(page.tree(), "data-account-action-error", "dsh-opencode-go");
+    expect(textsOfSim(firstError).join(" ")).toContain("gateway/internal");
+    expect(textsOfSim(firstError).join(" ")).toContain("first write refused");
+
+    resolveSecond?.({ ok: true, value: undefined });
+    await settleSim(mini);
+    expect(host.statusCalls).toHaveLength(statusBefore + 1);
+    expect(host.modelCalls).toHaveLength(modelsBefore + 1);
+    expect(findSim(page.tree(), "data-account-action-error")).toBeUndefined();
+  });
+
+  const successShapes = [
+    { shape: "ok:true", result: { ok: true, value: undefined } },
+    { shape: "裸 undefined", result: undefined },
+  ] as const;
+  const allDirectActions = [
+    ...directActions,
+    { method: "setAccountModels", marker: "data-account-model", value: "oc-1:m1" },
+  ] as const;
+
+  it.each(allDirectActions.flatMap((action) => successShapes.map((shape) => ({ ...action, ...shape }))))(
+    "$method 兼容 $shape 成功形状，并只刷新目标厂商",
+    async ({ method, marker, value, result }) => {
+      const mini = await runtime();
+      const { host, page, usage } = await openCodePage(mini);
+      const statusBefore = host.statusCalls.length;
+      const modelsBefore = host.modelCalls.length;
+      const write = vi.fn().mockResolvedValue(result);
+      if (method === "setAccountModels") usage.setAccountModels = write as never;
+      else vi.spyOn(usage, method).mockResolvedValue(result as never);
+
+      if (method === "setAccountModels") {
+        fireSim(find(page.tree(), marker, value), "onChange", { target: { checked: true } });
+      } else {
+        click(page.tree(), marker, value);
+      }
+      await settleSim(mini);
+
+      expect(host.statusCalls.slice(statusBefore)).toEqual(["dsh-opencode-go"]);
+      expect(host.modelCalls.slice(modelsBefore)).toEqual(["dsh-opencode-go"]);
+      expect(findSim(page.tree(), "data-account-action-error")).toBeUndefined();
+    },
+  );
 });
 
 // —— 仿真 2：侧边栏卡片 ————————

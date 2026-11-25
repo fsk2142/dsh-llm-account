@@ -33,6 +33,7 @@
  */
 
 import type { AssistantStreamRecord } from "@deepseek-ai/dsh-llm";
+import type { SettingsPort } from "../core/adapter";
 import { lastAssistantStreamChunk } from "@deepseek-ai/dsh-llm";
 
 import { applyAutoContinue, repairLegacyContinueMessages } from "./auto-continue";
@@ -143,6 +144,49 @@ export function autoContinueEnabledOf(
     document["autoContinueOnError"] === true ||
     document["autoContinueOnTruncate"] === true
   );
+}
+
+/**
+ * 创建自动继续开关的权威设置读取器。
+ *
+ * schema 解析会给 `autoContinue` 填默认 `false`，无法区分「没配过」与「显式关闭」。
+ * 因此每个厂商都从 `SettingsPort.describe()` 读未经 schema 加工的持久文档；显式值优先，
+ * 读取失败时 fail-closed，避免用户以为关掉后仍自动消费。
+ * @param settings - 设置端口。
+ * @param namespace - 本厂商设置命名空间。
+ * @param current - schema 解析后的当前文档（只用于旧字段兼容与次数/间隔）。
+ * @returns 刷新与有效开关读取函数。
+ */
+export function createAutoContinueSwitch(
+  settings: Pick<SettingsPort, "describe">,
+  namespace: string,
+  current: () => Record<string, unknown>,
+): { refresh: () => void; enabled: () => boolean } {
+  let raw: Record<string, unknown> | undefined;
+  let failed = false;
+  let sequence = 0;
+  const refresh = (): void => {
+    sequence += 1;
+    const seq = sequence;
+    void Promise.resolve()
+      .then(() => settings.describe(namespace))
+      .then((snapshot) => {
+        if (seq !== sequence) return;
+        raw = snapshot.value;
+        failed = false;
+      })
+      .catch(() => {
+        if (seq !== sequence) return;
+        failed = true;
+      });
+  };
+  const enabled = (): boolean => {
+    if (failed) return false;
+    if (raw !== undefined && Object.hasOwn(raw, "autoContinue")) return raw["autoContinue"] === true;
+    return autoContinueEnabledOf(current());
+  };
+  refresh();
+  return { refresh, enabled };
 }
 
 /**
@@ -275,13 +319,14 @@ export function wireAutoContinue(
           return agentOfCurrentRun()?.inbox;
         },
         /*
-         * 只给 `kind`。断流的续写判据（要不要因为 `PROVIDER_STREAM_TRUNCATED` 也继续）
-         * 由**核心判定**决定，不在这一层拼字符串 —— 那样会让「error 到底是什么错误」
-         * 的信息在接线处丢失，日后没法区分。
+         * 截断信号必须完整透传：普通 finish 返回 `kind`；`error` 则优先返回稳定
+         * `failure.code`，让核心判定认出 `PROVIDER_STREAM_TRUNCATED`。只看 `kind`
+         * 会把断流误当成普通错误，从而既不续写也不保留已有的半截回答。
          */
         lastFinishReason: (sessionId, turn) => {
           const finish = finishesBySession.get(sessionId);
-          return finish?.turn === turn ? finish.kind : undefined;
+          if (finish?.turn !== turn) return undefined;
+          return finish.failureCode ?? finish.kind;
         },
       },
     );

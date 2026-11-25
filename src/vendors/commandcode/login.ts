@@ -409,8 +409,8 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
    * @returns 尝试落地后的状态。
    */
   async #startAttempt(): Promise<LoginStatus> {
-    await this.#teardown();
     const attempt = (this.#attemptSeq += 1);
+    await this.#teardown();
     this.#attemptAbort = new AbortController();
     const port = await this.#findPort();
     const expectedState = randomBytes(32).toString("base64url");
@@ -688,7 +688,30 @@ class CommandCodeLoginFlow implements CommandCodeLogin {
       await this.#settleTerminal(attempt, { state: "failed", reason });
       return;
     }
-    await this.#settleTerminal(attempt, { state: "success" });
+    await this.#settleCommitted(attempt, credentials.userName);
+  }
+
+  /**
+   * 凭据已经落库后的收尾：同一代里，落库事实优先于取消/超时写下的乐观终态；代际已变则
+   * 完全不碰新尝试。正常 waiting 仍走原有成功结算。
+   * @param attempt - 尝试代际。
+   * @param account - 已写入的账号名。
+   */
+  async #settleCommitted(attempt: number, account: string): Promise<void> {
+    if (this.#attemptSeq !== attempt) return;
+    if (this.#statusValue.state === "waiting") {
+      await this.#settleTerminal(attempt, { state: "success" });
+      return;
+    }
+    if (
+      this.#statusValue.state === "failed" &&
+      (this.#statusValue.reason === "cancelled" || this.#statusValue.reason === "timeout")
+    ) {
+      this.#statusValue = {
+        state: "success",
+        detail: `账号「${account}」在${this.#statusValue.reason === "cancelled" ? "取消" : "超时"}前已写入完成`,
+      };
+    }
   }
 
   /**

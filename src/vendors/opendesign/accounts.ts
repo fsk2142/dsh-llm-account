@@ -247,8 +247,12 @@ export function opendesignControlRef(value: Readonly<Record<string, unknown>>, r
 }
 
 /**
- * 解析一个账号的工作区 id：条目 `workspaceId` 优先，其次顶层 `workspaceId`（计划 §2.5：
- * 「只在该账号配置了 workspaceId 且本机能解析到 vela 时查询」）。
+ * 解析一个账号的工作区 id：条目 `workspaceId` 优先；只有文档整体仍是**单账号**形状时，
+ * 才兼容旧文档的顶层 `workspaceId` 回退。
+ *
+ * 单账号判定以有效账号条目为准，并计入显式的非默认顶层 ref；旧文档没有条目时，顶层
+ * 当前槽（缺省为默认 ref）就是唯一账号。默认槽不额外凑成第二个身份，避免 schema 的默认
+ * 值让单账号条目失去兼容回退。一旦存在两个不同身份，顶层值就不能归给其中任何一个。
  * @param value - 现读的设置文档。
  * @param ref - 目标账号的推理凭据引用名。
  * @returns 工作区 id，或 `undefined`。
@@ -256,7 +260,17 @@ export function opendesignControlRef(value: Readonly<Record<string, unknown>>, r
 export function opendesignWorkspaceId(value: Readonly<Record<string, unknown>>, ref: string): string | undefined {
   const entry = itemOf(value, ref);
   const declared = isRecord(entry) ? normalizeKey(entry[WORKSPACE_FIELD]) : undefined;
-  return declared ?? normalizeKey(value[WORKSPACE_FIELD]);
+  if (declared !== undefined) return declared;
+
+  const identities = new Set<string>();
+  for (const item of rawAccounts(value)) {
+    const itemRef = refOf(item);
+    if (itemRef !== undefined) identities.add(itemRef);
+  }
+  const active = refValue(value[ACTIVE_FIELD]);
+  if (active !== undefined && active !== OPENDESIGN_DEFAULT_REF) identities.add(active);
+  if (identities.size === 0) identities.add(opendesignAccountSlot(value).ref);
+  return identities.size === 1 && identities.has(ref) ? normalizeKey(value[WORKSPACE_FIELD]) : undefined;
 }
 
 /**
@@ -545,9 +559,9 @@ class OpenDesignAccountsImpl implements OpenDesignAccounts {
    * 把工作区写进**这个账号自己的条目**（多账号兼容的关键，2026-10-20）。
    *
    * 为什么必须逐账号：周期额度只来自 `vela billing preflight`，它按 `workspaceId` 查。
-   * 旧实现在「同账号重新登录」时把发现到的工作区写进**顶层**字段（`fillTopLevelWorkspace`），
-   * 而顶层是所有账号共用的回退 —— 第二个账号登录后会把顶层改成它自己的工作区，于是第一个
-   * 账号（自己没配）回退到顶层，拿到的是**第二个账号的工作区**，额度就显示错了人。
+   * 旧实现把登录发现的工作区写进**顶层** `workspaceId`，而顶层是所有账号共用的回退：
+   * 第二个账号登录后会把顶层改成它自己的工作区，于是第一个账号（自己没配）回退到顶层，
+   * 拿到的是**第二个账号的工作区**，额度就显示错了人。
    *
    * 空值不写：`undefined` / 空串表示「这次没发现到」，不该把已有值擦掉。
    * @param ref - 目标账号的 ref。

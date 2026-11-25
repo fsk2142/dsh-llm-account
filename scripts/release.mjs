@@ -36,6 +36,8 @@ import { existsSync, readFileSync } from "node:fs";
  */
 import {
   existingPaths as existingPathsIn,
+  currentBranch as currentBranchIn,
+  isAncestor as isAncestorIn,
   parseNulList as parseNulListIn,
   previousTagOf as previousTagOfIn,
   refExists as refExistsIn,
@@ -258,11 +260,14 @@ function guardWorkingTree() {
     );
   }
 
-  // —— 3. 让人看到会提交什么 ——
+  // —— 3. 工作树必须完全干净 ——
+  // 发版提交只能包含脚本自己写入的版本号与重建产物；任何预先存在的源码/配置改动
+  // 都说明「这次发布建立在未提交状态上」，必须先由维护者单独提交。
   const dirty = statusPaths();
   if (dirty.length > 0) {
-    console.log("本次会提交这些变更：");
-    for (const path of dirty) console.log(`  ${path}`);
+    throw new Error(
+      [`发版中止：工作树不干净 ——`, ...dirty.map((path) => `  ${path}`), ``, `先提交或还原这些改动，再运行发版脚本。`].join("\n"),
+    );
   }
 }
 
@@ -462,6 +467,14 @@ async function main() {
   //
   // 把不依赖构建的检查全部提前：有问题就在写任何东西之前停下，工作树保持原样。
   guardWorkingTree();
+  if (currentBranchIn(process.cwd()) !== "main") {
+    throw new Error("发版中止：当前分支不是 main。正式发布必须从 main 执行。");
+  }
+  // 先刷新远端引用，再确认本地 main 可以快进推送；远端已前进时在写版本前停止。
+  run(["git", "fetch", "origin", "main"]);
+  if (!isAncestorIn(process.cwd(), "origin/main", "HEAD")) {
+    throw new Error("发版中止：origin/main 不是 HEAD 的祖先，远端已前进或历史分叉。先同步 main。");
+  }
   /**
    * 预检 tag 冲突：同名 tag 已存在说明这个版本发过了 —— 或者上一轮发到一半。
    * 两种情况都不该继续（`git tag` 会直接报错，但那时版本号已经写进去了）。

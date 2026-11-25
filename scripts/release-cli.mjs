@@ -33,6 +33,8 @@
  * @module scripts/release-cli
  */
 
+import { RELEASE_TAG } from "./release-git.mjs";
+
 /** 认识的 flag。出现别的 `--xxx` 一律报错（防手误拼错后静默进入另一模式）。 */
 const KNOWN_FLAGS = ["--dry-run", "--release-only", "--note"];
 
@@ -93,7 +95,7 @@ export function parseReleaseArgs(argv) {
   if (rawTag !== undefined) {
     const tag = String(rawTag).trim();
     if (tag === "") throw new Error("--release-only 需要一个 tag，收到空值。");
-    if (!/^v\d+\.\d+\.\d+/u.test(tag)) {
+    if (!RELEASE_TAG.test(tag)) {
       throw new Error(`--release-only 需要一个版本 tag（如 v1.5.0），收到：${tag}`);
     }
     return { mode: "release-only", dryRun, tag, note };

@@ -990,14 +990,14 @@ export interface UsageNamespace {
    */
   restoreAccountName?(vendor: string, ref: string): Promise<void>;
   replaceKey(vendor: string, ref: string, key: string): Promise<void>;
-  removeAccount(vendor: string, ref: string): Promise<void>;
-  selectAccount(vendor: string, ref: string | null): Promise<void>;
-  moveAccount(vendor: string, ref: string, toIndex: number): Promise<void>;
+  removeAccount(vendor: string, ref: string): Promise<unknown>;
+  selectAccount(vendor: string, ref: string | null): Promise<unknown>;
+  moveAccount(vendor: string, ref: string, toIndex: number): Promise<unknown>;
   setAutoSwitch(vendor: string, value: boolean): Promise<void>;
   switchNow?(vendor: string): Promise<SwitchNowResult>;
   setAccountOrder?(order: readonly string[]): Promise<void>;
   setSwitchSettings?(settings: SwitchSettingsWrite): Promise<void>;
-  setAccountModels?(vendor: string, ref: string, models: readonly string[]): Promise<void>;
+  setAccountModels?(vendor: string, ref: string, models: readonly string[]): Promise<unknown>;
   loginBegin(vendor: string): Promise<LoginStatus>;
   loginStatus(vendor: string): Promise<LoginStatus>;
   loginCancel(vendor: string): Promise<void>;

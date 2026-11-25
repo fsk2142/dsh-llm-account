@@ -71,4 +71,30 @@ describe("文案键护栏", () => {
     expect(source).not.toContain("models.showGroup");
     expect(source).not.toContain("models.hideGroup");
   });
+
+  it("自动继续提示覆盖重试、两类截断、默认关闭、次数限制与缺接缝降级", () => {
+    for (const language of ["zh", "en"] as const) {
+      const hint = COPY[language]["field.autoContinue.hint"];
+      expect(hint, `${language}: 输出上限截断`).toContain("max-tokens");
+      expect(hint, `${language}: 网关断流`).toContain("PROVIDER_STREAM_TRUNCATED");
+      expect(hint, `${language}: 默认关闭`).toMatch(language === "zh" ? /默认关闭/u : /off by default/iu);
+      expect(hint, `${language}: 次数受限`).toMatch(language === "zh" ? /次数|轮次/u : /limit|per turn/iu);
+      expect(hint, `${language}: 宿主接缝`).toMatch(language === "zh" ? /宿主/u : /host/iu);
+      expect(hint, `${language}: 安全降级`).toMatch(language === "zh" ? /降级|安全关闭/u : /safe|disable/iu);
+    }
+  });
+
+  it("新增账户提示只提供网页登录", () => {
+    expect(COPY.zh["account.addAccount.hint"]).toContain("网页登录");
+    expect(COPY.zh["account.addAccount.hint"]).not.toContain("API Key");
+    expect(COPY.en["account.addAccount.hint"]).toMatch(/web login/iu);
+    expect(COPY.en["account.addAccount.hint"]).not.toMatch(/API key/iu);
+  });
+
+  it("顺序提示把手动切号指向账号行的「使用」按钮", () => {
+    expect(COPY.zh["account.orderHint"]).toMatch(/账号行/u);
+    expect(COPY.zh["account.orderHint"]).toContain("「使用」");
+    expect(COPY.en["account.orderHint"]).toMatch(/account row/iu);
+    expect(COPY.en["account.orderHint"]).toMatch(/“Use”|"Use"/u);
+  });
 });

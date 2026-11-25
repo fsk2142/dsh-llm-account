@@ -151,6 +151,38 @@ it("设备授权成功：状态先 waiting（带授权网址与验证码），�
 });
 });
 
+it("storeKey 挂起期间取消：先立即 cancelled，写入完成后以 success 为准", async () => {
+  let releaseStore: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    releaseStore = resolve;
+  });
+  let storeSettled = false;
+  const storeKey = vi.fn(async () => {
+    await gate;
+    storeSettled = true;
+  });
+  const login = createOpenDesignLogin(loginDeps({ storeKey }));
+
+  expect(await login.begin()).toMatchObject({ state: "waiting" });
+  await vi.waitFor(() => {
+    expect(storeKey, "已经进入写入").toHaveBeenCalledTimes(1);
+  });
+
+  await login.cancel();
+  expect(await login.status()).toEqual({ state: "failed", reason: "cancelled" });
+
+  releaseStore?.();
+  await vi.waitFor(() => {
+    expect(storeSettled, "storeKey 已完成").toBe(true);
+  });
+  expect(await settle(login), "落库事实必须覆盖取消前的乐观状态").toBe("success");
+  expect(await login.status()).toMatchObject({
+    state: "success",
+    detail: expect.stringContaining("取消前"),
+  });
+  expect(storeKey).toHaveBeenCalledTimes(1);
+});
+
 it("找不到 vela 但本机已有登录产物：直接导入并成功（不逼用户再装一个 CLI）", async () => {
   const storeKey = vi.fn(async () => undefined);
   const spawn = vi.fn(() => fakeChild());

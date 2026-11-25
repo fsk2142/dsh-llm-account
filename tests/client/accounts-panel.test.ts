@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 
 import { AccountsPanel, type AccountsPanelProps } from "../../src/client/accounts-panel";
 import { dictionaryOf } from "../../src/client/copy";
+import { UsageExportButton } from "../../src/client/failure-list";
 import type { VendorEntry } from "../../src/client/registry";
 import type { AccountUsageStatus, VendorCapabilities, VendorUsageStatus } from "../../src/client/usage-contract";
 import type { StubElement } from "../support/react-stub";
@@ -120,6 +121,18 @@ it("账号平铺在同一列表：没有供应商分组标题，账号名后跟�
   expect(elementsOf(tree).filter((element) => element.props["data-accounts-group"] !== undefined)).toEqual([]);
 });
 
+it("账号行的「使用」按钮按所属厂商切号", () => {
+  const { tree, props } = render();
+  const useCommandCode = elementsOf(tree).find((element) => element.props["data-account-use"] === "cc-1");
+  const useOpenCode = elementsOf(tree).find((element) => element.props["data-account-use"] === "oc-1");
+  expect(textsOf(useCommandCode).join(" ")).toContain("使用");
+  expect(textsOf(useOpenCode).join(" ")).toContain("使用");
+  fire(useCommandCode, "onClick");
+  fire(useOpenCode, "onClick");
+  expect(props.onSelect).toHaveBeenNthCalledWith(1, "commandcode", "cc-1");
+  expect(props.onSelect).toHaveBeenNthCalledWith(2, "dsh-opencode-go", "oc-1");
+});
+
 it("全局添加入口只剩「网页登录」：每家一个，各自路由到自己的厂商", () => {
   const { tree, props } = render();
   // 2026-10-20 需求去掉「使用 API Key」入口（官方入口已提供 API 添加）。
@@ -163,6 +176,43 @@ it("失败原因只在开着编辑器的那一家渲染（actionError 与 action
   const errors = elementsOf(tree).filter((element) => element.props["data-action-error"] !== undefined);
   expect(errors).toHaveLength(1);
   expect(textsOf(errors[0]).join(" ")).toContain("请先填写账户名称。");
+});
+
+it("更多菜单的移动项必须把 onMove 转发给对应厂商（真实菜单点击回归）", () => {
+  const onMove = vi.fn();
+  const { tree, props } = render({
+    onMove,
+    vendors: [
+      {
+        entry: OPENCODE_ENTRY,
+        status: status("dsh-opencode-go", OPENCODE, [account("oc-1", "First"), account("oc-2", "Second")]),
+      },
+    ],
+  });
+
+  // 走真实渲染出来的菜单项，不直接调用 accountPropsFor：这条回归专杀「面板接了回调却没转发」。
+  const moveDown = elementsOf(tree).find(
+    (element) => element.props["data-move"] === "down" && element.props["data-move-ref"] === "oc-1",
+  );
+  expect(moveDown, "支持排序的账号菜单必须渲染下移项").toBeDefined();
+  fire(moveDown, "onClick");
+  expect(props.onMove).toHaveBeenCalledWith("dsh-opencode-go", "oc-1", 1);
+});
+
+it("账户写操作失败按厂商显示 code/message，不混到别家", () => {
+  const { tree } = render({
+    mutationErrors: { "dsh-opencode-go": "gateway/internal: mutation refused" },
+    vendors: [
+      { entry: COMMAND_CODE_ENTRY, status: status("commandcode", COMMAND_CODE, [account("cc-1")]) },
+      { entry: OPENCODE_ENTRY, status: status("dsh-opencode-go", OPENCODE, [account("oc-1")]) },
+    ],
+  });
+
+  const errors = elementsOf(tree).filter((element) => element.props["data-account-action-error"] !== undefined);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]!.props["data-account-action-error"]).toBe("dsh-opencode-go");
+  expect(textsOf(errors[0]).join(" ")).toContain("gateway/internal");
+  expect(textsOf(errors[0]).join(" ")).toContain("mutation refused");
 });
 
 it("全局网页登录入口：两家都能发起；等待时显示 user code 与授权网址", () => {
@@ -215,6 +265,27 @@ it("面板头部显示账号总数", () => {
   const count = elementsOf(tree).find((element) => element.props["data-accounts-count"] !== undefined);
   expect(count!.props["data-accounts-count"]).toBe(2);
   expect(textsOf(count!)).toContain(dictionaryOf("zh")("account.count").replace("{n}", "2"));
+});
+
+it("导出按钮位于账户面板头部，点击走全局导出路由", () => {
+  const onExportUsage = vi.fn().mockResolvedValue(undefined);
+  const { tree, props } = render({ onExportUsage });
+  const head = elementsOf(tree).find((element) => element.props["data-panel-head"] === "accounts");
+  expect(head).toBeDefined();
+  const exportComponent = elementsOf(head).find((element) => element.type === UsageExportButton);
+  expect(exportComponent, "头部应放置真实导出组件").toBeDefined();
+  const button = elementsOf(UsageExportButton(exportComponent!.props as never)).find(
+    (element) => element.props["data-usage-export"] !== undefined,
+  );
+  expect(button).toBeDefined();
+  expect(textsOf(button).join(" ")).toContain("导出 CSV");
+  fire(button, "onClick");
+  expect(props.onExportUsage).toHaveBeenCalledTimes(1);
+
+  const unavailableHead = elementsOf(render().tree).find((element) => element.props["data-panel-head"] === "accounts");
+  const unavailableExport = elementsOf(unavailableHead).find((element) => element.type === UsageExportButton);
+  expect(unavailableExport).toBeDefined();
+  expect(UsageExportButton(unavailableExport!.props as never)).toBeNull();
 });
 
 it("按账户刷新模型：每个账号行有自己的刷新按钮，回调带厂商；不传回调就不渲染", () => {

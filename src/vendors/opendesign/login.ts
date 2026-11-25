@@ -35,6 +35,7 @@ import { delimiter, join } from "node:path";
 import type { LoginPort, LoginStatus, VendorId } from "../../core/adapter";
 import { accountRef } from "../../core/accounts";
 import { normalizeKey } from "../../core/credentials";
+import { redactDiagnostic } from "../../core/diagnostic-text";
 
 /** 本登录流所属的 provider 路由（ref 生成的厂商段）。 */
 export const OPEN_DESIGN_LOGIN_VENDOR: VendorId = "opendesign";
@@ -204,9 +205,7 @@ const VELA_DIAGNOSTIC_LIMIT = 600;
  * @returns 诊断文本；完全没有输出时也给一句说明（`undefined` 表示不需要展示）。
  */
 export function describeVelaOutput(text: string): string | undefined {
-  const cleaned = stripAnsi(text)
-    .replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-***")
-    .replace(/vela_[A-Za-z0-9_-]{8,}/g, "vela_***")
+  const cleaned = redactDiagnostic(stripAnsi(text))
     .trim();
   if (cleaned === "") return "vela 没有任何输出（命令可能没能启动，或退出得比提示还快）";
   const flat = cleaned.replace(/\s+/g, " ");
@@ -525,7 +524,7 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
       // 路径里有非法字符这类故障都会被报成「没装 vela / 没有可导入的登录产物」——
       // 用户照着装一遍环境也不会好。把原文留下来，交给失败状态带去界面。
       vela = undefined;
-      resolveProblem = error instanceof Error ? error.message : String(error);
+      resolveProblem = redactDiagnostic(error instanceof Error ? error.message : String(error));
     }
     if (abort.signal.aborted || this.#cancelPending) return this.#settleCancelled();
 
@@ -545,7 +544,7 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
       this.#statusValue = {
         state: "failed",
         reason: "unavailable",
-        detail: `启动 vela 失败：${error instanceof Error ? error.message : String(error)}`,
+        detail: `启动 vela 失败：${redactDiagnostic(error instanceof Error ? error.message : String(error))}`,
       };
       return { ...this.#statusValue };
     }
@@ -813,7 +812,30 @@ class OpenDesignLoginFlow implements OpenDesignLogin {
       await this.#settle(attempt, { state: "failed", reason: "unavailable" });
       return;
     }
-    await this.#settle(attempt, { state: "success" });
+    await this.#settleCommitted(attempt, label);
+  }
+
+  /**
+   * 凭据已经落库后的收尾：同一代里，落库事实优先于取消/超时写下的乐观终态；代际已变则
+   * 完全不碰新尝试。正常 waiting 仍走原有成功结算。
+   * @param attempt - 尝试代际。
+   * @param account - 已写入的账号标签。
+   */
+  async #settleCommitted(attempt: number, account: string): Promise<void> {
+    if (this.#attemptSeq !== attempt) return;
+    if (this.#statusValue.state === "waiting") {
+      await this.#settle(attempt, { state: "success" });
+      return;
+    }
+    if (
+      this.#statusValue.state === "failed" &&
+      (this.#statusValue.reason === "cancelled" || this.#statusValue.reason === "timeout")
+    ) {
+      this.#statusValue = {
+        state: "success",
+        detail: `账号「${account}」在${this.#statusValue.reason === "cancelled" ? "取消" : "超时"}前已写入完成`,
+      };
+    }
   }
 
   /**
